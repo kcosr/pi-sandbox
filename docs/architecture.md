@@ -35,10 +35,11 @@ the invoking user outside Bubblewrap.
 ## Managed application and identity broker
 
 The installed application is one prebuilt Bun executable. Its private entry
-point captures the canonical launch CWD, validates administrative
-configuration, probes the selected executor, filters caller arguments, and calls Pi's
-`main()` API. The Pi Sandbox extension and a build-selected set of managed
-extension modules are compiled into the same executable. Pi still receives
+point rejects an effective root UID before Pi starts, captures the canonical
+launch CWD, validates administrative configuration, probes the selected
+executor, filters caller arguments, and calls Pi's `main()` API. The Pi Sandbox
+extension and a build-selected set of managed extension modules are compiled
+into the same executable. Pi still receives
 exactly one forced inline Pi Sandbox extension factory; managed modules
 register through Pi Sandbox's restricted extension API rather than receiving
 Pi's extension API directly.
@@ -86,6 +87,11 @@ is installed under the root-owned libexec directory and selected by the
 compiled runtime. macOS packages only the application; the Linux-only broker is not
 included. Keeping the product executable behind its configured launcher path provides a canonical command,
 but does not constitute access control against the logged-in user.
+
+The root check has no configuration override. Only the non-interactive
+`--validate-installation` and `--print-execution-backend` commands used by the
+system installers are admitted with effective UID `0`; they validate
+administrative inputs and never start Pi or an execution backend.
 
 ## Tool catalog and approvals
 

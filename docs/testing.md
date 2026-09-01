@@ -41,6 +41,8 @@ unavailable namespaces.
 - managed-executable argument filtering;
 - rejection of Pi package-management commands;
 - fixed administrative configuration and model-path resolution;
+- effective-UID root rejection for Pi, help, and worker execution, with only
+  installer-owned validation commands admitted as root;
 - strict system-versus-bundled Bubblewrap distribution selection and immutable
   compiled runtime path;
 - strict version 4 broker protocol parsing, version 5 per-UID TOML parsing,
