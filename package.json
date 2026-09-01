@@ -1,0 +1,52 @@
+{
+  "name": "pi-sandbox",
+  "version": "0.5.0",
+  "private": true,
+  "license": "MIT",
+  "type": "module",
+  "imports": {
+    "#pi-sandbox-compiled-layout": "./src/build-layout/default.ts"
+  },
+  "engines": {
+    "node": ">=24"
+  },
+  "scripts": {
+    "build": "npm run build:application && node scripts/build-broker.mjs",
+    "build:application": "node scripts/clean-dist.mjs && tsc -p tsconfig.build.json && node scripts/build-bundles.mjs",
+    "build:release": "node scripts/build-release.mjs",
+    "format": "prettier --write .",
+    "format:check": "prettier --check .",
+    "lint": "eslint .",
+    "test": "vitest run",
+    "test:e2e": "vitest run tests/e2e",
+    "test:broker": "node scripts/test-broker.mjs",
+    "test:build-composition": "node scripts/test/build-composition.mjs",
+    "test:distribution": "node scripts/test/distribution.mjs",
+    "test:install": "npm run test:install:linux && npm run test:install:macos",
+    "test:install:linux": "node scripts/test/install-smoke.mjs",
+    "test:install:macos": "node scripts/test/macos-install-smoke.mjs",
+    "test:integration": "vitest run tests/integration",
+    "test:systemd": "node scripts/test-systemd-units.mjs",
+    "test:unit": "vitest run src",
+    "test:watch": "vitest",
+    "typecheck": "tsc --noEmit",
+    "verify:release": "node scripts/verify-release.mjs"
+  },
+  "dependencies": {
+    "@iarna/toml": "2.2.5"
+  },
+  "devDependencies": {
+    "@earendil-works/pi-ai": "0.84.3",
+    "@earendil-works/pi-coding-agent": "0.84.3",
+    "@earendil-works/pi-tui": "0.84.3",
+    "@eslint/js": "^9.39.1",
+    "@types/iarna__toml": "^2.0.5",
+    "@types/node": "^24.10.1",
+    "esbuild": "^0.28.2",
+    "eslint": "^9.39.1",
+    "prettier": "^3.7.4",
+    "typescript": "^5.9.3",
+    "typescript-eslint": "^8.48.1",
+    "vitest": "^4.0.15"
+  }
+}

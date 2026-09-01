@@ -1,0 +1,277 @@
+import { existsSync } from "node:fs";
+import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import path from "node:path";
+import type {
+  ExtensionAPI,
+  ExtensionContext,
+  UserBashEvent,
+} from "@earendil-works/pi-coding-agent";
+import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import type { SandboxConfig } from "../../src/domain/index.js";
+import { createPiSandboxExtension } from "../../src/extension/index.js";
+import {
+  createBubblewrapExecutor,
+  type SandboxCommandRequest,
+  type SandboxCommandResult,
+  type SandboxExecutionOptions,
+  type SandboxExecutor,
+} from "../../src/sandbox/index.js";
+import { testSandboxWorkerCommand } from "../helpers/sandbox-worker.js";
+
+const BWRAP_PATH = process.env.PI_SANDBOX_BWRAP_PATH ?? "/usr/bin/bwrap";
+const REAL_BWRAP_AVAILABLE = process.platform === "linux" && existsSync(BWRAP_PATH);
+
+interface RegisteredTool {
+  readonly name: string;
+  execute(
+    id: string,
+    parameters: unknown,
+    signal: AbortSignal | undefined,
+    onUpdate: ((update: unknown) => void) | undefined,
+    context: ExtensionContext,
+  ): Promise<unknown>;
+}
+
+type EventHandler = (...arguments_: unknown[]) => unknown;
+type CommandOptions = Parameters<ExtensionAPI["registerCommand"]>[1];
+
+class FakePi {
+  readonly tools = new Map<string, RegisteredTool>();
+  readonly commands = new Map<string, CommandOptions>();
+  readonly handlers = new Map<string, EventHandler[]>();
+  activeTools: readonly string[] = [];
+
+  readonly api = {
+    registerTool: (tool: unknown): void => {
+      const registered = tool as RegisteredTool;
+      if (this.tools.has(registered.name)) {
+        throw new Error(`duplicate_fake_tool:${registered.name}`);
+      }
+      this.tools.set(registered.name, registered);
+    },
+    registerCommand: (name: string, options: CommandOptions): void => {
+      this.commands.set(name, options);
+    },
+    on: (event: string, handler: EventHandler): void => {
+      const handlers = this.handlers.get(event) ?? [];
+      handlers.push(handler);
+      this.handlers.set(event, handlers);
+    },
+    setActiveTools: (names: readonly string[]): void => {
+      this.activeTools = [...names];
+    },
+  } as unknown as ExtensionAPI;
+
+  async emit(event: string, ...arguments_: unknown[]): Promise<unknown[]> {
+    const results: unknown[] = [];
+    for (const handler of this.handlers.get(event) ?? []) {
+      results.push(await handler(...arguments_));
+    }
+    return results;
+  }
+}
+
+class RecordingExecutor implements SandboxExecutor {
+  readonly requests: SandboxCommandRequest[] = [];
+
+  constructor(private readonly delegate: SandboxExecutor) {}
+
+  get cwd(): string {
+    return this.delegate.cwd;
+  }
+
+  get home(): string {
+    return this.delegate.home;
+  }
+
+  get backend(): SandboxExecutor["backend"] {
+    return this.delegate.backend;
+  }
+
+  get commands(): SandboxExecutor["commands"] {
+    return this.delegate.commands;
+  }
+
+  probe(signal?: AbortSignal): Promise<void> {
+    return this.delegate.probe(signal);
+  }
+
+  execute(
+    request: SandboxCommandRequest,
+    options?: SandboxExecutionOptions,
+  ): Promise<SandboxCommandResult> {
+    this.requests.push(request);
+    return this.delegate.execute(request, options);
+  }
+
+  close(): Promise<void> {
+    return this.delegate.close();
+  }
+}
+
+describe.skipIf(!REAL_BWRAP_AVAILABLE)(
+  "stock Pi extension tool routing with a fake Pi host",
+  () => {
+    let baseDirectory: string;
+    let workspace: string;
+    let fakePi: FakePi;
+    let executor: RecordingExecutor;
+
+    beforeAll(async () => {
+      const fixtureRoot = process.env.PI_SANDBOX_TEST_TMPDIR ?? "/var/tmp";
+      baseDirectory = await mkdtemp(path.join(fixtureRoot, "pi-sandbox-pi-e2e-"));
+      workspace = path.join(baseDirectory, "workspace");
+      await mkdir(workspace, { mode: 0o700 });
+      await writeFile(path.join(workspace, "input.txt"), "before\n", {
+        mode: 0o600,
+      });
+      executor = new RecordingExecutor(
+        await createBubblewrapExecutor({
+          cwd: workspace,
+          bubblewrapPath: BWRAP_PATH,
+          workerCommand: testSandboxWorkerCommand(),
+        }),
+      );
+      await executor.probe();
+
+      fakePi = new FakePi();
+      createPiSandboxExtension({
+        cwd: workspace,
+        configPath: "/etc/pi-sandbox/config.toml",
+        userStateDir: "/home/test/.pi/agent",
+        loadConfig: () => Promise.resolve(allowAllConfig()),
+        executor,
+      })(fakePi.api);
+      await fakePi.emit("session_start", {}, nonInteractiveContext());
+    });
+
+    afterAll(async () => {
+      await fakePi?.emit("session_shutdown", {}, nonInteractiveContext());
+      await executor?.close();
+      if (baseDirectory) await rm(baseDirectory, { recursive: true, force: true });
+    });
+
+    it("registers exactly the seven replacement built-ins", () => {
+      expect([...fakePi.tools.keys()].sort()).toEqual([
+        "bash",
+        "edit",
+        "find",
+        "grep",
+        "ls",
+        "read",
+        "write",
+      ]);
+      expect([...fakePi.activeTools].sort()).toEqual([...fakePi.tools.keys()].sort());
+      expect([...fakePi.commands.keys()]).toEqual(["sandbox"]);
+    });
+
+    it("routes all seven model tools through the sandbox executor", async () => {
+      const readResult = await invoke(fakePi, "read", { path: "input.txt" });
+      expect(resultText(readResult)).toContain("before");
+
+      await invoke(fakePi, "write", {
+        path: "written.txt",
+        content: "created\n",
+      });
+      expect(await readFile(path.join(workspace, "written.txt"), "utf8")).toBe("created\n");
+
+      await invoke(fakePi, "edit", {
+        path: "input.txt",
+        edits: [{ oldText: "before", newText: "after" }],
+      });
+      expect(await readFile(path.join(workspace, "input.txt"), "utf8")).toBe("after\n");
+
+      expect(resultText(await invoke(fakePi, "ls", { path: "." }))).toContain("input.txt");
+      expect(resultText(await invoke(fakePi, "find", { pattern: "*.txt", path: "." }))).toContain(
+        "input.txt",
+      );
+      expect(resultText(await invoke(fakePi, "grep", { pattern: "after", path: "." }))).toContain(
+        "after",
+      );
+
+      const bashResult = await invoke(fakePi, "bash", {
+        command: "printf model-bash > model-bash.txt",
+      });
+      expect(resultText(bashResult)).not.toContain("error");
+      expect(await readFile(path.join(workspace, "model-bash.txt"), "utf8")).toBe("model-bash");
+
+      const executedCommands = executor.requests.map((request) => request.argv[0]);
+      expect(executedCommands).toContain("/bin/cat");
+      expect(executedCommands).toContain("/bin/sh");
+      expect(executedCommands).toContain("/bin/bash");
+      expect(
+        executor.requests.some((request) =>
+          request.argv.some((argument) => argument.includes("/usr/bin/find")),
+        ),
+      ).toBe(true);
+      expect(
+        executor.requests.some((request) =>
+          request.argv.some((argument) => argument.includes("/bin/grep")),
+        ),
+      ).toBe(true);
+    });
+
+    it("routes user shell through the same executor without host fallback", async () => {
+      const event = {
+        command: "printf user-shell > user-shell.txt",
+        cwd: workspace,
+        excludeFromContext: false,
+      } as UserBashEvent;
+      const [response] = await fakePi.emit("user_bash", event, nonInteractiveContext());
+      const routed = response as {
+        readonly result?: {
+          readonly output: string;
+          readonly exitCode: number;
+          readonly cancelled: boolean;
+          readonly truncated: boolean;
+        };
+      };
+      expect(routed.result).toMatchObject({
+        exitCode: 0,
+        cancelled: false,
+        truncated: false,
+      });
+      expect(await readFile(path.join(workspace, "user-shell.txt"), "utf8")).toBe("user-shell");
+      expect(executor.requests.at(-1)?.argv).toEqual(["/bin/bash", "-c", event.command]);
+    });
+  },
+);
+
+async function invoke(fakePi: FakePi, name: string, parameters: unknown): Promise<unknown> {
+  const tool = fakePi.tools.get(name);
+  if (!tool) throw new Error(`missing_fake_tool:${name}`);
+  return tool.execute(`call-${name}`, parameters, undefined, undefined, nonInteractiveContext());
+}
+
+function resultText(result: unknown): string {
+  const typed = result as {
+    readonly content?: readonly { readonly type: string; readonly text?: string }[];
+  };
+  return (typed.content ?? []).map((content) => content.text ?? "").join("\n");
+}
+
+function nonInteractiveContext(): ExtensionContext {
+  return { hasUI: false } as ExtensionContext;
+}
+
+function allowAllConfig(): SandboxConfig {
+  const allow = { mode: "allow", sessionGrant: "never" } as const;
+  return {
+    configVersion: 5,
+    modelsFile: "/etc/pi-sandbox/models.json",
+    execution: { backend: "bubblewrap" },
+    identity: { mode: "disabled" },
+    network: { mode: "none" },
+    environment: { pi: {}, sandbox: {}, extensions: {} },
+    extensions: {},
+    tools: {
+      read: allow,
+      grep: allow,
+      find: allow,
+      ls: allow,
+      write: allow,
+      edit: allow,
+      bash: allow,
+    },
+  };
+}

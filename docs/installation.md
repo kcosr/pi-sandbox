@@ -1,0 +1,402 @@
+# Installation and operation
+
+## Requirements
+
+Installed hosts require x86-64 or arm64 Linux, or x86-64 or arm64 macOS.
+
+Linux Bubblewrap mode requires working unprivileged user namespaces and either
+the build-selected system Bubblewrap executable or the release's verified
+bundled Bubblewrap executable. Linux direct mode does not use Bubblewrap. Both Linux modes require
+`fd` (or Debian's `fdfind`), Ripgrep (`rg`), `file`, Bash, a POSIX `/bin/sh`, and
+the fixed GNU utilities used by typed tools.
+
+macOS supports direct mode only and requires Homebrew `coreutils`, `findutils`,
+`grep`, `gawk`, `fd`, and `ripgrep`, plus system Bash, `sh`, and `file`. The
+runtime resolves the Homebrew prefix for Apple silicon or Intel and fails
+closed if a GNU command is missing. A macOS release build additionally requires
+Homebrew GNU tar (`gtar`) for reproducible archives.
+
+Selected managed extensions add conditional absolute-executable requirements.
+The Git extension requires `/usr/bin/git`. Startup validates the requirements
+for every selected managed extension; separately maintained executables and
+their configuration remain deployment inputs.
+
+The distributed application and optional Linux static identity broker are prebuilt.
+An installed host does not need Bun, Node.js, Rust, a package source tree, a
+compiler, network access, or Pi source. A release without the Git extension
+selected does not require Git. Pi Sandbox does not require QEMU,
+Gondolin, Docker, or a persistent privileged daemon; the optional root broker
+is systemd socket activated per connection on Linux. Broker identity is not
+supported or packaged on macOS; macOS configuration must set
+`identity.mode = "disabled"`.
+
+## Release archive and installed layout
+
+Each platform-specific release archive is complete and may be copied to an offline host. It
+contains the executable, its required adjacent static assets, administrative
+defaults, and the installation helper. Installation uses one application
+directory rather than wrapper generations:
+
+```text
+/usr/bin/pi-sandbox -> /usr/libexec/pi-sandbox/pi-sandbox
+
+/usr/libexec/pi-sandbox/
+  pi-sandbox
+  pi-sandbox-identity-broker
+  bwrap                         # bundled-provider releases only
+  package.json
+  theme/
+  assets/
+  export-html/
+  photon_rs_bg.wasm
+  defaults/
+    config.toml
+    models.json
+  systemd/
+    pi-sandbox-identity-broker.socket
+    pi-sandbox-identity-broker@.service
+  licenses/
+    LICENSE
+    identity-broker/
+      THIRD-PARTY-NOTICES.md
+      <vendored package license texts>
+    bubblewrap/                 # bundled-provider releases only
+      LICENSE
+
+/usr/lib/systemd/system/
+  pi-sandbox-identity-broker.socket -> packaged unit
+  pi-sandbox-identity-broker@.service -> packaged unit
+
+/etc/pi-sandbox/
+  config.toml
+  models.json
+```
+
+These are the default paths. The build-selected distribution manifest may set
+different absolute root-owned config, libexec, launcher, identity-socket, and
+Linux service-unit paths. It also selects a system or bundled Bubblewrap
+provider. Those choices are compiled into the application and
+rendered into its installer, uninstaller, systemd units, and release manifest.
+
+The default macOS layout omits the broker, broker licenses, and systemd units:
+
+```text
+/usr/local/bin/pi-sandbox -> /usr/local/libexec/pi-sandbox/pi-sandbox
+
+/usr/local/libexec/pi-sandbox/
+  pi-sandbox
+  package.json
+  theme/
+  assets/
+  export-html/
+  photon_rs_bg.wasm
+  defaults/
+  licenses/
+
+/etc/pi-sandbox/
+  config.toml
+  models.json
+```
+
+Broker mode may additionally read
+`/etc/pi-sandbox/users.d/<uid>.toml`. The optional live directory and its
+root-owned mode-0600 drop-ins are deliberately absent from the release and are
+never created, replaced, backed up, or removed by the installer or uninstaller.
+
+Only assets actually required by the pinned Pi build need to be present. The
+release process inspects the archive against this documented layout and records
+its checksums before distribution. The release manifest also records the
+compiled extension kinds, identifiers, versions, tool names, manifest and entrypoint
+digests, optional repository/revision provenance, private bundle digest, and
+the selected Bubblewrap provider, runtime path, version, and binary digest.
+
+`/etc/pi-sandbox/config.toml` is the fixed policy entry point. Its required
+`models_file` setting normally points to `/etc/pi-sandbox/models.json`, but the
+administrator may select another absolute managed path. Pi Sandbox performs no
+root-ownership or file-mode checks; deployment tooling is responsible for
+ownership and permissions.
+
+## Building a release
+
+Release builds use Node.js 24 or newer with `NODE_ENV` unset. Linux release
+builds also use Rust/Cargo 1.85 or newer; Rust dependencies are pinned and
+vendored so the broker builds offline:
+
+```sh
+env -u NODE_ENV npm ci
+env -u NODE_ENV npm run verify:release
+```
+
+One strict TOML distribution manifest selects all extension manifests and the
+platform installation layouts. For example:
+
+```sh
+env -u NODE_ENV npm run verify:release -- \
+  --distribution /path/to/company/pi-sandbox-distribution.toml
+```
+
+```toml
+version = 1
+extension_manifests = [
+  "/path/to/pi-sandbox-extension.json",
+  "/path/to/private-extension/pi-sandbox-extension.json",
+]
+
+[platforms.linux]
+config_dir = "/etc/pi-sandbox"
+libexec_dir = "/usr/libexec/pi-sandbox"
+launcher_path = "/usr/bin/pi-sandbox"
+service_dir = "/usr/lib/systemd/system"
+identity_socket_path = "/run/pi-sandbox-identity/broker.sock"
+
+[platforms.linux.bubblewrap]
+mode = "system"
+path = "/usr/bin/bwrap"
+
+[platforms.darwin]
+config_dir = "/etc/pi-sandbox"
+libexec_dir = "/usr/local/libexec/pi-sandbox"
+launcher_path = "/usr/local/bin/pi-sandbox"
+identity_socket_path = "/run/pi-sandbox-identity/broker.sock"
+```
+
+Linux may instead package a prebuilt Bubblewrap binary:
+
+```toml
+[platforms.linux.bubblewrap]
+mode = "bundled"
+binary = "./build-inputs/bwrap-linux-x64"
+version = "0.11.2"
+sha256 = "<lowercase SHA-256>"
+license_file = "./build-inputs/bubblewrap-COPYING"
+```
+
+Build-input paths resolve relative to the distribution manifest. The release
+builder requires regular files, verifies the binary digest, Linux architecture,
+reported version, and required command-line options, then installs it at
+`libexec_dir/bwrap` with mode `0755`. The license is packaged beside the other
+third-party notices. System mode packages no Bubblewrap binary and leaves the
+selected absolute path unmanaged.
+
+Each strict JSON extension manifest has `"manifestVersion": 1`, kind
+`"managed"` or `"pi-tool"`, API version 3, a lowercase hyphenated identifier,
+semantic version, relative entrypoint, exact tool-name list, and optional
+repository/revision provenance. A `pi-tool` entrypoint is a standard Pi
+extension factory; only tool registration and `pi.exec` are exposed during
+factory initialization. A managed entrypoint uses the Pi Sandbox SDK. The build
+resolves and statically imports every entrypoint and records hashes. It does not
+create runtime search paths or copy extension source. The default distribution
+selects Git; a private distribution can live beside private extensions and
+select Git plus those manifests.
+
+For a standard Pi extension whose default export is an ordinary extension
+factory, use:
+
+```json
+{
+  "manifestVersion": 1,
+  "kind": "pi-tool",
+  "apiVersion": 3,
+  "id": "example-tools",
+  "version": "1.0.0",
+  "entrypoint": "./index.ts",
+  "tools": ["example_lookup"]
+}
+```
+
+Then select it with an empty `[extensions.example-tools]` table and provide a
+complete `[tools.example_lookup]` policy. Factories that register commands,
+event handlers, renderers, flags, or other non-tool features are rejected.
+
+The distribution manifest also sets `config_dir`, `libexec_dir`,
+`launcher_path`, `identity_socket_path`, and, on Linux, `service_dir` for each
+platform, plus the Linux Bubblewrap provider. All runtime paths are normalized
+absolute paths and immutable at runtime. A
+packaged default config must point `models_file` at that layout's
+`config_dir/models.json`.
+
+The build produces a native archive for its current Linux or macOS architecture.
+It downloads, or accepts a locally supplied copy of, the official Pi
+0.84.3 source archive pinned in `pi-source.lock.json`. It verifies the recorded
+SHA-256 digest, extracts the source into temporary or ignored build storage,
+applies the small patch series in `patches/pi`, compiles Pi plus the separate Pi
+Sandbox extension and selected modules into the Bun application, and
+builds the broker as a static native executable on Linux. Pi still loads only the single
+forced Pi Sandbox extension factory. The extracted Pi worktree and external
+extension sources are not included in the release archive.
+
+See [Pi integration and upgrade contract](../specs/pi-integration.md) for the
+authoritative upstream contract.
+
+## Installing and upgrading
+
+Extract the release archive and run its helper as root:
+
+```sh
+sudo ./install.sh
+```
+
+The default distribution installs under `/usr` on Linux and `/usr/local` on
+macOS, with `/etc/pi-sandbox` for administrative configuration. A custom
+distribution uses its compiled paths. The macOS installer validates
+the native direct-mode config and GNU prerequisites and never installs broker
+or service-manager files.
+
+The installer serializes concurrent updates with
+`/usr/libexec/.pi-sandbox.install.lock`. If an interrupted installation leaves
+that directory behind, first verify that no installer is running, then remove
+the lock directory and retry.
+
+The helper refuses a live system installation when the platform prerequisites
+described above are absent or not executable. Selected extension prerequisites are checked when
+the effective configuration is admitted. Neither path installs operating-system
+packages; install those dependencies first. Staged `DESTDIR` installation
+skips host checks because dependency resolution belongs to the target image.
+
+The installer installs or upgrades both executables, packaged assets, and
+managed systemd unit symlinks. It does not enable or start the broker socket. On the
+first installation it also copies the packaged defaults to
+`/etc/pi-sandbox/config.toml` and `/etc/pi-sandbox/models.json`. On an ordinary
+upgrade it preserves all existing files under `/etc/pi-sandbox` and validates
+them with the new executable before completing the installation.
+
+After a successful operation, the installer prints both executables, the
+launcher and unit symlinks, runtime support directory, live administrative
+files, and any backups it created. Configuration entries are labeled as
+installed, replaced, or preserved. It separately identifies `users.d` as an
+optional administrator-managed directory that it did not create or alter.
+
+To intentionally deploy the package's administrative configuration as well as
+its code, use:
+
+```sh
+sudo ./install.sh --replace-config
+```
+
+`--replace-config` validates the packaged files, makes recoverable backups of
+the active configuration and model files, and then replaces them atomically.
+There is no implicit configuration replacement. This supports both complete
+archive deployments and systems where Salt or another configuration manager
+owns `/etc/pi-sandbox`.
+
+The installed configuration must use format version 5. It must include the
+`[execution]` and `[extensions]` tables and explicit `[environment.pi]`,
+`[environment.sandbox]`, and `[environment.extensions]` tables, even when the
+environment tables are empty. Set `execution.backend = "bubblewrap"` on Linux
+for containment, or `execution.backend = "direct"` on Linux/macOS for
+policy-gated execution in the user's host security context. Direct mode also
+requires `network.mode = "host"`; macOS requires disabled identity. If a
+preserved site configuration does not satisfy the current schema, update the
+site-managed TOML first or use `--replace-config` to install the packaged
+defaults.
+
+When the optional identity broker is enabled, `users.d/<uid>.toml` may overlay
+scoped environment and supply model, execution, network, and complete
+tool-policy overrides for that UID. Global/default values belong in the main
+`config.toml`; there is no separate defaults or aggregate users file. A missing
+directory or matching file inherits the main configuration unchanged. An
+execution override may select `bubblewrap` or `direct`; the final effective
+configuration must still pair `direct` with `network.mode = "host"`.
+
+See [Models and authentication](models.md) for the distinction between the
+active catalog and packaged defaults, API-key resolution, and model
+troubleshooting.
+
+See [Per-user environment and overrides](identity-broker.md) to create optional
+per-UID drop-ins and enable the socket. After installing or upgrading units on a live
+host, run `systemctl daemon-reload` before enabling or restarting the socket.
+
+On Linux, disable the optional socket before uninstalling if it has been enabled:
+
+```sh
+sudo systemctl disable --now pi-sandbox-identity-broker.socket
+sudo ./uninstall.sh
+```
+
+The uninstaller refuses to remove an active or enabled broker unit. It never
+removes `users.d` or its contents, including with `--remove-config`, and reloads
+systemd after removing the managed units.
+
+This project does not build an RPM. The archive layout and installer semantics
+are intentionally straightforward enough for an administrator to wrap in an
+RPM or another site-specific package later.
+
+## User state
+
+Pi continues to store user-controlled state in its normal agent directory,
+typically:
+
+```text
+~/.pi/agent/
+```
+
+`PI_CODING_AGENT_DIR` may select another user-state directory. It affects
+credentials, sessions, settings, skills, themes, logs, and caches. It does not
+change `/etc/pi-sandbox/config.toml`, the resolved `models_file`, extension
+loading, or tool implementations.
+
+## Launch
+
+Change to the project directory and invoke the canonical command:
+
+```sh
+cd /home/alice/worktrees/example
+pi-sandbox
+```
+
+Before starting the interactive application, the executable validates the
+compiled extension catalog, loads the base policy, optionally resolves the
+calling UID, validates the selected extensions, effective model catalog, exact
+tool policy, and conditional executable prerequisites, and probes a real
+Bubblewrap operation for the launch directory. Any failure stops startup. No
+stock tool or host-execution fallback is available.
+
+The captured directory remains the current directory inside every sandbox
+operation and appears at the same absolute path. User/project extensions and Pi
+package-management commands are rejected. Skills, `--no-skills`, tool-selection
+options, and selection among administratively configured models remain
+available.
+
+## Troubleshooting
+
+### Administrative configuration is rejected
+
+Confirm that `/etc/pi-sandbox/config.toml` is readable, strictly valid, and
+contains an absolute `models_file` whose target is readable and valid. Pi
+Sandbox does not fall back to user configuration or Pi's internal model catalog.
+
+### Bubblewrap probe fails
+
+For a system-provider release, confirm the manifest-selected Bubblewrap path is
+executable. For a bundled-provider release, confirm `libexec_dir/bwrap` is
+present and executable. The installer rejects either provider when it lacks a
+required command-line option. If Bubblewrap is present but cannot establish the sandbox, confirm that the host permits
+unprivileged user namespaces and that its Bubblewrap version supports the
+required options. Pi Sandbox intentionally refuses to run tools directly on
+the host when the boundary cannot be established.
+
+### An approval is always denied
+
+`ask` requires Pi's interactive UI. Headless/RPC operation cannot approve a
+prompt and therefore denies. Also confirm that the subject is not `deny` or
+`disabled` and that no earlier prompt was cancelled.
+
+### A host path is read-only
+
+Only the directory from which `pi-sandbox` was launched is persistently
+writable. Launch from the intended project root. Starting in a nested directory
+intentionally makes only that subtree writable.
+
+### Networking fails
+
+The packaged `network.mode = "none"` intentionally disables networking for tools
+and shell commands. Provider traffic still works because Pi itself remains
+host-side. An administrator may select `network.mode = "host"` for unrestricted
+host loopback, LAN, and Internet access; restart `pi-sandbox` after changing the
+effective configuration.
+
+### Sandbox execution failure
+
+The current operation fails and no host fallback occurs. Inspect the bounded
+diagnostic and correct the command, policy, installation, or host problem. Exit
+and relaunch Pi if the sandbox probe or installation admission failed.

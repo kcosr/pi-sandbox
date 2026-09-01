@@ -1,0 +1,330 @@
+import { chmod, mkdtemp, rm } from "node:fs/promises";
+import { spawn } from "node:child_process";
+import { createServer, type Server, type Socket } from "node:net";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { pathToFileURL } from "node:url";
+
+import { afterEach, describe, expect, it } from "vitest";
+
+import { IDENTITY_BROKER_SOCKET_PATH, type SandboxConfig } from "../domain/index.js";
+
+import {
+  applyUserOverrides,
+  configureManagedUser,
+  parseBrokerResponse,
+  resolveBrokerUser,
+} from "./client.js";
+
+const servers: Server[] = [];
+const temporaryDirectories: string[] = [];
+
+afterEach(async () => {
+  await Promise.all(
+    servers
+      .splice(0)
+      .map((server) => new Promise<void>((resolve) => server.close(() => resolve()))),
+  );
+  await Promise.all(temporaryDirectories.splice(0).map((path) => rm(path, { recursive: true })));
+});
+
+describe("managed identity", () => {
+  it("returns empty scopes when disabled", async () => {
+    await expect(configureManagedUser({ mode: "disabled" })).resolves.toEqual({
+      environment: { pi: {}, sandbox: {}, extensions: {} },
+      overrides: { tools: {} },
+    });
+  });
+
+  it("returns the broker-selected environment and overrides", async () => {
+    const user = await configureManagedUser({ mode: "broker" }, (socketPath) => {
+      expect(socketPath).toBe(IDENTITY_BROKER_SOCKET_PATH);
+      return Promise.resolve({
+        environment: {
+          pi: { MODEL_TOKEN: "broker-value" },
+          sandbox: {},
+          extensions: {},
+        },
+        overrides: { tools: {} },
+      });
+    });
+    expect(user.environment.pi).toEqual({ MODEL_TOKEN: "broker-value" });
+    expect(user.overrides).toEqual({ tools: {} });
+  });
+
+  it("fails closed after broker failure", async () => {
+    await expect(
+      configureManagedUser({ mode: "broker" }, () => Promise.reject(new Error("unavailable"))),
+    ).rejects.toThrow("unavailable");
+  });
+});
+
+describe("broker response", () => {
+  it("accepts strict success and error responses", () => {
+    expect(
+      parseBrokerResponse(
+        '{"version":4,"status":"ok","environment":{"pi":{"MODEL_TOKEN":"token"},"sandbox":{"PROJECT_ENV":"test"},"extensions":{"service-api":{"SERVICE_API_TOKEN":"service-token"}}},"overrides":{"models_file":"/etc/pi-sandbox/models/alice.json","execution":{"backend":"direct"},"network":{"mode":"host"},"tools":{"write":{"mode":"ask","session_grant":"offer"},"git_clone":{"mode":"deny","session_grant":"never"}}}}\n',
+      ),
+    ).toEqual({
+      version: 4,
+      status: "ok",
+      environment: {
+        pi: { MODEL_TOKEN: "token" },
+        sandbox: { PROJECT_ENV: "test" },
+        extensions: { "service-api": { SERVICE_API_TOKEN: "service-token" } },
+      },
+      overrides: {
+        modelsFile: "/etc/pi-sandbox/models/alice.json",
+        execution: { backend: "direct" },
+        network: { mode: "host" },
+        tools: {
+          write: { mode: "ask", sessionGrant: "offer" },
+          git_clone: { mode: "deny", sessionGrant: "never" },
+        },
+      },
+    });
+    expect(
+      parseBrokerResponse('{"version":4,"status":"error","code":"user_store_unavailable"}\n'),
+    ).toEqual({ version: 4, status: "error", code: "user_store_unavailable" });
+  });
+
+  it("rejects malformed, unknown, and unsafe responses", () => {
+    for (const response of [
+      "not-json",
+      '{"version":4,"status":"error","code":"user_not_found"}',
+      '{"version":2,"status":"ok","environment":{"pi":{},"sandbox":{},"extensions":{}},"overrides":{}}',
+      '{"version":4,"status":"ok","overrides":{}}',
+      '{"version":4,"status":"ok","environment":{"pi":{},"sandbox":{},"extensions":{}},"overrides":{},"extra":true}',
+      '{"version":4,"status":"ok","environment":{"pi":{},"sandbox":{}},"overrides":{}}',
+      '{"version":4,"status":"ok","environment":{"pi":{},"sandbox":{},"extensions":{},"extra":{}},"overrides":{}}',
+      '{"version":4,"status":"ok","environment":{"pi":[],"sandbox":{},"extensions":{}},"overrides":{}}',
+      '{"version":4,"status":"ok","environment":{"pi":{"BAD-NAME":"value"},"sandbox":{},"extensions":{}},"overrides":{}}',
+      '{"version":4,"status":"ok","environment":{"pi":{"NODE_OPTIONS":"--require=x"},"sandbox":{},"extensions":{}},"overrides":{}}',
+      '{"version":4,"status":"ok","environment":{"pi":{},"sandbox":{"BASH_ENV":"/tmp/inject"},"extensions":{}},"overrides":{}}',
+      '{"version":4,"status":"ok","environment":{"pi":{"PI_SANDBOX_INTERNAL_SECRET":"value"},"sandbox":{},"extensions":{}},"overrides":{}}',
+      '{"version":4,"status":"ok","environment":{"pi":{"TOKEN":1},"sandbox":{},"extensions":{}},"overrides":{}}',
+      '{"version":4,"status":"ok","environment":{"pi":{"TOKEN":"nul\\u0000value"},"sandbox":{},"extensions":{}},"overrides":{}}',
+      '{"version":4,"status":"ok","environment":{"pi":{},"sandbox":{"HOME":"/tmp"},"extensions":{}},"overrides":{}}',
+      '{"version":4,"status":"ok","environment":{"pi":{},"sandbox":{},"extensions":[]},"overrides":{}}',
+      '{"version":4,"status":"ok","environment":{"pi":{},"sandbox":{},"extensions":{"Bad_ID":{}}},"overrides":{}}',
+      '{"version":4,"status":"ok","environment":{"pi":{},"sandbox":{},"extensions":{"service-api":[]}},"overrides":{}}',
+      '{"version":4,"status":"ok","environment":{"pi":{},"pi":{},"sandbox":{},"extensions":{}},"overrides":{}}',
+      '{"version":4,"status":"ok","environment":{"pi":{"TOKEN":"one","T\\u004fKEN":"two"},"sandbox":{},"extensions":{}},"overrides":{}}',
+      '{"version":4,"status":"ok","environment":{"pi":{},"sandbox":{},"extensions":{}},"overrides":{"unknown":true}}',
+      '{"version":4,"status":"ok","environment":{"pi":{},"sandbox":{},"extensions":{}},"overrides":{"models_file":"relative.json"}}',
+      '{"version":4,"status":"ok","environment":{"pi":{},"sandbox":{},"extensions":{}},"overrides":{"execution":{"backend":"container"}}}',
+      '{"version":4,"status":"ok","environment":{"pi":{},"sandbox":{},"extensions":{}},"overrides":{"execution":{"backend":"direct","extra":true}}}',
+      '{"version":4,"status":"ok","environment":{"pi":{},"sandbox":{},"extensions":{}},"overrides":{"network":{"mode":"filtered"}}}',
+      '{"version":4,"status":"ok","environment":{"pi":{},"sandbox":{},"extensions":{}},"overrides":{"network":{"mode":"host","extra":true}}}',
+      '{"version":4,"status":"ok","environment":{"pi":{},"sandbox":{},"extensions":{}},"overrides":{"tools":{"Bad-Name":{"mode":"deny","session_grant":"never"}}}}',
+      '{"version":4,"status":"ok","environment":{"pi":{},"sandbox":{},"extensions":{}},"overrides":{"tools":{"write":{"mode":"allow","session_grant":"offer"}}}}',
+      '{"version":4,"status":"error","code":"unknown"}',
+      '{"version":4,"status":"error","code":["user_not_found"]}',
+      '{"version":4,"status":"error","code":"user_not_found","code":"protocol_error"}',
+      '{"version":4,"status":"ok","environment":{"pi":{},"sandbox":{},"extensions":{}},"overrides":{"tools":{},"t\\u006fools":{}}}',
+    ]) {
+      expect(() => parseBrokerResponse(response)).toThrow("identity_broker_response_invalid");
+    }
+  });
+
+  it("rejects environment responses that exceed bounded sizes", () => {
+    const tooManyVariables = Object.fromEntries(
+      Array.from({ length: 129 }, (_, index) => [`VARIABLE_${index}`, "value"]),
+    );
+    const tooManyExtensions = Object.fromEntries(
+      Array.from({ length: 65 }, (_, index) => [`extension-${index}`, {}]),
+    );
+    for (const environment of [
+      { pi: tooManyVariables, sandbox: {}, extensions: {} },
+      { pi: { TOKEN: "x".repeat(8193) }, sandbox: {}, extensions: {} },
+      { pi: {}, sandbox: {}, extensions: tooManyExtensions },
+      {
+        pi: Object.fromEntries(Array.from({ length: 128 }, (_, index) => [`PI_${index}`, ""])),
+        sandbox: Object.fromEntries(
+          Array.from({ length: 128 }, (_, index) => [`SANDBOX_${index}`, ""]),
+        ),
+        extensions: { git: { OVER_LIMIT: "" } },
+      },
+    ]) {
+      const response = JSON.stringify({
+        version: 4,
+        status: "ok",
+        environment,
+        overrides: {},
+      });
+      expect(() => parseBrokerResponse(response)).toThrow("identity_broker_response_invalid");
+    }
+  });
+
+  it("resolves scoped environment over a Unix socket", async () => {
+    const { server, socketPath } = await listen((socket) => {
+      let request = "";
+      socket.setEncoding("utf8");
+      socket.on("data", (chunk: string) => {
+        request += chunk;
+        if (!request.endsWith("\n")) return;
+        expect(JSON.parse(request)).toEqual({ version: 4, operation: "get-user" });
+        socket.end(
+          '{"version":4,"status":"ok","environment":{"pi":{"MODEL_TOKEN":"from-broker"},"sandbox":{"PROJECT_ENV":"test"},"extensions":{"service-api":{"SERVICE_API_TOKEN":"service-token"}}},"overrides":{}}\n',
+        );
+      });
+    });
+    servers.push(server);
+    await expect(resolveBrokerUser(socketPath)).resolves.toEqual({
+      environment: {
+        pi: { MODEL_TOKEN: "from-broker" },
+        sandbox: { PROJECT_ENV: "test" },
+        extensions: { "service-api": { SERVICE_API_TOKEN: "service-token" } },
+      },
+      overrides: { tools: {} },
+    });
+  });
+
+  it("keeps the request connection open for the compiled Bun runtime", async () => {
+    const { server, socketPath } = await listen((socket) => {
+      let request = "";
+      socket.setEncoding("utf8");
+      socket.on("data", (chunk: string) => {
+        request += chunk;
+        if (!request.endsWith("\n")) return;
+        setTimeout(() => {
+          socket.end(
+            '{"version":4,"status":"ok","environment":{"pi":{"MODEL_TOKEN":"bun-token"},"sandbox":{},"extensions":{}},"overrides":{}}\n',
+          );
+        }, 25);
+      });
+    });
+    servers.push(server);
+
+    const clientModule = pathToFileURL(join(process.cwd(), "src/identity/client.ts")).href;
+    const source = `
+      import { resolveBrokerUser } from ${JSON.stringify(clientModule)};
+      const result = await resolveBrokerUser(process.env.TEST_BROKER_SOCKET);
+      process.stdout.write(JSON.stringify(result));
+    `;
+    const result = await runBun(source, { TEST_BROKER_SOCKET: socketPath });
+    expect(result.stderr).toBe("");
+    expect(JSON.parse(result.stdout)).toEqual({
+      environment: { pi: { MODEL_TOKEN: "bun-token" }, sandbox: {}, extensions: {} },
+      overrides: { tools: {} },
+    });
+  });
+
+  it("fails closed on broker errors and truncated responses", async () => {
+    const errorEndpoint = await listen((socket) => {
+      socket.once("data", () =>
+        socket.end('{"version":4,"status":"error","code":"user_store_unavailable"}\n'),
+      );
+    });
+    servers.push(errorEndpoint.server);
+    await expect(resolveBrokerUser(errorEndpoint.socketPath)).rejects.toThrow(
+      "user overrides are unavailable",
+    );
+
+    const truncatedEndpoint = await listen((socket) => {
+      socket.once("data", () => socket.end('{"version":4'));
+    });
+    servers.push(truncatedEndpoint.server);
+    await expect(resolveBrokerUser(truncatedEndpoint.socketPath)).rejects.toThrow(
+      "invalid response",
+    );
+  });
+});
+
+describe("user overrides", () => {
+  it("atomically replaces selected tools and inherits all omitted values", () => {
+    const basePolicy = { mode: "allow", sessionGrant: "never" } as const;
+    const base = {
+      configVersion: 5,
+      modelsFile: "/etc/pi-sandbox/models.json",
+      execution: { backend: "bubblewrap" },
+      identity: { mode: "broker" },
+      network: { mode: "none" },
+      environment: { pi: {}, sandbox: {}, extensions: {} },
+      extensions: {
+        git: { id: "git", settings: {}, toolNames: ["git_clone"] },
+        "service-api": {
+          id: "service-api",
+          settings: {},
+          toolNames: ["service_api"],
+        },
+      },
+      tools: Object.fromEntries(
+        ["read", "grep", "find", "ls", "write", "edit", "bash", "git_clone", "service_api"].map(
+          (name) => [name, basePolicy],
+        ),
+      ) as SandboxConfig["tools"],
+    } satisfies SandboxConfig;
+    const effective = applyUserOverrides(base, {
+      modelsFile: "/etc/pi-sandbox/models/alice.json",
+      execution: { backend: "direct" },
+      network: { mode: "host" },
+      tools: {
+        write: { mode: "disabled", sessionGrant: "never" },
+        git_clone: { mode: "disabled", sessionGrant: "never" },
+        service_api: { mode: "deny", sessionGrant: "never" },
+      },
+    });
+    expect(effective.modelsFile).toBe("/etc/pi-sandbox/models/alice.json");
+    expect(effective.execution).toEqual({ backend: "direct" });
+    expect(effective.network).toEqual({ mode: "host" });
+    expect(effective.tools.write).toEqual({ mode: "disabled", sessionGrant: "never" });
+    expect(effective.tools.git_clone).toEqual({ mode: "disabled", sessionGrant: "never" });
+    expect(effective.tools.service_api).toEqual({ mode: "deny", sessionGrant: "never" });
+    expect(effective.tools.read).toBe(basePolicy);
+    expect(effective.identity).toBe(base.identity);
+    expect(effective.extensions).toBe(base.extensions);
+    expect(() =>
+      applyUserOverrides(base, {
+        tools: { unknown_tool: { mode: "deny", sessionGrant: "never" } },
+      }),
+    ).toThrow("override for unavailable tool: unknown_tool");
+  });
+});
+
+async function listen(handler: (socket: Socket) => void): Promise<{
+  server: Server;
+  socketPath: string;
+}> {
+  const directory = await mkdtemp(join(tmpdir(), "pi-sandbox-identity-client-"));
+  temporaryDirectories.push(directory);
+  await chmod(directory, 0o700);
+  const socketPath = join(directory, "broker.sock");
+  const server = createServer({ allowHalfOpen: true }, handler);
+  await new Promise<void>((resolve, reject) => {
+    server.once("error", reject);
+    server.listen(socketPath, () => {
+      server.off("error", reject);
+      resolve();
+    });
+  });
+  return { server, socketPath };
+}
+
+function runBun(
+  source: string,
+  environment: Record<string, string>,
+): Promise<{ stdout: string; stderr: string }> {
+  return new Promise((resolve, reject) => {
+    const child = spawn("bun", ["--eval", source], {
+      cwd: process.cwd(),
+      env: { ...process.env, ...environment },
+      stdio: ["ignore", "pipe", "pipe"],
+    });
+    let stdout = "";
+    let stderr = "";
+    child.stdout.setEncoding("utf8");
+    child.stderr.setEncoding("utf8");
+    child.stdout.on("data", (chunk: string) => {
+      stdout += chunk;
+    });
+    child.stderr.on("data", (chunk: string) => {
+      stderr += chunk;
+    });
+    child.once("error", reject);
+    child.once("exit", (code, signal) => {
+      if (code === 0) resolve({ stdout, stderr });
+      else reject(new Error(`Bun client failed with ${signal ?? `exit code ${code}`}: ${stderr}`));
+    });
+  });
+}

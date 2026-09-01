@@ -1,0 +1,9 @@
+{
+  "manifestVersion": 1,
+  "kind": "managed",
+  "apiVersion": 3,
+  "id": "git",
+  "version": "1.1.0",
+  "entrypoint": "./index.ts",
+  "tools": ["git_clone"]
+}

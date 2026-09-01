@@ -1,0 +1,13 @@
+[Unit]
+Description=Pi Sandbox identity broker socket
+
+[Socket]
+ListenStream=/run/pi-sandbox-identity/broker.sock
+Accept=yes
+SocketMode=0666
+DirectoryMode=0755
+RemoveOnStop=yes
+MaxConnections=128
+
+[Install]
+WantedBy=sockets.target

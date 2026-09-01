@@ -1,0 +1,1575 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta
+      name="description"
+      content="A concise technical overview of managed AI-agent access, policy, execution boundaries, configuration, and intended use."
+    />
+    <title>Pi Sandbox — Technical Overview</title>
+    <style>
+      :root {
+        color-scheme: light dark;
+        --page: #e9edf2;
+        --surface: #ffffff;
+        --surface-soft: #f4f6f8;
+        --text: #18202a;
+        --muted: #5d6875;
+        --line: #cbd3dc;
+        --accent: #235f9c;
+        --accent-soft: #e7f0f9;
+        --accent-strong: #164978;
+        --good: #2f6c51;
+        --warn: #8a5a17;
+        --code: #17212b;
+        --code-text: #edf3f8;
+        --shadow: 0 18px 48px rgb(25 38 52 / 14%);
+        --radius: 10px;
+      }
+
+      :root[data-theme="dark"] {
+        --page: #10151b;
+        --surface: #182029;
+        --surface-soft: #202a35;
+        --text: #edf2f7;
+        --muted: #aeb9c5;
+        --line: #3a4653;
+        --accent: #72afe8;
+        --accent-soft: #1d344a;
+        --accent-strong: #9ac9f3;
+        --good: #7ec3a1;
+        --warn: #e2b46f;
+        --code: #0c1117;
+        --code-text: #e6edf4;
+        --shadow: 0 18px 48px rgb(0 0 0 / 30%);
+      }
+
+      @media (prefers-color-scheme: dark) {
+        :root:not([data-theme="light"]) {
+          --page: #10151b;
+          --surface: #182029;
+          --surface-soft: #202a35;
+          --text: #edf2f7;
+          --muted: #aeb9c5;
+          --line: #3a4653;
+          --accent: #72afe8;
+          --accent-soft: #1d344a;
+          --accent-strong: #9ac9f3;
+          --good: #7ec3a1;
+          --warn: #e2b46f;
+          --code: #0c1117;
+          --code-text: #e6edf4;
+          --shadow: 0 18px 48px rgb(0 0 0 / 30%);
+        }
+      }
+
+      * {
+        box-sizing: border-box;
+      }
+
+      html,
+      body {
+        min-height: 100%;
+        margin: 0;
+      }
+
+      body {
+        display: grid;
+        place-items: center;
+        padding: 24px;
+        overflow: hidden;
+        background: var(--page);
+        color: var(--text);
+        font-family:
+          Inter,
+          ui-sans-serif,
+          system-ui,
+          -apple-system,
+          BlinkMacSystemFont,
+          "Segoe UI",
+          sans-serif;
+      }
+
+      button {
+        font: inherit;
+      }
+
+      .deck {
+        position: relative;
+        width: min(1180px, calc(100vw - 48px));
+        aspect-ratio: 16 / 9;
+        min-height: 540px;
+        max-height: calc(100vh - 48px);
+        overflow: hidden;
+        border: 1px solid var(--line);
+        border-radius: var(--radius);
+        background: var(--surface);
+        box-shadow: var(--shadow);
+      }
+
+      .slides {
+        position: absolute;
+        inset: 0;
+      }
+
+      .slide {
+        position: absolute;
+        inset: 0;
+        display: none;
+        grid-template-rows: auto 1fr auto;
+        gap: clamp(18px, 2.2vw, 30px);
+        padding: clamp(34px, 4.6vw, 68px) clamp(38px, 5.4vw, 78px) 56px;
+        overflow: auto;
+        background: var(--surface);
+      }
+
+      .slide.is-active {
+        display: grid;
+        animation: reveal 150ms ease-out;
+      }
+
+      @keyframes reveal {
+        from {
+          opacity: 0;
+          transform: translateY(3px);
+        }
+        to {
+          opacity: 1;
+          transform: translateY(0);
+        }
+      }
+
+      .eyebrow {
+        margin: 0 0 8px;
+        color: var(--accent-strong);
+        font-size: clamp(0.72rem, 1vw, 0.88rem);
+        font-weight: 700;
+        letter-spacing: 0.12em;
+        text-transform: uppercase;
+      }
+
+      h1,
+      h2,
+      h3,
+      p {
+        margin-top: 0;
+      }
+
+      h1 {
+        max-width: 890px;
+        margin-bottom: 20px;
+        font-size: clamp(2.35rem, 4.4vw, 4.15rem);
+        line-height: 1;
+        letter-spacing: -0.035em;
+      }
+
+      h2 {
+        margin-bottom: 8px;
+        font-size: clamp(1.65rem, 2.8vw, 2.55rem);
+        line-height: 1.08;
+        letter-spacing: -0.025em;
+      }
+
+      h3 {
+        margin-bottom: 8px;
+        font-size: clamp(0.95rem, 1.4vw, 1.25rem);
+        line-height: 1.2;
+      }
+
+      .lede {
+        max-width: 920px;
+        color: var(--muted);
+        font-size: clamp(1rem, 1.65vw, 1.35rem);
+        line-height: 1.45;
+      }
+
+      .purpose {
+        display: grid;
+        grid-template-columns: minmax(0, 1.3fr) minmax(260px, 0.7fr);
+        gap: clamp(28px, 4vw, 60px);
+        align-items: end;
+      }
+
+      .intro-statement {
+        max-width: 980px;
+        color: var(--text);
+        font-size: clamp(1rem, 1.45vw, 1.22rem);
+        line-height: 1.5;
+      }
+
+      .intro-statement strong {
+        color: var(--accent-strong);
+      }
+
+      .role-grid,
+      .definition-grid {
+        display: grid;
+        gap: clamp(14px, 2vw, 22px);
+      }
+
+      .role-grid {
+        grid-template-columns: repeat(3, minmax(0, 1fr));
+      }
+
+      .definition-grid {
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+      }
+
+      .definition {
+        display: grid;
+        grid-template-columns: minmax(90px, 0.32fr) minmax(0, 1fr);
+        gap: 16px;
+        padding: 16px 0;
+        border-top: 1px solid var(--line);
+      }
+
+      .definition strong {
+        color: var(--text);
+        font-size: clamp(0.88rem, 1.15vw, 1rem);
+      }
+
+      .definition span {
+        color: var(--muted);
+        font-size: clamp(0.8rem, 1.05vw, 0.95rem);
+        line-height: 1.45;
+      }
+
+      .principle {
+        border-left: 4px solid var(--accent);
+        padding: 4px 0 4px 18px;
+      }
+
+      .principle strong {
+        display: block;
+        margin-bottom: 7px;
+        font-size: clamp(1rem, 1.6vw, 1.35rem);
+      }
+
+      .principle span {
+        color: var(--muted);
+        font-size: clamp(0.88rem, 1.2vw, 1rem);
+        line-height: 1.45;
+      }
+
+      .grid-2,
+      .grid-3 {
+        display: grid;
+        gap: clamp(14px, 2vw, 24px);
+      }
+
+      .grid-2 {
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+      }
+
+      .grid-3 {
+        grid-template-columns: repeat(3, minmax(0, 1fr));
+      }
+
+      .panel {
+        padding: clamp(16px, 2vw, 24px);
+        border: 1px solid var(--line);
+        border-radius: 8px;
+        background: var(--surface-soft);
+      }
+
+      .panel p:last-child,
+      .panel ul:last-child {
+        margin-bottom: 0;
+      }
+
+      .panel p,
+      li {
+        color: var(--muted);
+        font-size: clamp(0.78rem, 1.05vw, 0.98rem);
+        line-height: 1.45;
+      }
+
+      ul {
+        margin: 0;
+        padding-left: 1.15rem;
+      }
+
+      li + li {
+        margin-top: 7px;
+      }
+
+      .architecture {
+        display: grid;
+        grid-template-columns: 0.9fr 42px 1.4fr 42px 1.05fr;
+        gap: 8px;
+        align-items: stretch;
+      }
+
+      .request-flow {
+        display: grid;
+        grid-template-columns: repeat(4, minmax(0, 1fr) 28px) minmax(0, 1fr);
+        gap: 7px;
+        align-items: stretch;
+      }
+
+      .flow-step {
+        padding: 16px;
+        border: 1px solid var(--line);
+        border-radius: 8px;
+        background: var(--surface-soft);
+      }
+
+      .flow-step.policy-step {
+        border-color: color-mix(in srgb, var(--accent) 55%, var(--line));
+        background: var(--accent-soft);
+      }
+
+      .step-number {
+        display: block;
+        margin-bottom: 10px;
+        color: var(--accent-strong);
+        font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+        font-size: 0.76rem;
+        font-weight: 700;
+      }
+
+      .flow-step strong {
+        display: block;
+        margin-bottom: 6px;
+        font-size: clamp(0.84rem, 1.1vw, 1rem);
+      }
+
+      .flow-step p {
+        margin: 0;
+        color: var(--muted);
+        font-size: clamp(0.7rem, 0.88vw, 0.82rem);
+        line-height: 1.4;
+      }
+
+      .flow-arrow {
+        display: grid;
+        place-items: center;
+        color: var(--accent);
+        font-size: 1.4rem;
+      }
+
+      .policy-strip {
+        display: grid;
+        grid-template-columns: repeat(4, minmax(0, 1fr));
+        margin-top: 20px;
+        border-top: 1px solid var(--line);
+        border-bottom: 1px solid var(--line);
+      }
+
+      .policy-strip div {
+        padding: 11px 14px;
+        border-right: 1px solid var(--line);
+        color: var(--muted);
+        font-size: clamp(0.72rem, 0.92vw, 0.86rem);
+        line-height: 1.35;
+      }
+
+      .policy-strip div:last-child {
+        border-right: 0;
+      }
+
+      .policy-strip code {
+        display: block;
+        margin-bottom: 4px;
+        color: var(--accent-strong);
+        font-weight: 700;
+      }
+
+      .approval-layout {
+        display: grid;
+        grid-template-columns: minmax(0, 1.45fr) minmax(250px, 0.55fr);
+        gap: 22px;
+        min-height: 0;
+      }
+
+      .terminal-mock {
+        min-height: 0;
+        overflow: hidden;
+        border: 1px solid #3d4752;
+        border-radius: 8px;
+        background: var(--code);
+        color: var(--code-text);
+        font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+        font-size: clamp(0.67rem, 0.82vw, 0.78rem);
+        line-height: 1.4;
+      }
+
+      .terminal-prompt {
+        margin: 12px;
+        padding: 11px 13px;
+        background: #414b56;
+        color: #f3f6f8;
+        font-weight: 700;
+      }
+
+      .terminal-shell {
+        margin: 12px 16px 8px;
+        color: #f3f6f8;
+      }
+
+      .terminal-shell span {
+        color: #a9ccd1;
+        font-weight: 700;
+      }
+
+      .terminal-narration {
+        margin: 11px 16px;
+        color: #b8c0ca;
+        font-style: italic;
+      }
+
+      .terminal-tool {
+        margin: 0 12px 11px;
+        padding: 11px 13px;
+        color: #f6f8fa;
+      }
+
+      .terminal-tool.complete {
+        background: #15522a;
+      }
+
+      .terminal-tool.pending {
+        background: #1a2f63;
+      }
+
+      .terminal-tool strong {
+        color: #fff;
+      }
+
+      .terminal-tool span {
+        color: #b9d2f1;
+      }
+
+      .approval-box {
+        margin: 0 12px 12px;
+        padding: 11px 13px 9px;
+        border-top: 2px solid #6d8dff;
+        border-bottom: 2px solid #6d8dff;
+      }
+
+      .approval-question {
+        margin-bottom: 8px;
+        color: #a9ccd1;
+        font-weight: 700;
+      }
+
+      .approval-choice {
+        color: #f3f6f8;
+      }
+
+      .approval-choice.selected {
+        color: #a9ccd1;
+        font-weight: 700;
+      }
+
+      .annotation-list {
+        display: grid;
+        gap: 14px;
+        margin: 0;
+        padding: 0;
+        list-style: none;
+      }
+
+      .annotation-list li {
+        display: grid;
+        grid-template-columns: 24px 1fr;
+        gap: 10px;
+        margin: 0;
+        padding-bottom: 12px;
+        border-bottom: 1px solid var(--line);
+      }
+
+      .annotation-list li:last-child {
+        border-bottom: 0;
+      }
+
+      .annotation-number {
+        color: var(--accent-strong);
+        font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+        font-weight: 700;
+      }
+
+      .annotation-list strong {
+        display: block;
+        margin-bottom: 4px;
+        color: var(--text);
+      }
+
+      .arch-column {
+        display: grid;
+        gap: 12px;
+      }
+
+      .arch-node {
+        display: flex;
+        min-height: 84px;
+        flex-direction: column;
+        justify-content: center;
+        padding: 15px;
+        border: 1px solid var(--line);
+        border-radius: 8px;
+        background: var(--surface-soft);
+      }
+
+      .arch-node strong {
+        margin-bottom: 5px;
+        font-size: clamp(0.82rem, 1.15vw, 1rem);
+      }
+
+      .arch-node span {
+        color: var(--muted);
+        font-size: clamp(0.7rem, 0.9vw, 0.84rem);
+        line-height: 1.35;
+      }
+
+      .arch-node.trusted {
+        border-color: color-mix(in srgb, var(--accent) 55%, var(--line));
+        background: var(--accent-soft);
+      }
+
+      .connector {
+        display: grid;
+        place-items: center;
+        color: var(--accent);
+        font-size: 1.6rem;
+      }
+
+      .mode-table {
+        width: 100%;
+        border-collapse: collapse;
+        font-size: clamp(0.74rem, 1vw, 0.94rem);
+      }
+
+      .mode-table th,
+      .mode-table td {
+        padding: 11px 13px;
+        border-bottom: 1px solid var(--line);
+        text-align: left;
+        vertical-align: top;
+      }
+
+      .mode-table th {
+        color: var(--text);
+        font-weight: 700;
+      }
+
+      .mode-table td {
+        color: var(--muted);
+        line-height: 1.4;
+      }
+
+      .mode-table th:first-child,
+      .mode-table td:first-child {
+        width: 20%;
+        color: var(--text);
+        font-weight: 650;
+      }
+
+      .callout {
+        display: flex;
+        gap: 12px;
+        align-items: flex-start;
+        padding: 12px 15px;
+        border-left: 4px solid var(--warn);
+        background: var(--surface-soft);
+        color: var(--muted);
+        font-size: clamp(0.76rem, 1vw, 0.92rem);
+        line-height: 1.4;
+      }
+
+      .callout strong {
+        color: var(--text);
+        white-space: nowrap;
+      }
+
+      .hierarchy {
+        display: grid;
+        grid-template-columns: repeat(3, minmax(0, 1fr));
+        gap: 18px;
+        align-items: stretch;
+      }
+
+      .layer {
+        position: relative;
+        padding: 20px;
+        border-top: 4px solid var(--line);
+        background: var(--surface-soft);
+      }
+
+      .layer:nth-child(1) {
+        border-color: var(--accent);
+      }
+
+      .layer:nth-child(2) {
+        border-color: var(--good);
+      }
+
+      .layer:nth-child(3) {
+        border-color: var(--warn);
+      }
+
+      .layer .tag {
+        display: inline-block;
+        margin-bottom: 11px;
+        color: var(--muted);
+        font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+        font-size: clamp(0.68rem, 0.86vw, 0.78rem);
+      }
+
+      .layer p {
+        margin-bottom: 0;
+        color: var(--muted);
+        font-size: clamp(0.75rem, 1vw, 0.92rem);
+        line-height: 1.45;
+      }
+
+      .code-layout {
+        display: grid;
+        grid-template-columns: minmax(0, 1.28fr) minmax(280px, 0.72fr);
+        gap: 20px;
+        min-height: 0;
+      }
+
+      pre {
+        min-height: 0;
+        margin: 0;
+        overflow: auto;
+        padding: clamp(16px, 2vw, 22px);
+        border-radius: 8px;
+        background: var(--code);
+        color: var(--code-text);
+        font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+        font-size: clamp(0.64rem, 0.85vw, 0.81rem);
+        line-height: 1.45;
+        tab-size: 2;
+        white-space: pre;
+      }
+
+      pre.compact {
+        padding: 16px 20px;
+        font-size: clamp(0.62rem, 0.78vw, 0.75rem);
+        line-height: 1.3;
+      }
+
+      .policy-list {
+        display: grid;
+        gap: 10px;
+      }
+
+      .policy-item {
+        display: grid;
+        grid-template-columns: 76px 1fr;
+        gap: 10px;
+        align-items: baseline;
+        padding-bottom: 9px;
+        border-bottom: 1px solid var(--line);
+      }
+
+      .policy-item:last-child {
+        border-bottom: 0;
+      }
+
+      .policy-item code {
+        color: var(--accent-strong);
+        font-weight: 700;
+      }
+
+      .policy-item span {
+        color: var(--muted);
+        font-size: clamp(0.72rem, 0.95vw, 0.88rem);
+        line-height: 1.35;
+      }
+
+      .checklist {
+        display: grid;
+        grid-template-columns: 1fr 1fr;
+        gap: 12px 30px;
+        margin: 0;
+        padding: 0;
+        list-style: none;
+      }
+
+      .checklist li {
+        position: relative;
+        margin: 0;
+        padding-left: 26px;
+      }
+
+      .checklist li::before {
+        position: absolute;
+        left: 0;
+        color: var(--good);
+        content: "✓";
+        font-weight: 800;
+      }
+
+      .slide-footer {
+        display: flex;
+        justify-content: space-between;
+        color: var(--muted);
+        font-size: clamp(0.66rem, 0.82vw, 0.76rem);
+      }
+
+      .controls {
+        position: absolute;
+        z-index: 10;
+        right: 16px;
+        bottom: 13px;
+        left: 16px;
+        display: grid;
+        grid-template-columns: auto 1fr auto;
+        gap: 12px;
+        align-items: center;
+        pointer-events: none;
+      }
+
+      .control-group,
+      .progress-wrap {
+        pointer-events: auto;
+      }
+
+      .control-group {
+        display: flex;
+        gap: 7px;
+      }
+
+      .control {
+        display: grid;
+        width: 34px;
+        height: 30px;
+        place-items: center;
+        border: 1px solid var(--line);
+        border-radius: 6px;
+        background: var(--surface);
+        color: var(--text);
+        cursor: pointer;
+      }
+
+      .control:hover:not(:disabled) {
+        border-color: var(--accent);
+        background: var(--accent-soft);
+      }
+
+      .control:focus-visible {
+        outline: 3px solid color-mix(in srgb, var(--accent) 45%, transparent);
+        outline-offset: 2px;
+      }
+
+      .control:disabled {
+        cursor: default;
+        opacity: 0.38;
+      }
+
+      .progress-wrap {
+        display: flex;
+        gap: 10px;
+        align-items: center;
+        justify-content: center;
+      }
+
+      .progress-track {
+        width: min(360px, 34vw);
+        height: 4px;
+        overflow: hidden;
+        border-radius: 999px;
+        background: var(--line);
+      }
+
+      .progress-bar {
+        width: 0;
+        height: 100%;
+        background: var(--accent);
+        transition: width 150ms ease-out;
+      }
+
+      .counter {
+        min-width: 42px;
+        color: var(--muted);
+        font-variant-numeric: tabular-nums;
+        font-size: 0.76rem;
+      }
+
+      .help {
+        position: absolute;
+        z-index: 20;
+        right: 16px;
+        bottom: 54px;
+        display: none;
+        width: min(330px, calc(100% - 32px));
+        padding: 16px;
+        border: 1px solid var(--line);
+        border-radius: 8px;
+        background: var(--surface);
+        box-shadow: var(--shadow);
+      }
+
+      .help.is-open {
+        display: block;
+      }
+
+      .help h3 {
+        margin-bottom: 10px;
+      }
+
+      .shortcut-grid {
+        display: grid;
+        grid-template-columns: auto 1fr;
+        gap: 7px 14px;
+        color: var(--muted);
+        font-size: 0.82rem;
+      }
+
+      kbd {
+        display: inline-block;
+        min-width: 24px;
+        padding: 2px 6px;
+        border: 1px solid var(--line);
+        border-bottom-width: 2px;
+        border-radius: 4px;
+        background: var(--surface-soft);
+        color: var(--text);
+        font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+        text-align: center;
+      }
+
+      .visually-hidden {
+        position: absolute;
+        width: 1px;
+        height: 1px;
+        overflow: hidden;
+        clip: rect(0 0 0 0);
+        clip-path: inset(50%);
+        white-space: nowrap;
+      }
+
+      @media (max-width: 800px), (max-height: 650px) {
+        body {
+          padding: 0;
+          overflow: auto;
+        }
+
+        .deck {
+          width: 100vw;
+          min-height: 100vh;
+          max-height: none;
+          border: 0;
+          border-radius: 0;
+          box-shadow: none;
+        }
+
+        .slide {
+          padding: 30px 24px 64px;
+        }
+
+        .purpose,
+        .grid-2,
+        .grid-3,
+        .role-grid,
+        .definition-grid,
+        .approval-layout,
+        .hierarchy,
+        .code-layout {
+          grid-template-columns: 1fr;
+        }
+
+        .definition {
+          grid-template-columns: 1fr;
+          gap: 7px;
+        }
+
+        .architecture,
+        .request-flow {
+          grid-template-columns: 1fr;
+        }
+
+        .connector,
+        .flow-arrow {
+          height: 20px;
+          transform: rotate(90deg);
+        }
+
+        .policy-strip {
+          grid-template-columns: 1fr 1fr;
+        }
+
+        .policy-strip div:nth-child(2) {
+          border-right: 0;
+        }
+
+        .mode-table {
+          min-width: 650px;
+        }
+
+        .table-scroll {
+          overflow-x: auto;
+        }
+
+        .checklist {
+          grid-template-columns: 1fr;
+        }
+
+        .progress-track {
+          width: min(190px, 30vw);
+        }
+      }
+
+      @media print {
+        @page {
+          size: 16in 9in;
+          margin: 0;
+        }
+
+        body {
+          display: block;
+          padding: 0;
+          overflow: visible;
+          background: #fff;
+        }
+
+        .deck {
+          width: auto;
+          min-height: 0;
+          max-height: none;
+          overflow: visible;
+          border: 0;
+          box-shadow: none;
+        }
+
+        .slides {
+          position: static;
+        }
+
+        .slide,
+        .slide.is-active {
+          position: relative;
+          display: grid;
+          width: 16in;
+          height: 9in;
+          break-after: page;
+          overflow: hidden;
+          animation: none;
+          color: #18202a;
+          background: #fff;
+        }
+
+        .controls,
+        .help {
+          display: none !important;
+        }
+      }
+    </style>
+  </head>
+  <body>
+    <main class="deck" id="deck" aria-label="Pi Sandbox technical overview">
+      <div class="slides">
+        <section class="slide is-active" data-title="Purpose" aria-labelledby="slide-1-title">
+          <header>
+            <p class="eyebrow">Technical overview</p>
+            <h1 id="slide-1-title">Pi Sandbox</h1>
+            <p class="lede">Managed AI-agent access for development and production servers.</p>
+          </header>
+          <div>
+            <p class="intro-statement">
+              Developers, operations staff, and administrators may need an AI agent to review or
+              edit configuration, troubleshoot logs, work with source code, run commands, or call
+              internal services. The goal is to provide that access through
+              <strong>centrally managed tools, permissions, and human approvals</strong> instead of
+              giving the model an uncontrolled shell.
+            </p>
+            <div class="role-grid" style="margin-top: 26px">
+              <article class="panel">
+                <h3>Users</h3>
+                <p>
+                  Run an interactive agent in a chosen working directory and see proposed operations
+                  before they run.
+                </p>
+              </article>
+              <article class="panel">
+                <h3>Administrators</h3>
+                <p>
+                  Define available tools, approval requirements, execution mode, network access, and
+                  user exceptions.
+                </p>
+              </article>
+              <article class="panel">
+                <h3>Security and operations</h3>
+                <p>
+                  Deploy one consistent, fail-closed policy across managed development and
+                  production systems.
+                </p>
+              </article>
+            </div>
+          </div>
+          <footer class="slide-footer">
+            <span>Purpose</span><span>Attended, policy-controlled agent use</span>
+          </footer>
+        </section>
+
+        <section class="slide" data-title="Terminology" aria-labelledby="slide-2-title">
+          <header>
+            <p class="eyebrow">Terminology and components</p>
+            <h2 id="slide-2-title">What Pi Sandbox manages</h2>
+          </header>
+          <div>
+            <div class="definition-grid">
+              <div class="definition">
+                <strong>AI agent</strong>
+                <span
+                  >An interactive application that sends a user request to a language model and can
+                  carry out model-requested operations on the host.</span
+                >
+              </div>
+              <div class="definition">
+                <strong>Pi</strong>
+                <span
+                  >The terminal application: it provides the conversation UI, contacts the
+                  configured language model, and maintains sessions and user state.</span
+                >
+              </div>
+              <div class="definition">
+                <strong>Tool</strong>
+                <span
+                  >A named operation with structured input, such as <code>read</code>,
+                  <code>edit</code>, <code>bash</code>, or <code>git_clone</code>. The model can
+                  request only tools it is shown.</span
+                >
+              </div>
+              <div class="definition">
+                <strong>Pi Sandbox</strong>
+                <span
+                  >A managed distribution of Pi that replaces its executable tools with
+                  policy-controlled implementations and administrator-selected extensions.</span
+                >
+              </div>
+            </div>
+            <div class="callout" style="margin-top: 20px">
+              <strong>Division of responsibility</strong>
+              <span
+                >Pi handles the interactive agent experience. Pi Sandbox governs which operations
+                are exposed, whether they require approval, and where approved work executes.</span
+              >
+            </div>
+          </div>
+          <footer class="slide-footer">
+            <span>Terminology</span><span>Agent interface plus managed execution</span>
+          </footer>
+        </section>
+
+        <section class="slide" data-title="Request flow" aria-labelledby="slide-3-title">
+          <header>
+            <p class="eyebrow">Request and approval flow</p>
+            <h2 id="slide-3-title">How an agent operation reaches the server</h2>
+          </header>
+          <div>
+            <div class="request-flow" aria-label="Agent tool request flow">
+              <article class="flow-step">
+                <span class="step-number">01</span>
+                <strong>User request</strong>
+                <p>
+                  The user asks Pi to inspect, troubleshoot, or change something from the current
+                  host working directory.
+                </p>
+              </article>
+              <div class="flow-arrow" aria-hidden="true">→</div>
+              <article class="flow-step">
+                <span class="step-number">02</span>
+                <strong>Model response</strong>
+                <p>
+                  The configured language model may answer directly or request one advertised tool.
+                </p>
+              </article>
+              <div class="flow-arrow" aria-hidden="true">→</div>
+              <article class="flow-step">
+                <span class="step-number">03</span>
+                <strong>Structured tool call</strong>
+                <p>Pi Sandbox validates the tool name and its typed arguments.</p>
+              </article>
+              <div class="flow-arrow" aria-hidden="true">→</div>
+              <article class="flow-step policy-step">
+                <span class="step-number">04</span>
+                <strong>Policy and approval</strong>
+                <p>
+                  The effective per-tool policy allows, prompts, refuses, or hides the operation.
+                </p>
+              </article>
+              <div class="flow-arrow" aria-hidden="true">→</div>
+              <article class="flow-step">
+                <span class="step-number">05</span>
+                <strong>Execution and result</strong>
+                <p>
+                  The exact approved request runs through its fixed boundary; output returns to Pi.
+                </p>
+              </article>
+            </div>
+            <div class="callout" style="margin-top: 22px">
+              <strong>Tool exposure is independent</strong>
+              <span
+                >Model-visible Bash can be disabled while selected typed tools remain available. The
+                user's explicit <code>!</code> shell command is human-only and follows the
+                configured execution backend.</span
+              >
+            </div>
+          </div>
+          <footer class="slide-footer">
+            <span>Request flow</span
+            ><span>The model requests; policy decides; the boundary executes</span>
+          </footer>
+        </section>
+
+        <section class="slide" data-title="Approval UI" aria-labelledby="slide-4-title">
+          <header>
+            <p class="eyebrow">Interactive approval</p>
+            <h2 id="slide-4-title">What the user sees when approval is required</h2>
+          </header>
+          <div class="approval-layout">
+            <div
+              class="terminal-mock"
+              role="img"
+              aria-label="Mock Pi terminal showing a read tool approval request"
+            >
+              <div class="terminal-shell"><span>$</span> pi-sandbox</div>
+              <div class="terminal-prompt">
+                Review /etc/example/app.ini and report any obvious issues.
+              </div>
+              <p class="terminal-narration">I’ll locate and inspect the configuration file.</p>
+              <div class="terminal-tool complete">
+                <strong>find</strong> <span>app.ini in /etc/example</span><br /><br />app.ini
+              </div>
+              <p class="terminal-narration">The file was found. I’ll read it now.</p>
+              <div class="terminal-tool pending">
+                <strong>read</strong> <span>/etc/example/app.ini</span>
+              </div>
+              <div class="approval-box">
+                <div class="approval-question">Allow read?</div>
+                <div class="approval-choice selected">→ Allow once</div>
+                <div class="approval-choice">&nbsp;&nbsp;Deny</div>
+              </div>
+            </div>
+            <aside aria-label="Approval interface details">
+              <ul class="annotation-list">
+                <li>
+                  <span class="annotation-number">1</span>
+                  <span
+                    ><strong>Operation is visible</strong>The tool card identifies both the tool and
+                    the relevant target before execution.</span
+                  >
+                </li>
+                <li>
+                  <span class="annotation-number">2</span>
+                  <span
+                    ><strong>Policy creates the prompt</strong>An <code>ask</code> policy pauses the
+                    tool call. The model cannot approve its own request.</span
+                  >
+                </li>
+                <li>
+                  <span class="annotation-number">3</span>
+                  <span
+                    ><strong>The user decides</strong>Allowing runs the exact validated request.
+                    Denial returns a refusal to the agent.</span
+                  >
+                </li>
+              </ul>
+            </aside>
+          </div>
+          <footer class="slide-footer">
+            <span>Approval UI</span><span>Mocked interaction using generic paths</span>
+          </footer>
+        </section>
+
+        <section class="slide" data-title="Administration" aria-labelledby="slide-5-title">
+          <header>
+            <p class="eyebrow">Administrative policy</p>
+            <h2 id="slide-5-title">What administrators configure</h2>
+          </header>
+          <div>
+            <div class="hierarchy">
+              <article class="layer">
+                <span class="tag">distribution.toml · build time</span>
+                <h3>Installed capabilities</h3>
+                <p>
+                  Determines which extension implementations can exist in the package, installation
+                  paths, and the Linux Bubblewrap provider.
+                </p>
+              </article>
+              <article class="layer">
+                <span class="tag">config.toml + models.json · global</span>
+                <h3>System baseline</h3>
+                <p>
+                  Defines active extensions, every tool policy, model catalog, scoped environment,
+                  execution backend, and network mode.
+                </p>
+              </article>
+              <article class="layer">
+                <span class="tag">users.d/&lt;uid&gt;.toml · optional</span>
+                <h3>Per-user exception</h3>
+                <p>
+                  A root-owned Linux drop-in may override selected environment, model, execution,
+                  network, and tool-policy values for one Unix UID.
+                </p>
+              </article>
+            </div>
+            <div class="policy-strip" aria-label="Tool policy modes">
+              <div><code>allow</code>Run without a model-tool prompt.</div>
+              <div><code>ask</code>Require interactive approval.</div>
+              <div><code>deny</code>Advertise the tool but refuse calls.</div>
+              <div><code>disabled</code>Do not show the tool to the model.</div>
+            </div>
+          </div>
+          <footer class="slide-footer">
+            <span>Administration</span><span>Strict, versioned, root-managed inputs</span>
+          </footer>
+        </section>
+
+        <section class="slide" data-title="Execution boundaries" aria-labelledby="slide-6-title">
+          <header>
+            <p class="eyebrow">Execution boundaries</p>
+            <h2 id="slide-6-title">Where approved operations run</h2>
+          </header>
+          <div>
+            <div class="table-scroll">
+              <table class="mode-table">
+                <thead>
+                  <tr>
+                    <th>Path</th>
+                    <th>Typical operations</th>
+                    <th>Authority and containment</th>
+                    <th>Policy controls that remain</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  <tr>
+                    <td>Bubblewrap<br /><small>Linux</small></td>
+                    <td>Built-in file, search, edit, and shell tools</td>
+                    <td>
+                      Host filesystem read-only; launch directory read/write at the same path;
+                      private runtime and optional isolated network.
+                    </td>
+                    <td>
+                      Tool visibility, approval, fixed request mapping, time/output limits, and
+                      descendant cleanup.
+                    </td>
+                  </tr>
+                  <tr>
+                    <td>Direct<br /><small>Linux / macOS</small></td>
+                    <td>The same built-ins when containment is not selected</td>
+                    <td>
+                      Runs as the invoking user with ordinary host filesystem and network authority.
+                      This is not a sandbox.
+                    </td>
+                    <td>
+                      The same tool catalog, policies, approvals, direct argument handling, and
+                      process lifecycle controls.
+                    </td>
+                  </tr>
+                  <tr>
+                    <td>Managed host tool</td>
+                    <td>Small typed exceptions such as <code>git_clone</code></td>
+                    <td>
+                      Runs outside Bubblewrap as the invoking user because it needs host identity or
+                      network access.
+                    </td>
+                    <td>
+                      Fixed executable, bounded structured arguments, extension-specific validation,
+                      and the same per-tool approval policy.
+                    </td>
+                  </tr>
+                </tbody>
+              </table>
+            </div>
+            <div class="callout" style="margin-top: 18px">
+              <strong>Two separate decisions</strong>
+              <span
+                >Policy determines whether an operation may run. The selected execution path
+                determines what an allowed operation can reach. Approval never changes the
+                configured boundary.</span
+              >
+            </div>
+          </div>
+          <footer class="slide-footer">
+            <span>Execution boundaries</span
+            ><span>No fallback from Bubblewrap to direct execution</span>
+          </footer>
+        </section>
+
+        <section class="slide" data-title="Configuration" aria-labelledby="slide-7-title">
+          <header>
+            <p class="eyebrow">Configuration example</p>
+            <h2 id="slide-7-title">Global policy with an optional user exception</h2>
+          </header>
+          <div class="code-layout">
+            <pre
+              class="compact"
+              aria-label="Example global Pi Sandbox configuration"
+            ><code># /etc/pi-sandbox/config.toml — excerpt
+config_version = 5
+models_file = "/etc/pi-sandbox/models.json"
+[execution]
+backend = "bubblewrap"
+[identity]
+mode = "broker"
+[network]
+mode = "none"
+[environment.pi]
+[environment.sandbox]
+[environment.extensions]
+[extensions.git]
+allowed_hosts = ["github.com", "git.example.com"]
+allowed_schemes = ["https", "ssh"]
+[tools]
+read = { mode = "allow", session_grant = "never" }
+write = { mode = "ask", session_grant = "offer" }
+bash = { mode = "disabled", session_grant = "never" }
+git_clone = { mode = "ask", session_grant = "never" }
+# A complete file also declares grep, find, ls, and edit.</code></pre>
+            <div>
+              <pre
+                class="compact"
+                aria-label="Example per-user Pi Sandbox override"
+              ><code># users.d/1234.toml — optional
+version = 5
+uid = 1234
+
+[overrides.tools.git_clone]
+mode = "disabled"
+session_grant = "never"</code></pre>
+              <div class="callout" style="margin-top: 18px">
+                <strong>Effective policy</strong>
+                <span
+                  >The main TOML applies to every user. A matching root-owned UID file replaces only
+                  the values it names; everything else is inherited.</span
+                >
+              </div>
+              <p
+                style="margin: 16px 0 0; color: var(--muted); font-size: 0.82rem; line-height: 1.4"
+              >
+                Environment is scoped separately for Pi's model connection, sandboxed commands, and
+                individual managed extensions. Environment values cannot enable tools or grant
+                approvals.
+              </p>
+            </div>
+          </div>
+          <footer class="slide-footer">
+            <span>Configuration</span
+            ><span>Illustrative excerpts; invalid inputs stop startup</span>
+          </footer>
+        </section>
+
+        <section class="slide" data-title="Operating scope" aria-labelledby="slide-8-title">
+          <header>
+            <p class="eyebrow">Operating scope</p>
+            <h2 id="slide-8-title">Intended use and scope of control</h2>
+            <p class="lede">
+              Adds managed controls for agent-requested operations without replacing the user's
+              existing access to the server.
+            </p>
+          </header>
+          <div class="grid-2">
+            <article class="panel">
+              <h3>Intended use</h3>
+              <ul>
+                <li>
+                  Configuration review and editing, log troubleshooting, diagnostics, repository
+                  work, and coding on development or production servers.
+                </li>
+                <li>
+                  A consistent administrator-defined tool set instead of per-user agent
+                  configuration.
+                </li>
+                <li>
+                  Typed tools with model-visible Bash disabled when a narrower interface is
+                  preferred.
+                </li>
+                <li>A distributable public core with separately compiled private extensions.</li>
+              </ul>
+            </article>
+            <article class="panel">
+              <h3>Scope of control</h3>
+              <ul>
+                <li>
+                  Existing Unix account permissions and server security controls remain
+                  authoritative.
+                </li>
+                <li>
+                  Users retain whatever access to software, files, and services their account and
+                  organizational policies already permit.
+                </li>
+                <li>
+                  Administrators control agent tools independently: each may be hidden, denied,
+                  forced through interactive approval, or allowed.
+                </li>
+                <li>
+                  Bubblewrap adds execution isolation through filesystem mount controls, private
+                  process and runtime namespaces, bounded writable locations, and
+                  administrator-selected network isolation.
+                </li>
+              </ul>
+            </article>
+          </div>
+          <footer class="slide-footer">
+            <span>Operating scope</span><span>Agent policy within existing host access</span>
+          </footer>
+        </section>
+      </div>
+
+      <div class="controls" aria-label="Slide controls">
+        <div class="control-group">
+          <button class="control" id="previous" type="button" aria-label="Previous slide">←</button>
+          <button class="control" id="next" type="button" aria-label="Next slide">→</button>
+        </div>
+        <div class="progress-wrap" aria-hidden="true">
+          <div class="progress-track"><div class="progress-bar" id="progress"></div></div>
+          <span class="counter" id="counter">1 / 8</span>
+        </div>
+        <div class="control-group">
+          <button class="control" id="theme" type="button" aria-label="Toggle color theme">
+            ◐
+          </button>
+          <button
+            class="control"
+            id="help-button"
+            type="button"
+            aria-label="Show keyboard shortcuts"
+            aria-expanded="false"
+          >
+            ?
+          </button>
+        </div>
+      </div>
+
+      <aside class="help" id="help" aria-labelledby="help-title">
+        <h3 id="help-title">Keyboard shortcuts</h3>
+        <div class="shortcut-grid">
+          <kbd>→</kbd><span>Next slide</span> <kbd>←</kbd><span>Previous slide</span> <kbd>Home</kbd
+          ><span>First slide</span> <kbd>End</kbd><span>Last slide</span> <kbd>F</kbd
+          ><span>Toggle fullscreen</span> <kbd>?</kbd><span>Toggle this help</span>
+        </div>
+      </aside>
+      <p class="visually-hidden" id="announcement" aria-live="polite"></p>
+    </main>
+
+    <script>
+      (() => {
+        const root = document.documentElement;
+        const deck = document.getElementById("deck");
+        const slides = Array.from(document.querySelectorAll(".slide"));
+        const previous = document.getElementById("previous");
+        const next = document.getElementById("next");
+        const progress = document.getElementById("progress");
+        const counter = document.getElementById("counter");
+        const theme = document.getElementById("theme");
+        const helpButton = document.getElementById("help-button");
+        const help = document.getElementById("help");
+        const announcement = document.getElementById("announcement");
+        let index = 0;
+        let touchStartX = null;
+
+        const requestedSlide = Number.parseInt(window.location.hash.slice(1), 10);
+        if (Number.isInteger(requestedSlide)) {
+          index = Math.min(slides.length - 1, Math.max(0, requestedSlide - 1));
+        }
+
+        const render = (announce = true) => {
+          slides.forEach((slide, slideIndex) => {
+            const active = slideIndex === index;
+            slide.classList.toggle("is-active", active);
+            slide.setAttribute("aria-hidden", String(!active));
+          });
+          previous.disabled = index === 0;
+          next.disabled = index === slides.length - 1;
+          progress.style.width = `${((index + 1) / slides.length) * 100}%`;
+          counter.textContent = `${index + 1} / ${slides.length}`;
+          history.replaceState(null, "", `#${index + 1}`);
+          document.title = `${slides[index].dataset.title} — Pi Sandbox`;
+          if (announce) {
+            announcement.textContent = `Slide ${index + 1} of ${slides.length}: ${slides[index].dataset.title}`;
+          }
+        };
+
+        const go = (nextIndex) => {
+          const bounded = Math.min(slides.length - 1, Math.max(0, nextIndex));
+          if (bounded === index) return;
+          index = bounded;
+          render();
+        };
+
+        previous.addEventListener("click", () => go(index - 1));
+        next.addEventListener("click", () => go(index + 1));
+
+        theme.addEventListener("click", () => {
+          const current = root.dataset.theme;
+          if (current === "dark") root.dataset.theme = "light";
+          else if (current === "light") root.dataset.theme = "dark";
+          else {
+            root.dataset.theme = window.matchMedia("(prefers-color-scheme: dark)").matches
+              ? "light"
+              : "dark";
+          }
+        });
+
+        const toggleHelp = () => {
+          const open = !help.classList.contains("is-open");
+          help.classList.toggle("is-open", open);
+          helpButton.setAttribute("aria-expanded", String(open));
+        };
+
+        helpButton.addEventListener("click", toggleHelp);
+
+        document.addEventListener("keydown", (event) => {
+          if (event.altKey || event.ctrlKey || event.metaKey) return;
+          if (event.key === "ArrowRight" || event.key === "PageDown" || event.key === " ") {
+            event.preventDefault();
+            go(index + 1);
+          } else if (event.key === "ArrowLeft" || event.key === "PageUp") {
+            event.preventDefault();
+            go(index - 1);
+          } else if (event.key === "Home") {
+            event.preventDefault();
+            go(0);
+          } else if (event.key === "End") {
+            event.preventDefault();
+            go(slides.length - 1);
+          } else if (event.key.toLowerCase() === "f") {
+            event.preventDefault();
+            if (document.fullscreenElement) document.exitFullscreen();
+            else deck.requestFullscreen?.();
+          } else if (event.key === "?") {
+            event.preventDefault();
+            toggleHelp();
+          } else if (event.key === "Escape" && help.classList.contains("is-open")) {
+            help.classList.remove("is-open");
+            helpButton.setAttribute("aria-expanded", "false");
+          }
+        });
+
+        deck.addEventListener(
+          "touchstart",
+          (event) => {
+            touchStartX = event.changedTouches[0]?.clientX ?? null;
+          },
+          { passive: true },
+        );
+
+        deck.addEventListener(
+          "touchend",
+          (event) => {
+            if (touchStartX === null) return;
+            const endX = event.changedTouches[0]?.clientX ?? touchStartX;
+            const distance = endX - touchStartX;
+            touchStartX = null;
+            if (Math.abs(distance) < 50) return;
+            go(index + (distance < 0 ? 1 : -1));
+          },
+          { passive: true },
+        );
+
+        window.addEventListener("hashchange", () => {
+          const requested = Number.parseInt(window.location.hash.slice(1), 10);
+          if (Number.isInteger(requested)) go(requested - 1);
+        });
+
+        render(false);
+      })();
+    </script>
+  </body>
+</html>

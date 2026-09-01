@@ -1,0 +1,273 @@
+# Architecture
+
+## Boundary placement
+
+Pi Sandbox deliberately keeps the stock Pi process on the host. Pi owns the
+terminal UI, provider credentials, provider traffic, and session state. The
+compiled Pi Sandbox extension owns tool presentation, approval, and process
+lifecycle. One Bubblewrap worker lives for the `pi-sandbox` process; each
+allowed built-in operation runs through the administrator-selected Bubblewrap
+or direct backend.
+
+```text
+trusted host
+  optional root systemd identity broker
+    -> SO_PEERCRED UID lookup in optional /etc/pi-sandbox/users.d/<uid>.toml
+  prebuilt Bun pi-sandbox executable
+    pinned, minimally patched Pi runtime
+      forced inline Pi Sandbox extension
+        compiled extension registry
+        model-tool policy and approval UI
+        bounded direct-argv host executor
+        selected built-in executor
+          -> Bubblewrap process-lifetime worker and framed pipe IPC (Linux)
+          -> or bounded direct host child (Linux/macOS)
+```
+
+Allowing a tool call never delegates to Pi's stock host implementation. The
+extension replaces all seven built-ins and maps the exact approved request to a
+fixed direct executable invocation through the selected backend. User `!`
+shell commands follow the same route. Administratively selected
+managed-extension tools may instead declare host execution. Those tools still use the same policy and
+approval machinery, but run only their fixed executable and argument shape as
+the invoking user outside Bubblewrap.
+
+## Managed application and identity broker
+
+The installed application is one prebuilt Bun executable. Its private entry
+point captures the canonical launch CWD, validates administrative
+configuration, probes the selected executor, filters caller arguments, and calls Pi's
+`main()` API. The Pi Sandbox extension and a build-selected set of managed
+extension modules are compiled into the same executable. Pi still receives
+exactly one forced inline Pi Sandbox extension factory; managed modules
+register through Pi Sandbox's restricted extension API rather than receiving
+Pi's extension API directly.
+
+The build-selected distribution manifest lists every extension manifest and
+the platform installation layout. Extension source may live in another
+repository. Release composition emits static imports, so there is no runtime
+module path, discovery, dynamic import, or package installation. The default
+public distribution selects Git; another distribution can select any desired
+combination.
+The compiled catalog validates extension API versions, identifiers, semantic
+versions, tool schemas, and collisions before administrative configuration is
+admitted. The root configuration selects a subset of that immutable catalog.
+
+The private entry point always disables extension discovery, Pi's built-in
+extension factories, and Pi's built-in tools. It rejects arguments and commands
+that could load executable extension code, manage packages, or restore stock
+tool implementations. Skills and user tool-selection options remain available:
+they may provide instructions or narrow the visible catalog, but all executable
+tool authority still comes from the forced extension.
+
+Administrative configuration begins at the distribution's compiled
+`config_dir/config.toml`. When configured, the Bun process asks the
+separate static Rust broker for the calling UID's optional drop-in. The broker uses kernel
+peer credentials, reads one newline-delimited request without requiring a
+client half-close, and reads only the matching root-owned version 5 TOML file.
+It returns a protocol version 4 per-UID environment and optional model,
+execution, network, and atomic tool-policy patch. A missing directory or file
+returns an empty patch. The Bun process validates the response independently,
+overlays it on the global policy and scoped environment from the main TOML, constructs one effective
+configuration, and loads only its selected model catalog. Pi-scoped values are
+applied to the trusted host Pi process, sandbox-scoped values are added to the
+cleared Bubblewrap environment or overlaid on the inherited direct-command
+environment, and extension-scoped values are admitted only
+for their named extension. The patched Pi runtime omits its internal model
+catalog. `PI_CODING_AGENT_DIR` still selects user credentials, sessions,
+settings, skills, themes, and logs, but cannot redirect administrative policy,
+broker selection, or models. Missing or invalid effective inputs abort startup.
+
+The distribution manifest fixes the config directory, libexec directory,
+launcher path, identity socket, Linux systemd unit directory, and Linux
+Bubblewrap provider at build time. A system provider names an unmanaged
+absolute executable. A bundled provider supplies a verified native binary that
+is installed under the root-owned libexec directory and selected by the
+compiled runtime. macOS packages only the application; the Linux-only broker is not
+included. Keeping the product executable behind its configured launcher path provides a canonical command,
+but does not constitute access control against the logged-in user.
+
+## Tool catalog and approvals
+
+The extension registers only configured, non-disabled model tools. The exact
+catalog is the seven replacement tools plus every tool contributed by selected
+compiled extensions. Immediately before execution it creates a stable snapshot
+of the final tool input, obtains the configured policy decision, and maps that
+same snapshot to either a sandbox request or the managed extension's fixed host
+request.
+
+Approval presentation and execution authority are separate:
+
+- policy decides whether a request may run;
+- the selected execution boundary decides what an allowed request can reach.
+
+An approval cannot add a mount, change the operation being executed, or switch
+a tool between configured execution backends. It cannot alter the admitted scoped
+environment or enable networking. Host tools intentionally retain the invoking
+user's host authority subject to their compiled environment policy as described
+below. Prompt errors, loss of interactive UI, and cancellation deny the
+request.
+
+## Managed host tools
+
+Managed host tools exist for small, explicitly compiled operations that need
+the invoking user's ordinary host identity. They run with the captured launch
+CWD and a separately constructed environment for each selected extension.
+Most of the ordinary ambient host environment remains available. An extension
+declares the managed variable names it accepts, the exact inherited names or
+prefixes it removes, and any fixed values it applies. Broker values under
+`environment.extensions.<id>` can populate only names declared by that
+extension. Pi-scoped values and variables declared by other extensions are
+removed, so one extension does not receive another extension's managed
+identity. The central host executor uses an absolute executable, direct
+argument vector, bounded standard input, duration, and output; it never invokes
+a shell. Cancellation, timeout, output overflow, shutdown, or process-start
+failure terminates the command process group and fails the operation. Host
+tools are outside Bubblewrap and therefore outside its mount, seccomp, and
+network policy.
+
+Managed-extension API version 3 lets each tool provide a short call summary.
+The central Pi Sandbox adapter validates and bounds that plain-text summary and
+renders it inside Pi's normal tool card; extensions do not receive Pi's TUI or
+theme APIs. A formatter must select only the identifying fields that are useful
+before approval and omit payloads or credentials.
+
+The Git managed extension exposes only `git_clone({ repository })`. It validates
+the administrator's exact host and scheme allowlists, derives one immediate
+child name beneath the launch CWD from the repository basename, and executes:
+
+```text
+/usr/bin/git clone -- <repository> <derived-absolute-child>
+```
+
+The model cannot select a target directory or Git options. After cloning,
+ordinary Git remains available to Bash. In Bubblewrap mode the host root is
+read-only and the launch CWD writable; in direct mode Git has the current
+user's ordinary host authority. Bash can run `git status`, `git switch`, and
+similar repository-local commands through the selected backend.
+The normal tool card shows the submitted repository locator.
+
+The Git host and scheme allowlists validate only the submitted repository
+locator. The compiled Git environment neutralizes Git URL-rewrite and prompt
+configuration, but SSH configuration, DNS, proxies, and redirects may still
+affect the contacted destination. The locator allowlist is not egress
+filtering.
+
+Two extension kinds are supported. A `managed` extension uses Pi Sandbox's
+small host-command API and gets its declared scoped environment, executable
+checks, bounded process lifecycle, and optional call-summary renderer. A
+`pi-tool` extension is an ordinary Pi extension factory restricted at startup
+to `registerTool` and `exec`; its declared tool names must exactly match its
+registrations. Pi Sandbox wraps those tools with the same allow/ask/deny/
+disabled policy. Standard Pi tool extensions are trusted compiled code and may
+exercise host authority internally, so they do not receive the containment
+guarantees of the managed API merely by being policy-wrapped.
+
+User `!` shell bypasses model-tool approval because the user invoked it
+directly. It uses the selected built-in executor and is never advertised to the
+model. Direct mode is configured up front; it is not a fallback.
+
+## Direct executor
+
+Direct mode runs each approved built-in request as a bounded, detached process
+group in the captured launch CWD. It preserves the ordinary user environment,
+overlays the effective `environment.sandbox` values, and resolves `~` against
+the user's real home. The same direct-argument validation, input/output limits,
+timeouts, cancellation, and descendant cleanup used for managed host commands
+apply. There is no mount, PID, network, seccomp, or filesystem containment.
+
+Linux uses the distribution's fixed GNU utility paths. macOS direct mode
+resolves a declared Homebrew GNU command profile (coreutils, findutils, grep,
+and gawk) plus system Bash, `sh`, and `file`, and fails startup if any command is
+missing. This preserves one typed-tool implementation instead of silently
+changing semantics between GNU and BSD utilities.
+
+## Bubblewrap worker
+
+The host starts one hidden worker mode of the same compiled executable inside
+the build-selected system or bundled Bubblewrap executable. That boundary has private user, PID, IPC, UTS, and cgroup namespaces;
+the effective policy selects a private or shared-host network namespace. It also
+has dropped capabilities, a new session, and parent-death semantics.
+Its inherited environment is cleared before a small fixed environment is
+constructed and the effective configured `sandbox` scope is added. Those values are
+deliberately visible to the model and cannot replace fixed sandbox values such
+as `HOME`, `PATH`, or `TMPDIR`.
+
+The host and worker communicate over the worker's anonymous stdin/stdout pipes
+using length-prefixed, versioned JSON frames. There is no socket, listening
+port, or filesystem control endpoint. Requests carry an identifier, direct
+argument vector, bounded input, duration, and output ceiling. The worker
+serializes requests and returns framed output and results.
+
+The mount view is:
+
+```text
+/                              host root, read-only at identical paths
+<captured launch CWD>          same host path overlaid read/write
+/tmp                           private writable temporary filesystem by default
+private runtime directory     private writable runtime filesystem
+/proc                          sandbox process namespace
+/dev                           minimal sandbox devices
+```
+
+Host `/proc`, `/sys`, `/dev`, `/run`, privileged sockets, desktop buses, agent
+sockets, and container-engine sockets are not made available as host resources.
+System executables and libraries needed by sandbox commands remain visible
+through the read-only host-root view.
+
+The exact-path mount contract means a launch from
+`/home/alice/worktrees/example` also starts every sandbox operation in
+`/home/alice/worktrees/example`. Absolute paths do not need translation.
+
+## Bubblewrap filesystem authority
+
+The captured launch CWD subtree is the maximum persistent host mutation
+authority. The broader ordinary host tree is readable but not writable.
+Private `/tmp` and runtime directories persist across tool calls and logical Pi
+sessions in the same process, then disappear when `pi-sandbox` exits. If `/tmp`
+itself is deliberately selected as the launch CWD, the writable launch overlay
+takes precedence and host `/tmp` is the selected workspace; launching from a
+project below `/tmp` still keeps the rest of host `/tmp` private.
+
+Structured file tools validate their inputs and report errors coherently, but
+the mount namespace is the enforcement boundary. An approved Bash operation can
+perform any operation permitted by the mounts; structured `write` or `edit`
+policy cannot further constrain Bash.
+
+## Network authority
+
+For Bubblewrap tools, the required administrative mode is `none` or `host`. `none`
+creates a private network namespace and denies `socket`. `host` shares the
+complete host network namespace and permits socket creation, including host
+loopback, LAN, Internet, and reachable Unix-domain services. Bubblewrap does not
+provide destination filtering, and Pi Sandbox exposes no filtered network mode.
+Provider networking continues independently in the trusted host-side Pi
+process. Managed host tools and direct built-in execution use the invoking
+user's complete host network authority. Direct mode therefore requires the
+explicit `host` value.
+
+A classic seccomp BPF filter always denies the `io_uring` control syscalls,
+`link`, and `linkat`; offline mode additionally denies `socket`. Anonymous
+`socketpair()` remains available because Bun uses it when spawning a child. The
+executor streams the compiled filter to Bubblewrap on a dedicated inherited
+file descriptor and rejects unsupported architectures before execution.
+
+## Execution and lifecycle
+
+Structured tools use fixed absolute executables with explicit argument arrays;
+no host shell is implied. Input, output, arguments, and duration are bounded.
+Malformed inputs, process startup failure, excessive output, timeout, and
+cancellation fail closed. Bash is the only operation that deliberately invokes a
+shell, and its complete approved command is passed as one argument.
+
+On cancellation or timeout, the selected executor terminates the command process group,
+escalates after a bounded grace period, and kills every remaining command
+process visible in its private PID namespace before starting another request.
+This prevents background descendants from becoming persistent even though the
+mount namespace remains alive. Closing the executor terminates active work and,
+in Bubblewrap mode, the worker and complete Bubblewrap process tree.
+
+There is never a direct-host fallback. Direct built-in execution occurs only
+when `execution.backend = "direct"` was admitted at startup. Managed host
+execution occurs only for a tool whose compiled definition selects it. Neither
+is a recovery path for a Bubblewrap failure.

@@ -1,0 +1,179 @@
+# Testing
+
+Pi Sandbox tests are offline. They never invoke a live model provider and never
+depend on provider credentials.
+
+## Verification sequence
+
+Install dependencies with `NODE_ENV` unset, then run the fail-closed local
+release verifier:
+
+```sh
+env -u NODE_ENV npm ci
+env -u NODE_ENV npm run verify:release
+```
+
+To use a previously downloaded pinned Pi source archive, pass it through:
+
+```sh
+env -u NODE_ENV npm run verify:release -- --pi-source-archive /path/to/pi-0.84.3-source.tar.gz
+```
+
+The verifier runs formatting, lint, type checking, Rust broker checks, unit,
+integration, real-Bubblewrap, package/install, build, archive inspection, and
+packaged executable diagnostic checks as distinct observable steps. A supported release
+host must execute the Bubblewrap suites rather than accepting a skip caused by
+unavailable namespaces.
+
+## Test layers
+
+### Unit
+
+- strict versioned TOML parsing;
+- compiled extension catalog, manifest, schema, identifier, and collision
+  validation;
+- required extension selection and exact dynamic model-tool policy sets;
+- strict offline and host network modes;
+- all required model-tool policies and unknown-field rejection;
+- mode and session-grant decisions;
+- memory-only grants scoped by approval subject;
+- no-UI, prompt cancellation, and prompt failure denial;
+- managed-executable argument filtering;
+- rejection of Pi package-management commands;
+- fixed administrative configuration and model-path resolution;
+- strict system-versus-bundled Bubblewrap distribution selection and immutable
+  compiled runtime path;
+- strict version 4 broker protocol parsing, version 5 per-UID TOML parsing,
+  global-plus-per-UID scoped environment overlay, missing-drop-in inheritance,
+  environment bounds and reserved-name rejection, dynamic
+  UID-drop-in execution and tool override validation, effective backend/network
+  validation, active-policy cross-checking, atomic
+  per-user override merging, and the compiled Bun client's no-half-close request
+  flow;
+- direct-argv host execution, per-extension declared environment admission,
+  cross-extension and Pi-variable isolation, inherited-variable removal and
+  fixed overlays, bounds, process-group cleanup, and fixed launch CWD;
+- Git locator parsing, exact scheme/host admission, safe derived destination,
+  and rejection of options, local transports, bad basenames, and arbitrary
+  targets;
+- standard Pi tool-only factory capture, declaration matching, and policy wrapping;
+- command/input/output/time limits and cancellation; and
+- exact dynamic tool-catalog construction.
+
+### Integration
+
+A deterministic fake Pi API loads the built extension without contacting a
+provider. It proves that:
+
+- all seven non-disabled replacement tools register with the expected names;
+- selected, non-disabled managed-extension tools register while unselected or
+  disabled extension tools do not;
+- managed API version 3 call summaries render identifying fields in Pi's tool
+  card and reject control characters or oversized output;
+- per-UID complete policies can deny or disable `git_clone` and other selected tools,
+  while environment values alone never alter the tool catalog or decisions;
+- disabled tools are absent;
+- allowed and approved calls execute the exact immutable request through the
+  tool's declared sandbox or host boundary;
+- denied and cancelled calls never reach an executor;
+- model Bash is policy-gated while user `!` shell runs without a prompt;
+- `/sandbox` diagnostics report the admitted mount policy, effective tool
+  policy, and current session grants without invoking the executor;
+- every user-shell error explicitly blocks instead of falling through; and
+- session shutdown clears grants without closing the process-owned sandbox.
+
+Host-tool integration uses a mocked host executor and local fixtures only. It
+proves that `git_clone` constructs `/usr/bin/git clone --` with one derived
+child. Tests do not contact Git hosts or a broker service.
+
+### Real Bubblewrap
+
+Tests execute a disposable fixture through the installed `bwrap` binary and
+prove kernel-observable properties:
+
+- `pwd` and absolute paths match the host launch CWD;
+- the launch CWD can be created, changed, and deleted;
+- an existing fixture outside the launch CWD is readable but cannot be changed;
+- `/tmp` is writable, private from host `/tmp`, and persistent between calls in
+  one Pi process;
+- commands are serialized through one stable sandbox namespace;
+- host pseudo-filesystems and privileged sockets are not exposed;
+- TCP and pathname Unix-socket attempts inside and outside the writable CWD
+  fail in offline mode;
+- host mode reaches a host-loopback listener;
+- `io_uring` cannot reopen socket authority on kernels where setup is otherwise
+  permitted;
+- sandboxed `link` creation fails while pre-existing hard links remain the
+  documented residual risk;
+- ambient credential and agent variables are absent;
+- Pi- and extension-scoped configured values are absent, while configured sandbox
+  values are present and fixed sandbox variables cannot be replaced;
+- all seven tools and user shell cross the Bubblewrap boundary;
+- `/usr/bin/git` remains visible inside Bubblewrap so repository-local branch,
+  status, and diff operations use the ordinary sandboxed Bash path;
+- cancellation and process shutdown kill active work and descendants; and
+- sandbox startup or execution failure never triggers host execution.
+
+Direct-executor tests separately prove Linux direct execution, host-home path
+resolution, ambient-plus-scoped environment construction, direct-argv request
+bounds, cancellation/error mapping, and unsupported-platform failure. Config
+tests prove direct mode requires explicit host networking. macOS command-profile
+tests and native release validation require the declared Homebrew GNU tools;
+they never substitute BSD utility semantics.
+
+Host fixtures use a disposable parent with separate `workspace` and
+`outside` directories. Tests must never use the repository root or a user's home
+directory as a mutation target.
+
+### Package and installation smoke
+
+Smoke coverage builds the distributable package, inspects its manifest and
+contents, and installs a fixture release into a disposable prefix. The release
+build separately runs the compiled managed executable without contacting a
+model provider. Together these checks verify:
+
+- the selected distribution layout and launcher symlink;
+- the static broker executable and managed systemd unit symlinks;
+- that no runtime download, target-side build, Node runtime, wrapper, or
+  generation tree is required;
+- first-install creation of packaged administrative defaults;
+- preservation of `/etc/pi-sandbox` during an ordinary upgrade;
+- non-creation, non-replacement, and non-removal of the optional root-managed
+  `users.d` directory;
+- rejection of obsolete per-UID file/protocol versions and validation of
+  version 5 scoped environments during broker-mode release checks;
+- validated, backed-up replacement through `--replace-config`;
+- compiled administrative config-path loading and its required `models_file` and
+  network mode, required extension selection, and exact dynamic tool policy;
+- selected-extension executable prerequisite failure;
+- fail-closed missing or invalid administrative files;
+- preservation of `PI_CODING_AGENT_DIR` for user state without policy or model
+  redirection;
+- operation from an extracted package rather than the source installer; and
+- clean uninstall or replacement of the disposable prefix.
+
+Build tests also verify strict distribution and external extension manifests,
+deterministic static composition, extension inventory/provenance and hashes,
+the absence of runtime extension loading, bundled Bubblewrap input digest,
+architecture, version, required options, license packaging, installer mode, and
+release-manifest consistency.
+They verify the `pi-source.lock.json` source-archive checksum, apply
+the patch series to a clean temporary Pi 0.84.3 tree, run relevant upstream Pi
+tests, prove the configured-only model catalog, build and inspect the static
+Rust broker, and inspect the final Bun application and release archive. The
+packaged executable diagnostic also proves that only the administrative model
+catalog is exposed and that the forced Pi Sandbox extension is the only Pi
+extension. A local source archive may replace the download so the entire
+release test remains offline.
+
+## Local release verification
+
+Linux release testing runs locally with Node.js 24, Rust/Cargo 1.85 or newer,
+and Bubblewrap through `npm run verify:release`. macOS release testing runs on
+the target architecture with Node.js 24, Bun, and the Homebrew prerequisites;
+it builds and validates the native direct-mode archive. Generated artifacts are
+not committed.
+
+If a test must skip because the developer host lacks Bubblewrap or user
+namespaces, the output must explain the missing prerequisite. Release
+verification treats such a skip as a failure.

@@ -1,0 +1,47 @@
+config_version = 5
+models_file = "/etc/pi-sandbox/models.json"
+
+[execution]
+backend = "direct"
+
+[identity]
+mode = "disabled"
+
+[network]
+mode = "host"
+
+[environment.pi]
+
+[environment.sandbox]
+
+[environment.extensions]
+
+[extensions]
+
+[tools.read]
+mode = "allow"
+session_grant = "never"
+
+[tools.grep]
+mode = "allow"
+session_grant = "never"
+
+[tools.find]
+mode = "allow"
+session_grant = "never"
+
+[tools.ls]
+mode = "allow"
+session_grant = "never"
+
+[tools.write]
+mode = "ask"
+session_grant = "never"
+
+[tools.edit]
+mode = "ask"
+session_grant = "never"
+
+[tools.bash]
+mode = "disabled"
+session_grant = "never"

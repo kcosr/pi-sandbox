@@ -1,0 +1,19 @@
+version = 1
+extension_manifests = ["../../src/managed-extensions/git-clone/pi-sandbox-extension.json"]
+
+[platforms.linux]
+config_dir = "/etc/pi-sandbox"
+libexec_dir = "/usr/libexec/pi-sandbox"
+launcher_path = "/usr/bin/pi-sandbox"
+service_dir = "/usr/lib/systemd/system"
+identity_socket_path = "/run/pi-sandbox-identity/broker.sock"
+
+[platforms.linux.bubblewrap]
+mode = "system"
+path = "/usr/bin/bwrap"
+
+[platforms.darwin]
+config_dir = "/etc/pi-sandbox"
+libexec_dir = "/usr/local/libexec/pi-sandbox"
+launcher_path = "/usr/local/bin/pi-sandbox"
+identity_socket_path = "/run/pi-sandbox-identity/broker.sock"

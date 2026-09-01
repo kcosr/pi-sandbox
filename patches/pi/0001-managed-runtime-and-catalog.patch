@@ -1,0 +1,338 @@
+diff --git a/packages/coding-agent/src/cli/auth-check.ts b/packages/coding-agent/src/cli/auth-check.ts
+index 9266ddb..e0056ed 100644
+--- a/packages/coding-agent/src/cli/auth-check.ts
++++ b/packages/coding-agent/src/cli/auth-check.ts
+@@ -1,6 +1,6 @@
+ import type { CredentialStore } from "@earendil-works/pi-ai";
+ import { resolveCliModel } from "../core/model-resolver.ts";
+-import { ModelRuntime } from "../core/model-runtime.ts";
++import { ModelRuntime, type ModelRuntimeFactory } from "../core/model-runtime.ts";
+ import { InMemoryCodingAgentModelsStore } from "../core/models-store.ts";
+ import type { Args } from "./args.ts";
+ import { AuthCommandError, getAuthCredential, validateAuthCommandArgs } from "./auth-command.ts";
+@@ -63,8 +63,11 @@ export async function getProviderCredential(
+ 	return getAuthCredential(await modelRuntime.getAuth(providerId));
+ }
+ 
+-export async function createAuthCheckModelRuntime(credentials: CredentialStore): Promise<ModelRuntime> {
+-	return ModelRuntime.create({
++export async function createAuthCheckModelRuntime(
++	credentials: CredentialStore,
++	createModelRuntime: ModelRuntimeFactory = ModelRuntime.create,
++): Promise<ModelRuntime> {
++	return createModelRuntime({
+ 		credentials,
+ 		modelsStore: new InMemoryCodingAgentModelsStore(),
+ 		allowModelNetwork: false,
+diff --git a/packages/coding-agent/src/core/model-runtime.ts b/packages/coding-agent/src/core/model-runtime.ts
+index 6f4071b..24c1222 100644
+--- a/packages/coding-agent/src/core/model-runtime.ts
++++ b/packages/coding-agent/src/core/model-runtime.ts
+@@ -79,8 +79,12 @@ export interface CreateModelRuntimeOptions {
+ 	signal?: AbortSignal;
+ 	/** Skip initial catalog and availability refresh. Static models remain available. */
+ 	refreshOnCreate?: boolean;
++	/** Expose the built-in provider/model catalog. Defaults to true. */
++	includeBuiltinCatalog?: boolean;
+ }
+ 
++export type ModelRuntimeFactory = (options?: CreateModelRuntimeOptions) => Promise<ModelRuntime>;
++
+ export interface ModelRuntimeAuthOverrides extends AuthOperationOptions {
+ 	apiKey?: string;
+ 	env?: Record<string, string>;
+@@ -137,6 +141,7 @@ export class ModelRuntime implements Models {
+ 	private readonly compositionErrors = new Map<string, string>();
+ 	private readonly modelsPath: string | undefined;
+ 	private readonly modelNetworkEnabled: boolean;
++	private readonly includeBuiltinCatalog: boolean;
+ 	private config: ModelConfig;
+ 	private snapshot: ModelRuntimeSnapshot = {
+ 		all: [],
+@@ -158,11 +163,13 @@ export class ModelRuntime implements Models {
+ 		modelsStore: ModelsStore,
+ 		providers: readonly Provider[],
+ 		modelNetworkEnabled: boolean,
++		includeBuiltinCatalog: boolean,
+ 	) {
+ 		this.credentials = credentials;
+ 		this.config = config;
+ 		this.modelsPath = modelsPath;
+ 		this.modelNetworkEnabled = modelNetworkEnabled;
++		this.includeBuiltinCatalog = includeBuiltinCatalog;
+ 		this.defaultBuiltins = new Map(providers.map((provider) => [provider.id, provider]));
+ 		for (const [providerId, provider] of this.defaultBuiltins) this.builtins.set(providerId, provider);
+ 		this.models = createModels({ credentials, modelsStore });
+@@ -194,6 +201,7 @@ export class ModelRuntime implements Models {
+ 			modelsStore,
+ 			providers,
+ 			process.env.PI_OFFLINE === undefined,
++			options.includeBuiltinCatalog !== false,
+ 		);
+ 		runtime.configureRadiusProviders();
+ 		runtime.rebuildProviders();
+@@ -235,7 +243,7 @@ export class ModelRuntime implements Models {
+ 
+ 	private providerIds(): Set<string> {
+ 		return new Set([
+-			...this.builtins.keys(),
++			...(this.includeBuiltinCatalog ? this.builtins.keys() : []),
+ 			...this.nativeExtensionProviders.keys(),
+ 			...this.config.getProviderIds(),
+ 			...this.extensionProviders.keys(),
+@@ -250,18 +258,22 @@ export class ModelRuntime implements Models {
+ 			this.compositionErrors.delete(providerId);
+ 			return;
+ 		}
+-		if (base && !this.config.getProvider(providerId) && !extension) {
++		if (this.includeBuiltinCatalog && base && !this.config.getProvider(providerId) && !extension) {
+ 			// No overlays: use the builtin untouched so its auth/login/stream behavior is exact.
+ 			this.models.setProvider(base);
+ 			this.compositionErrors.delete(providerId);
+ 			return;
+ 		}
+ 		try {
+-			this.models.setProvider(composeModelProvider(providerId, base, this.config, extension));
++			this.models.setProvider(
++				composeModelProvider(providerId, base, this.config, extension, {
++					includeBuiltinModels: this.includeBuiltinCatalog,
++				}),
++			);
+ 			this.compositionErrors.delete(providerId);
+ 		} catch (error) {
+ 			this.compositionErrors.set(providerId, error instanceof Error ? error.message : String(error));
+-			if (base) this.models.setProvider(base);
++			if (this.includeBuiltinCatalog && base) this.models.setProvider(base);
+ 			else this.models.deleteProvider(providerId);
+ 		}
+ 	}
+diff --git a/packages/coding-agent/src/core/provider-composer.ts b/packages/coding-agent/src/core/provider-composer.ts
+index 1be7fcd..5053fb5 100644
+--- a/packages/coding-agent/src/core/provider-composer.ts
++++ b/packages/coding-agent/src/core/provider-composer.ts
+@@ -422,6 +422,7 @@ export function composeModelProvider(
+ 	base: Provider | undefined,
+ 	modelConfig: ModelConfig,
+ 	extension: ProviderConfigInput | undefined,
++	options: { includeBuiltinModels?: boolean } = {},
+ ): Provider {
+ 	const config = modelConfig.getProvider(providerId);
+ 	let extensionOAuthCredential: OAuthCredentials | undefined;
+@@ -433,7 +434,7 @@ export function composeModelProvider(
+ 	const getModels = () => {
+ 		let models = applyExtension(
+ 			providerId,
+-			applyModelsJson(providerId, base?.getModels() ?? [], config),
++			applyModelsJson(providerId, options.includeBuiltinModels === false ? [] : (base?.getModels() ?? []), config),
+ 			currentExtension(),
+ 		);
+ 		if (extensionOAuthCredential && extension?.oauth?.modifyModels) {
+diff --git a/packages/coding-agent/src/index.ts b/packages/coding-agent/src/index.ts
+index 210b840..b918a36 100644
+--- a/packages/coding-agent/src/index.ts
++++ b/packages/coding-agent/src/index.ts
+@@ -185,6 +185,7 @@ export {
+ 	type CredentialSynchronizationOperation,
+ 	ModelRuntime,
+ 	type ModelRuntimeAuthOverrides,
++	type ModelRuntimeFactory,
+ } from "./core/model-runtime.ts";
+ export type {
+ 	PackageManager,
+diff --git a/packages/coding-agent/src/main.ts b/packages/coding-agent/src/main.ts
+index 23b4d42..b39eb0b 100644
+--- a/packages/coding-agent/src/main.ts
++++ b/packages/coding-agent/src/main.ts
+@@ -5,6 +5,7 @@
+  * createAgentSession() options. The SDK does the heavy lifting.
+  */
+ 
++import { join } from "node:path";
+ import { createInterface } from "node:readline";
+ import { type ImageContent, modelsAreEqual } from "@earendil-works/pi-ai";
+ import chalk from "chalk";
+@@ -45,7 +46,7 @@ import { exportFromFile } from "./core/export-html/index.ts";
+ import type { InlineExtension } from "./core/extensions/types.ts";
+ import { applyHttpProxySettings, configureHttpDispatcher } from "./core/http-dispatcher.ts";
+ import { resolveCliModel, resolveModelScope, type ScopedModel } from "./core/model-resolver.ts";
+-import { ModelRuntime } from "./core/model-runtime.ts";
++import { ModelRuntime, type ModelRuntimeFactory } from "./core/model-runtime.ts";
+ import { restoreStdout, takeOverStdout } from "./core/output-guard.ts";
+ import { type AppMode, resolveProjectTrusted } from "./core/project-trust.ts";
+ import type { CreateAgentSessionOptions } from "./core/sdk.ts";
+@@ -127,7 +128,10 @@ function isPlainRuntimeMetadataCommand(parsed: Args): boolean {
+ 	return !parsed.print && parsed.mode === undefined && (parsed.help === true || parsed.listModels !== undefined);
+ }
+ 
+-async function runAuthCommand(args: string[]): Promise<boolean> {
++async function runAuthCommand(
++	args: string[],
++	createModelRuntime: ModelRuntimeFactory = ModelRuntime.create,
++): Promise<boolean> {
+ 	if (isAuthCommandHelp(args)) {
+ 		printAuthCommandHelp();
+ 		return true;
+@@ -158,7 +162,7 @@ async function runAuthCommand(args: string[]): Promise<boolean> {
+ 		}
+ 		if (command.kind !== "check") {
+ 			const signal = AbortSignal.timeout(15_000);
+-			const modelRuntime = await ModelRuntime.create({ allowModelNetwork: false, signal });
++			const modelRuntime = await createModelRuntime({ allowModelNetwork: false, signal });
+ 			const credential = await resolveCredentialForPrint(
+ 				parsed,
+ 				modelRuntime,
+@@ -175,7 +179,7 @@ async function runAuthCommand(args: string[]): Promise<boolean> {
+ 		let credential: string | undefined;
+ 		try {
+ 			const credentials = command.noRefresh ? new ReadOnlyAuthStorage() : AuthStorage.create();
+-			const modelRuntime = await createAuthCheckModelRuntime(credentials);
++			const modelRuntime = await createAuthCheckModelRuntime(credentials, createModelRuntime);
+ 			result = await checkProviderAuth(parsed, modelRuntime, { refresh: !command.noRefresh });
+ 			if (command.credentials && result.status === "ready") {
+ 				credential = await getProviderCredential(result.provider, modelRuntime, credentials, {
+@@ -555,18 +559,23 @@ async function promptForMissingSessionCwd(
+ 
+ export interface MainOptions {
+ 	extensionFactories?: InlineExtension[];
++	includeBuiltInExtensions?: boolean;
++	createModelRuntime?: ModelRuntimeFactory;
+ }
+ 
+ export async function main(args: string[], options?: MainOptions) {
+ 	resetTimings();
+-	const extensionFactories = [...builtInExtensions, ...(options?.extensionFactories ?? [])];
++	const extensionFactories = [
++		...(options?.includeBuiltInExtensions === false ? [] : builtInExtensions),
++		...(options?.extensionFactories ?? []),
++	];
+ 	const offlineMode = args.includes("--offline") || isTruthyEnvFlag(process.env.PI_OFFLINE);
+ 	if (offlineMode) {
+ 		process.env.PI_OFFLINE = "1";
+ 		process.env.PI_SKIP_VERSION_CHECK = "1";
+ 	}
+ 
+-	if (await runAuthCommand(args)) {
++	if (await runAuthCommand(args, options?.createModelRuntime)) {
+ 		return;
+ 	}
+ 
+@@ -727,10 +736,18 @@ export async function main(args: string[], options?: MainOptions) {
+ 				parsed.projectTrustOverride ??
+ 				(!hasTrustRequiringResources || trustStore.get(cwd) === true));
+ 		const runtimeSettingsManager = SettingsManager.create(cwd, agentDir, { projectTrusted });
++		const managedModelRuntime = options?.createModelRuntime
++			? await options.createModelRuntime({
++					authPath: join(agentDir, "auth.json"),
++					modelsPath: join(agentDir, "models.json"),
++					signal: AbortSignal.timeout(15_000),
++				})
++			: undefined;
+ 		const services = await createAgentSessionServices({
+ 			cwd,
+ 			agentDir,
+ 			settingsManager: runtimeSettingsManager,
++			modelRuntime: managedModelRuntime,
+ 			modelRuntimeSignal: AbortSignal.timeout(15_000),
+ 			extensionFlagValues: parsed.unknownFlags,
+ 			resourceLoaderReloadOptions: shouldResolveProjectTrust
+diff --git a/packages/coding-agent/test/auth-check.test.ts b/packages/coding-agent/test/auth-check.test.ts
+index 5f1ce63..49bd9d4 100644
+--- a/packages/coding-agent/test/auth-check.test.ts
++++ b/packages/coding-agent/test/auth-check.test.ts
+@@ -165,7 +165,15 @@ describe("auth check command", () => {
+ 	});
+ 
+ 	test("creates an auth-check runtime without catalog storage", async () => {
+-		const runtime = await createAuthCheckModelRuntime(AuthStorage.inMemory());
++		const createModelRuntime = vi.fn(ModelRuntime.create);
++		const runtime = await createAuthCheckModelRuntime(AuthStorage.inMemory(), createModelRuntime);
+ 		expect(runtime.getProvider("openai")).toBeDefined();
++		expect(createModelRuntime).toHaveBeenCalledOnce();
++		expect(createModelRuntime).toHaveBeenCalledWith(
++			expect.objectContaining({
++				allowModelNetwork: false,
++				refreshOnCreate: false,
++			}),
++		);
+ 	});
+ });
+diff --git a/packages/coding-agent/test/managed-model-runtime.test.ts b/packages/coding-agent/test/managed-model-runtime.test.ts
+new file mode 100644
+index 0000000..b282547
+--- /dev/null
++++ b/packages/coding-agent/test/managed-model-runtime.test.ts
+@@ -0,0 +1,74 @@
++import { mkdirSync, rmSync, writeFileSync } from "node:fs";
++import { tmpdir } from "node:os";
++import { join } from "node:path";
++import { InMemoryModelsStore } from "@earendil-works/pi-ai";
++import { afterEach, beforeEach, describe, expect, test } from "vitest";
++import { AuthStorage } from "../src/core/auth-storage.ts";
++import { ModelRuntime } from "../src/core/model-runtime.ts";
++
++describe("configured-only model runtime", () => {
++	let tempDir: string;
++	let modelsPath: string;
++
++	beforeEach(() => {
++		tempDir = join(tmpdir(), `pi-managed-models-${Date.now()}-${Math.random().toString(36).slice(2)}`);
++		mkdirSync(tempDir, { recursive: true });
++		modelsPath = join(tempDir, "models.json");
++	});
++
++	afterEach(() => {
++		rmSync(tempDir, { recursive: true, force: true });
++	});
++
++	async function createRuntime(): Promise<ModelRuntime> {
++		return ModelRuntime.create({
++			credentials: AuthStorage.inMemory({ openai: { type: "api_key", key: "test-key" } }),
++			modelsPath,
++			modelsStore: new InMemoryModelsStore(),
++			allowModelNetwork: false,
++			refreshOnCreate: false,
++			includeBuiltinCatalog: false,
++		});
++	}
++
++	test("exposes only explicitly configured providers and models", async () => {
++		writeFileSync(
++			modelsPath,
++			JSON.stringify({
++				providers: {
++					openai: {
++						api: "openai-responses",
++						baseUrl: "https://api.openai.com/v1",
++						models: [{ id: "managed-model" }],
++					},
++				},
++			}),
++		);
++
++		const runtime = await createRuntime();
++
++		expect(runtime.getError()).toBeUndefined();
++		expect(runtime.getModels().map((model) => `${model.provider}/${model.id}`)).toEqual(["openai/managed-model"]);
++		expect(runtime.getProvider("openai")).toBeDefined();
++		expect(runtime.getProvider("anthropic")).toBeUndefined();
++	});
++
++	test("does not restore a built-in provider after configured composition fails", async () => {
++		writeFileSync(modelsPath, JSON.stringify({ providers: { openai: { models: [{ id: "missing-api-and-url" }] } } }));
++
++		const runtime = await createRuntime();
++
++		expect(runtime.getError()).toContain('Provider "openai"');
++		expect(runtime.getProvider("openai")).toBeUndefined();
++		expect(runtime.getModels()).toEqual([]);
++	});
++
++	test("does not expose any built-in model when the administrative catalog is empty", async () => {
++		writeFileSync(modelsPath, JSON.stringify({ providers: {} }));
++
++		const runtime = await createRuntime();
++
++		expect(runtime.getError()).toBeUndefined();
++		expect(runtime.getModels()).toEqual([]);
++	});
++});
