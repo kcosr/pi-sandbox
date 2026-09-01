@@ -90,6 +90,9 @@ flowchart LR
   for each tool.
 - Configuration, model files, host prerequisites, and the selected executor
   probe are checked before the interactive application starts.
+- Interactive execution is available only to unprivileged Unix users. The
+  application refuses to start Pi when its effective UID is root; this has no
+  configuration override.
 
 The sandbox boundary applies to tool and shell processes. Pi handles model API
 connectivity separately on the host, so tool-network isolation does not
@@ -122,6 +125,10 @@ sudo ./install.sh
 cd /path/to/directory
 pi-sandbox
 ```
+
+Run the installer as root, but launch `pi-sandbox` as the intended unprivileged
+user. The executable permits its installer-only validation commands as root but
+refuses to start Pi with effective UID `0`.
 
 A normal upgrade preserves the compiled configuration directory. Use
 `install.sh --replace-config`

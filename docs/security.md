@@ -39,6 +39,11 @@ or malicious action in that host-side code is outside this threat model.
 The managed executable is the supported product entry point, not access control
 against the account owner. A logged-in user can inspect its processes and
 installed files or run unrelated software. Executable naming is not a defense.
+The interactive application refuses effective UID `0`, preventing an accidental
+root invocation from giving model tools or user shell commands root authority.
+This check has no configuration override. Installer-only configuration
+validation commands remain available to root and do not start Pi or an
+execution backend.
 The build-selected system Bubblewrap executable or packaged bundled Bubblewrap
 binary is trusted installation code. A bundled binary is digest-checked at
 build and by the release inventory, installed non-setuid beneath the root-owned
@@ -80,6 +85,7 @@ The following conditions deny the operation or abort startup rather than use a
 host fallback:
 
 - the configured executor is unavailable or its probe fails;
+- the interactive application is launched with effective UID `0`;
 - administrative configuration or the selected model catalog is missing or
   invalid;
 - the broker is unavailable or the matching per-UID drop-in is invalid;

@@ -236,6 +236,13 @@ Extract the release archive and run its helper as root:
 sudo ./install.sh
 ```
 
+Root authority is for installation only. Launch `pi-sandbox` from the intended
+working directory as the unprivileged user whose host permissions and state
+should apply. Interactive startup with effective UID `0` is rejected without a
+configuration override. The installer may invoke the executable's
+non-interactive configuration validation commands as root; those commands do
+not start Pi or an execution backend.
+
 The default distribution installs under `/usr` on Linux and `/usr/local` on
 macOS, with `/etc/pi-sandbox` for administrative configuration. A custom
 distribution uses its compiled paths. The macOS installer validates
@@ -358,6 +365,13 @@ options, and selection among administratively configured models remain
 available.
 
 ## Troubleshooting
+
+### Running as root is rejected
+
+Run `pi-sandbox` directly as the intended unprivileged account rather than with
+`sudo`. The application does not offer a root-mode configuration switch. Root
+remains appropriate for `install.sh`, `uninstall.sh`, and administration of the
+system configuration and optional identity broker.
 
 ### Administrative configuration is rejected
 
