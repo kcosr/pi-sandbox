@@ -35,14 +35,14 @@ reimplemented rather than mechanically reapplied.
   an absolute system Bubblewrap executable or a verified bundled executable;
   runtime configuration cannot change that provider.
 - Preserve host absolute paths inside the sandbox.
-- Present the ordinary host filesystem read-only, overlay the launch CWD read/write at the identical path, and provide private writable runtime/temp locations.
+- Present the ordinary host filesystem read-only and explicitly bind the launch CWD at the identical path, read/write or read-only according to `filesystem.cwd_writable`. Preserve private writable runtime/temp locations; reject read-only CWD access with direct execution or CWD exactly `/tmp`.
 - Default Bubblewrap tool and shell networking to an isolated namespace with
   socket creation denied. Permit only the explicit administrator-selected
   `host` mode, which shares the complete host network namespace; provide no
   filtered-network mode or fallback. Require `host` whenever `direct` is
   selected.
 - Build one precompiled Bun `pi-sandbox` application from pinned Pi source and the separately maintained Pi Sandbox extension. Force that extension through Pi's inline factory API, disable Pi's built-in extension factories, and permit no user/project extensions or package-management commands. Package the optional per-UID resolver as a separate static Rust broker; it is never a wrapper or sandbox backend.
-- Read base administrative policy and global scoped environment only through the build-selected `config_dir/config.toml` entry point. Require its administrator-selected `models_file`, disable Pi's internal model catalog, and fail closed when any effective input is invalid. Optional broker mode uses protocol version 4 and optional version 5 `config_dir/users.d/<uid>.toml` files to return only the matching root-managed UID's environment and model, execution, network, and atomic complete named-tool policy patch. A missing directory or matching file inherits the main configuration unchanged. Scoped environment never selects or enables tools.
+- Read base administrative policy and global scoped environment only through the build-selected `config_dir/config.toml` entry point. Require its administrator-selected `models_file`, disable Pi's internal model catalog, and fail closed when any effective input is invalid. Optional broker mode uses protocol version 5 and optional version 6 `config_dir/users.d/<uid>.toml` files to return only the matching root-managed UID's environment and model, execution, network, filesystem, and atomic complete named-tool invocation-policy patch. A missing directory or matching file inherits the main configuration unchanged. Scoped environment never selects or enables tools.
 - Preserve `PI_CODING_AGENT_DIR` for user state such as credentials, sessions, settings, skills, themes, and logs. It must not redirect administrative configuration or the model catalog.
 - Replace all seven Pi built-ins (`read`, `grep`, `find`, `ls`, `write`, `edit`,
   and `bash`) and route user `!` shell commands through the selected execution

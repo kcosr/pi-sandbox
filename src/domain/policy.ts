@@ -39,6 +39,10 @@ export const EXECUTION_BACKENDS = Object.freeze(["bubblewrap", "direct"] as cons
 
 export type ExecutionBackend = (typeof EXECUTION_BACKENDS)[number];
 
+export interface FilesystemConfig {
+  readonly cwdWritable: boolean;
+}
+
 export interface ExecutionConfig {
   readonly backend: ExecutionBackend;
 }
@@ -48,7 +52,27 @@ export interface SubjectPolicy {
   readonly sessionGrant: SessionGrantPolicy;
 }
 
-export type ToolPolicies = Readonly<Record<string, SubjectPolicy>>;
+export interface ToolPolicy extends SubjectPolicy {
+  readonly audit: boolean;
+}
+
+export const AUDIT_FACILITIES = Object.freeze([
+  "local0",
+  "local1",
+  "local2",
+  "local3",
+  "local4",
+  "local5",
+  "local6",
+  "local7",
+] as const);
+export type AuditFacility = (typeof AUDIT_FACILITIES)[number];
+export interface AuditConfig {
+  readonly enabled: boolean;
+  readonly facility: AuditFacility;
+}
+
+export type ToolPolicies = Readonly<Record<string, ToolPolicy>>;
 
 export interface ExtensionConfig {
   readonly id: string;
@@ -70,6 +94,7 @@ export interface UserOverrides {
   readonly modelsFile?: string;
   readonly execution?: ExecutionConfig;
   readonly network?: NetworkConfig;
+  readonly filesystem?: FilesystemConfig;
   readonly tools: Readonly<Partial<Record<string, SubjectPolicy>>>;
 }
 
@@ -82,11 +107,13 @@ export interface ManagedUserEnvironment {
 }
 
 export interface SandboxConfig {
-  readonly configVersion: 5;
+  readonly configVersion: 6;
+  readonly audit: AuditConfig;
   readonly modelsFile: string;
   readonly execution: ExecutionConfig;
   readonly identity: IdentityConfig;
   readonly network: NetworkConfig;
+  readonly filesystem: FilesystemConfig;
   readonly environment: ManagedUserEnvironment;
   readonly extensions: Readonly<Record<string, ExtensionConfig>>;
   readonly tools: ToolPolicies;

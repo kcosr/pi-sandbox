@@ -24,6 +24,7 @@ const commonChecks = [
   ["npm", ["run", "typecheck"]],
   ["npm", ["run", "test:build-composition"]],
   ["npm", ["run", "test:distribution"]],
+  [process.execPath, ["--test", "scripts/test/sbom.mjs"]],
   ["npm", ["run", "test:unit"]],
   ["npm", ["run", "test:integration"]],
   ["npm", ["run", "test:e2e"]],
@@ -32,6 +33,7 @@ const platformChecks =
   process.platform === "linux"
     ? [
         ["npm", ["run", "test:broker"]],
+        ["npm", ["run", "test:audit-collector"]],
         ["npm", ["run", "test:systemd"]],
         ["npm", ["run", "build"]],
         ["npm", ["run", "test:install"]],

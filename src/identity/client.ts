@@ -10,15 +10,17 @@ import {
   isNormalizedAbsoluteFilePath,
   parseManagedEnvironment,
   type ExecutionConfig,
+  type FilesystemConfig,
   type IdentityConfig,
   type ManagedUserEnvironment,
   type NetworkConfig,
   type SandboxConfig,
   type SubjectPolicy,
+  type ToolPolicy,
   type UserOverrides,
 } from "../domain/index.js";
 
-export const IDENTITY_BROKER_PROTOCOL_VERSION = 4;
+export const IDENTITY_BROKER_PROTOCOL_VERSION = 5;
 export const IDENTITY_BROKER_TIMEOUT_MS = 1000;
 export const MAXIMUM_IDENTITY_RESPONSE_BYTES = 512 * 1024;
 
@@ -28,14 +30,14 @@ export interface BrokerUser {
 }
 
 interface BrokerSuccessResponse {
-  readonly version: 4;
+  readonly version: 5;
   readonly status: "ok";
   readonly environment: ManagedUserEnvironment;
   readonly overrides: UserOverrides;
 }
 
 interface BrokerErrorResponse {
-  readonly version: 4;
+  readonly version: 5;
   readonly status: "error";
   readonly code: "user_store_unavailable" | "protocol_error";
 }
@@ -125,7 +127,7 @@ export function parseBrokerResponse(source: string): BrokerResponse {
       throw invalidResponse();
     }
     return Object.freeze({
-      version: 4,
+      version: 5,
       status: "ok",
       environment: parseBrokerEnvironment(value.environment),
       overrides: parseUserOverrides(value.overrides),
@@ -152,15 +154,19 @@ export function applyUserOverrides(base: SandboxConfig, overrides: UserOverrides
   const tools = Object.fromEntries(
     Object.keys(base.tools).map((toolName) => [
       toolName,
-      overrides.tools[toolName] ?? base.tools[toolName],
+      overrides.tools[toolName] === undefined
+        ? base.tools[toolName]
+        : Object.freeze({ ...overrides.tools[toolName], audit: base.tools[toolName]!.audit }),
     ]),
-  ) as Record<string, SubjectPolicy>;
+  ) as Record<string, ToolPolicy>;
   return Object.freeze({
-    configVersion: 5,
+    configVersion: 6,
+    audit: base.audit,
     modelsFile: overrides.modelsFile ?? base.modelsFile,
     execution: overrides.execution ?? base.execution,
     identity: base.identity,
     network: overrides.network ?? base.network,
+    filesystem: overrides.filesystem ?? base.filesystem,
     environment: base.environment,
     extensions: base.extensions,
     tools: Object.freeze(tools),
@@ -170,7 +176,7 @@ export function applyUserOverrides(base: SandboxConfig, overrides: UserOverrides
 function parseUserOverrides(value: unknown): UserOverrides {
   if (
     !isRecord(value) ||
-    !hasAllowedKeys(value, ["models_file", "execution", "network", "tools"])
+    !hasAllowedKeys(value, ["models_file", "execution", "network", "filesystem", "tools"])
   ) {
     throw invalidResponse();
   }
@@ -186,6 +192,17 @@ function parseUserOverrides(value: unknown): UserOverrides {
       throw invalidResponse();
     }
     execution = Object.freeze({ backend: value.execution.backend as ExecutionConfig["backend"] });
+  }
+  let filesystem: FilesystemConfig | undefined;
+  if (Object.hasOwn(value, "filesystem")) {
+    if (
+      !isRecord(value.filesystem) ||
+      !hasExactKeys(value.filesystem, ["cwd_writable"]) ||
+      typeof value.filesystem.cwd_writable !== "boolean"
+    ) {
+      throw invalidResponse();
+    }
+    filesystem = Object.freeze({ cwdWritable: value.filesystem.cwd_writable });
   }
   let modelsFile: string | undefined;
   if (Object.hasOwn(value, "models_file")) {
@@ -220,6 +237,7 @@ function parseUserOverrides(value: unknown): UserOverrides {
     ...(modelsFile === undefined ? {} : { modelsFile }),
     ...(execution === undefined ? {} : { execution }),
     ...(network === undefined ? {} : { network }),
+    ...(filesystem === undefined ? {} : { filesystem }),
     tools: Object.freeze(tools),
   });
 }

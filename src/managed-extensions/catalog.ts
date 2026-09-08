@@ -41,6 +41,7 @@ const TOOL_KEYS = new Set([
   "diagnosticScope",
   "executionMode",
   "formatCall",
+  "auditTarget",
   "execute",
 ]);
 
@@ -204,6 +205,9 @@ function validateTool(tool: ManagedToolDefinition, path: string): void {
   }
   if (tool.formatCall !== undefined && typeof tool.formatCall !== "function") {
     throw new Error(`${path}.formatCall must be a function`);
+  }
+  if (tool.auditTarget !== undefined && typeof tool.auditTarget !== "function") {
+    throw new Error(`${path}.auditTarget must be a function`);
   }
   if (typeof tool.execute !== "function") throw new Error(`${path}.execute must be a function`);
   validateToolSchema(tool.parameters, `${path}.parameters`);

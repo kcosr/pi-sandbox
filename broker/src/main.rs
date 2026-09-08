@@ -12,8 +12,8 @@ use std::time::Duration;
 use serde::de::{MapAccess, Visitor};
 use serde::{Deserialize, Deserializer, Serialize};
 
-const PROTOCOL_VERSION: u32 = 4;
-const USER_OVERRIDE_VERSION: u32 = 5;
+const PROTOCOL_VERSION: u32 = 5;
+const USER_OVERRIDE_VERSION: u32 = 6;
 const MAX_REQUEST_BYTES: usize = 1024;
 const MAX_OVERRIDE_FILE_BYTES: u64 = 1024 * 1024;
 const MAX_TOOL_OVERRIDES: usize = 256;
@@ -204,6 +204,8 @@ struct UserOverrides {
     execution: Option<ExecutionConfig>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     network: Option<NetworkConfig>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    filesystem: Option<FilesystemConfig>,
     #[serde(default, skip_serializing_if = "ToolOverrides::is_empty")]
     tools: ToolOverrides,
 }
@@ -219,6 +221,12 @@ struct ExecutionConfig {
 enum ExecutionBackend {
     Bubblewrap,
     Direct,
+}
+
+#[derive(Debug, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+struct FilesystemConfig {
+    cwd_writable: bool,
 }
 
 #[derive(Debug, Deserialize, Serialize, PartialEq, Eq)]
@@ -708,7 +716,7 @@ mod tests {
     #[test]
     fn parses_a_strict_per_uid_override() {
         let source = br#"
-version = 5
+version = 6
 uid = 1000
 username = "alice"
 comment = "development account"
@@ -757,34 +765,85 @@ session_grant = "offer"
     }
 
     #[test]
+    fn parses_complete_filesystem_overrides_and_rejects_invalid_shapes() {
+        assert_eq!(
+            lookup_user_bytes(b"version = 6\nuid = 7\n", 7)
+                .unwrap()
+                .overrides
+                .filesystem,
+            None
+        );
+        for cwd_writable in [true, false] {
+            let source = format!(
+                "version = 6\nuid = 7\n[overrides.filesystem]\ncwd_writable = {cwd_writable}\n"
+            );
+            let user = lookup_user_bytes(source.as_bytes(), 7).unwrap();
+            assert_eq!(
+                user.overrides.filesystem,
+                Some(FilesystemConfig { cwd_writable })
+            );
+            let wire = serde_json::to_value(&user.overrides).unwrap();
+            assert_eq!(wire["filesystem"]["cwd_writable"], cwd_writable);
+        }
+        for fields in [
+            "",
+            "cwd_writable = 0",
+            "cwd_writable = \"false\"",
+            "cwd_writable = true\nextra = true",
+            "cwdWritable = true",
+        ] {
+            let source = format!("version = 6\nuid = 7\n[overrides.filesystem]\n{fields}\n");
+            assert_eq!(
+                lookup_user_bytes(source.as_bytes(), 7),
+                Err(LookupError::InvalidFile)
+            );
+        }
+        assert_eq!(
+            lookup_user_bytes(b"version = 5\nuid = 7\n", 7),
+            Err(LookupError::InvalidFile)
+        );
+    }
+
+    #[test]
     fn rejects_wrong_uid_version_unknown_fields_and_invalid_policies() {
         let cases: &[&[u8]] = &[
             b"version = 4\nuid = 7\n",
-            b"version = 5\nuid = 8\n",
-            b"version = 5\nuid = 7\nextra = true\n",
-            b"version = 5\nuid = 7\n[overrides.tools.write]\nmode = \"allow\"\nsession_grant = \"offer\"\n",
-            b"version = 5\nuid = 7\n[overrides.execution]\nbackend = \"container\"\n",
-            b"version = 5\nuid = 7\n[overrides.network]\nmode = \"filtered\"\n",
+            b"version = 6\nuid = 8\n",
+            b"version = 6\nuid = 7\nextra = true\n",
+            b"version = 6\nuid = 7\n[overrides.tools.write]\nmode = \"allow\"\nsession_grant = \"offer\"\n",
+            b"version = 6\nuid = 7\n[overrides.execution]\nbackend = \"container\"\n",
+            b"version = 6\nuid = 7\n[overrides.network]\nmode = \"filtered\"\n",
         ];
         for source in cases {
             assert_eq!(lookup_user_bytes(source, 7), Err(LookupError::InvalidFile));
+        }
+        for fields in [
+            "[overrides.tools.write]\nmode = \"ask\"\nsession_grant = \"never\"\naudit = false",
+            "[overrides.audit]\nenabled = false\nfacility = \"local0\"",
+            "[audit]\nenabled = false\nfacility = \"local0\"",
+        ] {
+            let source = format!("version = 6\nuid = 7\n{fields}\n");
+            assert_eq!(
+                lookup_user_bytes(source.as_bytes(), 7),
+                Err(LookupError::InvalidFile)
+            );
         }
     }
 
     #[test]
     fn rejects_invalid_and_oversized_environment_values() {
         let cases: &[&[u8]] = &[
-            b"version = 5\nuid = 7\n[environment.pi]\nBad-Name = \"x\"\n",
-            b"version = 5\nuid = 7\n[environment.pi]\nPI_SANDBOX_SECRET = \"x\"\n",
-            b"version = 5\nuid = 7\n[environment.pi]\nLD_PRELOAD = \"x\"\n",
-            b"version = 5\nuid = 7\n[environment.sandbox]\nHOME = \"/tmp\"\n",
-            b"version = 5\nuid = 7\n[environment.extensions.Bad_ID]\nTOKEN = \"x\"\n",
+            b"version = 6\nuid = 7\n[environment.pi]\nBad-Name = \"x\"\n",
+            b"version = 6\nuid = 7\n[environment.pi]\nPI_SANDBOX_SECRET = \"x\"\n",
+            b"version = 6\nuid = 7\n[environment.pi]\nLD_PRELOAD = \"x\"\n",
+            b"version = 6\nuid = 7\n[environment.sandbox]\nHOME = \"/tmp\"\n",
+            b"version = 6\nuid = 7\n[environment.extensions.Bad_ID]\nTOKEN = \"x\"\n",
         ];
         for source in cases {
             assert_eq!(lookup_user_bytes(source, 7), Err(LookupError::InvalidFile));
         }
 
-        let mut too_many = String::from("version = 5\nuid = 7\n[environment.pi]\n");
+        let mut too_many = String::from("version = 6\nuid = 7\n[environment.pi]\n");
         for index in 0..=MAX_ENVIRONMENT_VARIABLES_PER_SCOPE {
             too_many.push_str(&format!("VARIABLE_{index} = \"x\"\n"));
         }
@@ -794,14 +853,14 @@ session_grant = "offer"
         );
 
         let oversized_name = format!(
-            "version = 5\nuid = 7\n[environment.pi]\n{} = \"x\"\n",
+            "version = 6\nuid = 7\n[environment.pi]\n{} = \"x\"\n",
             format!("A{}", "A".repeat(MAX_ENVIRONMENT_VARIABLE_NAME_BYTES))
         );
         let oversized_value = format!(
-            "version = 5\nuid = 7\n[environment.pi]\nTOKEN = \"{}\"\n",
+            "version = 6\nuid = 7\n[environment.pi]\nTOKEN = \"{}\"\n",
             "x".repeat(MAX_ENVIRONMENT_VALUE_BYTES + 1)
         );
-        let mut too_many_extensions = String::from("version = 5\nuid = 7\n");
+        let mut too_many_extensions = String::from("version = 6\nuid = 7\n");
         for index in 0..=MAX_EXTENSION_ENVIRONMENTS {
             too_many_extensions.push_str(&format!(
                 "[environment.extensions.extension-{index}]\nTOKEN = \"x\"\n"
@@ -823,7 +882,7 @@ session_grant = "offer"
             "/etc/pi-sandbox//models.json",
             "/etc/pi-sandbox/models.json/",
         ] {
-            let source = format!("version = 5\nuid = 7\n[overrides]\nmodels_file = {path:?}\n");
+            let source = format!("version = 6\nuid = 7\n[overrides]\nmodels_file = {path:?}\n");
             assert_eq!(
                 lookup_user_bytes(source.as_bytes(), 7),
                 Err(LookupError::InvalidFile)
@@ -853,7 +912,7 @@ session_grant = "offer"
         let path = directory.join(format!("{uid}.toml"));
         fs::write(
             &path,
-            format!("version = 5\nuid = {uid}\n[environment.pi]\nTOKEN = \"mine\"\n"),
+            format!("version = 6\nuid = {uid}\n[environment.pi]\nTOKEN = \"mine\"\n"),
         )
         .expect("write override");
         fs::set_permissions(&path, fs::Permissions::from_mode(0o600)).expect("chmod file");
@@ -879,7 +938,7 @@ session_grant = "offer"
         let (mut client, mut server_input) = UnixStream::pair().expect("socket pair");
         let mut server_output = server_input.try_clone().expect("clone server socket");
         client
-            .write_all(b"{\"version\":4,\"operation\":\"get-user\"}\n")
+            .write_all(b"{\"version\":5,\"operation\":\"get-user\"}\n")
             .expect("write request");
         let server_fd = server_input.as_raw_fd();
         serve_one(
@@ -897,13 +956,13 @@ session_grant = "offer"
         client.read_to_string(&mut response).expect("read response");
         assert_eq!(
             response,
-            "{\"version\":4,\"status\":\"ok\",\"environment\":{\"pi\":{},\"sandbox\":{},\"extensions\":{}},\"overrides\":{}}\n"
+            "{\"version\":5,\"status\":\"ok\",\"environment\":{\"pi\":{},\"sandbox\":{},\"extensions\":{}},\"overrides\":{}}\n"
         );
     }
 
     #[test]
     fn requires_a_bounded_newline_delimited_request() {
-        let request = b"{\"version\":4,\"operation\":\"get-user\"}";
+        let request = b"{\"version\":5,\"operation\":\"get-user\"}";
         assert!(read_request(&mut io::Cursor::new(request)).is_err());
         let mut oversized = vec![b' '; MAX_REQUEST_BYTES + 1];
         oversized.push(b'\n');
@@ -926,7 +985,7 @@ session_grant = "offer"
         fs::remove_file(&path).expect("remove fifo");
 
         let target = directory.join("target.toml");
-        fs::write(&target, format!("version = 5\nuid = {uid}\n")).expect("write target");
+        fs::write(&target, format!("version = 6\nuid = {uid}\n")).expect("write target");
         fs::set_permissions(&target, fs::Permissions::from_mode(0o600)).expect("chmod target");
         symlink(&target, &path).expect("create symlink");
         assert_eq!(lookup_user(&directory, uid, uid), Err(LookupError::Io));

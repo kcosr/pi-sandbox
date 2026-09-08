@@ -15,6 +15,7 @@ import {
   type UserBashEventResult,
 } from "@earendil-works/pi-coding-agent";
 import { Text } from "@earendil-works/pi-tui";
+import { ToolAuditor } from "../audit/tools.js";
 
 import type { SandboxConfig, ToolName } from "../domain/index.js";
 import type {
@@ -60,6 +61,7 @@ interface ExtensionState {
   hostExecutors: Readonly<Record<string, HostCommandExecutor>>;
   started: boolean;
   stopped: boolean;
+  auditor: ToolAuditor | undefined;
 }
 
 async function registerPiToolExtensions(
@@ -299,7 +301,9 @@ async function authorize<T extends JsonObject>(
     ...(ui === undefined ? {} : { ui }),
     ...(signal === undefined ? {} : { signal }),
   });
+  await state.auditor?.decision(decision);
   if (!decision.allowed) throw new Error(`Pi Sandbox denied ${subject}: ${decision.reason}`);
+  if (signal?.aborted === true) throw new SandboxExecutionError("sandbox_aborted");
   return request.arguments as T;
 }
 
@@ -573,12 +577,13 @@ function registerTools(
         } catch (error) {
           const snapshot = output.finish();
           if (signal?.aborted === true || isSandboxAbort(error))
-            throw new Error(withShellStatus(snapshot.output, "Command aborted"));
+            throw new Error(withShellStatus(snapshot.output, "Command aborted"), { cause: error });
           throw new Error(
             withShellStatus(
               snapshot.output,
               error instanceof Error ? error.message : "Sandbox command failed",
             ),
+            { cause: error },
           );
         }
         output.appendFallback(result.stdout, result.stderr);
@@ -654,6 +659,7 @@ export function createPiSandboxExtension(
       ),
       started: false,
       stopped: false,
+      auditor: undefined,
     };
 
     pi.registerCommand("sandbox", {
@@ -688,6 +694,7 @@ export function createPiSandboxExtension(
               configPath: dependencies.configPath,
               modelsFile: config.modelsFile,
               execution: config.execution,
+              filesystem: config.filesystem,
               identity: config.identity,
               network: config.network,
               extensions: Object.keys(config.extensions),
@@ -696,7 +703,7 @@ export function createPiSandboxExtension(
           );
         }
         if (argumentsList.length === 1 && argumentsList[0] === "mounts") {
-          return notify(formatSandboxMounts(dependencies.cwd, config.execution));
+          return notify(formatSandboxMounts(dependencies.cwd, config.execution, config.filesystem));
         }
         if (argumentsList[0] === "policy" && argumentsList.length <= 2) {
           const subject = argumentsList[1];
@@ -730,7 +737,7 @@ export function createPiSandboxExtension(
       },
     });
 
-    pi.on("session_start", async () => {
+    pi.on("session_start", async (_event, ctx) => {
       if (state.started) throw new Error("Pi Sandbox session was started more than once");
       state.started = true;
       const config = await dependencies.loadConfig();
@@ -738,12 +745,49 @@ export function createPiSandboxExtension(
       state.policy = new PolicyEngine(createApprovalPolicies(config));
       try {
         state.executor = dependencies.executor;
+        if (config.audit.enabled) {
+          if (dependencies.auditClient === undefined)
+            throw new Error("Pi Sandbox tool logging client is not initialized");
+          state.auditor = new ToolAuditor(
+            dependencies.auditClient,
+            dependencies.cwd,
+            dependencies.executor.home,
+          );
+          await state.auditor.start(ctx);
+        }
+        const registrationApi = new Proxy(pi, {
+          get(target, property): unknown {
+            if (property !== "registerTool") return Reflect.get(target, property);
+            return (definition: ToolDefinition) => {
+              const managed = state.managedExtensions.find((instance) =>
+                instance.extension.tools.some((tool) => tool.name === definition.name),
+              );
+              const compiled = state.piToolExtensions.find((extension) =>
+                extension.toolNames.includes(definition.name),
+              );
+              const extension = managed?.extension.id ?? compiled?.id;
+              const auditTarget = managed?.extension.tools.find(
+                (tool) => tool.name === definition.name,
+              )?.auditTarget;
+              target.registerTool(
+                config.tools[definition.name]?.audit === true && state.auditor !== undefined
+                  ? state.auditor.wrap(
+                      definition,
+                      extension === undefined ? dependencies.executor.backend : "host",
+                      extension,
+                      auditTarget,
+                    )
+                  : definition,
+              );
+            };
+          },
+        });
         const enabled = new Set(
           Object.keys(config.tools).filter((name) => state.policy?.isEnabled(name) === true),
         );
-        registerTools(pi, state, enabled, dependencies.cwd);
-        registerManagedTools(pi, state, enabled, dependencies.cwd);
-        await registerPiToolExtensions(pi, state, enabled);
+        registerTools(registrationApi, state, enabled, dependencies.cwd);
+        registerManagedTools(registrationApi, state, enabled, dependencies.cwd);
+        await registerPiToolExtensions(registrationApi, state, enabled);
         pi.setActiveTools([...(dependencies.activeTools ?? enabled)]);
       } catch (error) {
         state.executor = undefined;
@@ -752,10 +796,11 @@ export function createPiSandboxExtension(
       }
     });
 
-    pi.on("session_shutdown", () => {
+    pi.on("session_shutdown", async () => {
       state.stopped = true;
       state.policy?.clearSessionGrants();
       state.executor = undefined;
+      await state.auditor?.end();
     });
 
     const userBashHandler: ExtensionHandler<UserBashEvent, UserBashEventResult> = async (

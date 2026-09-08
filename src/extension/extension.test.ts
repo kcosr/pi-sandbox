@@ -19,6 +19,7 @@ import {
 import { SandboxExecutionError } from "../sandbox/index.js";
 import { createPiSandboxExtension } from "./index.js";
 import { LINUX_TOOL_COMMANDS } from "../sandbox/index.js";
+import type { AuditClient, AuditEvent } from "../audit/client.js";
 import type { SandboxExecutor } from "./types.js";
 
 type Handler = (event: never, context: ExtensionContext) => unknown;
@@ -68,7 +69,9 @@ function config(
   overrides: Partial<Record<ToolName, "allow" | "ask" | "deny" | "disabled">> = {},
 ): SandboxConfig {
   return {
-    configVersion: 5,
+    configVersion: 6,
+    filesystem: { cwdWritable: true },
+    audit: { enabled: false, facility: "local0" },
     modelsFile: "/etc/pi-sandbox/models.json",
     execution: { backend: "bubblewrap" },
     identity: { mode: "disabled" },
@@ -76,7 +79,10 @@ function config(
     environment: { pi: {}, sandbox: {}, extensions: {} },
     extensions: {},
     tools: Object.fromEntries(
-      TOOL_NAMES.map((name) => [name, { mode: overrides[name] ?? "allow", sessionGrant: "never" }]),
+      TOOL_NAMES.map((name) => [
+        name,
+        { mode: overrides[name] ?? "allow", sessionGrant: "never", audit: false },
+      ]),
     ),
   };
 }
@@ -91,6 +97,7 @@ function context(
 ): ExtensionContext {
   return {
     cwd: "/work/project",
+    sessionManager: { getSessionId: () => "pi-session-1" },
     hasUI: options.hasUI ?? false,
     mode: "tui",
     signal: options.signal,
@@ -217,7 +224,7 @@ function configWithManagedTool(mode: "allow" | "ask" | "deny" | "disabled"): San
     },
     tools: {
       ...base.tools,
-      host_echo: { mode, sessionGrant: "never" },
+      host_echo: { mode, sessionGrant: "never", audit: false },
     },
   };
 }
@@ -263,7 +270,7 @@ function configWithPiTool(mode: "allow" | "ask" | "deny" | "disabled"): SandboxC
         toolNames: ["standard_echo"],
       },
     },
-    tools: { ...base.tools, standard_echo: { mode, sessionGrant: "never" } },
+    tools: { ...base.tools, standard_echo: { mode, sessionGrant: "never", audit: false } },
   };
 }
 
@@ -296,6 +303,164 @@ async function executeTool(
 }
 
 describe("Pi Sandbox extension", () => {
+  async function loggedExtension(
+    options: {
+      config?: SandboxConfig;
+      failEvent?: AuditEvent["event"];
+      managed?: boolean;
+      compiled?: boolean;
+    } = {},
+  ) {
+    const pi = fakePi();
+    const executor = fakeExecutor();
+    const events: AuditEvent[] = [];
+    const auditClient: AuditClient = {
+      submit(event) {
+        events.push(event);
+        if (event.event === options.failEvent)
+          return Promise.reject(new Error("collector unavailable"));
+        return Promise.resolve();
+      },
+      close: async () => {},
+    };
+    const base =
+      options.config ??
+      (options.managed
+        ? configWithManagedTool("allow")
+        : options.compiled
+          ? configWithPiTool("allow")
+          : config());
+    const cfg = {
+      ...base,
+      audit: { enabled: true, facility: "local0" as const },
+      tools: Object.fromEntries(
+        Object.entries(base.tools).map(([name, policy]) => [
+          name,
+          { ...policy, audit: name !== "read" },
+        ]),
+      ),
+    };
+    const managed = managedToolFixture();
+    const host = {
+      cwd: "/work/project",
+      close: async () => {},
+      execute: vi.fn(() =>
+        Promise.resolve({
+          exitCode: 0,
+          signal: null,
+          stdout: Buffer.alloc(0),
+          stderr: Buffer.alloc(0),
+        }),
+      ),
+    };
+    createPiSandboxExtension({
+      cwd: "/work/project",
+      configPath: "/etc/pi-sandbox/config.toml",
+      userStateDir: "/home/test/.pi/agent",
+      loadConfig: () => Promise.resolve(cfg),
+      executor,
+      auditClient,
+      ...(options.managed
+        ? { managedExtensions: [managed.instance], hostExecutors: { example: host } }
+        : {}),
+      ...(options.compiled ? { piToolExtensions: [piToolFixture()] } : {}),
+    })(pi.api);
+    await pi.handlers.get("session_start")?.(undefined as never, context());
+    return { pi, executor, events, managed, host };
+  }
+
+  it("logs model write targets and decisions without contents while excluding read and human shell", async () => {
+    const { pi, events } = await loggedExtension();
+    await executeTool(pi, "write", { path: "note.txt", content: "PRIVATE CONTENT" });
+    expect(events.map((event) => event.event)).toEqual([
+      "session_started",
+      "tool_requested",
+      "tool_execution_intent",
+      "tool_completed",
+    ]);
+    expect(events[0]).toMatchObject({ pi_session_id: "pi-session-1", cwd: "/work/project" });
+    expect(events.at(-1)).toMatchObject({
+      invocation_id: "call-1",
+      tool: "write",
+      path: "/work/project/note.txt",
+      boundary: "bubblewrap",
+      approval_source: "policy",
+      outcome: "success",
+    });
+    expect(JSON.stringify(events)).not.toContain("PRIVATE CONTENT");
+    await executeTool(pi, "read", { path: "note.txt" });
+    await pi.handlers.get("user_bash")?.(
+      { type: "user_bash", command: "echo human" } as never,
+      context(),
+    );
+    expect(events).toHaveLength(4);
+    await pi.handlers.get("session_shutdown")?.(undefined as never, context());
+    expect(events.at(-1)?.event).toBe("session_ended");
+  });
+
+  it("logs denied calls without dispatching them", async () => {
+    const { pi, events, executor } = await loggedExtension({ config: config({ write: "deny" }) });
+    await expect(
+      executeTool(pi, "write", { path: "note.txt", content: "private" }),
+    ).rejects.toThrow("denied");
+    expect(executor.calls).toHaveLength(0);
+    expect(events.at(-1)).toMatchObject({
+      event: "tool_denied",
+      reason: "policy_denied",
+      path: "/work/project/note.txt",
+    });
+  });
+
+  it("blocks effects on intent submission failure and never retries a completed effect", async () => {
+    const before = await loggedExtension({ failEvent: "tool_execution_intent" });
+    await expect(
+      executeTool(before.pi, "write", { path: "note.txt", content: "private" }),
+    ).rejects.toThrow("logging is unavailable");
+    expect(before.executor.calls).toHaveLength(0);
+    const after = await loggedExtension({ failEvent: "tool_completed" });
+    await expect(
+      executeTool(after.pi, "write", { path: "note.txt", content: "private" }),
+    ).rejects.toThrow("logging is unavailable");
+    const calls = after.executor.calls.length;
+    expect(calls).toBeGreaterThan(0);
+    await expect(
+      executeTool(after.pi, "write", { path: "other.txt", content: "private" }),
+    ).rejects.toThrow("logging is unavailable");
+    expect(after.executor.calls).toHaveLength(calls);
+    expect(after.events.filter((event) => event.event === "tool_completed")).toHaveLength(1);
+  });
+
+  it("logs managed and compiled Pi tools at their actual host boundary", async () => {
+    const managed = await loggedExtension({ managed: true });
+    await executeTool(managed.pi, "host_echo", { value: "private payload" });
+    expect(managed.events.at(-1)).toMatchObject({
+      tool: "host_echo",
+      extension: "example",
+      boundary: "host",
+      outcome: "success",
+    });
+    expect(JSON.stringify(managed.events)).not.toContain("private payload");
+    const compiled = await loggedExtension({ compiled: true });
+    await executeTool(compiled.pi, "standard_echo", { value: "private payload" });
+    expect(compiled.events.at(-1)).toMatchObject({
+      tool: "standard_echo",
+      extension: "standard-example",
+      boundary: "host",
+      outcome: "success",
+    });
+  });
+
+  it("records bounded Bash commands and typed timeout outcomes without output", async () => {
+    const { pi, events, executor } = await loggedExtension();
+    executor.execute = vi.fn(() => Promise.reject(new SandboxExecutionError("sandbox_timeout")));
+    await expect(executeTool(pi, "bash", { command: "echo hello\n".repeat(1000) })).rejects.toThrow(
+      "sandbox_timeout",
+    );
+    const event = events.at(-1)!;
+    expect(event).toMatchObject({ outcome: "timeout", command_truncated: true });
+    expect(Buffer.byteLength(JSON.stringify(event.command)) - 2).toBeLessThanOrEqual(4096);
+  });
+
   it("registers standard Pi tool extensions through the same tool policy", async () => {
     const pi = fakePi();
     createPiSandboxExtension({

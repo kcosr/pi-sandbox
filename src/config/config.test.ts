@@ -23,9 +23,9 @@ function completeConfig(
 ): string {
   const sections = TOOL_NAMES.map(
     (toolName) =>
-      `[tools.${toolName}]\n${overrides[toolName] ?? 'mode = "allow"\nsession_grant = "never"'}`,
+      `[tools.${toolName}]\naudit = false\n${overrides[toolName] ?? 'mode = "allow"\nsession_grant = "never"'}`,
   );
-  return `config_version = 5\nmodels_file = "/etc/pi-sandbox/models.json"\n\n[execution]\nbackend = "bubblewrap"\n\n[identity]\nmode = "disabled"\n\n[network]\nmode = "none"\n\n[environment.pi]\n\n[environment.sandbox]\n\n[environment.extensions]\n\n[extensions]\n\n${sections.join("\n\n")}\n`;
+  return `config_version = 6\nmodels_file = "/etc/pi-sandbox/models.json"\n\n[audit]\nenabled = false\nfacility = "local0"\n\n[filesystem]\ncwd_writable = true\n\n[execution]\nbackend = "bubblewrap"\n\n[identity]\nmode = "disabled"\n\n[network]\nmode = "none"\n\n[environment.pi]\n\n[environment.sandbox]\n\n[environment.extensions]\n\n[extensions]\n\n${sections.join("\n\n")}\n`;
 }
 
 function parseConfig(
@@ -48,7 +48,9 @@ describe("parseConfig", () => {
     );
 
     expect(config).toEqual({
-      configVersion: 5,
+      configVersion: 6,
+      filesystem: { cwdWritable: true },
+      audit: { enabled: false, facility: "local0" },
       modelsFile: "/etc/pi-sandbox/models.json",
       execution: { backend: "bubblewrap" },
       identity: { mode: "disabled" },
@@ -56,18 +58,77 @@ describe("parseConfig", () => {
       environment: { pi: {}, sandbox: {}, extensions: {} },
       extensions: {},
       tools: {
-        read: { mode: "allow", sessionGrant: "never" },
-        grep: { mode: "ask", sessionGrant: "offer" },
-        find: { mode: "deny", sessionGrant: "never" },
-        ls: { mode: "disabled", sessionGrant: "never" },
-        write: { mode: "allow", sessionGrant: "never" },
-        edit: { mode: "allow", sessionGrant: "never" },
-        bash: { mode: "allow", sessionGrant: "never" },
+        read: { mode: "allow", sessionGrant: "never", audit: false },
+        grep: { mode: "ask", sessionGrant: "offer", audit: false },
+        find: { mode: "deny", sessionGrant: "never", audit: false },
+        ls: { mode: "disabled", sessionGrant: "never", audit: false },
+        write: { mode: "allow", sessionGrant: "never", audit: false },
+        edit: { mode: "allow", sessionGrant: "never", audit: false },
+        bash: { mode: "allow", sessionGrant: "never", audit: false },
       },
     });
     expect(Object.isFrozen(config)).toBe(true);
     expect(Object.isFrozen(config.tools)).toBe(true);
     expect(Object.isFrozen(config.tools.read)).toBe(true);
+  });
+
+  it("requires a strict filesystem policy and rejects unenforceable direct access", () => {
+    const source = completeConfig();
+    const readonly = source.replace("cwd_writable = true", "cwd_writable = false");
+    expect(parseConfig(readonly).filesystem).toEqual({ cwdWritable: false });
+    expect(Object.isFrozen(parseConfig(readonly).filesystem)).toBe(true);
+    for (const invalid of [
+      source.replace("[filesystem]\ncwd_writable = true\n\n", ""),
+      source.replace("cwd_writable = true", ""),
+      source.replace("cwd_writable = true", 'cwd_writable = "false"'),
+      source.replace("cwd_writable = true", "cwd_writable = 0"),
+      source.replace("cwd_writable = true", "cwd_writable = true\nextra = true"),
+    ])
+      expect(() => parseConfig(invalid)).toThrow(ConfigError);
+    expect(() =>
+      parseConfig(
+        readonly
+          .replace('backend = "bubblewrap"', 'backend = "direct"')
+          .replace('mode = "none"', 'mode = "host"'),
+      ),
+    ).toThrow("config.filesystem.cwd_writable must be true");
+  });
+
+  it("requires strict global and per-tool audit settings", () => {
+    const source = completeConfig();
+    expect(parseConfig(source.replace("enabled = false", "enabled = true")).audit).toEqual({
+      enabled: true,
+      facility: "local0",
+    });
+    for (const facility of [
+      "local0",
+      "local1",
+      "local2",
+      "local3",
+      "local4",
+      "local5",
+      "local6",
+      "local7",
+    ]) {
+      expect(
+        parseConfig(source.replace('facility = "local0"', `facility = "${facility}"`)).audit
+          .facility,
+      ).toBe(facility);
+    }
+    for (const [before, after, issue] of [
+      ['[audit]\nenabled = false\nfacility = "local0"\n\n', "", "config.audit is required"],
+      ["enabled = false", 'enabled = "false"', "config.audit.enabled must be a boolean"],
+      ['facility = "local0"', 'facility = "user"', "config.audit.facility must be one of"],
+      [
+        'facility = "local0"',
+        'facility = "local0"\npath = "/tmp/events"',
+        "config.audit.path is not a recognized field",
+      ],
+      ["audit = false\n", "", "config.tools.read.audit is required"],
+      ["audit = false", 'audit = "false"', "config.tools.read.audit must be a boolean"],
+    ]) {
+      expect(() => parseConfig(source.replace(before!, after!))).toThrow(issue);
+    }
   });
 
   it("rejects malformed TOML without returning a partial policy", () => {
@@ -78,11 +139,11 @@ describe("parseConfig", () => {
 
   it("rejects unsupported config versions and types", () => {
     expect(() =>
-      parseConfig(completeConfig().replace("config_version = 5", 'config_version = "5"')),
-    ).toThrow("config.config_version must be the integer 5");
+      parseConfig(completeConfig().replace("config_version = 6", 'config_version = "6"')),
+    ).toThrow("config.config_version must be the integer 6");
     expect(() =>
-      parseConfig(completeConfig().replace("config_version = 5", "config_version = 4")),
-    ).toThrow("config.config_version must be the integer 5");
+      parseConfig(completeConfig().replace("config_version = 6", "config_version = 4")),
+    ).toThrow("config.config_version must be the integer 6");
   });
 
   it("requires models_file to be a normalized absolute file path", () => {
@@ -115,7 +176,7 @@ describe("parseConfig", () => {
   it("rejects unknown fields at every schema level", () => {
     expect(() =>
       parseConfig(
-        completeConfig().replace("config_version = 5", "config_version = 5\nunexpected = true"),
+        completeConfig().replace("config_version = 6", "config_version = 6\nunexpected = true"),
       ),
     ).toThrow("config.unexpected is not a recognized field");
     expect(() =>
@@ -165,12 +226,12 @@ describe("parseConfig", () => {
     const source = `${completeConfig().replace(
       "[environment.extensions]",
       '[environment.extensions.git]\nGIT_TOKEN = "configured"',
-    )}\n[extensions.git]\nallowed_hosts = ["github.com"]\n\n[tools.git_clone]\nmode = "ask"\nsession_grant = "never"\n`;
+    )}\n[extensions.git]\nallowed_hosts = ["github.com"]\n\n[tools.git_clone]\naudit = false\nmode = "ask"\nsession_grant = "never"\n`;
     const config = parseConfig(source, "managed.toml", catalog);
     expect(config.extensions).toEqual({
       git: { id: "git", settings: { allowedHosts: ["github.com"] }, toolNames: ["git_clone"] },
     });
-    expect(config.tools.git_clone).toEqual({ mode: "ask", sessionGrant: "never" });
+    expect(config.tools.git_clone).toEqual({ mode: "ask", sessionGrant: "never", audit: false });
     expect(config.environment.extensions.git).toEqual({ GIT_TOKEN: "configured" });
     expect(() =>
       parseConfig(
@@ -191,7 +252,10 @@ describe("parseConfig", () => {
     ).toThrow("config.extensions.git must contain only allowed_hosts");
     expect(() =>
       parseConfig(
-        source.replace('[tools.git_clone]\nmode = "ask"\nsession_grant = "never"', ""),
+        source.replace(
+          '[tools.git_clone]\naudit = false\nmode = "ask"\nsession_grant = "never"',
+          "",
+        ),
         "managed.toml",
         catalog,
       ),
@@ -242,7 +306,7 @@ describe("parseConfig", () => {
 
   it("rejects every missing tool policy", () => {
     for (const toolName of TOOL_NAMES) {
-      const section = `[tools.${toolName}]\nmode = "allow"\nsession_grant = "never"`;
+      const section = `[tools.${toolName}]\naudit = false\nmode = "allow"\nsession_grant = "never"`;
       expect(() => parseConfig(completeConfig().replace(section, ""))).toThrow(
         `config.tools.${toolName} is required`,
       );
@@ -250,18 +314,18 @@ describe("parseConfig", () => {
   });
 
   it("rejects missing root fields and tables with the wrong shape", () => {
-    expect(() => parseConfig(completeConfig().replace("config_version = 5\n", ""))).toThrow(
+    expect(() => parseConfig(completeConfig().replace("config_version = 6\n", ""))).toThrow(
       "config.config_version is required",
     );
     expect(() =>
       parseConfig(
-        'config_version = 5\nmodels_file = "/etc/pi-sandbox/models.json"\nexecution = "direct"\nidentity = "disabled"\nnetwork = "none"\nextensions = "none"\ntools = "all"\n',
+        'config_version = 6\nmodels_file = "/etc/pi-sandbox/models.json"\nexecution = "direct"\nidentity = "disabled"\nnetwork = "none"\nextensions = "none"\ntools = "all"\n',
       ),
     ).toThrow("config.tools must be a table");
     expect(() =>
       parseConfig(
         completeConfig().replace(
-          '[tools.read]\nmode = "allow"\nsession_grant = "never"',
+          '[tools.read]\naudit = false\nmode = "allow"\nsession_grant = "never"',
           'tools.read = "allow"',
         ),
       ),
@@ -287,7 +351,12 @@ describe("parseConfig", () => {
       parseConfig(completeConfig().replace('backend = "bubblewrap"', 'backend = "direct"')),
     ).toThrow('config.network.mode must be "host" when config.execution.backend is "direct"');
     expect(() =>
-      parseConfig(completeConfig().replace('[execution]\nbackend = "bubblewrap"\n\n', "")),
+      parseConfig(
+        completeConfig().replace(
+          '[audit]\nenabled = false\nfacility = "local0"\n\n[filesystem]\ncwd_writable = true\n\n[execution]\nbackend = "bubblewrap"\n\n',
+          "",
+        ),
+      ),
     ).toThrow("config.execution is required");
     expect(() =>
       parseConfig(completeConfig().replace('backend = "bubblewrap"', 'backend = "container"')),
@@ -362,7 +431,9 @@ describe("loadConfig", () => {
     await writeFile(path, completeConfig(), "utf8");
 
     await expect(loadConfig(path, EMPTY_EXTENSION_CATALOG)).resolves.toMatchObject({
-      configVersion: 5,
+      configVersion: 6,
+      filesystem: { cwdWritable: true },
+      audit: { enabled: false, facility: "local0" },
     });
   });
 

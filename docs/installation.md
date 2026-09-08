@@ -21,14 +21,15 @@ The Git extension requires `/usr/bin/git`. Startup validates the requirements
 for every selected managed extension; separately maintained executables and
 their configuration remain deployment inputs.
 
-The distributed application and optional Linux static identity broker are prebuilt.
+The distributed application and optional Linux static identity and event-collector
+services are prebuilt.
 An installed host does not need Bun, Node.js, Rust, a package source tree, a
 compiler, network access, or Pi source. A release without the Git extension
 selected does not require Git. Pi Sandbox does not require QEMU,
 Gondolin, Docker, or a persistent privileged daemon; the optional root broker
 is systemd socket activated per connection on Linux. Broker identity is not
 supported or packaged on macOS; macOS configuration must set
-`identity.mode = "disabled"`.
+`identity.mode = "disabled"` and `[audit].enabled = false`.
 
 ## Release archive and installed layout
 
@@ -43,8 +44,10 @@ directory rather than wrapper generations:
 /usr/libexec/pi-sandbox/
   pi-sandbox
   pi-sandbox-identity-broker
+  pi-sandbox-audit-collector
   bwrap                         # bundled-provider releases only
   package.json
+  sbom.cdx.json
   theme/
   assets/
   export-html/
@@ -55,6 +58,8 @@ directory rather than wrapper generations:
   systemd/
     pi-sandbox-identity-broker.socket
     pi-sandbox-identity-broker@.service
+    pi-sandbox-audit.socket
+    pi-sandbox-audit@.service
   licenses/
     LICENSE
     identity-broker/
@@ -66,6 +71,8 @@ directory rather than wrapper generations:
 /usr/lib/systemd/system/
   pi-sandbox-identity-broker.socket -> packaged unit
   pi-sandbox-identity-broker@.service -> packaged unit
+  pi-sandbox-audit.socket -> packaged unit
+  pi-sandbox-audit@.service -> packaged unit
 
 /etc/pi-sandbox/
   config.toml
@@ -78,7 +85,7 @@ Linux service-unit paths. It also selects a system or bundled Bubblewrap
 provider. Those choices are compiled into the application and
 rendered into its installer, uninstaller, systemd units, and release manifest.
 
-The default macOS layout omits the broker, broker licenses, and systemd units:
+The default macOS layout omits both Rust services, their licenses, and systemd units:
 
 ```text
 /usr/local/bin/pi-sandbox -> /usr/local/libexec/pi-sandbox/pi-sandbox
@@ -86,6 +93,7 @@ The default macOS layout omits the broker, broker licenses, and systemd units:
 /usr/local/libexec/pi-sandbox/
   pi-sandbox
   package.json
+  sbom.cdx.json
   theme/
   assets/
   export-html/
@@ -136,7 +144,7 @@ env -u NODE_ENV npm run verify:release -- \
 ```
 
 ```toml
-version = 1
+version = 2
 extension_manifests = [
   "/path/to/pi-sandbox-extension.json",
   "/path/to/private-extension/pi-sandbox-extension.json",
@@ -148,6 +156,7 @@ libexec_dir = "/usr/libexec/pi-sandbox"
 launcher_path = "/usr/bin/pi-sandbox"
 service_dir = "/usr/lib/systemd/system"
 identity_socket_path = "/run/pi-sandbox-identity/broker.sock"
+audit_socket_path = "/run/pi-sandbox-audit/collector.sock"
 
 [platforms.linux.bubblewrap]
 mode = "system"
@@ -158,6 +167,7 @@ config_dir = "/etc/pi-sandbox"
 libexec_dir = "/usr/local/libexec/pi-sandbox"
 launcher_path = "/usr/local/bin/pi-sandbox"
 identity_socket_path = "/run/pi-sandbox-identity/broker.sock"
+audit_socket_path = "/run/pi-sandbox-audit/collector.sock"
 ```
 
 Linux may instead package a prebuilt Bubblewrap binary:
@@ -209,7 +219,7 @@ complete `[tools.example_lookup]` policy. Factories that register commands,
 event handlers, renderers, flags, or other non-tool features are rejected.
 
 The distribution manifest also sets `config_dir`, `libexec_dir`,
-`launcher_path`, `identity_socket_path`, and, on Linux, `service_dir` for each
+`launcher_path`, `identity_socket_path`, `audit_socket_path`, and, on Linux, `service_dir` for each
 platform, plus the Linux Bubblewrap provider. All runtime paths are normalized
 absolute paths and immutable at runtime. A
 packaged default config must point `models_file` at that layout's
@@ -286,24 +296,27 @@ There is no implicit configuration replacement. This supports both complete
 archive deployments and systems where Salt or another configuration manager
 owns `/etc/pi-sandbox`.
 
-The installed configuration must use format version 5. It must include the
-`[execution]` and `[extensions]` tables and explicit `[environment.pi]`,
+The installed configuration must include the
+`[audit]`, `[execution]`, `[filesystem]`, and `[extensions]` tables, an `audit` boolean on every
+base tool policy, and explicit `[environment.pi]`,
 `[environment.sandbox]`, and `[environment.extensions]` tables, even when the
 environment tables are empty. Set `execution.backend = "bubblewrap"` on Linux
 for containment, or `execution.backend = "direct"` on Linux/macOS for
 policy-gated execution in the user's host security context. Direct mode also
-requires `network.mode = "host"`; macOS requires disabled identity. If a
+requires `network.mode = "host"` and `filesystem.cwd_writable = true`; macOS
+requires disabled identity. If a
 preserved site configuration does not satisfy the current schema, update the
 site-managed TOML first or use `--replace-config` to install the packaged
 defaults.
 
 When the optional identity broker is enabled, `users.d/<uid>.toml` may overlay
-scoped environment and supply model, execution, network, and complete
+scoped environment and supply model, execution, network, filesystem, and complete
 tool-policy overrides for that UID. Global/default values belong in the main
 `config.toml`; there is no separate defaults or aggregate users file. A missing
 directory or matching file inherits the main configuration unchanged. An
 execution override may select `bubblewrap` or `direct`; the final effective
-configuration must still pair `direct` with `network.mode = "host"`.
+configuration must still pair `direct` with `network.mode = "host"` and
+`filesystem.cwd_writable = true`.
 
 See [Models and authentication](models.md) for the distinction between the
 active catalog and packaged defaults, API-key resolution, and model
@@ -313,14 +326,17 @@ See [Per-user environment and overrides](identity-broker.md) to create optional
 per-UID drop-ins and enable the socket. After installing or upgrading units on a live
 host, run `systemctl daemon-reload` before enabling or restarting the socket.
 
-On Linux, disable the optional socket before uninstalling if it has been enabled:
+On Linux, disable any enabled optional sockets and stop event-collector
+connections before uninstalling:
 
 ```sh
-sudo systemctl disable --now pi-sandbox-identity-broker.socket
+sudo systemctl disable --now pi-sandbox-identity-broker.socket pi-sandbox-audit.socket
+sudo systemctl stop 'pi-sandbox-audit@*.service'
 sudo ./uninstall.sh
 ```
 
-The uninstaller refuses to remove an active or enabled broker unit. It never
+The uninstaller refuses to remove active or enabled sockets or active
+event-collector connections. It never
 removes `users.d` or its contents, including with `--remove-config`, and reloads
 systemd after removing the managed units.
 
@@ -397,9 +413,15 @@ prompt and therefore denies. Also confirm that the subject is not `deny` or
 
 ### A host path is read-only
 
-Only the directory from which `pi-sandbox` was launched is persistently
-writable. Launch from the intended project root. Starting in a nested directory
-intentionally makes only that subtree writable.
+Check `/sandbox mounts` and the effective `filesystem.cwd_writable` setting.
+In Bubblewrap, the launch directory is persistently writable only when that
+setting is `true`; with `false`, even approved Bash/write/edit operations cannot
+modify it. Private temporary/runtime storage remains writable. Launch from the
+intended workspace; changing directories inside Bash does not broaden access.
+A read-only launch from exactly `/tmp` is rejected. Use a workspace beneath
+`/tmp` or another directory to preserve private writable temporary storage.
+Direct execution rejects read-only CWD configuration. Managed host tools use
+their separate host authority.
 
 ### Networking fails
 
@@ -414,3 +436,50 @@ effective configuration.
 The current operation fails and no host fallback occurs. Inspect the bounded
 diagnostic and correct the command, policy, installation, or host problem. Exit
 and relaunch Pi if the sandbox probe or installation admission failed.
+
+## Local syslog integration
+
+Linux releases include `pi-sandbox-audit-collector` and the
+`pi-sandbox-audit.socket` / `pi-sandbox-audit@.service` systemd units. Enable the
+socket before setting `[audit].enabled = true` in the parent configuration:
+
+```sh
+sudo systemctl daemon-reload
+sudo systemctl enable --now pi-sandbox-audit.socket
+```
+
+The default endpoint is `/run/pi-sandbox-audit/collector.sock`; a distribution
+may select another absolute path at build time with `audit_socket_path`.
+The root collector reads the parent configuration for the enabled state and
+syslog facility. No UID drop-in changes these settings. Identity-broker mode is
+not required. The host must provide its standard local syslog socket at
+`/dev/log`.
+
+The configuration file and every ancestor directory must be root-owned, must
+not be symlinks, and must not be group- or world-writable (normally `0644` for
+the file and `0755` for directories). Configuration rejection details appear in
+the collector service journal.
+
+The packaged socket allows 128 concurrent connections host-wide and eight per
+UID. Each logging-enabled process holds one connection. Exceeding these limits
+prevents the additional process from logging and its logged tools fail closed.
+Administrators can adjust these limits with a systemd socket unit drop-in.
+
+Events are emitted under the fixed `pi-sandbox` identifier using the configured
+`local0` through `local7` facility. Configure the host's logging service to store
+and forward those events as desired. There is no application-managed log file,
+rotation policy, remote logging destination, or durable-delivery promise. The
+application requires an acknowledgment that the collector submitted each
+required record to the local syslog socket.
+
+## Release component inventory
+
+Each release includes `sbom.cdx.json`, a CycloneDX 1.6 software bill of materials
+covered by the release checksums. It records the application binary hash,
+source commit and working-tree status, pinned Pi source and patch provenance,
+actual JavaScript bundle inputs, selected compiled extensions, Bun version,
+packaged native assets and executable hashes, Linux Rust dependency inventories, and bundled
+Bubblewrap when selected. Cargo inventories include build-only dependencies.
+System libraries and Bun's internal third-party dependencies are outside the
+inventory's stated coverage. Supply the SBOM alongside the matching release
+when using dependency scanners.

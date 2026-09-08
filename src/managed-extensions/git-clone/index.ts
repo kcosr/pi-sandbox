@@ -89,6 +89,10 @@ export const gitCloneExtension = defineManagedExtension({
       formatCall(arguments_) {
         return typeof arguments_.repository === "string" ? arguments_.repository : undefined;
       },
+      auditTarget(arguments_, cwd) {
+        const target = gitCloneTarget(arguments_.repository, cwd);
+        return { repository: arguments_.repository, path: target };
+      },
       async execute(arguments_, context) {
         return executeGitClone(arguments_, context);
       },
@@ -131,10 +135,7 @@ async function executeGitClone(
     throw new Error(`git clone host is not allowed: ${parsed.host}`);
   }
 
-  const destination = path.resolve(context.cwd, parsed.destinationName);
-  if (path.dirname(destination) !== context.cwd) {
-    throw new Error("derived Git clone destination is outside the launch directory");
-  }
+  const destination = gitCloneTarget(arguments_.repository, context.cwd);
   await requireAbsent(destination);
 
   const protocolPolicy = config.allowed_schemes.flatMap((scheme) => [
@@ -173,6 +174,14 @@ async function executeGitClone(
     ],
     details: undefined,
   };
+}
+
+function gitCloneTarget(repository: string, cwd: string): string {
+  const parsed = parseRepository(repository);
+  const destination = path.resolve(cwd, parsed.destinationName);
+  if (path.dirname(destination) !== cwd)
+    throw new Error("derived Git clone destination is outside the launch directory");
+  return destination;
 }
 
 function parseRepository(repository: string): ParsedRepository {

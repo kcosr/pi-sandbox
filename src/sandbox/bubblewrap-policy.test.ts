@@ -20,6 +20,33 @@ describe("Bubblewrap policy", () => {
     expect(hasSequence(args, ["--seccomp", String(BUBBLEWRAP_SECCOMP_FD)])).toBe(true);
   });
 
+  it.each(["/home/person/project", "/tmp/project"])(
+    "explicitly overlays read-only CWD after private mounts: %s",
+    (cwd) => {
+      const args = buildBubblewrapArguments(cwd, ["/bin/true"], "none", {}, false);
+      const cwdMount = sequenceIndex(args, ["--ro-bind", cwd, cwd]);
+      expect(cwdMount).toBeGreaterThan(sequenceIndex(args, ["--tmpfs", "/tmp"]));
+      expect(cwdMount).toBeGreaterThan(sequenceIndex(args, ["--tmpfs", "/run"]));
+      expect(hasSequence(args, ["--bind", cwd, cwd])).toBe(false);
+      expect(describeBubblewrapMounts(cwd, false)).toContainEqual({
+        target: cwd,
+        access: "read-only",
+        content: "host launch directory",
+      });
+    },
+  );
+
+  it("rejects read-only /tmp instead of masking writable private temporary storage", () => {
+    expect(() => buildBubblewrapArguments("/tmp", ["/bin/true"], "none", {}, false)).toThrow(
+      "sandbox_cwd_masks_private_tmp",
+    );
+    expect(() => describeBubblewrapMounts("/tmp", false)).toThrow("sandbox_cwd_masks_private_tmp");
+    expect(() => buildBubblewrapArguments("/tmp", ["/bin/true"])).not.toThrow();
+    expect(describeBubblewrapMounts("/tmp").filter((mount) => mount.target === "/tmp")).toEqual([
+      { target: "/tmp", access: "read/write", content: "host launch directory" },
+    ]);
+  });
+
   it("creates private pseudo-filesystems and locks down namespace authority", () => {
     const args = buildBubblewrapArguments("/home/person/project", ["/bin/true"]);
 

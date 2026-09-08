@@ -1,0 +1,31 @@
+[Unit]
+Description=Pi Sandbox tool logging connection
+
+[Service]
+Type=simple
+ExecStart=/usr/libexec/pi-sandbox/pi-sandbox-audit-collector /etc/pi-sandbox/config.toml
+StandardInput=socket
+StandardOutput=socket
+StandardError=journal
+User=root
+Group=root
+UMask=0077
+MemoryMax=32M
+TasksMax=16
+NoNewPrivileges=yes
+CapabilityBoundingSet=
+PrivateDevices=yes
+PrivateNetwork=yes
+PrivateTmp=yes
+BindReadOnlyPaths=/dev/log
+ProtectHome=yes
+ProtectSystem=strict
+ProtectControlGroups=yes
+ProtectKernelModules=yes
+ProtectKernelTunables=yes
+RestrictAddressFamilies=AF_UNIX
+RestrictNamespaces=yes
+LockPersonality=yes
+MemoryDenyWriteExecute=yes
+RestrictSUIDSGID=yes
+SystemCallArchitectures=native

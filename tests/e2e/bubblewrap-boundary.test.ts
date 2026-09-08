@@ -33,6 +33,7 @@ describe.skipIf(!REAL_BWRAP_AVAILABLE)("real Bubblewrap boundary", () => {
     });
     executor = await createBubblewrapExecutor({
       cwd: workspace,
+      cwdWritable: true,
       bubblewrapPath: BWRAP_PATH,
       environment: { SANDBOX_CONFIGURED_VALUE: "configured" },
       workerCommand: testSandboxWorkerCommand(),
@@ -77,6 +78,20 @@ describe.skipIf(!REAL_BWRAP_AVAILABLE)("real Bubblewrap boundary", () => {
     });
     expect(writeOutside.exitCode).not.toBe(0);
     expect(await readFile(outsideFile, "utf8")).toBe("host-read-only\n");
+  });
+
+  it("rejects a read-only launch CWD at /tmp before it can mask private temporary storage", async () => {
+    await expect(
+      createBubblewrapExecutor({
+        cwd: "/tmp",
+        cwdWritable: false,
+        bubblewrapPath: BWRAP_PATH,
+        workerCommand: testSandboxWorkerCommand(),
+      }),
+    ).rejects.toMatchObject({
+      code: "sandbox_start_failed",
+      cause: { message: "sandbox_cwd_masks_private_tmp" },
+    });
   });
 
   it("provides process-private persistent temporary and runtime storage", async () => {

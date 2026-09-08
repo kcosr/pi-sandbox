@@ -7,6 +7,7 @@ export interface CompiledLayout {
   readonly libexecDir: string;
   readonly launcherPath: string;
   readonly identitySocketPath: string;
+  readonly auditSocketPath: string;
   readonly serviceDir?: string;
   readonly bubblewrap?: {
     readonly mode: "system" | "bundled";

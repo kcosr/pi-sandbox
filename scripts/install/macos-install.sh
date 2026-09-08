@@ -74,7 +74,9 @@ defaults_models="$payload/defaults/models.json"
 [ -f "$checksums" ] && [ ! -L "$checksums" ] || { echo "release SHA256SUMS is missing" >&2; exit 1; }
 [ -d "$payload" ] && [ ! -L "$payload" ] || { echo "release payload is missing" >&2; exit 1; }
 [ -f "$candidate" ] && [ -x "$candidate" ] && [ ! -L "$candidate" ] || { echo "release executable is invalid" >&2; exit 1; }
-[ -f "$defaults_config" ] && [ -f "$defaults_models" ] || { echo "release defaults are incomplete" >&2; exit 1; }
+for required in "$defaults_config" "$defaults_models" "$payload/release-manifest.json" "$payload/sbom.cdx.json"; do
+  [ -f "$required" ] && [ ! -L "$required" ] || { echo "release payload is incomplete" >&2; exit 1; }
+done
 [ -z "$(find "$payload" ! -type d ! -type f -print -quit)" ] || {
   echo "release payload contains an unsupported file type" >&2
   exit 1

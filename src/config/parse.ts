@@ -1,6 +1,8 @@
 import { parse as parseToml } from "@iarna/toml";
 
 import {
+  AUDIT_FACILITIES,
+  type AuditConfig,
   POLICY_MODES,
   EXECUTION_BACKENDS,
   NETWORK_MODES,
@@ -9,9 +11,10 @@ import {
   type IdentityConfig,
   type ExtensionConfig,
   type ExecutionConfig,
+  type FilesystemConfig,
   type NetworkConfig,
   type SandboxConfig,
-  type SubjectPolicy,
+  type ToolPolicy,
   type ToolPolicies,
   isNormalizedAbsoluteFilePath,
   parseManagedEnvironment,
@@ -24,14 +27,16 @@ type UnknownRecord = Record<string, unknown>;
 const ROOT_KEYS = [
   "config_version",
   "models_file",
+  "audit",
   "execution",
+  "filesystem",
   "identity",
   "network",
   "environment",
   "extensions",
   "tools",
 ] as const;
-const POLICY_KEYS = ["mode", "session_grant"] as const;
+const POLICY_KEYS = ["mode", "session_grant", "audit"] as const;
 const IDENTITY_MODES = ["disabled", "broker"] as const;
 
 function isRecord(value: unknown): value is UnknownRecord {
@@ -95,7 +100,7 @@ function parseSubjectPolicy(
   value: unknown,
   path: string,
   issues: string[],
-): SubjectPolicy | undefined {
+): ToolPolicy | undefined {
   if (!isRecord(value)) {
     issues.push(`${path} must be a table`);
     return undefined;
@@ -118,7 +123,12 @@ function parseSubjectPolicy(
     return undefined;
   }
 
-  return Object.freeze({ mode, sessionGrant });
+  const audit = own(value, "audit");
+  if (typeof audit !== "boolean") {
+    issues.push(`${path}.audit must be a boolean`);
+    return undefined;
+  }
+  return Object.freeze({ mode, sessionGrant, audit });
 }
 
 function parseToolPolicies(
@@ -132,7 +142,7 @@ function parseToolPolicies(
   }
 
   inspectKeys(value, toolNames, "config.tools", issues);
-  const entries: Record<string, SubjectPolicy> = {};
+  const entries: Record<string, ToolPolicy> = {};
 
   for (const toolName of toolNames) {
     const policy = parseSubjectPolicy(own(value, toolName), `config.tools.${toolName}`, issues);
@@ -222,6 +232,24 @@ function validateExtensionEnvironment(
   }
 }
 
+function parseAudit(value: unknown, issues: string[]): AuditConfig | undefined {
+  if (!isRecord(value)) {
+    issues.push("config.audit must be a table");
+    return undefined;
+  }
+  inspectKeys(value, ["enabled", "facility"], "config.audit", issues);
+  const enabled = own(value, "enabled");
+  const facility = enumValue(
+    own(value, "facility"),
+    AUDIT_FACILITIES,
+    "config.audit.facility",
+    issues,
+  );
+  if (typeof enabled !== "boolean") issues.push("config.audit.enabled must be a boolean");
+  if (typeof enabled !== "boolean" || facility === undefined) return undefined;
+  return Object.freeze({ enabled, facility });
+}
+
 function parseIdentity(value: unknown, issues: string[]): IdentityConfig | undefined {
   if (!isRecord(value)) {
     issues.push("config.identity must be a table");
@@ -242,6 +270,20 @@ function parseNetwork(value: unknown, issues: string[]): NetworkConfig | undefin
   inspectKeys(value, ["mode"], "config.network", issues);
   const mode = enumValue(own(value, "mode"), NETWORK_MODES, "config.network.mode", issues);
   return mode === undefined ? undefined : Object.freeze({ mode });
+}
+
+function parseFilesystem(value: unknown, issues: string[]): FilesystemConfig | undefined {
+  if (!isRecord(value)) {
+    issues.push("config.filesystem must be a table");
+    return undefined;
+  }
+  inspectKeys(value, ["cwd_writable"], "config.filesystem", issues);
+  const cwdWritable = own(value, "cwd_writable");
+  if (typeof cwdWritable !== "boolean") {
+    issues.push("config.filesystem.cwd_writable must be a boolean");
+    return undefined;
+  }
+  return Object.freeze({ cwdWritable });
 }
 
 function parseExecution(value: unknown, issues: string[]): ExecutionConfig | undefined {
@@ -280,8 +322,8 @@ export function parseConfig(
   inspectKeys(parsed, ROOT_KEYS, "config", issues);
 
   const configVersion = own(parsed, "config_version");
-  if (configVersion !== 5) {
-    issues.push("config.config_version must be the integer 5");
+  if (configVersion !== 6) {
+    issues.push("config.config_version must be the integer 6");
   }
 
   const modelsFileValue = own(parsed, "models_file");
@@ -290,8 +332,10 @@ export function parseConfig(
     issues.push("config.models_file must be a normalized absolute file path");
   }
 
+  const audit = parseAudit(own(parsed, "audit"), issues);
   const identity = parseIdentity(own(parsed, "identity"), issues);
   const execution = parseExecution(own(parsed, "execution"), issues);
+  const filesystem = parseFilesystem(own(parsed, "filesystem"), issues);
   const network = parseNetwork(own(parsed, "network"), issues);
   let environment;
   try {
@@ -301,6 +345,11 @@ export function parseConfig(
   }
   if (execution?.backend === "direct" && network?.mode !== "host") {
     issues.push('config.network.mode must be "host" when config.execution.backend is "direct"');
+  }
+  if (execution?.backend === "direct" && filesystem?.cwdWritable === false) {
+    issues.push(
+      'config.filesystem.cwd_writable must be true when config.execution.backend is "direct"',
+    );
   }
   const extensions = parseExtensions(own(parsed, "extensions"), catalog, issues);
   validateExtensionEnvironment(environment, extensions, catalog, issues);
@@ -319,9 +368,11 @@ export function parseConfig(
   if (
     issues.length > 0 ||
     modelsFile === undefined ||
+    audit === undefined ||
     identity === undefined ||
     execution === undefined ||
     network === undefined ||
+    filesystem === undefined ||
     environment === undefined ||
     extensions === undefined ||
     tools === undefined
@@ -330,11 +381,13 @@ export function parseConfig(
   }
 
   return Object.freeze({
-    configVersion: 5,
+    configVersion: 6,
+    audit,
     modelsFile,
     execution,
     identity,
     network,
+    filesystem,
     environment,
     extensions,
     tools,

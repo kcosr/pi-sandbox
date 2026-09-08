@@ -8,12 +8,14 @@ export function layoutReplacements(layout, os) {
           libexecDir: "/usr/libexec/pi-sandbox",
           launcherPath: "/usr/bin/pi-sandbox",
           serviceDir: "/usr/lib/systemd/system",
+          auditSocketPath: "/run/pi-sandbox-audit/collector.sock",
           identitySocketPath: "/run/pi-sandbox-identity/broker.sock",
         }
       : {
           configDir: "/etc/pi-sandbox",
           libexecDir: "/usr/local/libexec/pi-sandbox",
           launcherPath: "/usr/local/bin/pi-sandbox",
+          auditSocketPath: "/run/pi-sandbox-audit/collector.sock",
           identitySocketPath: "/run/pi-sandbox-identity/broker.sock",
         };
   const replacements = [
@@ -25,6 +27,7 @@ export function layoutReplacements(layout, os) {
     [defaults.libexecDir, layout.libexecDir],
     [defaults.launcherPath, layout.launcherPath],
     [defaults.identitySocketPath, layout.identitySocketPath],
+    [defaults.auditSocketPath, layout.auditSocketPath],
   ];
   if (os === "linux") {
     replacements.unshift(
@@ -45,6 +48,12 @@ export function layoutReplacements(layout, os) {
         ),
       ],
     );
+    for (const unit of ["pi-sandbox-audit.socket", "pi-sandbox-audit@.service"]) {
+      replacements.unshift([
+        `../../../libexec/pi-sandbox/systemd/${unit}`,
+        relative(layout.serviceDir, join(layout.libexecDir, "systemd", unit)),
+      ]);
+    }
     replacements.push([defaults.serviceDir, layout.serviceDir]);
   }
   return replacements;

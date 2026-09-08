@@ -51,8 +51,8 @@ export const BUBBLEWRAP_SECCOMP_FD = 4;
 /**
  * Construct the process-lifetime boundary for the internal command worker. The
  * host root is visible read-only at identical absolute paths, with the captured
- * CWD overlaid read/write. Ordering is security-sensitive: private
- * pseudo-filesystems are mounted after the host root and before the writable
+ * CWD explicitly overlaid with its configured access. Ordering is security-sensitive: private
+ * pseudo-filesystems are mounted after the host root and before the same-path
  * CWD.
  */
 export function buildBubblewrapArguments(
@@ -60,8 +60,9 @@ export function buildBubblewrapArguments(
   argv: readonly [string, ...string[]],
   networkMode: NetworkMode = "none",
   environment: Readonly<Record<string, string>> = {},
+  cwdWritable = true,
 ): readonly string[] {
-  assertSandboxCwd(cwd);
+  assertSandboxCwd(cwd, cwdWritable);
   assertNetworkMode(networkMode);
   const customEnvironment = validateSandboxEnvironment(environment);
   if (!path.isAbsolute(argv[0])) {
@@ -111,7 +112,7 @@ export function buildBubblewrapArguments(
     // contents were intentionally hidden by the private tmpfs above.
     "--dir",
     cwd,
-    "--bind",
+    cwdWritable ? "--bind" : "--ro-bind",
     cwd,
     cwd,
   ];
@@ -163,12 +164,21 @@ function assertNetworkMode(networkMode: NetworkMode): void {
 }
 
 /** Describe the effective mount policy without exposing Bubblewrap's raw argv or mountinfo noise. */
-export function describeBubblewrapMounts(cwd: string): readonly SandboxMountDescription[] {
-  assertSandboxCwd(cwd);
+export function describeBubblewrapMounts(
+  cwd: string,
+  cwdWritable = true,
+): readonly SandboxMountDescription[] {
+  assertSandboxCwd(cwd, cwdWritable);
   return Object.freeze([
     { target: "/", access: "read-only", content: "host filesystem" },
-    { target: cwd, access: "read/write", content: "host launch directory" },
-    { target: "/tmp", access: "read/write", content: "private tmpfs" },
+    {
+      target: cwd,
+      access: cwdWritable ? "read/write" : "read-only",
+      content: "host launch directory",
+    },
+    ...(cwd === "/tmp"
+      ? []
+      : [{ target: "/tmp", access: "read/write" as const, content: "private tmpfs" }]),
     { target: "/run", access: "read/write", content: "private tmpfs" },
     { target: "/proc", access: "private", content: "sandbox process view" },
     { target: "/sys", access: "private", content: "empty private filesystem" },
@@ -176,7 +186,9 @@ export function describeBubblewrapMounts(cwd: string): readonly SandboxMountDesc
   ]);
 }
 
-export function assertSandboxCwd(cwd: string): void {
+export function assertSandboxCwd(cwd: string, cwdWritable = true): void {
+  if (typeof cwdWritable !== "boolean") throw new Error("sandbox_cwd_writable_invalid");
+  if (cwd === "/tmp" && !cwdWritable) throw new Error("sandbox_cwd_masks_private_tmp");
   if (
     !path.isAbsolute(cwd) ||
     path.normalize(cwd) !== cwd ||

@@ -5,8 +5,10 @@ import { formatSandboxMounts, formatSandboxPolicy, formatSandboxSummary } from "
 
 function diagnosticConfig(): SandboxConfig {
   return {
-    configVersion: 5,
+    configVersion: 6,
+    audit: { enabled: false, facility: "local0" },
     modelsFile: "/etc/pi-sandbox/models.json",
+    filesystem: { cwdWritable: true },
     execution: { backend: "bubblewrap" },
     identity: { mode: "disabled" },
     network: { mode: "none" },
@@ -18,6 +20,7 @@ function diagnosticConfig(): SandboxConfig {
         {
           mode: subject === "write" || subject === "edit" ? "ask" : "allow",
           sessionGrant: subject === "write" ? "offer" : "never",
+          audit: false,
         },
       ]),
     ),
@@ -32,6 +35,7 @@ describe("sandbox diagnostics", () => {
         cwd: "/work/project",
         configPath: "/etc/pi-sandbox/config.toml",
         modelsFile: "/etc/pi-sandbox/models.json",
+        filesystem: { cwdWritable: true },
         execution: { backend: "bubblewrap" },
         identity: { mode: "disabled" },
         network: { mode: "none" },
@@ -41,6 +45,7 @@ describe("sandbox diagnostics", () => {
     ).toBe(`Pi Sandbox: initialized
 
 Launch CWD:  /work/project
+CWD access:  read/write
 Lifetime:    pi-sandbox process
 Execution:   Bubblewrap sandbox
 Network:     disabled (private namespace)
@@ -59,6 +64,7 @@ Use /sandbox mounts or /sandbox policy for details.`);
       cwd: "/work/project\nNetwork: enabled",
       configPath: "/etc/pi-sandbox/config.toml",
       modelsFile: "/etc/pi-sandbox/models\u001b[31m.json",
+      filesystem: { cwdWritable: true },
       execution: { backend: "bubblewrap" },
       identity: { mode: "broker" },
       network: { mode: "host" },
@@ -76,12 +82,41 @@ Use /sandbox mounts or /sandbox policy for details.`);
   });
 
   it("formats the semantic mount policy instead of raw mountinfo", () => {
-    const output = formatSandboxMounts("/work/project", { backend: "bubblewrap" });
+    const output = formatSandboxMounts(
+      "/work/project",
+      { backend: "bubblewrap" },
+      { cwdWritable: true },
+    );
     expect(output).toContain("Sandbox mounts");
     expect(output).toContain("/              read-only   host filesystem");
     expect(output).toContain("/work/project  read/write  host launch directory");
     expect(output).toContain("HOME: /run/pi-sandbox/home");
     expect(output).not.toContain("mount ID");
+  });
+
+  it("reports read-only CWD and keeps managed host tools outside that restriction", () => {
+    const config = { ...diagnosticConfig(), filesystem: { cwdWritable: false } };
+    const mounts = formatSandboxMounts("/work/project", config.execution, config.filesystem);
+    expect(mounts).toContain("/work/project  read-only");
+    expect(mounts).toContain("Only private temporary/runtime storage is writable");
+    for (const subject of ["write", "edit", "bash", "user_shell"]) {
+      const detail = formatSandboxPolicy(
+        { config, hasSessionGrant: () => false, isToolActive: () => true },
+        subject,
+      );
+      expect(detail).toContain("including the launch directory, is read-only");
+      expect(detail).not.toContain("write inside the launch directory");
+    }
+    const host = formatSandboxPolicy(
+      {
+        config,
+        hasSessionGrant: () => false,
+        isToolActive: () => true,
+        hostToolScopes: { write: "test-host-tool" },
+      },
+      "write",
+    );
+    expect(host).toContain("Is not restricted by the Bubblewrap boundary, its filesystem setting");
   });
 
   it("reports configured modes, session options, and memory-only active grants", () => {
@@ -119,6 +154,7 @@ Use /sandbox mounts or /sandbox policy for details.`);
       configPath: "/etc/pi-sandbox/config.toml",
       modelsFile: config.modelsFile,
       execution: config.execution,
+      filesystem: config.filesystem,
       identity: config.identity,
       network: config.network,
       extensions: [],
@@ -145,13 +181,14 @@ Use /sandbox mounts or /sandbox policy for details.`);
       configPath: "/etc/pi-sandbox/config.toml",
       modelsFile: config.modelsFile,
       execution: config.execution,
+      filesystem: config.filesystem,
       identity: config.identity,
       network: config.network,
       extensions: [],
       userStateDir: "/Users/alice/.pi/agent",
     });
     expect(summary).toContain("Execution:   direct host execution (uncontained)");
-    expect(formatSandboxMounts("/work/project", config.execution)).toContain(
+    expect(formatSandboxMounts("/work/project", config.execution, config.filesystem)).toContain(
       "no mount namespace or filesystem containment boundary",
     );
 
@@ -179,7 +216,7 @@ Use /sandbox mounts or /sandbox policy for details.`);
       },
       tools: {
         ...base.tools,
-        host_echo: { mode: "ask", sessionGrant: "never" },
+        host_echo: { mode: "ask", sessionGrant: "never", audit: false },
       },
     } satisfies SandboxConfig;
     const input = {
