@@ -107,7 +107,7 @@ The default macOS layout omits both Rust services, their licenses, and systemd u
 ```
 
 Broker mode may additionally read
-`/etc/pi-sandbox/users.d/<uid>.toml`. The optional live directory and its
+`/etc/pi-sandbox/users.d/*.toml` and `/etc/pi-sandbox/groups.d/*.toml`. The optional live directories and their
 root-owned mode-0600 drop-ins are deliberately absent from the release and are
 never created, replaced, backed up, or removed by the installer or uninstaller.
 
@@ -280,8 +280,8 @@ them with the new executable before completing the installation.
 After a successful operation, the installer prints both executables, the
 launcher and unit symlinks, runtime support directory, live administrative
 files, and any backups it created. Configuration entries are labeled as
-installed, replaced, or preserved. It separately identifies `users.d` as an
-optional administrator-managed directory that it did not create or alter.
+installed, replaced, or preserved. It separately identifies `users.d` and `groups.d` as
+optional administrator-managed directories that it did not create or alter.
 
 To intentionally deploy the package's administrative configuration as well as
 its code, use:
@@ -309,11 +309,12 @@ preserved site configuration does not satisfy the current schema, update the
 site-managed TOML first or use `--replace-config` to install the packaged
 defaults.
 
-When the optional identity broker is enabled, `users.d/<uid>.toml` may overlay
+When the optional identity broker is enabled, `users.d/*.toml` and `groups.d/*.toml` may overlay
 scoped environment and supply model, execution, network, filesystem, and complete
-tool-policy overrides for that UID. Global/default values belong in the main
-`config.toml`; there is no separate defaults or aggregate users file. A missing
-directory or matching file inherits the main configuration unchanged. An
+tool-policy overrides for the account and its primary/supplementary groups. Matching
+explicit permissions combine using least restrictive wins before overlaying defaults. Global/default values belong in the main
+`config.toml`; there is no separate defaults or aggregate users file. If no rules
+match, the main configuration remains unchanged. An
 execution override may select `bubblewrap` or `direct`; the final effective
 configuration must still pair `direct` with `network.mode = "host"` and
 `filesystem.cwd_writable = true`.
@@ -322,8 +323,8 @@ See [Models and authentication](models.md) for the distinction between the
 active catalog and packaged defaults, API-key resolution, and model
 troubleshooting.
 
-See [Per-user environment and overrides](identity-broker.md) to create optional
-per-UID drop-ins and enable the socket. After installing or upgrading units on a live
+See [User and group environment and overrides](identity-broker.md) to create optional
+user/group drop-ins and enable the socket. After installing or upgrading units on a live
 host, run `systemctl daemon-reload` before enabling or restarting the socket.
 
 On Linux, disable any enabled optional sockets and stop event-collector
@@ -337,7 +338,7 @@ sudo ./uninstall.sh
 
 The uninstaller refuses to remove active or enabled sockets or active
 event-collector connections. It never
-removes `users.d` or its contents, including with `--remove-config`, and reloads
+removes `users.d`, `groups.d`, or their contents, including with `--remove-config`, and reloads
 systemd after removing the managed units.
 
 This project does not build an RPM. The archive layout and installer semantics
@@ -369,7 +370,7 @@ pi-sandbox
 
 Before starting the interactive application, the executable validates the
 compiled extension catalog, loads the base policy, optionally resolves the
-calling UID, validates the selected extensions, effective model catalog, exact
+calling account and groups, validates the selected extensions, effective model catalog, exact
 tool policy, and conditional executable prerequisites, and probes a real
 Bubblewrap operation for the launch directory. Any failure stops startup. No
 stock tool or host-execution fallback is available.
@@ -451,9 +452,15 @@ sudo systemctl enable --now pi-sandbox-audit.socket
 The default endpoint is `/run/pi-sandbox-audit/collector.sock`; a distribution
 may select another absolute path at build time with `audit_socket_path`.
 The root collector reads the parent configuration for the enabled state and
-syslog facility. No UID drop-in changes these settings. Identity-broker mode is
+syslog facility. No user/group rule changes these settings. Identity-broker mode is
 not required. The host must provide its standard local syslog socket at
-`/dev/log`.
+`/dev/log` and `/usr/bin/getent` for trusted account-name lookup. The resolver
+uses host NSS and locally reachable account-service sockets; it has no direct
+network LDAP access. Name resolution runs once per connection with a four-second
+budget. The application allows ten seconds for connection/acknowledgment.
+Records use schema 2 and identify each submission with `principal_uid`,
+`principal_user` (null if the UID has no account), and `principal_pid`. No
+principal GID or group membership is included.
 
 The configuration file and every ancestor directory must be root-owned, must
 not be symlinks, and must not be group- or world-writable (normally `0644` for

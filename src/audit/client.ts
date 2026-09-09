@@ -31,7 +31,7 @@ export interface AuditClient {
   close(): Promise<void>;
 }
 
-const DEADLINE_MS = 5_000;
+const DEADLINE_MS = 10_000;
 const MAX_REQUEST_BYTES = 32_768;
 const MAX_RESPONSE_BYTES = 4_096;
 

@@ -34,7 +34,7 @@ unavailable namespaces.
   validation;
 - required extension selection and exact dynamic model-tool policy sets;
 - strict offline and host network modes;
-- required CWD write-access configuration, parent inheritance and UID overrides,
+- required CWD write-access configuration, parent inheritance and user/group overrides,
   with direct/read-only rejection before and after override application;
 - all required model-tool policies and unknown-field rejection;
 - mode and session-grant decisions;
@@ -47,10 +47,12 @@ unavailable namespaces.
   installer-owned validation commands admitted as root;
 - strict system-versus-bundled Bubblewrap distribution selection and immutable
   compiled runtime path;
-- strict broker protocol and per-UID TOML parsing,
-  global-plus-per-UID scoped environment overlay, missing-drop-in inheritance,
+- strict broker protocol and user/group TOML parsing, named/numeric selectors,
+  primary/supplementary membership, least-restrictive joins, conflict rejection,
+  and bounded host resolver failures,
+  global-plus-combined-rule scoped environment overlay, missing-drop-in inheritance,
   environment bounds and reserved-name rejection, dynamic
-  UID-drop-in execution and tool override validation, effective backend/network
+  User/group rule execution and tool override validation, effective backend/network
   validation, active-policy cross-checking, atomic
   per-user override merging, and the compiled Bun client's no-half-close request
   flow;
@@ -74,7 +76,7 @@ provider. It proves that:
   disabled extension tools do not;
 - managed API version 3 call summaries render identifying fields in Pi's tool
   card and reject control characters or oversized output;
-- per-UID complete policies can deny or disable `git_clone` and other selected tools,
+- user/group complete policies can deny or disable `git_clone` and other selected tools,
   while environment values alone never alter the tool catalog or decisions;
 - disabled tools are absent;
 - allowed and approved calls execute the exact immutable request through the
@@ -149,8 +151,8 @@ model provider. Together these checks verify:
 - first-install creation of packaged administrative defaults;
 - preservation of `/etc/pi-sandbox` during an ordinary upgrade;
 - non-creation, non-replacement, and non-removal of the optional root-managed
-  `users.d` directory;
-- rejection of obsolete per-UID file/protocol versions and validation of
+  `users.d` and `groups.d` directories;
+- rejection of obsolete user/group file/protocol versions and validation of
   scoped environments during broker-mode release checks;
 - validated, backed-up replacement through `--replace-config`;
 - compiled administrative config-path loading and its required `models_file` and
@@ -191,7 +193,7 @@ verification treats such a skip as a failure.
 ## Tool logging and component inventory checks
 
 Unit and integration coverage verifies strict parent-only logging configuration,
-UID inheritance, selected tool filtering, target path metadata, bounded command
+parent logging inheritance, selected tool filtering, target path metadata, bounded command
 text, Pi-session correlation, permission decisions, and execution outcomes.
 Human shell calls remain excluded. Failure tests require acknowledged intent
 before execution and prove that completion-submission failures do not retry

@@ -1,17 +1,16 @@
 # Per-user environment and overrides
 
 On Linux, Pi Sandbox can optionally resolve administrator-managed settings for
-the Unix user that launches it. A root systemd socket service identifies the
-caller with Linux `SO_PEERCRED` and, when present, reads only
-`<config_dir>/users.d/<uid>.toml`. It returns that UID's environment and
-override patch. The Bun `pi-sandbox` application is the client; the broker is
-not a launcher or wrapper.
+the account that launches it and its primary and supplementary groups. A root
+systemd socket service identifies the caller with Linux `SO_PEERCRED`, resolves
+membership through the host account system, and combines matching rules from
+`<config_dir>/users.d/*.toml` and `<config_dir>/groups.d/*.toml`. It returns one
+environment and override patch. The Bun application is the client; the broker
+is not a launcher or wrapper.
 
 Global policy and global scoped environment belong in
-`<config_dir>/config.toml`. There is no `users.toml`, `users.json`, or
-`defaults.toml`. The `users.d` directory and every per-UID file are optional. A
-missing directory or missing matching file means that the main configuration
-is inherited unchanged.
+`<config_dir>/config.toml`. Both rule directories are optional. If no rules
+match, the main configuration is inherited unchanged.
 
 The broker is not built or packaged on macOS. macOS direct-mode configuration
 must use `identity.mode = "disabled"` and therefore uses only the main
@@ -29,12 +28,11 @@ mode = "broker"
 Broker mode always uses the root-managed socket compiled from the distribution
 manifest; runtime configuration cannot redirect it.
 
-Create the optional drop-in directory and a per-UID file only when that UID
-needs a patch:
+Create only the rule directories and files you need. For example:
 
 ```sh
-sudo install -d -o root -g root -m 0755 /etc/pi-sandbox/users.d
-sudo install -o root -g root -m 0600 1000.toml /etc/pi-sandbox/users.d/1000.toml
+sudo install -d -o root -g root -m 0755 /etc/pi-sandbox/groups.d
+sudo install -o root -g root -m 0600 admin.toml /etc/pi-sandbox/groups.d/admin.toml
 sudo systemctl daemon-reload
 sudo systemctl enable --now pi-sandbox-identity-broker.socket
 ```
@@ -45,10 +43,10 @@ must not be a symlink. `/etc`, `/etc/pi-sandbox`, and the fixed
 `/run/pi-sandbox-identity` socket directory must remain root-controlled.
 
 The release installs the broker executable and systemd units but never creates,
-replaces, backs up, or removes `users.d` or its contents, and it does not enable
+replaces, backs up, or removes `users.d`, `groups.d`, or their contents, and it does not enable
 the socket. Deployment tooling owns those live drop-ins and service state.
 
-To disable per-UID resolution, use the complete alternative table:
+To disable user/group resolution, use the complete alternative table:
 
 ```toml
 [identity]
@@ -58,7 +56,7 @@ mode = "disabled"
 Inherited `PI_SANDBOX_*` values and other runtime-injection variables are
 removed before managed startup. Configured environment names beginning with
 `PI_SANDBOX_` are invalid. Disabled mode still applies the global scoped
-environment from the main configuration; it merely skips per-UID lookup.
+environment from the main configuration; it merely skips user/group lookup.
 
 ## Main configuration environment
 
@@ -90,97 +88,129 @@ The three scopes are intentionally separate:
 Environment entries never select an extension, add or enable a tool, change a
 policy, or grant an invocation.
 
-## Per-UID drop-in format
+## User and group rules
 
-Each optional `/etc/pi-sandbox/users.d/<uid>.toml` is strict TOML.
-Its filename and `uid` must both match the kernel-reported
-calling UID:
+Put ordinary permissions in the main configuration. Add rules for accounts or
+groups that need exceptions; no priority or filename ordering is required.
+For example, with Bash disabled and read requiring approval in the main policy:
+
+`/etc/pi-sandbox/groups.d/admin.toml`:
 
 ```toml
-version = 6
-uid = 1000
-username = "user"
-comment = "Example account"
+version = 7
+group = "admin"
 
-[environment.pi]
-ORGANIZATION_MODEL_TOKEN = "user-model-value"
+[overrides.tools.bash]
+mode = "ask"
+session_grant = "offer"
+```
 
-[environment.extensions.service-api]
-SERVICE_API_TOKEN = "user-service-value"
+`/etc/pi-sandbox/groups.d/log-readers.toml`:
 
-[overrides.execution]
-backend = "bubblewrap"
+```toml
+version = 7
+group = "log-readers"
 
-[overrides.filesystem]
-cwd_writable = false
-
-[overrides.network]
-mode = "host"
-
-[overrides.tools.git_clone]
-mode = "disabled"
-session_grant = "never"
-
-[overrides.tools.service_api]
-mode = "deny"
+[overrides.tools.read]
+mode = "allow"
 session_grant = "never"
 ```
 
-`version` and `uid` are required. `username` and `comment` are optional
-annotations and are neither trusted nor returned to Pi. `environment` and
-`overrides` are optional patches. A per-UID environment value replaces the
-same variable in the same main-configuration scope; all unmentioned global
-values remain in effect.
+Someone in both groups receives both exceptions: Bash with approval and read
+without approval. Other tool policies remain at their defaults. A user rule
+can grant the same kind of exception:
 
-Variable names use the ordinary portable environment-name form and values are
-strings without NUL bytes. Names, values, maps, and the complete response are
-bounded. Runtime-injection names, dynamic-loader variables, and all
-`PI_SANDBOX_*` names are reserved; the sandbox scope also cannot replace fixed
-values such as `HOME`, `PATH`, or `TMPDIR`. Duplicate keys, malformed tool or
-extension names, unknown fields, exposed file permissions, symlinks, filename
-or UID mismatches, and invalid values reject the matching drop-in.
+`/etc/pi-sandbox/users.d/alice.toml`:
 
-`overrides.models_file`, `overrides.execution`, `overrides.network`, and
-`overrides.filesystem` are
-optional. `overrides.execution.backend` is exactly `bubblewrap` or `direct` and
-replaces the complete base execution table. `overrides.network.mode` is exactly
-`none` or `host` and replaces the complete base network table.
-`overrides.filesystem` must contain exactly the boolean `cwd_writable`, which
-replaces the base CWD write-access setting. Omission inherits the parent.
-`overrides.tools` may contain any bounded subset of syntactically valid model
-tool names. Each included tool replaces its invocation permissions, so both
-`mode` and `session_grant` are required. The parent tool's `audit` boolean is
-preserved; logging settings are not accepted in UID drop-ins. Every override name must belong to the
-exact active base tool policy, including tools from selected compiled
-extensions. Omitted values inherit `/etc/pi-sandbox/config.toml`. The effective
-backend/network/filesystem combination is then validated; `direct` requires
-`network.mode = "host"` and `filesystem.cwd_writable = true`.
-Per-UID files cannot select extensions, change extension configuration, change
-the broker socket or configuration version, change mount locations or host
-visibility, or change
-the fixed user-shell behavior.
+```toml
+version = 7
+user = "alice"
 
-The effective order is:
+[overrides.tools.write]
+mode = "ask"
+session_grant = "never"
+```
 
-1. Parse the complete main TOML configuration, including its global scoped
-   environment and complete tool policy.
-2. Resolve the calling UID through the broker. A missing
-   `users.d` directory or matching file yields an empty patch.
-3. Overlay the returned per-UID environment by scope, extension identifier,
-   and variable name; apply any atomic model, execution, network, filesystem, and complete
-   tool-policy overrides; and validate the effective configuration.
-4. Apply the effective `pi` scope while loading and validating the selected
-   model catalog.
-5. Validate selected-extension environment declarations and executables, then
-   start isolated per-extension host executors, the selected built-in executor,
-   and Pi with the effective policy and scoped environment.
+Every file requires `version` and exactly one selector: `user` or `uid` in
+`users.d`, and `group` or `gid` in `groups.d`. Use `uid = 1000` or `gid = 100`
+instead of a name when numeric identity is preferred. Filenames are labels,
+not selectors. Names and IDs have identical merge behavior. `comment` is an
+optional annotation. Names must be nonempty, at most 256 bytes, and contain no
+whitespace, control characters, or colons. Numeric-only names are rejected; use
+`uid` or `gid` for numeric selectors. Use the canonical spelling returned by the
+host account service.
 
-The broker protocol uses newline-delimited JSON version 5 and carries only
-the per-UID patch. The matching drop-in is reopened for every connection, so an
-administrator can atomically replace it without restarting the socket. An
-unavailable broker, invalid matching drop-in or response, or missing or invalid
-selected model file stops startup. Absence of the directory or matching file
-does not.
+`environment` and `overrides` are optional patches. Environment scopes follow
+the main configuration's structure. `overrides.models_file` selects a model
+file; `overrides.execution.backend` accepts `bubblewrap` or `direct`;
+`overrides.network.mode` accepts `none` or `host`; and
+`overrides.filesystem.cwd_writable` is boolean. Each named entry in
+`overrides.tools` requires both `mode` and `session_grant`. Tool names must
+belong to the exact active base policy, including selected compiled tools.
+
+### Combining matching rules
+
+All matching user and group rules participate equally. Combine their explicit
+settings first, then overlay the result on the main configuration. Defaults do
+not compete in this comparison, and user rules do not apply last.
+
+| Setting                         | Combination                                                                                                     |
+| ------------------------------- | --------------------------------------------------------------------------------------------------------------- |
+| Tool invocation policy          | Most permissive complete pair wins: `disabled/never` < `deny/never` < `ask/never` < `ask/offer` < `allow/never` |
+| Network mode                    | `host` wins over `none`                                                                                         |
+| CWD writable                    | `true` wins over `false`                                                                                        |
+| Execution backend or model file | Different explicit values are a configuration error                                                             |
+| Scoped environment variable     | Different values for the same scope, extension, and variable are a configuration error                          |
+| Omitted setting                 | Inherits from the main configuration if no matching rule specifies it                                           |
+
+Rules can replace a default restriction, but cannot revoke permission granted
+by another matching rule. For a common staff/admin setup, keep staff access in
+the default policy and use an admin rule for extra permissions.
+
+Parent tool `audit` flags and the global `[audit]` settings remain unchanged.
+Rules cannot select extensions, change extension configuration, redirect the
+broker socket, change mount locations or host visibility, or change the fixed
+human-shell behavior. Environment values cannot enable tools or grant approval.
+
+The combined effective configuration is validated again: direct execution
+requires `network.mode = "host"` and `filesystem.cwd_writable = true`.
+Unknown fields, invalid policy combinations, malformed environment names,
+reserved runtime-injection variables, exposed permissions, and symlinks are
+rejected. All `.toml` files are validated, including unmatched rules. The two
+directories together allow at most 256 rule files and 4 MiB of TOML, with at most
+1 MiB per file. Combined environment values and responses also retain their
+size limits.
+
+### Account lookup and lifecycle
+
+The static broker invokes the fixed host executable `/usr/bin/getent` through
+bounded argument vectors. This uses the host's NSS account configuration,
+including local accounts and SSSD accessed through local sockets. It does not
+implement an LDAP client. Direct network LDAP lookups are unsupported by the
+service's isolated network namespace; directory-backed installations must
+provide a working local account service.
+
+Membership includes the account's configured primary group and supplementary
+groups reported by the host resolver, rather than just the process's current
+GID. Running `newgrp` is unnecessary. Membership is a startup snapshot and may
+reflect the host account service's cache; restart Pi to resolve policy again.
+The complete account/membership lookup has a four-second budget. The client response deadline is ten
+seconds and the broker service lifetime is fifteen seconds. Lookup failure or
+timeout fails startup rather than silently dropping group rules.
+
+The broker receives the compiled configuration directory as its executable
+argument and reads both protected rule directories for each connection. Its
+protocol is newline-delimited JSON version 6 with operation `resolve-identity`;
+requests contain no claimed identity. It returns only the combined matching
+patch, not unrelated rule contents or annotations. Administrators can atomically
+replace files without restarting the socket.
+
+The Bun client independently validates the response, overlays the patch on the
+main configuration, and validates effective policy. It then applies the `pi`
+environment while loading models and validates extension environments before
+starting executors and Pi. Unavailable brokers, invalid rules or responses,
+conflicting matching values, and invalid effective models stop startup. Missing
+rule directories or no matches inherit defaults.
 
 ## Using Pi-scoped variables in models.json
 
@@ -214,7 +244,7 @@ reliable choice when the identity must accompany every request.
 
 Separate root-only drop-ins prevent one ordinary user from reading another
 user's configured patch. The broker obtains UID from the kernel rather than
-from request data and reads only the matching filename. It does not make a
+from request data and returns only the combined patch for that account and its groups. It does not make a
 user's own environment values secret from that user: the user can connect to
 the world-accessible Unix socket and request their own patch, Pi-scoped values
 exist in their host-side Pi process, sandbox-scoped values are deliberately

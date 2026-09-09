@@ -500,5 +500,6 @@ fi
 if [ "$models_present" -eq 1 ] && [ "$replace_config" -eq 1 ]; then
   printf '  %s (model catalog backup)\n' "$backup_models"
 fi
-printf '%s\n' "optional administrator-managed user overrides (directory not installed or replaced):"
+printf '%s\n' "optional administrator-managed identity overrides (directories not installed or replaced):"
 printf '  %s\n' "$etc_target/users.d/"
+printf '  %s\n' "$etc_target/groups.d/"

@@ -1201,11 +1201,11 @@
                 </p>
               </article>
               <article class="layer">
-                <span class="tag">users.d/&lt;uid&gt;.toml · optional</span>
+                <span class="tag">users.d + groups.d · optional</span>
                 <h3>Per-user exception</h3>
                 <p>
                   A root-owned Linux drop-in may override selected environment, model, execution,
-                  network, and tool-policy values for one Unix UID.
+                  network, and tool-policy values for matching users and groups.
                 </p>
               </article>
             </div>
@@ -1327,19 +1327,19 @@ git_clone = { mode = "ask", session_grant = "never", audit = true }
             <div>
               <pre
                 class="compact"
-                aria-label="Example per-user Pi Sandbox override"
-              ><code># users.d/1234.toml — optional
-version = 6
-uid = 1234
+                aria-label="Example group Pi Sandbox override"
+              ><code># groups.d/admin.toml — optional
+version = 7
+group = "admin"
 
 [overrides.tools.git_clone]
-mode = "disabled"
+mode = "allow"
 session_grant = "never"</code></pre>
               <div class="callout" style="margin-top: 18px">
                 <strong>Effective policy</strong>
                 <span
-                  >The main TOML applies to every user. A matching root-owned UID file replaces only
-                  the values it names; everything else is inherited.</span
+                  >The main TOML supplies defaults. Matching user and group rules combine explicit
+                  permissions using least restrictive wins; omitted settings inherit defaults.</span
                 >
               </div>
               <p

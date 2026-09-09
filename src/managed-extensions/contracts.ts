@@ -50,9 +50,9 @@ export interface ManagedToolExecutionContext {
 export interface ManagedHostEnvironment {
   /** Per-user variable names that this extension accepts from the identity broker. */
   readonly variables: readonly string[];
-  /** Exact inherited variable names removed before per-user values are applied. */
+  /** Exact inherited variable names removed before identity-scoped values are applied. */
   readonly removeInherited?: readonly string[];
-  /** Inherited variable-name prefixes removed before per-user values are applied. */
+  /** Inherited variable-name prefixes removed before identity-scoped values are applied. */
   readonly removeInheritedPrefixes?: readonly string[];
   /** Fixed values applied by the compiled extension policy. */
   readonly fixed?: Readonly<Record<string, string>>;

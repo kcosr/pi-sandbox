@@ -12,67 +12,71 @@ import {
   type ExecutionConfig,
   type FilesystemConfig,
   type IdentityConfig,
-  type ManagedUserEnvironment,
+  type ManagedEnvironment,
   type NetworkConfig,
   type SandboxConfig,
   type SubjectPolicy,
   type ToolPolicy,
-  type UserOverrides,
+  type IdentityOverrides,
 } from "../domain/index.js";
 
-export const IDENTITY_BROKER_PROTOCOL_VERSION = 5;
-export const IDENTITY_BROKER_TIMEOUT_MS = 1000;
+export const IDENTITY_BROKER_PROTOCOL_VERSION = 6;
+export const IDENTITY_BROKER_TIMEOUT_MS = 10_000;
 export const MAXIMUM_IDENTITY_RESPONSE_BYTES = 512 * 1024;
 
-export interface BrokerUser {
-  readonly environment: ManagedUserEnvironment;
-  readonly overrides: UserOverrides;
+export interface BrokerIdentity {
+  readonly environment: ManagedEnvironment;
+  readonly overrides: IdentityOverrides;
 }
 
 interface BrokerSuccessResponse {
-  readonly version: 5;
+  readonly version: 6;
   readonly status: "ok";
-  readonly environment: ManagedUserEnvironment;
-  readonly overrides: UserOverrides;
+  readonly environment: ManagedEnvironment;
+  readonly overrides: IdentityOverrides;
 }
 
 interface BrokerErrorResponse {
-  readonly version: 5;
+  readonly version: 6;
   readonly status: "error";
-  readonly code: "user_store_unavailable" | "protocol_error";
+  readonly code: "identity_store_unavailable" | "protocol_error";
 }
 
 type BrokerResponse = BrokerSuccessResponse | BrokerErrorResponse;
-export type BrokerUserResolver = (socketPath: string) => Promise<BrokerUser>;
+export type BrokerIdentityResolver = (socketPath: string) => Promise<BrokerIdentity>;
 
-export async function configureManagedUser(
+export async function configureManagedIdentity(
   identity: IdentityConfig,
-  resolveUser: BrokerUserResolver = resolveBrokerUser,
-): Promise<BrokerUser> {
-  if (identity.mode === "disabled") return emptyBrokerUser();
-  return resolveUser(IDENTITY_BROKER_SOCKET_PATH);
+  resolveIdentity: BrokerIdentityResolver = resolveBrokerIdentity,
+): Promise<BrokerIdentity> {
+  if (identity.mode === "disabled") return emptyBrokerIdentity();
+  return resolveIdentity(IDENTITY_BROKER_SOCKET_PATH);
 }
 
-export function resolveBrokerUser(socketPath: string): Promise<BrokerUser> {
+export function resolveBrokerIdentity(socketPath: string): Promise<BrokerIdentity> {
   return new Promise((resolve, reject) => {
     const socket = createConnection({ path: socketPath, allowHalfOpen: true });
     const chunks: Buffer[] = [];
     let totalBytes = 0;
     let settled = false;
 
-    const finish = (error?: Error, user?: BrokerUser): void => {
+    const finish = (error?: Error, identity?: BrokerIdentity): void => {
       if (settled) return;
       settled = true;
+      clearTimeout(deadline);
       socket.destroy();
       if (error !== undefined) reject(error);
-      else if (user !== undefined) resolve(user);
-      else reject(new Error("identity broker returned no user"));
+      else if (identity !== undefined) resolve(identity);
+      else reject(new Error("identity broker returned no identity"));
     };
 
-    socket.setTimeout(IDENTITY_BROKER_TIMEOUT_MS);
+    const deadline = setTimeout(
+      () => finish(new Error("identity broker timed out")),
+      IDENTITY_BROKER_TIMEOUT_MS,
+    );
     socket.once("connect", () => {
       socket.write(
-        `${JSON.stringify({ version: IDENTITY_BROKER_PROTOCOL_VERSION, operation: "get-user" })}\n`,
+        `${JSON.stringify({ version: IDENTITY_BROKER_PROTOCOL_VERSION, operation: "resolve-identity" })}\n`,
       );
     });
     socket.on("data", (chunk: Buffer) => {
@@ -83,7 +87,6 @@ export function resolveBrokerUser(socketPath: string): Promise<BrokerUser> {
       }
       chunks.push(Buffer.from(chunk));
     });
-    socket.once("timeout", () => finish(new Error("identity broker timed out")));
     socket.once("error", () => finish(new Error("identity broker is unavailable")));
     socket.once("end", () => {
       if (settled) return;
@@ -127,24 +130,27 @@ export function parseBrokerResponse(source: string): BrokerResponse {
       throw invalidResponse();
     }
     return Object.freeze({
-      version: 5,
+      version: 6,
       status: "ok",
       environment: parseBrokerEnvironment(value.environment),
-      overrides: parseUserOverrides(value.overrides),
+      overrides: parseIdentityOverrides(value.overrides),
     });
   }
   if (
     value.status !== "error" ||
     !hasExactKeys(value, ["version", "status", "code"]) ||
     typeof value.code !== "string" ||
-    !["user_store_unavailable", "protocol_error"].includes(value.code)
+    !["identity_store_unavailable", "protocol_error"].includes(value.code)
   ) {
     throw invalidResponse();
   }
   return value as unknown as BrokerErrorResponse;
 }
 
-export function applyUserOverrides(base: SandboxConfig, overrides: UserOverrides): SandboxConfig {
+export function applyIdentityOverrides(
+  base: SandboxConfig,
+  overrides: IdentityOverrides,
+): SandboxConfig {
   const availableTools = new Set(Object.keys(base.tools));
   for (const toolName of Object.keys(overrides.tools)) {
     if (!availableTools.has(toolName)) {
@@ -173,7 +179,7 @@ export function applyUserOverrides(base: SandboxConfig, overrides: UserOverrides
   });
 }
 
-function parseUserOverrides(value: unknown): UserOverrides {
+function parseIdentityOverrides(value: unknown): IdentityOverrides {
   if (
     !isRecord(value) ||
     !hasAllowedKeys(value, ["models_file", "execution", "network", "filesystem", "tools"])
@@ -242,7 +248,7 @@ function parseUserOverrides(value: unknown): UserOverrides {
   });
 }
 
-function parseBrokerEnvironment(value: unknown): ManagedUserEnvironment {
+function parseBrokerEnvironment(value: unknown): ManagedEnvironment {
   try {
     return parseManagedEnvironment(value);
   } catch {
@@ -275,7 +281,7 @@ function parseSubjectPolicy(value: unknown): SubjectPolicy {
   });
 }
 
-function emptyBrokerUser(): BrokerUser {
+function emptyBrokerIdentity(): BrokerIdentity {
   return Object.freeze({
     environment: emptyManagedEnvironment(),
     overrides: Object.freeze({ tools: Object.freeze({}) }),
@@ -284,8 +290,8 @@ function emptyBrokerUser(): BrokerUser {
 
 function errorMessage(code: BrokerErrorResponse["code"]): string {
   switch (code) {
-    case "user_store_unavailable":
-      return "identity broker user overrides are unavailable";
+    case "identity_store_unavailable":
+      return "identity broker identity overrides are unavailable";
     case "protocol_error":
       return "identity broker rejected the request";
   }

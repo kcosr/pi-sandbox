@@ -66,10 +66,10 @@ effective root-managed administrative configuration and is never selected
 after a Bubblewrap failure.
 
 The distribution's compiled `config_dir/config.toml` is the fixed global policy
-and scoped-environment source. In broker mode, an optional root-only
-`config_dir/users.d/<uid>.toml` may provide that UID's scoped-environment
-and administrator-selected model/execution/network/filesystem/tool patch. A missing
-directory or matching file preserves the main configuration unchanged. Pi's
+and scoped-environment source. In broker mode, optional root-only rules in
+`config_dir/users.d/*.toml` and `config_dir/groups.d/*.toml` may provide matching account/group scoped-environment
+and administrator-selected model/execution/network/filesystem/tool patch. If no rules
+match, the main configuration remains unchanged. Pi's
 internal model catalog is disabled. `PI_CODING_AGENT_DIR` may
 redirect user state but cannot redirect these administrative inputs. Missing,
 unreadable, or invalid effective inputs abort startup. The broker requires the
@@ -77,9 +77,11 @@ drop-in directory to be root-owned and not group/other writable, and matching
 files to be root-owned regular files with mode `0600`; ownership and
 permissions for the main TOML and model files remain deployment responsibilities.
 
-The base TOML remains the global tool policy. Per-UID drop-ins can replace
-complete policies for selected tools, including denying or disabling
-`git_clone` and any other selected extension tool. Environment values do not select extensions,
+The base TOML remains the default tool policy. Matching user/group rules combine
+explicit permissions using least restrictive wins before replacing defaults.
+A restrictive rule cannot revoke a grant from another matching rule; user rules
+have no special precedence. Conflicting backend, model, or scoped environment
+values fail startup. Environment values do not select extensions,
 enable tools, grant approvals, or otherwise change policy.
 
 The following conditions deny the operation or abort startup rather than use a
@@ -89,7 +91,7 @@ host fallback:
 - the interactive application is launched with effective UID `0`;
 - administrative configuration or the selected model catalog is missing or
   invalid;
-- the broker is unavailable or the matching per-UID drop-in is invalid;
+- the broker is unavailable or the matching user/group drop-in is invalid;
 - an unsafe managed-executable argument is supplied;
 - the selected command process cannot start or report a coherent result;
 - a required model-tool approval cannot be obtained;
@@ -171,7 +173,7 @@ seccomp permits `socket`. Sandboxed commands can therefore reach host loopback,
 LAN, Internet, metadata endpoints, and visible or abstract Unix-domain services
 subject only to ordinary host controls. This is not filtered egress. Bubblewrap
 does not enforce IP, port, hostname, or destination rules. Only the fixed base
-configuration or a root-managed per-UID broker drop-in can select this mode.
+configuration or a root-managed user/group broker drop-in can select this mode.
 
 In both modes the classic seccomp BPF program denies the three `io_uring`
 control syscalls. Anonymous `socketpair()` remains available because Bun uses it
@@ -212,7 +214,7 @@ worker. Length-prefixed protocol frames prevent output and partial reads from
 changing message boundaries. No socket or filesystem IPC endpoint accepts
 requests inside the tool sandbox. Separately, optional user resolution occurs
 before sandbox startup through a root systemd Unix socket. That broker derives
-the caller's UID from `SO_PEERCRED`, returns only the matching per-UID patch,
+the caller's UID from `SO_PEERCRED`, returns only the matching user/group patch,
 and never enters the Bubblewrap boundary. The worker
 processes one command at a time and removes all command descendants between
 requests.
@@ -254,7 +256,9 @@ resource controls where those risks matter.
 
 Optional Linux event collection attributes submissions to the Unix account
 identified by kernel socket credentials. The root collector supplies identity
-fields; a client cannot select a different UID. Pi session identifiers, tool
+fields; a client cannot select a different UID or account name. Every event
+records `principal_uid` and the trusted resolved `principal_user` (null for an
+unmapped UID), plus the peer PID. Group membership is not included in events. Pi session identifiers, tool
 metadata, and reported outcomes originate in the trusted application. Shared
 Unix accounts remain shared principals.
 

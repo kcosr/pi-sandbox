@@ -12,11 +12,11 @@ disables Pi's internal model catalog.
 The main configuration contains the global `pi`, `sandbox`, and
 extension-specific scoped environment. The required `identity` table either
 disables user resolution or selects the fixed administrator broker. Broker mode
-may overlay an optional `config_dir/users.d/<uid>.toml` patch for
-the calling UID, including scoped environment, selected model file, execution
-backend, network mode, CWD write access, and any subset of model-tool policies. A missing
-directory or matching file leaves the main configuration unchanged. See
-[per-user environment and overrides](identity-broker.md).
+may overlay a combined patch from `config_dir/users.d/*.toml` and
+`config_dir/groups.d/*.toml` for the caller and its primary/supplementary groups, including scoped environment, selected model file, execution
+backend, network mode, CWD write access, and any subset of model-tool policies. If no rules match,
+the main configuration remains unchanged. See
+[user and group environment and overrides](identity-broker.md).
 
 The required `execution` table selects `bubblewrap` or `direct`. Bubblewrap is
 available only on Linux. Direct execution is available on Linux and macOS and
@@ -42,7 +42,7 @@ closed. Deployment is responsible for ownership and permissions; Pi Sandbox
 does not perform root-ownership or metadata checks on these files.
 
 Project-local files are untrusted content and cannot broaden the installed
-policy. The only merge is an administrator-owned per-UID broker drop-in.
+policy. The only merge combines administrator-owned user/group rules through the broker. Matching explicit permissions use least restrictive wins before overlaying defaults; user rules have no special precedence.
 
 `PI_CODING_AGENT_DIR` remains supported for user state such as credentials,
 sessions, settings, skills, themes, and logs. It never changes the administrative
@@ -132,15 +132,15 @@ runs without an approval prompt through the selected backend. It is human-only
 and is never advertised to the model. Setting `[tools.bash]` to `disabled`
 therefore removes model Bash while preserving the user's `!` command.
 
-These TOML sections are the complete global tool policy. A broker UID drop-in
+These TOML sections are the complete global tool policy. A broker user/group rule
 may replace the complete execution backend and network mode and may atomically
 replace individual complete policies, including setting
-`git_clone` or another selected extension tool to `deny` or `disabled`. Per-UID environment values
+`git_clone` or another selected extension tool to `deny` or `disabled`. User/group environment values
 never select an extension, add a tool, change a policy, or authorize a call.
 
 `models_file` is also required and must name a normalized absolute file path.
 The administrator may place catalogs elsewhere. In broker mode a root-managed
-UID drop-in may replace it; no user environment, CLI argument, Pi setting, or
+user/group rule may replace it; no user environment, CLI argument, Pi setting, or
 project file can do so. `--model` may select only a model present in the
 effective file.
 
@@ -174,7 +174,7 @@ write according to their compiled operation and the invoking user's authority.
 The setting changes write access only; it does not restrict host filesystem
 visibility. Ordinary host filesystem reads remain governed by Unix permissions.
 
-A root-managed UID drop-in may override this setting with
+A root-managed user/group rule may override this setting with
 `[overrides.filesystem] cwd_writable = false`. Omission inherits the parent
 value. The final backend/filesystem combination is validated after overrides;
 switching a read-only base to direct execution also requires overriding
@@ -190,7 +190,7 @@ switching a read-only base to direct execution also requires overriding
 `host` is deliberately unrestricted. Bubblewrap does not provide IP, port,
 hostname, or destination filtering, and Pi Sandbox does not imply such filtering
 when this mode is selected. There is no CLI or environment override. In broker
-mode, an administrator-owned UID drop-in may replace the base network mode.
+mode, an administrator-owned user/group rule may replace the base network mode.
 Provider traffic from host-side Pi is unaffected by either setting.
 
 `direct` requires `host`. This requirement is checked both for the base TOML
@@ -205,7 +205,7 @@ Extension selection is an administrative runtime choice within the catalog
 fixed at build time. `[extensions]` is required even when empty. Selecting an
 extension enables its configuration and adds its tool names to the exact
 required policy set; `mode = "disabled"` hides a selected tool but does not
-remove the requirement to state its policy. Per-UID broker drop-ins can replace
+remove the requirement to state its policy. User/group broker drop-ins can replace
 policies for selected tools, but cannot select extensions or change extension
 configuration.
 
@@ -370,8 +370,8 @@ It does not change tool visibility, approval, or execution authority. Session
 lifecycle events are emitted whenever logging is enabled, independently of the
 individual tool selections. Human `!` commands are excluded.
 
-These settings belong exclusively to the parent configuration. UID drop-ins
-cannot contain `[audit]` or tool-level `audit` fields. A UID override replaces
+These settings belong exclusively to the parent configuration. user/group rules
+cannot contain `[audit]` or tool-level `audit` fields. A combined override replaces
 its tool's invocation permissions while retaining the parent's logging choice.
 
 Logged fields identify the tool, execution boundary, permission decision,

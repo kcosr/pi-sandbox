@@ -332,7 +332,7 @@ describe("administrative configuration", () => {
       sessionGrant: "never",
       audit: true,
     });
-    expect(effective.userEnvironment).toEqual({
+    expect(effective.identityEnvironment).toEqual({
       pi: {
         GLOBAL_PI: "base",
         MODEL_TOKEN: "broker-token",
@@ -379,7 +379,7 @@ describe("administrative configuration", () => {
     );
   });
 
-  it("rejects read-only direct execution after applying a UID override", async () => {
+  it("rejects read-only direct execution after applying identity overrides", async () => {
     const root = await createRoot();
     const configPath = rooted(root, "/etc/pi-sandbox/config.toml");
     const config = await readFile(configPath, "utf8");
