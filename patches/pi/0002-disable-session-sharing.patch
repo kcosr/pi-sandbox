@@ -1,0 +1,87 @@
+diff --git a/packages/coding-agent/src/core/slash-commands.ts b/packages/coding-agent/src/core/slash-commands.ts
+--- a/packages/coding-agent/src/core/slash-commands.ts
++++ b/packages/coding-agent/src/core/slash-commands.ts
+@@ -24,7 +24,6 @@
+ 	{ name: "scoped-models", description: "Enable/disable models for Ctrl+P cycling" },
+ 	{ name: "export", description: "Export session (HTML default, or specify path: .html/.jsonl)" },
+ 	{ name: "import", description: "Import and resume a session from a JSONL file" },
+-	{ name: "share", description: "Share session as a secret GitHub gist" },
+ 	{ name: "copy", description: "Copy last agent message to clipboard" },
+ 	{ name: "name", description: "Set session display name" },
+ 	{ name: "session", description: "Show session info and stats" },
+diff --git a/packages/coding-agent/src/modes/interactive/interactive-mode.ts b/packages/coding-agent/src/modes/interactive/interactive-mode.ts
+--- a/packages/coding-agent/src/modes/interactive/interactive-mode.ts
++++ b/packages/coding-agent/src/modes/interactive/interactive-mode.ts
+@@ -156,7 +156,6 @@
+ import { editInExternalEditor } from "./external-editor.ts";
+ import { refreshModelCatalogs } from "./model-catalog-refresh.ts";
+ import { getModelSearchText } from "./model-search.ts";
+-import { shareSession } from "./session-share.ts";
+ import {
+ 	getAvailableThemes,
+ 	getAvailableThemesWithPaths,
+@@ -2996,7 +2995,7 @@
+ 				this.editor.setText("");
+ 				return;
+ 			}
+-			if (text === "/share") {
++			if (text === "/share" || text.startsWith("/share ")) {
+ 				await this.handleShareCommand();
+ 				this.editor.setText("");
+ 				return;
+@@ -6089,14 +6088,7 @@
+ 	}
+ 
+ 	private async handleShareCommand(): Promise<void> {
+-		await shareSession({
+-			session: this.session,
+-			ui: this.ui,
+-			editorContainer: this.editorContainer,
+-			editor: this.editor,
+-			showStatus: (message) => this.showStatus(message),
+-			showError: (message) => this.showError(message),
+-		});
++		this.showError("Session sharing is disabled in this distribution.");
+ 	}
+ 
+ 	private async handleCopyCommand(options: { flashConfirmation?: boolean } = {}): Promise<void> {
+diff --git a/packages/coding-agent/test/managed-session-sharing.test.ts b/packages/coding-agent/test/managed-session-sharing.test.ts
+new file mode 100644
+--- /dev/null
++++ b/packages/coding-agent/test/managed-session-sharing.test.ts
+@@ -0,0 +1,24 @@
++import { describe, expect, it, vi } from "vitest";
++import { BUILTIN_SLASH_COMMANDS } from "../src/core/slash-commands.ts";
++import { InteractiveMode } from "../src/modes/interactive/interactive-mode.ts";
++
++describe("managed session sharing", () => {
++	it("does not advertise sharing but retains local export", () => {
++		expect(BUILTIN_SLASH_COMMANDS.some((command) => command.name === "share")).toBe(false);
++		expect(BUILTIN_SLASH_COMMANDS.some((command) => command.name === "export")).toBe(true);
++	});
++
++	it("rejects sharing without accessing the session or exporting content", async () => {
++		const showError = vi.fn();
++		const context = new Proxy({ showError }, {
++			get(target, property) {
++				if (property === "showError") return target.showError;
++				throw new Error(`Sharing must not access ${String(property)}`);
++			},
++		});
++		const handleShareCommand = Reflect.get(InteractiveMode.prototype, "handleShareCommand") as
++			(this: typeof context) => Promise<void>;
++		await handleShareCommand.call(context);
++		expect(showError).toHaveBeenCalledExactlyOnceWith("Session sharing is disabled in this distribution.");
++	});
++});
+diff --git a/packages/coding-agent/src/cli/args.ts b/packages/coding-agent/src/cli/args.ts
+--- a/packages/coding-agent/src/cli/args.ts
++++ b/packages/coding-agent/src/cli/args.ts
+@@ -432,7 +432,6 @@
+   PI_PACKAGE_DIR                   - Override package directory (for Nix/Guix store paths)
+   PI_OFFLINE                       - Disable startup network operations when set to 1/true/yes
+   PI_TELEMETRY                     - Override install telemetry when set to 1/true/yes or 0/false/no
+-  PI_SHARE_VIEWER_URL              - Base URL for /share command (default: https://pi.dev/session/)
+ 
+ ${chalk.bold("Built-in Tool Names:")}
+   read       - Read file contents

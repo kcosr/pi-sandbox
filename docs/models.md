@@ -123,3 +123,9 @@ If Pi reports that no models are available:
 Missing authentication can leave configured models unavailable. Invalid JSON,
 schema or composition errors, and an unreadable catalog cause startup to fail
 instead of falling back to other models.
+
+## Session export
+
+External session sharing is disabled in the managed distribution. `/share` is
+not advertised and returns a disabled message if entered. Local `/export`
+remains available for HTML or JSONL output.

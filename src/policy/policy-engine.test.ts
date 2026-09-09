@@ -274,7 +274,9 @@ describe("PolicyEngine", () => {
 
   it("creates policies from the configured model tools", () => {
     const config: SandboxConfig = {
-      configVersion: 5,
+      configVersion: 6,
+      filesystem: { cwdWritable: true },
+      audit: { enabled: false, facility: "local0" },
       modelsFile: "/etc/pi-sandbox/models.json",
       execution: { backend: "bubblewrap" },
       identity: { mode: "disabled" },
@@ -291,19 +293,19 @@ describe("PolicyEngine", () => {
         },
       },
       tools: {
-        read: allow,
-        grep: allow,
-        find: allow,
-        ls: allow,
-        write: allow,
-        edit: allow,
-        bash: { mode: "deny", sessionGrant: "never" },
-        git_clone: { mode: "ask", sessionGrant: "offer" },
+        read: { ...allow, audit: false },
+        grep: { ...allow, audit: false },
+        find: { ...allow, audit: false },
+        ls: { ...allow, audit: false },
+        write: { ...allow, audit: false },
+        edit: { ...allow, audit: false },
+        bash: { mode: "deny", sessionGrant: "never", audit: false },
+        git_clone: { mode: "ask", sessionGrant: "offer", audit: false },
       },
     };
     const created = createApprovalPolicies(config);
-    expect(created.bash).toEqual({ mode: "deny", sessionGrant: "never" });
-    expect(created.git_clone).toEqual({ mode: "ask", sessionGrant: "offer" });
+    expect(created.bash).toEqual({ mode: "deny", sessionGrant: "never", audit: false });
+    expect(created.git_clone).toEqual({ mode: "ask", sessionGrant: "offer", audit: false });
     expect(Object.keys(created)).toEqual([
       "read",
       "grep",

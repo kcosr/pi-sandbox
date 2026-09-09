@@ -14,7 +14,7 @@ try {
   const path = join(temporaryDirectory, "distribution.toml");
   await writeFile(
     path,
-    `version = 1
+    `version = 2
 extension_manifests = ["./extension.json"]
 
 [platforms.linux]
@@ -23,12 +23,27 @@ libexec_dir = "/opt/example/libexec"
 launcher_path = "/opt/example/bin/pi-sandbox"
 service_dir = "/opt/example/systemd"
 identity_socket_path = "/opt/example/run/broker.sock"
+audit_socket_path = "/opt/example/run/collector.sock"
 
 [platforms.linux.bubblewrap]
 mode = "system"
 path = "/opt/example/bin/bwrap"
 `,
   );
+  const validManifest = await readFile(path, "utf8");
+  await writeFile(path, validManifest.replace("version = 2", "version = 1"));
+  await assert.rejects(loadDistribution(path, "linux"), /version must be 2/);
+  await writeFile(
+    path,
+    validManifest.replace('audit_socket_path = "/opt/example/run/collector.sock"', ""),
+  );
+  await assert.rejects(loadDistribution(path, "linux"), /audit_socket_path/);
+  await writeFile(
+    path,
+    validManifest.replace("/opt/example/run/collector.sock", "/opt/example/run/broker.sock"),
+  );
+  await assert.rejects(loadDistribution(path, "linux"), /must differ/);
+  await writeFile(path, validManifest);
   const distribution = await loadDistribution(path, "linux");
   assert.deepEqual(distribution.layout, {
     configDir: "/opt/example/etc",
@@ -37,6 +52,7 @@ path = "/opt/example/bin/bwrap"
     libexecDir: "/opt/example/libexec",
     launcherPath: "/opt/example/bin/pi-sandbox",
     identitySocketPath: "/opt/example/run/broker.sock",
+    auditSocketPath: "/opt/example/run/collector.sock",
     serviceDir: "/opt/example/systemd",
     bubblewrap: { mode: "system", path: "/opt/example/bin/bwrap" },
   });
@@ -51,12 +67,16 @@ base=/usr/libexec/pi-sandbox
 config=/etc/pi-sandbox
 service=/usr/lib/systemd/system
 socket=/run/pi-sandbox-identity/broker.sock
+audit=/run/pi-sandbox-audit/collector.sock
+audit_unit=../../../libexec/pi-sandbox/systemd/pi-sandbox-audit.socket
 link=../libexec/pi-sandbox/pi-sandbox
 unit=../../../libexec/pi-sandbox/systemd/pi-sandbox-identity-broker.socket
 `,
     distribution.layout,
     "linux",
   );
+  assert.match(rendered, /audit=\/opt\/example\/run\/collector\.sock/);
+  assert.match(rendered, /audit_unit=\.\.\/libexec\/systemd\/pi-sandbox-audit\.socket/);
   assert.match(rendered, /launcher=\/opt\/example\/bin\/pi-sandbox/);
   assert.match(rendered, /link=\.\.\/libexec\/pi-sandbox/);
   assert.match(rendered, /unit=\.\.\/libexec\/systemd\/pi-sandbox-identity-broker\.socket/);
@@ -73,7 +93,7 @@ unit=../../../libexec/pi-sandbox/systemd/pi-sandbox-identity-broker.socket
 
   await writeFile(
     path,
-    `version = 1
+    `version = 2
 extension_manifests = []
 
 [platforms.linux]
@@ -82,6 +102,7 @@ libexec_dir = "/opt/pi-sandbox"
 launcher_path = "/usr/bin/pi-sandbox"
 service_dir = "/usr/lib/systemd/system"
 identity_socket_path = "/run/pi-sandbox-identity/broker.sock"
+audit_socket_path = "/run/pi-sandbox-audit/collector.sock"
 
 [platforms.linux.bubblewrap]
 mode = "bundled"
@@ -117,7 +138,7 @@ license_file = "./COPYING"
     "/usr/libexec/pi-sandbox/config /opt/pi-sandbox",
   );
 
-  await writeFile(path, `version = 1\nextension_manifests = []\nunknown = true\n`);
+  await writeFile(path, `version = 2\nextension_manifests = []\nunknown = true\n`);
   await assert.rejects(loadDistribution(path, "linux"), /unknown is not recognized/);
   process.stdout.write("distribution manifest tests passed\n");
 } finally {

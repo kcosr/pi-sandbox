@@ -2,6 +2,7 @@ node_modules/
 dist/
 coverage/
 /broker/target/
+/audit-collector/target/
 .pi/
 
 .tmp/

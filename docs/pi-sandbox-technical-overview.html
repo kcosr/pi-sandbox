@@ -1242,8 +1242,8 @@
                     <td>Bubblewrap<br /><small>Linux</small></td>
                     <td>Built-in file, search, edit, and shell tools</td>
                     <td>
-                      Host filesystem read-only; launch directory read/write at the same path;
-                      private runtime and optional isolated network.
+                      Host filesystem read-only; launch directory configured read/write or read-only
+                      at the same path; private runtime and optional isolated network.
                     </td>
                     <td>
                       Tool visibility, approval, fixed request mapping, time/output limits, and
@@ -1302,8 +1302,10 @@
               class="compact"
               aria-label="Example global Pi Sandbox configuration"
             ><code># /etc/pi-sandbox/config.toml — excerpt
-config_version = 5
+config_version = 6
 models_file = "/etc/pi-sandbox/models.json"
+audit = { enabled = false, facility = "local0" }
+filesystem = { cwd_writable = true }
 [execution]
 backend = "bubblewrap"
 [identity]
@@ -1317,17 +1319,17 @@ mode = "none"
 allowed_hosts = ["github.com", "git.example.com"]
 allowed_schemes = ["https", "ssh"]
 [tools]
-read = { mode = "allow", session_grant = "never" }
-write = { mode = "ask", session_grant = "offer" }
-bash = { mode = "disabled", session_grant = "never" }
-git_clone = { mode = "ask", session_grant = "never" }
+read = { mode = "allow", session_grant = "never", audit = false }
+write = { mode = "ask", session_grant = "offer", audit = true }
+bash = { mode = "disabled", session_grant = "never", audit = true }
+git_clone = { mode = "ask", session_grant = "never", audit = true }
 # A complete file also declares grep, find, ls, and edit.</code></pre>
             <div>
               <pre
                 class="compact"
                 aria-label="Example per-user Pi Sandbox override"
               ><code># users.d/1234.toml — optional
-version = 5
+version = 6
 uid = 1234
 
 [overrides.tools.git_clone]

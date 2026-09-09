@@ -1,4 +1,5 @@
 export {
+  AUDIT_FACILITIES,
   IDENTITY_BROKER_SOCKET_PATH,
   EXECUTION_BACKENDS,
   NETWORK_MODES,
@@ -8,6 +9,9 @@ export {
   isToolName,
 } from "./policy.js";
 export type {
+  AuditConfig,
+  AuditFacility,
+  ToolPolicy,
   ApprovalSubject,
   BuiltInToolName,
   BrokerIdentityConfig,
@@ -15,6 +19,7 @@ export type {
   EnvironmentVariables,
   ExecutionBackend,
   ExecutionConfig,
+  FilesystemConfig,
   IdentityConfig,
   ExtensionConfig,
   ManagedUserEnvironment,

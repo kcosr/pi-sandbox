@@ -90,6 +90,12 @@ export interface ManagedToolDefinition<
   readonly executionMode?: "parallel" | "sequential";
   /** Return a short, single-line, non-sensitive summary for Pi's tool-call card. */
   formatCall?(arguments_: Readonly<Partial<TArguments>>): string | undefined;
+  /** Select identifying target metadata without file content or arbitrary argument logging. */
+  auditTarget?(
+    this: void,
+    arguments_: Readonly<TArguments>,
+    cwd: string,
+  ): { readonly path?: string; readonly repository?: string };
   execute(
     arguments_: Readonly<TArguments>,
     context: ManagedToolExecutionContext,

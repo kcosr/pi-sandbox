@@ -16,7 +16,8 @@ services such as an SSH server where existing host controls permit it.
 The default Linux Bubblewrap ceiling is:
 
 - ordinary host filesystem readable;
-- only the captured launch CWD persistently writable;
+- only the captured launch CWD persistently writable by default; setting
+  `filesystem.cwd_writable = false` also makes that host directory read-only;
 - private temporary/runtime storage writable, except when host `/tmp` itself is
   deliberately selected as the writable launch CWD;
 - no network access from sandbox tools or shell commands unless an
@@ -67,7 +68,7 @@ after a Bubblewrap failure.
 The distribution's compiled `config_dir/config.toml` is the fixed global policy
 and scoped-environment source. In broker mode, an optional root-only
 `config_dir/users.d/<uid>.toml` may provide that UID's scoped-environment
-and administrator-selected model/execution/network/tool patch. A missing
+and administrator-selected model/execution/network/filesystem/tool patch. A missing
 directory or matching file preserves the main configuration unchanged. Pi's
 internal model catalog is disabled. `PI_CODING_AGENT_DIR` may
 redirect user state but cannot redirect these administrative inputs. Missing,
@@ -130,8 +131,12 @@ required guarantee.
 ## Filesystem details
 
 The host root is mounted read-only at `/`, preserving absolute paths. The
-captured launch CWD is mounted over its identical path read/write. Linux mount
-resolution makes the more specific writable subtree take precedence.
+captured launch CWD is explicitly mounted over its identical path, read/write
+when `filesystem.cwd_writable = true` and read-only when it is `false`. This
+bind is created after private mounts, preserving CWD visibility beneath `/tmp`.
+Read-only access does not hide host contents. CWD exactly `/tmp` is rejected in
+read-only mode so the CWD bind cannot mask writable private temporary storage.
+Reserved CWD path overlap checks remain in effect.
 
 The sandbox receives its own process and device views and private writable temp
 and runtime locations. Host pseudo-filesystems and privileged sockets are not
@@ -148,6 +153,11 @@ authority. Disabling the model-visible `bash` tool is useful when an operator
 wants only typed model operations, but it does not turn direct mode into a
 sandbox. User `!` remains available because it is invoked by the human rather
 than advertised to the model.
+
+The read-only CWD setting is a Bubblewrap filesystem restriction. It applies to
+model Bash and human shell commands as well as typed tools; an approval cannot
+bypass it. Direct mode rejects the setting, and managed host tools retain their
+explicit host authority. Writable private runtime/temp storage remains available.
 
 ## Network details
 
@@ -178,7 +188,7 @@ there is no socket or destination filtering.
 
 Seccomp denies `link` and `linkat`, so sandboxed tools cannot create new hard
 links. Pi Sandbox does not traverse the launch CWD looking for pre-existing hard
-links. A pre-existing writable hard link beneath the CWD can therefore mutate
+links. With `cwd_writable = true`, a pre-existing writable hard link beneath the CWD can mutate
 the same inode through a pathname outside the writable mount. This is an
 accepted residual risk: this boundary protects against accidental writes beyond
 the directory the user believes they selected, not deliberate filesystem
@@ -222,7 +232,7 @@ approved Bash command may observe ambient user credentials.
 - Bubblewrap shares the host kernel; it is not a virtual-machine boundary.
 - Direct mode provides policy gating and bounded process lifecycle, but no OS
   containment.
-- Writable-CWD commands can damage or delete the project.
+- Commands can damage or delete the project when `cwd_writable = true`.
 - An approved Bash command has all authority exposed by the sandbox mounts and
   effective network mode.
 - Read-only visibility may expose sensitive contents to a model through an
@@ -239,3 +249,22 @@ approved Bash command may observe ambient user credentials.
 
 Use ordinary backups, version control, least-privilege Unix accounts, and host
 resource controls where those risks matter.
+
+## Model-tool event records
+
+Optional Linux event collection attributes submissions to the Unix account
+identified by kernel socket credentials. The root collector supplies identity
+fields; a client cannot select a different UID. Pi session identifiers, tool
+metadata, and reported outcomes originate in the trusted application. Shared
+Unix accounts remain shared principals.
+
+Root ownership protects the collector endpoint. Protection, retention, and
+forwarding of accepted records belong to the host syslog infrastructure.
+Successful local submission does not prove durable storage. The feature does
+not independently verify human consent, execution, or completeness against a
+hostile account owner, who can run unrelated software or submit false reports
+under their own UID.
+
+Records exclude file contents, edit diffs, and tool output. Target paths, the
+launch CWD, and bounded Bash commands are intentional identifying fields and
+may contain sensitive information. Bash commands are truncated, not redacted.

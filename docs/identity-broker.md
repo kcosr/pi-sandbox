@@ -92,12 +92,12 @@ policy, or grant an invocation.
 
 ## Per-UID drop-in format
 
-Each optional `/etc/pi-sandbox/users.d/<uid>.toml` is strict TOML with file
-format version 5. Its filename and `uid` must both match the kernel-reported
+Each optional `/etc/pi-sandbox/users.d/<uid>.toml` is strict TOML.
+Its filename and `uid` must both match the kernel-reported
 calling UID:
 
 ```toml
-version = 5
+version = 6
 uid = 1000
 username = "user"
 comment = "Example account"
@@ -109,7 +109,10 @@ ORGANIZATION_MODEL_TOKEN = "user-model-value"
 SERVICE_API_TOKEN = "user-service-value"
 
 [overrides.execution]
-backend = "direct"
+backend = "bubblewrap"
+
+[overrides.filesystem]
+cwd_writable = false
 
 [overrides.network]
 mode = "host"
@@ -137,28 +140,34 @@ values such as `HOME`, `PATH`, or `TMPDIR`. Duplicate keys, malformed tool or
 extension names, unknown fields, exposed file permissions, symlinks, filename
 or UID mismatches, and invalid values reject the matching drop-in.
 
-`overrides.models_file`, `overrides.execution`, and `overrides.network` are
+`overrides.models_file`, `overrides.execution`, `overrides.network`, and
+`overrides.filesystem` are
 optional. `overrides.execution.backend` is exactly `bubblewrap` or `direct` and
 replaces the complete base execution table. `overrides.network.mode` is exactly
 `none` or `host` and replaces the complete base network table.
+`overrides.filesystem` must contain exactly the boolean `cwd_writable`, which
+replaces the base CWD write-access setting. Omission inherits the parent.
 `overrides.tools` may contain any bounded subset of syntactically valid model
-tool names. Each included tool replaces its complete base policy, so both
-`mode` and `session_grant` are required. Every override name must belong to the
+tool names. Each included tool replaces its invocation permissions, so both
+`mode` and `session_grant` are required. The parent tool's `audit` boolean is
+preserved; logging settings are not accepted in UID drop-ins. Every override name must belong to the
 exact active base tool policy, including tools from selected compiled
 extensions. Omitted values inherit `/etc/pi-sandbox/config.toml`. The effective
-backend/network combination is then validated; `direct` requires `host`.
+backend/network/filesystem combination is then validated; `direct` requires
+`network.mode = "host"` and `filesystem.cwd_writable = true`.
 Per-UID files cannot select extensions, change extension configuration, change
-the broker socket or configuration version, alter sandbox mounts, or change
+the broker socket or configuration version, change mount locations or host
+visibility, or change
 the fixed user-shell behavior.
 
 The effective order is:
 
 1. Parse the complete main TOML configuration, including its global scoped
    environment and complete tool policy.
-2. Resolve the calling UID through broker protocol version 4. A missing
+2. Resolve the calling UID through the broker. A missing
    `users.d` directory or matching file yields an empty patch.
 3. Overlay the returned per-UID environment by scope, extension identifier,
-   and variable name; apply any atomic model, execution, network, and complete
+   and variable name; apply any atomic model, execution, network, filesystem, and complete
    tool-policy overrides; and validate the effective configuration.
 4. Apply the effective `pi` scope while loading and validating the selected
    model catalog.
@@ -166,7 +175,7 @@ The effective order is:
    start isolated per-extension host executors, the selected built-in executor,
    and Pi with the effective policy and scoped environment.
 
-The broker protocol remains newline-delimited JSON version 4 and carries only
+The broker protocol uses newline-delimited JSON version 5 and carries only
 the per-UID patch. The matching drop-in is reopened for every connection, so an
 administrator can atomically replace it without restarting the socket. An
 unavailable broker, invalid matching drop-in or response, or missing or invalid

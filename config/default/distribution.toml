@@ -1,4 +1,4 @@
-version = 1
+version = 2
 extension_manifests = ["../../src/managed-extensions/git-clone/pi-sandbox-extension.json"]
 
 [platforms.linux]
@@ -7,6 +7,7 @@ libexec_dir = "/usr/libexec/pi-sandbox"
 launcher_path = "/usr/bin/pi-sandbox"
 service_dir = "/usr/lib/systemd/system"
 identity_socket_path = "/run/pi-sandbox-identity/broker.sock"
+audit_socket_path = "/run/pi-sandbox-audit/collector.sock"
 
 [platforms.linux.bubblewrap]
 mode = "system"
@@ -17,3 +18,4 @@ config_dir = "/etc/pi-sandbox"
 libexec_dir = "/usr/local/libexec/pi-sandbox"
 launcher_path = "/usr/local/bin/pi-sandbox"
 identity_socket_path = "/run/pi-sandbox-identity/broker.sock"
+audit_socket_path = "/run/pi-sandbox-audit/collector.sock"

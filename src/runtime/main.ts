@@ -11,6 +11,7 @@ import {
 } from "@earendil-works/pi-coding-agent";
 
 import { buildLayout } from "../build-layout/index.js";
+import { connectAuditClient, type AuditClient } from "../audit/client.js";
 import { loadConfig } from "../config/index.js";
 import type {
   EnvironmentVariables,
@@ -189,6 +190,7 @@ async function createProbedExecutor(
         cwd,
         bubblewrapPath: bubblewrap.path,
         networkMode: config.network.mode,
+        cwdWritable: config.filesystem.cwdWritable,
         environment,
       });
     } else {
@@ -237,9 +239,17 @@ export function assertExecutionPlatform(
   if (config.execution.backend === "direct" && config.network.mode !== "host") {
     throw new Error("Direct execution requires network.mode = host");
   }
+  if (config.execution.backend === "direct" && !config.filesystem.cwdWritable) {
+    throw new Error("Direct execution requires filesystem.cwd_writable = true");
+  }
   if (platform === "darwin" && config.identity.mode !== "disabled") {
     throw new Error(
       "The identity broker is supported only on Linux; macOS requires identity.mode = disabled",
+    );
+  }
+  if (platform === "darwin" && config.audit.enabled) {
+    throw new Error(
+      "Tool logging is supported only on Linux; macOS requires audit.enabled = false",
     );
   }
 }
@@ -390,7 +400,9 @@ export async function runPiSandbox(args: string[]): Promise<void> {
     ambientHostEnvironment,
   );
   const hostExecutors: Record<string, HostCommandExecutor> = {};
+  let auditClient: AuditClient | undefined;
   try {
+    if (config.audit.enabled) auditClient = await connectAuditClient(buildLayout.auditSocketPath);
     for (const instance of managedExtensions) {
       if (!extensionNeedsHostExecutor(config, instance)) continue;
       hostExecutors[instance.extension.id] = createHostCommandExecutor({
@@ -410,6 +422,7 @@ export async function runPiSandbox(args: string[]): Promise<void> {
         activeTools: selectManagedActiveTools(args, enabledTools),
         loadConfig: () => Promise.resolve(config),
         executor,
+        ...(auditClient === undefined ? {} : { auditClient }),
         managedExtensions,
         piToolExtensions,
         hostExecutors: Object.freeze(hostExecutors),
@@ -427,6 +440,7 @@ export async function runPiSandbox(args: string[]): Promise<void> {
     await Promise.all([
       executor.close(),
       ...Object.values(hostExecutors).map((host) => host.close()),
+      ...(auditClient === undefined ? [] : [auditClient.close()]),
     ]);
   }
 }

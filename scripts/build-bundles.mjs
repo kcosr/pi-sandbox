@@ -79,8 +79,9 @@ const common = {
   },
 };
 
-await build({
+const bundleResult = await build({
   ...common,
+  metafile: true,
   absWorkingDir: repositoryRoot,
   entryPoints: [join(repositoryRoot, "src/private-cli.ts")],
   outfile: privateBundle,
@@ -132,4 +133,9 @@ await writeFile(
   join(repositoryRoot, "dist/private/extension-build-inventory.json"),
   `${JSON.stringify(inventory, null, 2)}\n`,
   { mode: 0o644 },
+);
+
+await writeFile(
+  join(repositoryRoot, "dist/private/bundle-metafile.json"),
+  `${JSON.stringify(bundleResult.metafile)}\n`,
 );

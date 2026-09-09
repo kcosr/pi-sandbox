@@ -65,9 +65,9 @@ Administrative configuration begins at the distribution's compiled
 `config_dir/config.toml`. When configured, the Bun process asks the
 separate static Rust broker for the calling UID's optional drop-in. The broker uses kernel
 peer credentials, reads one newline-delimited request without requiring a
-client half-close, and reads only the matching root-owned version 5 TOML file.
-It returns a protocol version 4 per-UID environment and optional model,
-execution, network, and atomic tool-policy patch. A missing directory or file
+client half-close, and reads only the matching root-owned TOML file.
+It returns the per-UID environment and optional model,
+execution, network, filesystem, and atomic tool-policy patch. A missing directory or file
 returns an empty patch. The Bun process validates the response independently,
 overlays it on the global policy and scoped environment from the main TOML, constructs one effective
 configuration, and loads only its selected model catalog. Pi-scoped values are
@@ -80,7 +80,7 @@ settings, skills, themes, and logs, but cannot redirect administrative policy,
 broker selection, or models. Missing or invalid effective inputs abort startup.
 
 The distribution manifest fixes the config directory, libexec directory,
-launcher path, identity socket, Linux systemd unit directory, and Linux
+launcher path, identity and event-collector sockets, Linux systemd unit directory, and Linux
 Bubblewrap provider at build time. A system provider names an unmanaged
 absolute executable. A bundled provider supplies a verified native binary that
 is installed under the root-owned libexec directory and selected by the
@@ -148,9 +148,11 @@ child name beneath the launch CWD from the repository basename, and executes:
 
 The model cannot select a target directory or Git options. After cloning,
 ordinary Git remains available to Bash. In Bubblewrap mode the host root is
-read-only and the launch CWD writable; in direct mode Git has the current
-user's ordinary host authority. Bash can run `git status`, `git switch`, and
-similar repository-local commands through the selected backend.
+read-only and CWD access follows `filesystem.cwd_writable`; in direct mode Git
+has the current user's ordinary host authority. Bash can run repository-local
+commands through the selected backend, but commands that require host writes
+fail when the CWD is read-only. The managed `git_clone` tool itself remains a
+host operation and is unaffected by Bubblewrap filesystem settings.
 The normal tool card shows the submitted repository locator.
 
 The Git host and scheme allowlists validate only the submitted repository
@@ -209,7 +211,7 @@ The mount view is:
 
 ```text
 /                              host root, read-only at identical paths
-<captured launch CWD>          same host path overlaid read/write
+<captured launch CWD>          explicit same-path bind, read/write or read-only
 /tmp                           private writable temporary filesystem by default
 private runtime directory     private writable runtime filesystem
 /proc                          sandbox process namespace
@@ -227,18 +229,27 @@ The exact-path mount contract means a launch from
 
 ## Bubblewrap filesystem authority
 
-The captured launch CWD subtree is the maximum persistent host mutation
-authority. The broader ordinary host tree is readable but not writable.
-Private `/tmp` and runtime directories persist across tool calls and logical Pi
-sessions in the same process, then disappear when `pi-sandbox` exits. If `/tmp`
-itself is deliberately selected as the launch CWD, the writable launch overlay
-takes precedence and host `/tmp` is the selected workspace; launching from a
-project below `/tmp` still keeps the rest of host `/tmp` private.
+With `filesystem.cwd_writable = true` (the packaged default), the captured
+launch CWD subtree is the maximum persistent host mutation authority for
+Bubblewrap operations. With `false`, the CWD remains readable but cannot be
+modified through the sandbox. In both cases the broader ordinary host tree is
+readable and read-only.
 
-Structured file tools validate their inputs and report errors coherently, but
-the mount namespace is the enforcement boundary. An approved Bash operation can
-perform any operation permitted by the mounts; structured `write` or `edit`
-policy cannot further constrain Bash.
+Both modes create an explicit same-path CWD bind after the private mounts:
+`--bind` for writable access, `--ro-bind` for read-only access. Private `/tmp`
+and runtime directories persist across tool calls and logical Pi sessions in
+the same process, then disappear when `pi-sandbox` exits. A CWD beneath `/tmp`
+remains visible through its explicit bind while the rest of `/tmp` stays private.
+When CWD is exactly `/tmp`, only writable access is supported; that explicit host
+bind masks the private `/tmp` mount. Read-only CWD exactly `/tmp` is rejected.
+CWD `/` and overlaps with `/proc`, `/sys`, `/dev`, or `/run` remain rejected.
+
+Structured tools validate their inputs and report errors coherently, but the
+mount namespace enforces filesystem permissions. An approved Bash command can
+write private temporary state even when the CWD is read-only. Tool approval
+cannot broaden filesystem access. Direct mode requires `cwd_writable = true`
+and does not provide a filesystem ceiling. Managed host tools retain their
+separate host authority.
 
 ## Network authority
 
@@ -277,3 +288,18 @@ There is never a direct-host fallback. Direct built-in execution occurs only
 when `execution.backend = "direct"` was admitted at startup. Managed host
 execution occurs only for a tool whose compiled definition selects it. Neither
 is a recovery path for a Bubblewrap failure.
+
+## Model-tool event collection
+
+On Linux, the application can connect to a separate root-controlled Unix socket
+collector. It records selected model-tool decisions and execution lifecycle
+metadata, including target paths and bounded Bash commands, while excluding
+file contents and tool output. Human shell commands do not use this path.
+
+The static Rust collector obtains the peer UID, GID, and PID from Linux socket
+credentials and assigns a connection identifier. The client includes its Pi
+session ID and invocation ID for correlation. The collector submits one-line
+structured records to local syslog and acknowledges successful submission.
+Server logging infrastructure owns persistence, rotation, retention, and
+forwarding. This service is independent of per-UID configuration resolution;
+it is not an execution backend and does not run tool operations.

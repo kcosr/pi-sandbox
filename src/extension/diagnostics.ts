@@ -17,6 +17,7 @@ interface SandboxSummaryInput {
   readonly cwd: string;
   readonly configPath: string;
   readonly modelsFile: string;
+  readonly filesystem: SandboxConfig["filesystem"];
   readonly execution: ExecutionConfig;
   readonly identity: IdentityConfig;
   readonly network: NetworkConfig;
@@ -64,6 +65,14 @@ const SANDBOX_SUBJECT_SCOPES: Readonly<Record<string, readonly string[]>> = Obje
 export function formatSandboxSummary(input: SandboxSummaryInput): string {
   const rows: Array<readonly [string, string]> = [
     ["Launch CWD", input.cwd],
+    [
+      "CWD access",
+      input.execution.backend === "direct"
+        ? "host permissions (uncontained)"
+        : input.filesystem.cwdWritable
+          ? "read/write"
+          : "read-only",
+    ],
     ["Lifetime", "pi-sandbox process"],
     ["Execution", executionDisplay(input.execution)],
     ["Network", networkDisplay(input.network)],
@@ -79,16 +88,20 @@ export function formatSandboxSummary(input: SandboxSummaryInput): string {
   return `${input.initialized ? "Pi Sandbox: initialized" : "Pi Sandbox: unavailable"}\n\n${formatKeyValues(rows)}\n\nUse /sandbox mounts or /sandbox policy for details.`;
 }
 
-export function formatSandboxMounts(cwd: string, execution: ExecutionConfig): string {
+export function formatSandboxMounts(
+  cwd: string,
+  execution: ExecutionConfig,
+  filesystem: SandboxConfig["filesystem"],
+): string {
   if (execution.backend === "direct") {
     return "Execution mounts\n\nDirect execution uses the ordinary host filesystem as the current user.\nThere is no mount namespace or filesystem containment boundary.";
   }
-  const mounts = describeBubblewrapMounts(cwd);
+  const mounts = describeBubblewrapMounts(cwd, filesystem.cwdWritable);
   const table = formatTable(
     ["TARGET", "ACCESS", "CONTENT"],
     mounts.map((mount) => [mount.target, mount.access, mount.content]),
   );
-  return `Sandbox mounts\n\n${table}\n\nHOME: ${safeSandboxEnvironment().HOME}\nOnly the launch directory persists writes to the host.`;
+  return `Sandbox mounts\n\n${table}\n\nHOME: ${safeSandboxEnvironment().HOME}\n${filesystem.cwdWritable ? "Only the launch directory persists writes to the host." : "The launch directory is read-only. Only private temporary/runtime storage is writable."}`;
 }
 
 export function formatSandboxPolicy(
@@ -161,16 +174,29 @@ function subjectScope(input: PolicyDiagnosticInput, subject: string): readonly s
     return [
       `Runs the compiled managed extension operation ${hostScope} directly on the host as the current user.`,
       "Uses the user's host filesystem, environment, credentials, and network access.",
-      "Is not restricted by the Bubblewrap boundary or its network setting.",
+      "Is not restricted by the Bubblewrap boundary, its filesystem setting, or its network setting.",
     ];
   }
   if (input.config.execution.backend === "direct") {
     return [...directSubjectScope(subject), networkScope(input.config.network)];
   }
   return [
-    ...(SANDBOX_SUBJECT_SCOPES[subject] ?? ["Runs inside the Pi Sandbox boundary."]),
+    ...sandboxSubjectScope(subject, input.config.filesystem.cwdWritable),
     networkScope(input.config.network),
   ];
+}
+
+function sandboxSubjectScope(subject: string, cwdWritable: boolean): readonly string[] {
+  if (!cwdWritable && ["write", "edit", "bash", "user_shell"].includes(subject)) {
+    return [
+      ...(subject === "bash" || subject === "user_shell"
+        ? [SANDBOX_SUBJECT_SCOPES[subject]![0]!]
+        : []),
+      "The host filesystem, including the launch directory, is read-only.",
+      "May write private /tmp and /run state that disappears when pi-sandbox exits.",
+    ];
+  }
+  return SANDBOX_SUBJECT_SCOPES[subject] ?? ["Runs inside the Pi Sandbox boundary."];
 }
 
 function directSubjectScope(subject: string): readonly string[] {

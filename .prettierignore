@@ -6,3 +6,4 @@ package-lock.json
 scratch
 broker/target
 broker/vendor
+audit-collector/target

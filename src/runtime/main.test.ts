@@ -51,7 +51,9 @@ function rooted(root: string, absolutePath: string): string {
 describe("administrative configuration", () => {
   it("enforces the execution backend's platform contract", () => {
     const config = {
-      configVersion: 5,
+      configVersion: 6,
+      filesystem: { cwdWritable: true },
+      audit: { enabled: false, facility: "local0" },
       modelsFile: "/etc/pi-sandbox/models.json",
       execution: { backend: "bubblewrap" },
       identity: { mode: "disabled" },
@@ -61,6 +63,21 @@ describe("administrative configuration", () => {
       tools: {},
     } satisfies SandboxConfig;
     expect(() => assertExecutionPlatform(config, "linux")).not.toThrow();
+    expect(() =>
+      assertExecutionPlatform(
+        {
+          ...config,
+          execution: { backend: "direct" },
+          network: { mode: "host" },
+          filesystem: { cwdWritable: false },
+        },
+        "linux",
+      ),
+    ).toThrow("Direct execution requires filesystem.cwd_writable = true");
+    expect(() =>
+      assertExecutionPlatform({ ...config, filesystem: { cwdWritable: false } }, "linux"),
+    ).not.toThrow();
+
     expect(() => assertExecutionPlatform(config, "darwin")).toThrow(
       "Bubblewrap execution is supported only on Linux",
     );
@@ -207,9 +224,11 @@ describe("administrative configuration", () => {
         extension,
       },
     ]);
-    const allow = { mode: "allow", sessionGrant: "never" } as const;
+    const allow = { audit: false, mode: "allow", sessionGrant: "never" } as const;
     const config = {
-      configVersion: 5,
+      configVersion: 6,
+      filesystem: { cwdWritable: true },
+      audit: { enabled: false, facility: "local0" },
       modelsFile: "/etc/pi-sandbox/models.json",
       execution: { backend: "bubblewrap" },
       identity: { mode: "disabled" },
@@ -308,7 +327,11 @@ describe("administrative configuration", () => {
     expect(effective.config.modelsFile).toBe(selectedPath);
     expect(effective.config.execution).toEqual({ backend: "direct" });
     expect(effective.config.network).toEqual({ mode: "host" });
-    expect(effective.config.tools.write).toEqual({ mode: "disabled", sessionGrant: "never" });
+    expect(effective.config.tools.write).toEqual({
+      mode: "disabled",
+      sessionGrant: "never",
+      audit: true,
+    });
     expect(effective.userEnvironment).toEqual({
       pi: {
         GLOBAL_PI: "base",
@@ -338,6 +361,42 @@ describe("administrative configuration", () => {
         }),
       ),
     ).rejects.toThrow("Direct execution requires network.mode = host");
+  });
+
+  it("rejects read-only direct execution during installation validation", async () => {
+    const root = await createRoot();
+    const configPath = rooted(root, "/etc/pi-sandbox/config.toml");
+    const config = await readFile(configPath, "utf8");
+    await writeFile(
+      configPath,
+      config
+        .replace('backend = "bubblewrap"', 'backend = "direct"')
+        .replace('mode = "none"', 'mode = "host"')
+        .replace("cwd_writable = true", "cwd_writable = false"),
+    );
+    await expect(validateAdministrativeConfiguration(root)).rejects.toThrow(
+      'config.filesystem.cwd_writable must be true when config.execution.backend is "direct"',
+    );
+  });
+
+  it("rejects read-only direct execution after applying a UID override", async () => {
+    const root = await createRoot();
+    const configPath = rooted(root, "/etc/pi-sandbox/config.toml");
+    const config = await readFile(configPath, "utf8");
+    await writeFile(configPath, config.replace('mode = "disabled"', 'mode = "broker"'));
+    await expect(
+      resolveEffectiveAdministrativeConfiguration(root, {}, () =>
+        Promise.resolve({
+          environment: { pi: {}, sandbox: {}, extensions: {} },
+          overrides: {
+            execution: { backend: "direct" },
+            network: { mode: "host" },
+            filesystem: { cwdWritable: false },
+            tools: {},
+          },
+        }),
+      ),
+    ).rejects.toThrow("Direct execution requires filesystem.cwd_writable = true");
   });
 
   it("restores the exact caller environment when a later administrative input fails", async () => {

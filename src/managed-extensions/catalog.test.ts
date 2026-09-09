@@ -1,8 +1,15 @@
 import { describe, expect, it, vi } from "vitest";
+import { readFile } from "node:fs/promises";
+import { createHash } from "node:crypto";
 
 import type { CompiledExtensionRecord, ManagedExtension, PiToolExtension } from "./contracts.js";
 import { createManagedExtensionCatalog } from "./catalog.js";
-import { defineManagedHostEnvironment, freezeExtensionConfig } from "./sdk.js";
+import {
+  defineManagedHostEnvironment,
+  freezeExtensionConfig,
+  instantiateManagedExtension,
+} from "./sdk.js";
+import gitCloneExtension from "./git-clone/index.js";
 
 const DIGEST = "a".repeat(64);
 
@@ -51,6 +58,61 @@ function record(module = extension()): CompiledExtensionRecord {
 }
 
 describe("managed extension catalog", () => {
+  it("validates and instantiates the shipped Git extension with its actual manifest and target metadata", async () => {
+    const manifestSource = await readFile(
+      new URL("./git-clone/pi-sandbox-extension.json", import.meta.url),
+      "utf8",
+    );
+    const moduleSource = await readFile(new URL("./git-clone/index.ts", import.meta.url), "utf8");
+    const manifest = JSON.parse(manifestSource) as {
+      kind: "managed";
+      apiVersion: 3;
+      id: string;
+      version: string;
+      tools: string[];
+    };
+    const catalog = createManagedExtensionCatalog([
+      {
+        manifest: {
+          kind: manifest.kind,
+          apiVersion: manifest.apiVersion,
+          id: manifest.id,
+          version: manifest.version,
+          toolNames: manifest.tools,
+          digests: {
+            manifestSha256: createHash("sha256").update(manifestSource).digest("hex"),
+            moduleSha256: createHash("sha256").update(moduleSource).digest("hex"),
+          },
+        },
+        extension: gitCloneExtension,
+      },
+    ]);
+    const selected = catalog.getExtension("git");
+    if (selected?.kind !== "managed") throw new Error("missing Git extension");
+    const instance = instantiateManagedExtension(
+      selected,
+      selected.parseConfig(
+        { allowed_hosts: ["github.com"], allowed_schemes: ["https"] },
+        "extensions.git",
+      ),
+    );
+    expect(
+      instance.extension.tools[0]?.auditTarget?.(
+        { repository: "https://github.com/owner/project.git" },
+        "/work",
+      ),
+    ).toEqual({ repository: "https://github.com/owner/project.git", path: "/work/project" });
+  });
+
+  it("rejects a non-function target metadata selector", () => {
+    const base = extension();
+    const tool = base.tools[0]!;
+    expect(() =>
+      createManagedExtensionCatalog([
+        record({ ...base, tools: [{ ...tool, auditTarget: "invalid" as never }] }),
+      ]),
+    ).toThrow("auditTarget must be a function");
+  });
   it("indexes a standard Pi tool-only extension", () => {
     const module: PiToolExtension = {
       kind: "pi-tool",

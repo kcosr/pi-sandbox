@@ -19,7 +19,7 @@ To use a previously downloaded pinned Pi source archive, pass it through:
 env -u NODE_ENV npm run verify:release -- --pi-source-archive /path/to/pi-0.84.3-source.tar.gz
 ```
 
-The verifier runs formatting, lint, type checking, Rust broker checks, unit,
+The verifier runs formatting, lint, type checking, Rust service checks, unit,
 integration, real-Bubblewrap, package/install, build, archive inspection, and
 packaged executable diagnostic checks as distinct observable steps. A supported release
 host must execute the Bubblewrap suites rather than accepting a skip caused by
@@ -34,6 +34,8 @@ unavailable namespaces.
   validation;
 - required extension selection and exact dynamic model-tool policy sets;
 - strict offline and host network modes;
+- required CWD write-access configuration, parent inheritance and UID overrides,
+  with direct/read-only rejection before and after override application;
 - all required model-tool policies and unknown-field rejection;
 - mode and session-grant decisions;
 - memory-only grants scoped by approval subject;
@@ -45,7 +47,7 @@ unavailable namespaces.
   installer-owned validation commands admitted as root;
 - strict system-versus-bundled Bubblewrap distribution selection and immutable
   compiled runtime path;
-- strict version 4 broker protocol parsing, version 5 per-UID TOML parsing,
+- strict broker protocol and per-UID TOML parsing,
   global-plus-per-UID scoped environment overlay, missing-drop-in inheritance,
   environment bounds and reserved-name rejection, dynamic
   UID-drop-in execution and tool override validation, effective backend/network
@@ -96,6 +98,12 @@ prove kernel-observable properties:
 - `pwd` and absolute paths match the host launch CWD;
 - the launch CWD can be created, changed, and deleted;
 - an existing fixture outside the launch CWD is readable but cannot be changed;
+- read-only CWD access retains an explicit same-path bind after private mounts;
+- with model Bash allowed, Bash/write/edit cannot mutate read-only CWD files or
+  other host files, while read operations still see CWD contents;
+- read-only `/tmp`-based workspaces remain visible, and private `/tmp` and `/run`
+  remain writable without creating corresponding host files;
+- read-only CWD exactly `/tmp` is rejected before worker startup;
 - `/tmp` is writable, private from host `/tmp`, and persistent between calls in
   one Pi process;
 - commands are serialized through one stable sandbox namespace;
@@ -143,7 +151,7 @@ model provider. Together these checks verify:
 - non-creation, non-replacement, and non-removal of the optional root-managed
   `users.d` directory;
 - rejection of obsolete per-UID file/protocol versions and validation of
-  version 5 scoped environments during broker-mode release checks;
+  scoped environments during broker-mode release checks;
 - validated, backed-up replacement through `--replace-config`;
 - compiled administrative config-path loading and its required `models_file` and
   network mode, required extension selection, and exact dynamic tool policy;
@@ -179,3 +187,21 @@ not committed.
 If a test must skip because the developer host lacks Bubblewrap or user
 namespaces, the output must explain the missing prerequisite. Release
 verification treats such a skip as a failure.
+
+## Tool logging and component inventory checks
+
+Unit and integration coverage verifies strict parent-only logging configuration,
+UID inheritance, selected tool filtering, target path metadata, bounded command
+text, Pi-session correlation, permission decisions, and execution outcomes.
+Human shell calls remain excluded. Failure tests require acknowledged intent
+before execution and prove that completion-submission failures do not retry
+operations. Collector tests exercise kernel peer credentials, bounded protocol
+frames, structured single-line datagrams, facilities, and local-submission
+acknowledgments without relying on a remote logging service.
+
+Linux verification builds both static Rust services and validates their systemd
+units and installation lifecycle. Release checks apply the pinned-source patch
+that disables session sharing and test that the share operation is not invoked.
+SBOM tests check component discovery against bundle inputs and copied assets;
+release archive inspection verifies the generated inventory is checksummed and
+shipped with the matching application.

@@ -63,6 +63,26 @@ const CONFIG = parseGitCloneConfig(
 );
 
 describe("built-in Git clone managed extension", () => {
+  it("selects only validated locator and the same derived destination for tool logging", () => {
+    expect(
+      tool().auditTarget?.({ repository: "git@github.com:owner/project.git" }, "/work"),
+    ).toEqual({
+      repository: "git@github.com:owner/project.git",
+      path: "/work/project",
+    });
+    expect(() =>
+      tool().auditTarget?.(
+        { repository: "https://user:secret@github.com/owner/project.git" },
+        "/work",
+      ),
+    ).toThrow();
+    expect(() =>
+      tool().auditTarget?.(
+        { repository: "https://github.com/owner/project.git?token=secret" },
+        "/work",
+      ),
+    ).toThrow();
+  });
   it("declares one narrow tool and a hardened host environment", () => {
     expect(gitCloneExtension).toMatchObject({ id: "git", version: "1.1.0", apiVersion: 3 });
     expect(gitCloneExtension.hostEnvironment).toEqual({

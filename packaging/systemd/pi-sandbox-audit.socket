@@ -1,0 +1,14 @@
+[Unit]
+Description=Pi Sandbox tool logging socket
+
+[Socket]
+ListenStream=/run/pi-sandbox-audit/collector.sock
+Accept=yes
+SocketMode=0666
+DirectoryMode=0755
+RemoveOnStop=yes
+MaxConnections=128
+MaxConnectionsPerSource=8
+
+[Install]
+WantedBy=sockets.target

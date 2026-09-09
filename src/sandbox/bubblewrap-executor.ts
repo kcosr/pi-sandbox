@@ -138,7 +138,13 @@ export async function createBubblewrapExecutor(
   try {
     // Validate before allocating lifecycle state so an invalid policy cannot
     // leave close() waiting for a worker that was never spawned.
-    buildBubblewrapArguments(cwd, workerCommand, options.networkMode ?? "none", environment);
+    buildBubblewrapArguments(
+      cwd,
+      workerCommand,
+      options.networkMode ?? "none",
+      environment,
+      options.cwdWritable ?? true,
+    );
   } catch (cause) {
     throw new SandboxExecutionError("sandbox_start_failed", { cause });
   }
@@ -156,6 +162,7 @@ export async function createBubblewrapExecutor(
     seccompFilter,
     options.networkMode ?? "none",
     environment,
+    options.cwdWritable ?? true,
   );
   try {
     await executor.start(workerCommand);
@@ -199,6 +206,7 @@ class PersistentBubblewrapExecutor implements SandboxExecutor {
     private readonly seccompFilter: Buffer,
     private readonly networkMode: "none" | "host",
     private readonly environment: Readonly<Record<string, string>>,
+    private readonly cwdWritable: boolean,
   ) {
     let finish!: () => void;
     this.#finished = new Promise<void>((resolve) => {
@@ -211,7 +219,13 @@ class PersistentBubblewrapExecutor implements SandboxExecutor {
     if (this.#child !== undefined) throw new SandboxExecutionError("sandbox_start_failed");
     const child = spawn(
       this.bubblewrapPath,
-      buildBubblewrapArguments(this.cwd, workerCommand, this.networkMode, this.environment),
+      buildBubblewrapArguments(
+        this.cwd,
+        workerCommand,
+        this.networkMode,
+        this.environment,
+        this.cwdWritable,
+      ),
       {
         cwd: this.cwd,
         detached: true,

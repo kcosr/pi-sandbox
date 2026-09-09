@@ -23,6 +23,7 @@ import { spawn } from "node:child_process";
 import { parse as parseToml } from "@iarna/toml";
 
 import { loadExtensionManifests } from "./build/extension-composition.mjs";
+import { createSbom } from "./build/sbom.mjs";
 import { loadDistribution } from "./build/distribution.mjs";
 import { renderLayoutText } from "./build/layout-render.mjs";
 
@@ -39,6 +40,7 @@ const commonRequiredReleaseFiles = Object.freeze([
   "payload/pi-sandbox/defaults/models.json",
   "payload/pi-sandbox/licenses/LICENSE",
   "payload/pi-sandbox/release-manifest.json",
+  "payload/pi-sandbox/sbom.cdx.json",
 ]);
 const commonRequiredReleaseDirectories = Object.freeze([
   "payload/pi-sandbox/assets",
@@ -279,6 +281,9 @@ function releaseRequirements(os, bubblewrap) {
     files: [
       ...commonRequiredReleaseFiles,
       "payload/pi-sandbox/pi-sandbox-identity-broker",
+      "payload/pi-sandbox/pi-sandbox-audit-collector",
+      "payload/pi-sandbox/systemd/pi-sandbox-audit.socket",
+      "payload/pi-sandbox/systemd/pi-sandbox-audit@.service",
       "payload/pi-sandbox/systemd/pi-sandbox-identity-broker.socket",
       "payload/pi-sandbox/systemd/pi-sandbox-identity-broker@.service",
       "payload/pi-sandbox/licenses/identity-broker/THIRD-PARTY-NOTICES.md",
@@ -587,6 +592,7 @@ async function main() {
         "run",
         "packages/coding-agent/test/auth-check.test.ts",
         "packages/coding-agent/test/managed-model-runtime.test.ts",
+        "packages/coding-agent/test/managed-session-sharing.test.ts",
       ],
       { cwd: sourceRoot, env: cleanEnvironment },
     );
@@ -600,12 +606,14 @@ async function main() {
     await rm(join(payload, "pi"), { force: true });
 
     const codingAgentRoot = join(sourceRoot, "packages/coding-agent");
+    const bunMetafile = join(temporaryDirectory, "bun-metafile.json");
     process.stdout.write("Compiling the private Bun executable\n");
     await run(
       "bun",
       [
         "build",
         "--compile",
+        `--metafile=${bunMetafile}`,
         "--no-compile-autoload-bunfig",
         `--target=${bunTarget}`,
         "./dist/pi-sandbox/private-entrypoint.mjs",
@@ -627,12 +635,28 @@ async function main() {
         ],
         { env: cleanEnvironment },
       );
+      await run(
+        process.execPath,
+        [
+          join(repositoryRoot, "scripts/build-audit-collector.mjs"),
+          join(payload, "pi-sandbox-audit-collector"),
+        ],
+        { env: cleanEnvironment },
+      );
       const systemdTarget = join(payload, "systemd");
       await mkdir(systemdTarget);
       for (const unit of [
         "pi-sandbox-identity-broker.socket",
         "pi-sandbox-identity-broker@.service",
       ]) {
+        await renderFile(
+          join(repositoryRoot, "packaging/systemd", unit),
+          join(systemdTarget, unit),
+          distribution.layout,
+          os,
+        );
+      }
+      for (const unit of ["pi-sandbox-audit.socket", "pi-sandbox-audit@.service"]) {
         await renderFile(
           join(repositoryRoot, "packaging/systemd", unit),
           join(systemdTarget, unit),
@@ -686,6 +710,26 @@ async function main() {
         0o755,
       );
     }
+
+    const sbom = await createSbom({
+      repositoryRoot,
+      sourceRoot,
+      codingAgentRoot,
+      bunMetafile,
+      packageJson,
+      lock,
+      patches,
+      extensions: extensionBuildInventory.extensions,
+      platform,
+      bunVersion: (await capture("bun", ["--version"])).trim(),
+      sourceCommit: (await capture("git", ["rev-parse", "HEAD"])).trim(),
+      sourceDirty: (await capture("git", ["status", "--porcelain"])).trim().length > 0,
+      bubblewrap: os === "linux" ? distribution.bubblewrap.release : null,
+      payload,
+    });
+    await writeFile(join(payload, "sbom.cdx.json"), `${JSON.stringify(sbom, null, 2)}\n`, {
+      mode: 0o644,
+    });
 
     const releaseManifestPath = join(payload, "release-manifest.json");
     const releaseManifest = {

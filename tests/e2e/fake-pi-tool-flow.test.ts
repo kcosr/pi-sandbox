@@ -237,6 +237,124 @@ describe.skipIf(!REAL_BWRAP_AVAILABLE)(
   },
 );
 
+// Exercise allowed model tools, so failures must come from the real filesystem boundary.
+describe.skipIf(!REAL_BWRAP_AVAILABLE).each(["/var/tmp", "/tmp"])(
+  "read-only model tool workspace beneath %s",
+  (fixtureRoot) => {
+    let workspace: string;
+    let outsideDirectory: string;
+    let outsideFile: string;
+    let fakePi: FakePi;
+    let executor: RecordingExecutor;
+
+    beforeAll(async () => {
+      workspace = await mkdtemp(path.join(fixtureRoot, "pi-sandbox-readonly-"));
+      outsideDirectory = await mkdtemp("/var/tmp/pi-sandbox-readonly-outside-");
+      outsideFile = path.join(outsideDirectory, "outside.txt");
+      await writeFile(outsideFile, "outside-original\n");
+      await writeFile(path.join(workspace, "input.txt"), "workspace-original\n");
+      executor = new RecordingExecutor(
+        await createBubblewrapExecutor({
+          cwd: workspace,
+          cwdWritable: false,
+          bubblewrapPath: BWRAP_PATH,
+          workerCommand: testSandboxWorkerCommand(),
+        }),
+      );
+      await executor.probe();
+      fakePi = new FakePi();
+      createPiSandboxExtension({
+        cwd: workspace,
+        configPath: "/etc/pi-sandbox/config.toml",
+        userStateDir: "/home/test/.pi/agent",
+        loadConfig: () =>
+          Promise.resolve({
+            ...allowAllConfig(),
+            filesystem: { cwdWritable: false },
+          }),
+        executor,
+      })(fakePi.api);
+      await fakePi.emit("session_start", {}, nonInteractiveContext());
+    });
+
+    afterAll(async () => {
+      await fakePi?.emit("session_shutdown", {}, nonInteractiveContext());
+      await executor?.close();
+      if (workspace) await rm(workspace, { recursive: true, force: true });
+      if (outsideDirectory) await rm(outsideDirectory, { recursive: true, force: true });
+    });
+
+    it("keeps the same-path CWD readable through read and allowed model Bash", async () => {
+      expect(fakePi.activeTools).toContain("bash");
+      expect(resultText(await invoke(fakePi, "read", { path: "input.txt" }))).toContain(
+        "workspace-original",
+      );
+      expect(resultText(await invoke(fakePi, "bash", { command: "pwd; cat input.txt" }))).toBe(
+        `${workspace}\nworkspace-original\n`,
+      );
+    });
+
+    it("denies allowed model Bash writes to the CWD and other host directories", async () => {
+      for (const target of [path.join(workspace, "input.txt"), outsideFile]) {
+        await expect(
+          invoke(fakePi, "bash", {
+            command: `printf changed > '${target}'`,
+          }),
+        ).rejects.toThrow(/Read-only file system/i);
+      }
+      await expect(
+        invoke(fakePi, "bash", {
+          command: "printf created > new.txt",
+        }),
+      ).rejects.toThrow(/Read-only file system/i);
+      expect(await readFile(path.join(workspace, "input.txt"), "utf8")).toBe(
+        "workspace-original\n",
+      );
+      expect(await readFile(outsideFile, "utf8")).toBe("outside-original\n");
+      expect(existsSync(path.join(workspace, "new.txt"))).toBe(false);
+    });
+
+    it("denies allowed typed write and edit without changing existing host files", async () => {
+      for (const [target, oldText] of [
+        [path.join(workspace, "input.txt"), "workspace-original"],
+        [outsideFile, "outside-original"],
+      ] as const) {
+        await expect(
+          invoke(fakePi, "write", {
+            path: target,
+            content: "replacement\n",
+          }),
+        ).rejects.toThrow();
+        await expect(
+          invoke(fakePi, "edit", {
+            path: target,
+            edits: [{ oldText, newText: "replacement" }],
+          }),
+        ).rejects.toThrow();
+        expect(await readFile(target, "utf8")).toBe(`${oldText}\n`);
+      }
+    });
+
+    it("keeps private temporary and runtime storage writable across tool calls", async () => {
+      const marker = `${path.basename(workspace)}-private`;
+      await invoke(fakePi, "bash", {
+        command: `printf private-temp > /tmp/${marker}; printf private-runtime > /run/pi-sandbox/state/${marker}`,
+      });
+      expect(
+        resultText(
+          await invoke(fakePi, "bash", {
+            command: `cat /tmp/${marker}; printf '\\n'; cat /run/pi-sandbox/state/${marker}`,
+          }),
+        ),
+      ).toBe("private-temp\nprivate-runtime");
+      expect(existsSync(`/tmp/${marker}`)).toBe(false);
+      expect(await readFile(path.join(workspace, "input.txt"), "utf8")).toBe(
+        "workspace-original\n",
+      );
+    });
+  },
+);
+
 async function invoke(fakePi: FakePi, name: string, parameters: unknown): Promise<unknown> {
   const tool = fakePi.tools.get(name);
   if (!tool) throw new Error(`missing_fake_tool:${name}`);
@@ -255,9 +373,11 @@ function nonInteractiveContext(): ExtensionContext {
 }
 
 function allowAllConfig(): SandboxConfig {
-  const allow = { mode: "allow", sessionGrant: "never" } as const;
+  const allow = { audit: false, mode: "allow", sessionGrant: "never" } as const;
   return {
-    configVersion: 5,
+    configVersion: 6,
+    filesystem: { cwdWritable: true },
+    audit: { enabled: false, facility: "local0" },
     modelsFile: "/etc/pi-sandbox/models.json",
     execution: { backend: "bubblewrap" },
     identity: { mode: "disabled" },

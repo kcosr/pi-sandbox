@@ -10,6 +10,7 @@ const PLATFORM_KEYS = new Set([
   "launcher_path",
   "service_dir",
   "identity_socket_path",
+  "audit_socket_path",
   "bubblewrap",
 ]);
 const SYSTEM_BUBBLEWRAP_KEYS = new Set(["mode", "path"]);
@@ -122,7 +123,7 @@ export async function loadDistribution(path, platform = process.platform) {
   }
   const root = object(parsed, `distribution manifest ${distributionPath}`);
   rejectUnknown(root, ROOT_KEYS, `distribution manifest ${distributionPath}`);
-  if (root.version !== 1) throw new Error("distribution manifest version must be 1");
+  if (root.version !== 2) throw new Error("distribution manifest version must be 2");
   if (
     !Array.isArray(root.extension_manifests) ||
     root.extension_manifests.some((entry) => typeof entry !== "string" || entry.length === 0)
@@ -157,6 +158,13 @@ export async function loadDistribution(path, platform = process.platform) {
     selected.identity_socket_path,
     `distribution platforms.${platform}.identity_socket_path`,
   );
+  const auditSocketPath = absolutePath(
+    selected.audit_socket_path,
+    `distribution platforms.${platform}.audit_socket_path`,
+  );
+  if (auditSocketPath === identitySocketPath) {
+    throw new Error("distribution audit_socket_path must differ from identity_socket_path");
+  }
   const serviceDir =
     platform === "linux"
       ? absolutePath(selected.service_dir, "distribution platforms.linux.service_dir")
@@ -186,6 +194,7 @@ export async function loadDistribution(path, platform = process.platform) {
       libexecDir,
       launcherPath,
       identitySocketPath,
+      auditSocketPath,
       ...(bubblewrap === undefined
         ? {}
         : { bubblewrap: Object.freeze({ mode: bubblewrap.mode, path: bubblewrap.path }) }),

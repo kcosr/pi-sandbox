@@ -2,6 +2,7 @@ import type { SandboxConfig, ToolName } from "../domain/index.js";
 import type { HostCommandExecutor } from "../host/index.js";
 import type { ManagedExtensionInstance, PiToolExtension } from "../managed-extensions/sdk.js";
 import type { SandboxExecutor } from "../sandbox/index.js";
+import type { AuditClient } from "../audit/client.js";
 
 export interface ExtensionDependencies {
   readonly cwd: string;
@@ -10,6 +11,7 @@ export interface ExtensionDependencies {
   readonly activeTools?: readonly ToolName[];
   readonly loadConfig: () => Promise<SandboxConfig>;
   readonly executor: SandboxExecutor;
+  readonly auditClient?: AuditClient;
   readonly managedExtensions?: readonly ManagedExtensionInstance[];
   readonly piToolExtensions?: readonly PiToolExtension[];
   readonly hostExecutors?: Readonly<Record<string, HostCommandExecutor>>;

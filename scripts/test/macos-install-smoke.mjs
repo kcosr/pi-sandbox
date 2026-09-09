@@ -40,6 +40,10 @@ try {
   if (!(await lstat(join(installBase, "pi-sandbox"))).isFile()) {
     throw new Error("macOS executable was not installed");
   }
+  const installedSbom = await lstat(join(installBase, "sbom.cdx.json"));
+  if (!installedSbom.isFile() || (installedSbom.mode & 0o777) !== 0o644) {
+    throw new Error("macOS SBOM was not installed as a regular readable file");
+  }
   await writeFile(config, `${await readFile(config, "utf8")}# preserved\n`);
   run(join(release, "install.sh"), [], { DESTDIR: installRoot });
   if (!(await readFile(config, "utf8")).includes("# preserved")) {
@@ -85,6 +89,24 @@ try {
 }
 
 async function verifyPayloadIntegrityChecks(temporaryRoot) {
+  const missingSbomRelease = join(temporaryRoot, "release-missing-sbom");
+  await createRelease(missingSbomRelease);
+  await rm(join(missingSbomRelease, "payload/pi-sandbox/sbom.cdx.json"));
+  const sbomChecksums = join(missingSbomRelease, "SHA256SUMS");
+  await writeFile(
+    sbomChecksums,
+    (await readFile(sbomChecksums, "utf8"))
+      .split("\n")
+      .filter((line) => !line.endsWith("payload/pi-sandbox/sbom.cdx.json"))
+      .join("\n"),
+  );
+  expectFailure(
+    join(missingSbomRelease, "install.sh"),
+    [],
+    { DESTDIR: join(temporaryRoot, "missing-sbom-root") },
+    "release payload is incomplete",
+  );
+
   const unlistedRelease = join(temporaryRoot, "release-unlisted");
   await createRelease(unlistedRelease);
   await writeFile(join(unlistedRelease, "payload/pi-sandbox/unlisted"), "unlisted\n");
@@ -144,7 +166,7 @@ shift
 root=
 if [ "\${1:-}" = --root ]; then root=$2; shift 2; fi
 [ "$#" -eq 0 ]
-grep -q '^config_version = 5$' "$root/etc/pi-sandbox/config.toml"
+grep -q '^config_version = 6$' "$root/etc/pi-sandbox/config.toml"
 grep -q '"providers"' "$root/etc/pi-sandbox/models.json"
 case "$operation" in
   --validate-installation) ;;
@@ -156,13 +178,17 @@ esac
   );
   await writeFile(
     join(payload, "defaults/config.toml"),
-    'config_version = 5\nmodels_file = "/etc/pi-sandbox/models.json"\n\n[execution]\nbackend = "direct"\n\n[identity]\nmode = "disabled"\n\n[network]\nmode = "host"\n\n[environment.pi]\n\n[environment.sandbox]\n\n[environment.extensions]\n\n[extensions]\n',
+    'config_version = 6\nmodels_file = "/etc/pi-sandbox/models.json"\n\n[audit]\nenabled = false\nfacility = "local0"\n\n[filesystem]\ncwd_writable = true\n\n[execution]\nbackend = "direct"\n\n[identity]\nmode = "disabled"\n\n[network]\nmode = "host"\n\n[environment.pi]\n\n[environment.sandbox]\n\n[environment.extensions]\n\n[extensions]\n',
   );
   await writeFile(join(payload, "defaults/models.json"), '{"providers":{}}\n');
   await writeFile(join(payload, "package.json"), '{"name":"pi-sandbox"}\n');
   await writeFile(join(payload, "release-manifest.json"), '{"manifestVersion":2}\n');
   await writeFile(join(payload, "photon_rs_bg.wasm"), "wasm\n");
   await writeFile(join(payload, "licenses/LICENSE"), "license\n");
+  await writeFile(
+    join(payload, "sbom.cdx.json"),
+    '{"bomFormat":"CycloneDX","specVersion":"1.6","version":1,"components":[]}\n',
+  );
   const files = await regularFiles(payload);
   const checksums = await Promise.all(
     files.map(async (file) => {

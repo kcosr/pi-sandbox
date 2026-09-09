@@ -47,6 +47,8 @@ Sandbox factory through the inline extension-factory option. It must:
   could introduce executable code;
 - admit managed host environment values only through the selected compiled
   extension's versioned declaration, never through Pi extension discovery;
+- disable external session sharing through `/share`, omit it from command
+  discovery and CLI help (including `PI_SHARE_VIEWER_URL`), and retain local `/export`;
 - preserve skills, options that disable skills, and options that narrow the
   visible tool catalog; and
 - fail closed before interactive startup if managed initialization fails.
@@ -68,9 +70,9 @@ That path is fixed. No CLI argument, environment variable, Pi setting, project
 file, or user file may redirect it. The strict configuration has a required
 normalized absolute `models_file`. In broker mode, a root-managed drop-in
 selected solely by the kernel-reported UID may replace the model file,
-execution backend, network mode, and complete policies for a subset of model
-tools. The main TOML supplies the global scoped environment. An optional
-version 5 per-UID TOML drop-in may overlay that environment. No other field is
+execution backend, network mode, CWD write access, and complete invocation
+permissions for a subset of model tools. The main TOML supplies the global scoped environment. An optional
+per-UID TOML drop-in may overlay that environment. No other field is
 overridable.
 
 The managed Pi model runtime must:
@@ -111,7 +113,7 @@ that kernel UID. The request contains no
 claimed UID. Requests and responses are single newline-delimited JSON objects;
 the Bun client keeps the connection open after writing its request, and the
 broker replies when it reads the newline rather than waiting for client EOF. A
-successful protocol version 4 response contains exactly the matching UID's
+successful protocol version 5 response contains exactly the matching UID's
 scoped-environment and normalized override patch; username and comment
 annotations are never returned. A missing directory or matching file returns
 an empty patch and inherits the main configuration unchanged. Broker mode always uses
@@ -121,7 +123,8 @@ configuration field can redirect it.
 The Bun client independently validates the strict response and resolves the
 effective configuration in this order: complete main TOML including global
 scoped environment, then one per-UID environment, model,
-execution, and network override, and atomic complete policy replacements for named tools.
+execution, network, and filesystem override, and atomic complete invocation-policy
+replacements for named tools. Parent tool logging settings are preserved.
 Omitted fields inherit the base. The base TOML remains the global tool policy;
 environment entries never select extensions, add or enable tools, or grant
 approval. A per-UID complete policy may still deny or disable selected
@@ -149,10 +152,14 @@ provides these seams:
    without preventing explicitly configured providers from using Pi's trusted
    provider implementations.
 3. `main()` can omit Pi's built-in extension factories.
+4. The managed interactive distribution rejects `/share` without exporting
+   session content or invoking external sharing providers. It does not advertise
+   that command; local `/export` remains available.
 
 Tests carried in the patch series must prove configured-only model exposure,
 absence of built-in fallback after configuration failure, and use of the
-injected runtime by every retained entry path. Pi Sandbox tests separately prove
+injected runtime by every retained entry path, and rejection of external session
+sharing without accessing session content. Pi Sandbox tests separately prove
 the forced private-entry-point policy.
 
 Do not solve upstream merge conflicts by adding compatibility aliases or by
@@ -206,3 +213,18 @@ broker socket.
 
 Pi Sandbox does not produce an RPM. Site administrators may wrap the release
 archive and these semantics in their own package-management system.
+
+## CWD filesystem access
+
+Administrative configuration requires `[filesystem].cwd_writable`, with `true`
+in packaged defaults. Root-managed UID files may replace that setting under
+`[overrides.filesystem]`. Effective direct execution requires `true`.
+
+The Bubblewrap backend always creates an explicit same-path CWD bind after its
+private mounts: writable with `--bind`, read-only with `--ro-bind`. This preserves
+visibility for `/tmp`-based workspaces independently of write permission and does
+not introduce a restricted host-visibility mode. Private temporary/runtime
+storage remains writable. Read-only CWD exactly `/tmp` is rejected because its
+bind would mask private `/tmp`. Existing root and private-system-path overlap
+rejections remain enforced. The setting applies to built-ins and user shell;
+managed host tools retain their declared host authority.

@@ -1,5 +1,12 @@
-config_version = 5
+config_version = 6
 models_file = "/etc/pi-sandbox/models.json"
+
+[audit]
+enabled = false
+facility = "local0"
+
+[filesystem]
+cwd_writable = true
 
 [execution]
 backend = "direct"
@@ -21,27 +28,34 @@ mode = "host"
 [tools.read]
 mode = "allow"
 session_grant = "never"
+audit = false
 
 [tools.grep]
 mode = "allow"
 session_grant = "never"
+audit = false
 
 [tools.find]
 mode = "allow"
 session_grant = "never"
+audit = false
 
 [tools.ls]
 mode = "allow"
 session_grant = "never"
+audit = false
 
 [tools.write]
 mode = "ask"
 session_grant = "never"
+audit = true
 
 [tools.edit]
 mode = "ask"
 session_grant = "never"
+audit = true
 
 [tools.bash]
 mode = "disabled"
 session_grant = "never"
+audit = true

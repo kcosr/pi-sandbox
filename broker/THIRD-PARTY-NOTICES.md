@@ -1,8 +1,9 @@
-# Identity broker third-party notices
+# Native service third-party notices
 
-The Pi Sandbox identity broker statically links the following vendored Rust
-packages. Their complete license texts are distributed beside this notice in
-one directory per package.
+The Pi Sandbox identity broker and tool event collector use the following
+vendored Rust packages during compilation or in their statically linked runtime.
+Their complete license texts are distributed beside this notice in one directory
+per package. This shared notice covers both native service executables.
 
 | Package       | Version | License declared by package         |
 | ------------- | ------: | ----------------------------------- |

@@ -81,6 +81,9 @@ bubblewrap_runtime="/usr/bin/bwrap"
 bundled_bubblewrap="$payload/bwrap"
 candidate="$payload/pi-sandbox"
 candidate_broker="$payload/pi-sandbox-identity-broker"
+candidate_audit="$payload/pi-sandbox-audit-collector"
+audit_socket_unit_source="$payload/systemd/pi-sandbox-audit.socket"
+audit_service_unit_source="$payload/systemd/pi-sandbox-audit@.service"
 defaults_config="$payload/defaults/config.toml"
 defaults_models="$payload/defaults/models.json"
 socket_unit_source="$payload/systemd/pi-sandbox-identity-broker.socket"
@@ -102,7 +105,7 @@ service_unit_source="$payload/systemd/pi-sandbox-identity-broker@.service"
   echo "release executable is missing or invalid" >&2
   exit 1
 }
-for required in "$candidate_broker" "$defaults_config" "$defaults_models" "$socket_unit_source" "$service_unit_source" "$payload/release-manifest.json"; do
+for required in "$payload/sbom.cdx.json" "$candidate_audit" "$audit_socket_unit_source" "$audit_service_unit_source" "$candidate_broker" "$defaults_config" "$defaults_models" "$socket_unit_source" "$service_unit_source" "$payload/release-manifest.json"; do
   [ -f "$required" ] && [ ! -L "$required" ] || {
     echo "release payload is incomplete" >&2
     exit 1
@@ -110,6 +113,10 @@ for required in "$candidate_broker" "$defaults_config" "$defaults_models" "$sock
 done
 [ -x "$candidate_broker" ] || {
   echo "release identity broker is not executable" >&2
+  exit 1
+}
+[ -x "$candidate_audit" ] || {
+  echo "release audit collector is not executable" >&2
   exit 1
 }
 case "$bubblewrap_mode" in
@@ -147,12 +154,16 @@ launcher="${root_prefix}/usr/bin/pi-sandbox"
 bin_target=${launcher%/*}
 systemd_target="${root_prefix}/usr/lib/systemd/system"
 socket_unit="$systemd_target/pi-sandbox-identity-broker.socket"
+audit_socket_unit="$systemd_target/pi-sandbox-audit.socket"
 service_unit="$systemd_target/pi-sandbox-identity-broker@.service"
+audit_service_unit="$systemd_target/pi-sandbox-audit@.service"
 config="$etc_target/config.toml"
 models="$etc_target/models.json"
 expected_link=../libexec/pi-sandbox/pi-sandbox
 expected_socket_unit_link=../../../libexec/pi-sandbox/systemd/pi-sandbox-identity-broker.socket
+expected_audit_socket_unit_link=../../../libexec/pi-sandbox/systemd/pi-sandbox-audit.socket
 expected_service_unit_link=../../../libexec/pi-sandbox/systemd/pi-sandbox-identity-broker@.service
+expected_audit_service_unit_link=../../../libexec/pi-sandbox/systemd/pi-sandbox-audit@.service
 
 path_exists() { [ -e "$1" ] || [ -L "$1" ]; }
 require_regular() {
@@ -195,6 +206,18 @@ if path_exists "$service_unit"; then
     exit 1
   }
 fi
+if path_exists "$audit_socket_unit"; then
+  [ -L "$audit_socket_unit" ] && [ "$(readlink "$audit_socket_unit")" = "$expected_audit_socket_unit_link" ] || {
+    echo "existing pi-sandbox audit collector socket unit is not the managed symlink" >&2
+    exit 1
+  }
+fi
+if path_exists "$audit_service_unit"; then
+  [ -L "$audit_service_unit" ] && [ "$(readlink "$audit_service_unit")" = "$expected_audit_service_unit_link" ] || {
+    echo "existing pi-sandbox audit collector service unit is not the managed symlink" >&2
+    exit 1
+  }
+fi
 config_present=0
 models_present=0
 if path_exists "$config"; then require_regular "$config" configuration; config_present=1; fi
@@ -219,9 +242,13 @@ models_stage=
 link_stage=
 launcher_created=0
 socket_unit_stage=
+audit_socket_unit_stage=
 service_unit_stage=
+audit_service_unit_stage=
 socket_unit_created=0
+audit_socket_unit_created=0
 service_unit_created=0
+audit_service_unit_created=0
 code_committed=0
 old_code_moved=0
 old_code_path=
@@ -259,14 +286,18 @@ cleanup() {
       mv -T -- "$old_code_path" "$install_base" >/dev/null 2>&1 || true
     fi
     [ "$socket_unit_created" -eq 0 ] || rm -f -- "$socket_unit"
+    [ "$audit_socket_unit_created" -eq 0 ] || rm -f -- "$audit_socket_unit"
     [ "$service_unit_created" -eq 0 ] || rm -f -- "$service_unit"
+    [ "$audit_service_unit_created" -eq 0 ] || rm -f -- "$audit_service_unit"
     [ "$launcher_created" -eq 0 ] || rm -f -- "$launcher"
   fi
   [ -z "$config_stage" ] || rm -f -- "$config_stage"
   [ -z "$models_stage" ] || rm -f -- "$models_stage"
   [ -z "$link_stage" ] || rm -f -- "$link_stage"
   [ -z "$socket_unit_stage" ] || rm -f -- "$socket_unit_stage"
+  [ -z "$audit_socket_unit_stage" ] || rm -f -- "$audit_socket_unit_stage"
   [ -z "$service_unit_stage" ] || rm -f -- "$service_unit_stage"
+  [ -z "$audit_service_unit_stage" ] || rm -f -- "$audit_service_unit_stage"
   [ -z "$stage" ] || rm -rf -- "$stage"
   [ -z "$old_code_path" ] || rm -rf -- "$old_code_path"
   [ -z "$validation_root" ] || rm -rf -- "$validation_root"
@@ -329,6 +360,7 @@ find "$stage" -type d -exec chmod 0755 {} +
 find "$stage" -type f -exec chmod 0644 {} +
 chmod 0755 "$stage/pi-sandbox"
 chmod 0755 "$stage/pi-sandbox-identity-broker"
+chmod 0755 "$stage/pi-sandbox-audit-collector"
 if [ "$bubblewrap_mode" = bundled ]; then chmod 0755 "$stage/bwrap"; fi
 
 install_defaults=0
@@ -410,6 +442,29 @@ if ! path_exists "$service_unit"; then
   service_unit_stage=
 fi
 
+if ! path_exists "$audit_socket_unit"; then
+  audit_socket_unit_stage="$systemd_target/.pi-sandbox-audit.socket.$$"
+  [ ! -e "$audit_socket_unit_stage" ] && [ ! -L "$audit_socket_unit_stage" ] || {
+    echo "temporary socket unit path already exists" >&2
+    exit 1
+  }
+  ln -s "$expected_audit_socket_unit_link" "$audit_socket_unit_stage"
+  audit_socket_unit_created=1
+  mv -Tf -- "$audit_socket_unit_stage" "$audit_socket_unit"
+  audit_socket_unit_stage=
+fi
+if ! path_exists "$audit_service_unit"; then
+  audit_service_unit_stage="$systemd_target/.pi-sandbox-audit@.service.$$"
+  [ ! -e "$audit_service_unit_stage" ] && [ ! -L "$audit_service_unit_stage" ] || {
+    echo "temporary service unit path already exists" >&2
+    exit 1
+  }
+  ln -s "$expected_audit_service_unit_link" "$audit_service_unit_stage"
+  audit_service_unit_created=1
+  mv -Tf -- "$audit_service_unit_stage" "$audit_service_unit"
+  audit_service_unit_stage=
+fi
+
 installation_complete=1
 if [ "$install_defaults" -eq 0 ]; then
   config_action=preserved
@@ -422,6 +477,7 @@ fi
 printf '%s\n' "installed pi-sandbox files:"
 printf '  %s (executable)\n' "$install_base/pi-sandbox"
 printf '  %s (identity broker executable)\n' "$install_base/pi-sandbox-identity-broker"
+printf '  %s (audit collector executable)\n' "$install_base/pi-sandbox-audit-collector"
 if [ "$bubblewrap_mode" = bundled ]; then
   printf '  %s (bundled Bubblewrap executable)\n' "$install_base/bwrap"
 else
@@ -430,7 +486,9 @@ fi
 printf '  %s -> %s\n' "$launcher" "$install_base/pi-sandbox"
 printf '  %s (runtime support files)\n' "$install_base/"
 printf '  %s -> %s\n' "$socket_unit" "$install_base/systemd/pi-sandbox-identity-broker.socket"
+printf '  %s -> %s\n' "$audit_socket_unit" "$install_base/systemd/pi-sandbox-audit.socket"
 printf '  %s -> %s\n' "$service_unit" "$install_base/systemd/pi-sandbox-identity-broker@.service"
+printf '  %s -> %s\n' "$audit_service_unit" "$install_base/systemd/pi-sandbox-audit@.service"
 printf '%s\n' "live administrator configuration:"
 printf '  %s (%s)\n' "$config" "$config_action"
 if [ "$install_defaults" -eq 1 ] || [ "$models_present" -eq 1 ]; then

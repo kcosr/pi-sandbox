@@ -61,6 +61,9 @@ try {
   const systemdDirectory = path.join(installRoot, "usr/lib/systemd/system");
   const socketUnit = path.join(systemdDirectory, "pi-sandbox-identity-broker.socket");
   const serviceUnit = path.join(systemdDirectory, "pi-sandbox-identity-broker@.service");
+  const auditCollector = path.join(installBase, "pi-sandbox-audit-collector");
+  const auditSocketUnit = path.join(systemdDirectory, "pi-sandbox-audit.socket");
+  const auditServiceUnit = path.join(systemdDirectory, "pi-sandbox-audit@.service");
   const etcDirectory = path.join(installRoot, "etc/pi-sandbox");
   const config = path.join(etcDirectory, "config.toml");
   const models = path.join(etcDirectory, "models.json");
@@ -90,6 +93,15 @@ try {
   );
   await assertMode(path.join(installBase, "pi-sandbox"), 0o755);
   await assertMode(broker, 0o755);
+  await assertMode(path.join(installBase, "sbom.cdx.json"), 0o644);
+  await assertMode(auditCollector, 0o755);
+  for (const unit of [auditSocketUnit, auditServiceUnit]) {
+    assertEqual(
+      await readlink(unit),
+      `../../../libexec/pi-sandbox/systemd/${path.basename(unit)}`,
+      "audit unit link",
+    );
+  }
   await assertMode(path.join(installBase, "defaults/config.toml"), 0o644);
   assertEqual(await readFile(config, "utf8"), configContents("1"), "initial config");
   assertEqual(await readFile(models, "utf8"), modelsContents("1"), "initial models");
@@ -191,6 +203,24 @@ try {
     "checksum failure preserved installed payload",
   );
 
+  const missingSbomRelease = path.join(temporaryRoot, "release-missing-sbom");
+  await createRelease(missingSbomRelease, "3");
+  await rm(path.join(missingSbomRelease, "payload/pi-sandbox/sbom.cdx.json"));
+  const sbomChecksums = path.join(missingSbomRelease, "SHA256SUMS");
+  await writeFile(
+    sbomChecksums,
+    (await readFile(sbomChecksums, "utf8"))
+      .split("\n")
+      .filter((line) => !line.endsWith("payload/pi-sandbox/sbom.cdx.json"))
+      .join("\n"),
+  );
+  assertRunFails(path.join(missingSbomRelease, "install.sh"), [], { DESTDIR: installRoot });
+  assertEqual(
+    await readFile(path.join(installBase, "assets/release.txt"), "utf8"),
+    "release 2\n",
+    "missing SBOM preserves installed payload",
+  );
+
   const invalidRoot = path.join(temporaryRoot, "invalid-config-root");
   run(path.join(release1, "install.sh"), [], { DESTDIR: invalidRoot });
   await writeFile(path.join(invalidRoot, "etc/pi-sandbox/config.toml"), "invalid = true\n");
@@ -207,6 +237,38 @@ try {
   assertRunFails(path.join(release1, "install.sh"), [], { DESTDIR: occupiedLauncherRoot });
   await assertMissing(path.join(occupiedLauncherRoot, "usr/libexec/pi-sandbox"));
 
+  for (const unit of ["pi-sandbox-audit.socket", "pi-sandbox-audit@.service"]) {
+    const occupiedRoot = path.join(temporaryRoot, `occupied-${unit}`);
+    const unitPath = path.join(occupiedRoot, "usr/lib/systemd/system", unit);
+    await mkdir(path.dirname(unitPath), { recursive: true });
+    await writeFile(unitPath, "unrelated\n");
+    assertRunFails(path.join(release1, "install.sh"), [], { DESTDIR: occupiedRoot });
+    await assertMissing(path.join(occupiedRoot, "usr/libexec/pi-sandbox"));
+    assertEqual(await readFile(unitPath, "utf8"), "unrelated\n", "unmanaged audit unit preserved");
+    assertRunFails(path.join(release1, "uninstall.sh"), [], { DESTDIR: occupiedRoot });
+    assertEqual(
+      await readFile(unitPath, "utf8"),
+      "unrelated\n",
+      "uninstall preserves unmanaged audit unit",
+    );
+  }
+
+  const unsafeUninstallRoot = path.join(temporaryRoot, "unsafe-uninstall-root");
+  run(path.join(release1, "install.sh"), [], { DESTDIR: unsafeUninstallRoot });
+  const unsafeAuditUnit = path.join(
+    unsafeUninstallRoot,
+    "usr/lib/systemd/system/pi-sandbox-audit.socket",
+  );
+  await rm(unsafeAuditUnit);
+  await writeFile(unsafeAuditUnit, "operator-managed\n");
+  assertRunFails(path.join(release1, "uninstall.sh"), [], { DESTDIR: unsafeUninstallRoot });
+  await assertMode(path.join(unsafeUninstallRoot, "usr/libexec/pi-sandbox/pi-sandbox"), 0o755);
+  assertEqual(
+    await readlink(path.join(unsafeUninstallRoot, "usr/bin/pi-sandbox")),
+    "../libexec/pi-sandbox/pi-sandbox",
+    "failed uninstall preserves launcher",
+  );
+
   const symlinkConfigRoot = path.join(temporaryRoot, "symlink-config-root");
   const sentinel = path.join(temporaryRoot, "sentinel");
   await writeFile(sentinel, "do not replace\n");
@@ -222,13 +284,15 @@ try {
   const users = path.join(usersDirectory, "1000.toml");
   await writeFile(unrelated, "keep\n");
   await mkdir(usersDirectory, { mode: 0o755 });
-  await writeFile(users, 'version = 5\nuid = 1000\n\n[overrides.execution]\nbackend = "direct"\n', {
+  await writeFile(users, 'version = 6\nuid = 1000\n\n[overrides.execution]\nbackend = "direct"\n', {
     mode: 0o600,
   });
   run(path.join(release2, "uninstall.sh"), [], { DESTDIR: installRoot });
   await assertMissing(launcher);
   await assertMissing(socketUnit);
   await assertMissing(serviceUnit);
+  await assertMissing(auditSocketUnit);
+  await assertMissing(auditServiceUnit);
   await assertMissing(installBase);
   assertEqual(await readFile(config, "utf8"), configContents("2"), "retained config");
   assertEqual(await readFile(models, "utf8"), modelsContents("2"), "retained models");
@@ -240,7 +304,7 @@ try {
   assertEqual(await readFile(unrelated, "utf8"), "keep\n", "unrelated configuration");
   assertEqual(
     await readFile(users, "utf8"),
-    'version = 5\nuid = 1000\n\n[overrides.execution]\nbackend = "direct"\n',
+    'version = 6\nuid = 1000\n\n[overrides.execution]\nbackend = "direct"\n',
     "retained user override",
   );
   assertEqual(
@@ -305,6 +369,17 @@ grep -q '"valid":true' "$root$models_path"
   await writeFile(path.join(payload, "pi-sandbox-identity-broker"), "#!/bin/sh\nexit 0\n", {
     mode: 0o755,
   });
+  await writeFile(path.join(payload, "pi-sandbox-audit-collector"), "#!/bin/sh\nexit 0\n", {
+    mode: 0o755,
+  });
+  await writeFile(
+    path.join(payload, "systemd/pi-sandbox-audit.socket"),
+    "[Socket]\nListenStream=/run/pi-sandbox-audit/collector.sock\n",
+  );
+  await writeFile(
+    path.join(payload, "systemd/pi-sandbox-audit@.service"),
+    "[Service]\nStandardInput=socket\n",
+  );
   if (bundledBubblewrap) {
     await writeFile(
       path.join(payload, "bwrap"),
@@ -331,6 +406,10 @@ grep -q '"valid":true' "$root$models_path"
     `${JSON.stringify({ manifestVersion: 1, release })}\n`,
   );
 
+  await writeFile(
+    path.join(payload, "sbom.cdx.json"),
+    '{"bomFormat":"CycloneDX","specVersion":"1.6","version":1,"components":[]}\n',
+  );
   const files = await regularFiles(path.join(directory, "payload"));
   const checksums = files
     .sort()

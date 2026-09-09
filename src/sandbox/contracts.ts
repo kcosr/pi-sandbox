@@ -36,8 +36,10 @@ export interface SandboxResourceLimits {
 }
 
 export interface CreateBubblewrapExecutorOptions {
-  /** The launch directory. It is the only host subtree mounted read/write. */
+  /** The launch directory, explicitly mounted at the identical host path. */
   readonly cwd: string;
+  /** Whether the launch directory permits host writes. Omitted means writable. */
+  readonly cwdWritable?: boolean;
   /** Tool and shell network authority. Omitted means a private offline namespace. */
   readonly networkMode?: NetworkMode;
   /** Administrator-provided variables added to the fixed sandbox environment. */

@@ -11,7 +11,7 @@
     "node": ">=24"
   },
   "scripts": {
-    "build": "npm run build:application && node scripts/build-broker.mjs",
+    "build": "npm run build:application && node scripts/build-broker.mjs && node scripts/build-audit-collector.mjs",
     "build:application": "node scripts/clean-dist.mjs && tsc -p tsconfig.build.json && node scripts/build-bundles.mjs",
     "build:release": "node scripts/build-release.mjs",
     "format": "prettier --write .",
@@ -19,6 +19,7 @@
     "lint": "eslint .",
     "test": "vitest run",
     "test:e2e": "vitest run tests/e2e",
+    "test:audit-collector": "node scripts/test-audit-collector.mjs",
     "test:broker": "node scripts/test-broker.mjs",
     "test:build-composition": "node scripts/test/build-composition.mjs",
     "test:distribution": "node scripts/test/distribution.mjs",

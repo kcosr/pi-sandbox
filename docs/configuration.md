@@ -12,9 +12,9 @@ disables Pi's internal model catalog.
 The main configuration contains the global `pi`, `sandbox`, and
 extension-specific scoped environment. The required `identity` table either
 disables user resolution or selects the fixed administrator broker. Broker mode
-may overlay an optional version 5 `config_dir/users.d/<uid>.toml` patch for
+may overlay an optional `config_dir/users.d/<uid>.toml` patch for
 the calling UID, including scoped environment, selected model file, execution
-backend, network mode, and any subset of model-tool policies. A missing
+backend, network mode, CWD write access, and any subset of model-tool policies. A missing
 directory or matching file leaves the main configuration unchanged. See
 [per-user environment and overrides](identity-broker.md).
 
@@ -54,8 +54,15 @@ Provider definitions and API-key resolution are documented separately in
 ## Complete example
 
 ```toml
-config_version = 5
+config_version = 6
 models_file = "/etc/pi-sandbox/models.json"
+
+[audit]
+enabled = false
+facility = "local0"
+
+[filesystem]
+cwd_writable = true
 
 [execution]
 backend = "bubblewrap"
@@ -79,34 +86,42 @@ allowed_schemes = ["https", "ssh"]
 [tools.read]
 mode = "allow"
 session_grant = "never"
+audit = false
 
 [tools.grep]
 mode = "allow"
 session_grant = "never"
+audit = false
 
 [tools.find]
 mode = "allow"
 session_grant = "never"
+audit = false
 
 [tools.ls]
 mode = "allow"
 session_grant = "never"
+audit = false
 
 [tools.write]
 mode = "ask"
 session_grant = "never"
+audit = true
 
 [tools.edit]
 mode = "ask"
 session_grant = "never"
+audit = true
 
 [tools.bash]
 mode = "ask"
 session_grant = "never"
+audit = true
 
 [tools.git_clone]
 mode = "ask"
 session_grant = "never"
+audit = true
 
 ```
 
@@ -128,6 +143,42 @@ The administrator may place catalogs elsewhere. In broker mode a root-managed
 UID drop-in may replace it; no user environment, CLI argument, Pi setting, or
 project file can do so. `--model` may select only a model present in the
 effective file.
+
+## Launch directory access
+
+The required `[filesystem]` table contains exactly one boolean:
+
+```toml
+[filesystem]
+cwd_writable = true
+```
+
+`true` is the packaged default and permits Bubblewrap operations to write in
+the launch directory. `false` keeps the launch directory visible at the same
+absolute path but mounts it read-only. This restriction applies to all built-in
+tools and human `!` commands, including an allowed model Bash command. Tool
+approval never makes a read-only mount writable. Private `/tmp` and `/run`
+storage remains writable, so Bash can prepare temporary files without modifying
+host directory contents.
+
+Both settings create an explicit same-path CWD bind after the private mounts:
+`--bind` for writable access and `--ro-bind` for read-only access. Workspaces
+beneath `/tmp` therefore remain visible. CWD exactly `/tmp` is rejected when
+`cwd_writable = false`, because that bind would mask private writable `/tmp`.
+With `true`, the existing host-`/tmp` CWD behavior is retained. CWD `/` and paths
+overlapping `/proc`, `/sys`, `/dev`, or `/run` remain invalid.
+
+Direct execution requires `cwd_writable = true`; it cannot enforce a read-only
+host CWD. Managed host tools remain outside this restriction and can still
+write according to their compiled operation and the invoking user's authority.
+The setting changes write access only; it does not restrict host filesystem
+visibility. Ordinary host filesystem reads remain governed by Unix permissions.
+
+A root-managed UID drop-in may override this setting with
+`[overrides.filesystem] cwd_writable = false`. Omission inherits the parent
+value. The final backend/filesystem combination is validated after overrides;
+switching a read-only base to direct execution also requires overriding
+`cwd_writable` to `true`.
 
 ## Network modes
 
@@ -247,7 +298,7 @@ Pi Sandbox registers one read-only diagnostic command:
 
 `/sandbox` reports whether the selected backend is initialized, its process
 lifetime, execution backend, launch directory, fixed configuration path,
-effective selected model file, identity mode, effective network mode, and
+effective selected model file, identity mode, effective network mode, CWD access, and
 user-state directory. `/sandbox mounts` reports the semantic Bubblewrap mount
 policy or explicitly reports that direct mode has no mount boundary.
 `/sandbox policy` lists every configured model-tool
@@ -297,8 +348,50 @@ Model Bash defaults to a 120-second sandbox timeout and accepts an explicit
 timeout greater than zero through 600 seconds. User `!` shell always uses the
 fixed 120-second timeout and has no per-command override.
 
-Either kind of shell command can read the ordinary host filesystem, write anywhere
-inside the launch CWD, and write private temporary state. It cannot mutate the
-rest of the host filesystem. Its network authority is the effective `network`
+In Bubblewrap, either kind of shell command can read the ordinary host
+filesystem and write private temporary state. It can write inside the launch
+CWD only when `filesystem.cwd_writable = true`; the rest of the ordinary host
+filesystem remains read-only. Its network authority is the effective `network`
 mode. Structured-tool policies do not intercept file or network operations
 performed by Bash.
+
+## Tool event logging
+
+The configuration requires an `[audit]` table with `enabled` and
+`facility`, and an `audit` boolean in every base `[tools.<name>]` policy.
+`facility` is one of `local0` through `local7`. The fixed syslog identifier is
+`pi-sandbox`. Packaged defaults disable the feature globally, select `local0`,
+and mark write, edit, and Bash tools for logging while leaving
+read/search tools unlogged. Set `enabled = true` to activate the collector
+connection on Linux. macOS requires `enabled = false`.
+
+A tool's boolean selects its permission-decision and execution lifecycle events.
+It does not change tool visibility, approval, or execution authority. Session
+lifecycle events are emitted whenever logging is enabled, independently of the
+individual tool selections. Human `!` commands are excluded.
+
+These settings belong exclusively to the parent configuration. UID drop-ins
+cannot contain `[audit]` or tool-level `audit` fields. A UID override replaces
+its tool's invocation permissions while retaining the parent's logging choice.
+
+Logged fields identify the tool, execution boundary, permission decision,
+invocation, Pi session, and outcome. File tools include their resolved absolute
+target path or search root; they exclude file offsets, file contents, edit
+diffs, search expressions, and tool output. Bash includes bounded command text
+and an explicit truncation flag. Its command limit is 4096 bytes of JSON-escaped text; escaped characters
+count toward that bound. Invalid target paths are omitted, and command capture
+stops before a NUL or an unpaired Unicode surrogate with the truncation flag set. Commands may themselves contain inline
+content or credentials; length limits do not redact them. Session events include
+the captured launch CWD. Records use JSON escaping to remain single-line.
+
+Before an admitted logged tool runs, its execution-intent record must be
+acknowledged by the collector. Acknowledgment means successful submission to
+local syslog, not storage or remote delivery. Submission failure prevents new
+logged operations. Failure to submit a completion record never retries the
+operation; its externally observable outcome may remain unknown.
+
+Managed extension definitions may supply an optional `auditTarget` function
+that selects only an absolute `path` and/or repository locator from the same
+immutable arguments used for execution. The Git clone tool records its validated
+repository locator and derived destination. Other compiled tools without this
+function record tool identity, permission decisions, and outcomes only.
