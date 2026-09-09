@@ -12,7 +12,7 @@ or direct backend.
 ```text
 trusted host
   optional root systemd identity broker
-    -> SO_PEERCRED UID lookup in optional /etc/pi-sandbox/users.d/<uid>.toml
+    -> SO_PEERCRED UID -> host account/group lookup -> optional users.d + groups.d rules
   prebuilt Bun pi-sandbox executable
     pinned, minimally patched Pi runtime
       forced inline Pi Sandbox extension
@@ -63,11 +63,13 @@ tool authority still comes from the forced extension.
 
 Administrative configuration begins at the distribution's compiled
 `config_dir/config.toml`. When configured, the Bun process asks the
-separate static Rust broker for the calling UID's optional drop-in. The broker uses kernel
-peer credentials, reads one newline-delimited request without requiring a
-client half-close, and reads only the matching root-owned TOML file.
-It returns the per-UID environment and optional model,
-execution, network, filesystem, and atomic tool-policy patch. A missing directory or file
+separate static Rust broker for the caller's combined user/group rules. The broker uses kernel
+peer credentials, resolves account and primary/supplementary membership through
+the host NSS resolver, and reads protected root-owned rules. It accepts one
+newline-delimited request without requiring a client half-close. Matching
+explicit permissions combine using least restrictive wins; conflicting backend,
+model, or scoped environment values fail. It returns the environment and optional model,
+execution, network, filesystem, and atomic tool-policy patch. If no rules match, the broker
 returns an empty patch. The Bun process validates the response independently,
 overlays it on the global policy and scoped environment from the main TOML, constructs one effective
 configuration, and loads only its selected model catalog. Pi-scoped values are
@@ -296,10 +298,13 @@ collector. It records selected model-tool decisions and execution lifecycle
 metadata, including target paths and bounded Bash commands, while excluding
 file contents and tool output. Human shell commands do not use this path.
 
-The static Rust collector obtains the peer UID, GID, and PID from Linux socket
-credentials and assigns a connection identifier. The client includes its Pi
+The static Rust collector obtains the peer UID and PID from Linux socket
+credentials, resolves the account name through the trusted host account system
+once per connection, and assigns a connection identifier. Every record includes
+`principal_uid`, `principal_user` (null if no account exists), and `principal_pid`;
+records do not include a principal GID or group membership. The client includes its Pi
 session ID and invocation ID for correlation. The collector submits one-line
 structured records to local syslog and acknowledges successful submission.
 Server logging infrastructure owns persistence, rotation, retention, and
-forwarding. This service is independent of per-UID configuration resolution;
+forwarding. This service is independent of user/group configuration resolution;
 it is not an execution backend and does not run tool operations.

@@ -3,14 +3,14 @@ Description=Pi Sandbox identity broker connection
 
 [Service]
 Type=simple
-ExecStart=/usr/libexec/pi-sandbox/pi-sandbox-identity-broker /etc/pi-sandbox/users.d
+ExecStart=/usr/libexec/pi-sandbox/pi-sandbox-identity-broker /etc/pi-sandbox
 StandardInput=socket
 StandardOutput=socket
 StandardError=journal
 User=root
 Group=root
 UMask=0077
-RuntimeMaxSec=5s
+RuntimeMaxSec=15s
 MemoryMax=32M
 TasksMax=16
 NoNewPrivileges=yes

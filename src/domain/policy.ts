@@ -90,7 +90,7 @@ export interface BrokerIdentityConfig {
 
 export type IdentityConfig = DisabledIdentityConfig | BrokerIdentityConfig;
 
-export interface UserOverrides {
+export interface IdentityOverrides {
   readonly modelsFile?: string;
   readonly execution?: ExecutionConfig;
   readonly network?: NetworkConfig;
@@ -100,7 +100,7 @@ export interface UserOverrides {
 
 export type EnvironmentVariables = Readonly<Record<string, string>>;
 
-export interface ManagedUserEnvironment {
+export interface ManagedEnvironment {
   readonly pi: EnvironmentVariables;
   readonly sandbox: EnvironmentVariables;
   readonly extensions: Readonly<Record<string, EnvironmentVariables>>;
@@ -114,7 +114,7 @@ export interface SandboxConfig {
   readonly identity: IdentityConfig;
   readonly network: NetworkConfig;
   readonly filesystem: FilesystemConfig;
-  readonly environment: ManagedUserEnvironment;
+  readonly environment: ManagedEnvironment;
   readonly extensions: Readonly<Record<string, ExtensionConfig>>;
   readonly tools: ToolPolicies;
 }

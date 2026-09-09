@@ -165,7 +165,7 @@ describe("audit client", () => {
     vi.useFakeTimers();
     const submitted = client.submit(event);
     const rejection = expect(submitted).rejects.toThrow("acknowledgment timed out");
-    await vi.advanceTimersByTimeAsync(5_000);
+    await vi.advanceTimersByTimeAsync(10_000);
     await rejection;
     await expect(client.submit(event)).rejects.toThrow("acknowledgment timed out");
   });

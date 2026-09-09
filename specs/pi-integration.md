@@ -69,10 +69,10 @@ The executable always begins configuration resolution at:
 That path is fixed. No CLI argument, environment variable, Pi setting, project
 file, or user file may redirect it. The strict configuration has a required
 normalized absolute `models_file`. In broker mode, a root-managed drop-in
-selected solely by the kernel-reported UID may replace the model file,
+selected by the kernel-authenticated account and its primary/supplementary groups may replace the model file,
 execution backend, network mode, CWD write access, and complete invocation
 permissions for a subset of model tools. The main TOML supplies the global scoped environment. An optional
-per-UID TOML drop-in may overlay that environment. No other field is
+user/group TOML drop-in may overlay that environment. No other field is
 overridable.
 
 The managed Pi model runtime must:
@@ -104,31 +104,36 @@ logs, and caches. It must not affect:
 Interactive authentication and retained credentials therefore remain
 per-user, while the administrator controls the available model definitions.
 
-## Per-UID resolution
+## User and group resolution
 
-The optional identity broker is a separate static native executable. It is
-socket-activated per connection, obtains UID from Linux `SO_PEERCRED`, and reads
-only the optional root-owned `/etc/pi-sandbox/users.d/<uid>.toml` selected by
-that kernel UID. The request contains no
-claimed UID. Requests and responses are single newline-delimited JSON objects;
-the Bun client keeps the connection open after writing its request, and the
-broker replies when it reads the newline rather than waiting for client EOF. A
-successful protocol version 5 response contains exactly the matching UID's
-scoped-environment and normalized override patch; username and comment
-annotations are never returned. A missing directory or matching file returns
-an empty patch and inherits the main configuration unchanged. Broker mode always uses
-`/run/pi-sandbox-identity/broker.sock`; neither the drop-in directory nor another
-configuration field can redirect it.
+The optional identity broker is a separate static native executable, activated
+per socket connection. It obtains UID from Linux `SO_PEERCRED` and invokes the
+fixed `/usr/bin/getent` host NSS resolver to identify the account and its primary
+and supplementary groups. The compiled configuration directory is its process
+argument. It reads optional protected `users.d/*.toml` and `groups.d/*.toml`
+rules, selecting exactly one `user`/`uid` or `group`/`gid` per file. Filenames are
+labels. Names and numeric selectors have identical precedence.
 
-The Bun client independently validates the strict response and resolves the
-effective configuration in this order: complete main TOML including global
-scoped environment, then one per-UID environment, model,
-execution, network, and filesystem override, and atomic complete invocation-policy
-replacements for named tools. Parent tool logging settings are preserved.
-Omitted fields inherit the base. The base TOML remains the global tool policy;
-environment entries never select extensions, add or enable tools, or grant
-approval. A per-UID complete policy may still deny or disable selected
-extension tools such as `git_clone` and `service_api`.
+The protocol uses newline-delimited JSON version 6 and operation
+`resolve-identity`, with no caller-claimed identity. The client keeps its write
+side open; the broker responds after reading the newline. Successful responses
+contain only one combined matching environment/override patch. Missing rule
+directories or no matching rules return an empty patch. The socket remains
+`/run/pi-sandbox-identity/broker.sock` and cannot be redirected by policy.
+
+Combine matching explicit permissions before overlaying defaults. Complete tool
+pairs order as `disabled/never` < `deny/never` < `ask/never` < `ask/offer` <
+`allow/never`; `host` wins for networking and `true` for CWD writability.
+Different explicit backend/model values or values of the same scoped environment
+key fail resolution. User rules have no extra precedence. Logging flags remain
+parent-only. Revalidate the complete effective configuration after the merge.
+Environment entries never select extensions, enable tools, or grant approval.
+
+Host lookups are bounded to four seconds, the client deadline is ten seconds,
+and the service lifetime is fifteen seconds. Local accounts and SSSD via local
+sockets are supported; direct network LDAP is outside the service network
+boundary. Membership is a startup snapshot subject to host account caching.
+Lookup failure must not silently omit membership or matching rules.
 
 The effective model catalog is loaded with the `pi` scope applied to the
 trusted host process. The `sandbox` scope is added to Bubblewrap's cleared
@@ -138,7 +143,7 @@ compiled extension and names that extension declares; Pi-scoped and other
 extension-scoped values are excluded from its executor. Broker failures,
 invalid matching drop-ins, invalid responses or scoped environments, and
 invalid effective catalogs abort startup. Missing drop-ins do not. Disabled
-broker mode skips per-UID lookup but still applies the main configuration's
+broker mode skips user/group lookup but still applies the main configuration's
 global scoped environment.
 
 ## Required Pi patch behavior
@@ -208,7 +213,7 @@ explicit `--replace-config` operation validates packaged defaults, backs up the
 active files, and replaces them atomically.
 
 The installer never creates, replaces, backs up, or removes
-`/etc/pi-sandbox/users.d` or its contents, and does not enable or start the
+`/etc/pi-sandbox/users.d`, `/etc/pi-sandbox/groups.d`, or their contents, and does not enable or start the
 broker socket.
 
 Pi Sandbox does not produce an RPM. Site administrators may wrap the release
@@ -217,7 +222,7 @@ archive and these semantics in their own package-management system.
 ## CWD filesystem access
 
 Administrative configuration requires `[filesystem].cwd_writable`, with `true`
-in packaged defaults. Root-managed UID files may replace that setting under
+in packaged defaults. Root-managed user/group rules may replace that setting under
 `[overrides.filesystem]`. Effective direct execution requires `true`.
 
 The Bubblewrap backend always creates an explicit same-path CWD bind after its

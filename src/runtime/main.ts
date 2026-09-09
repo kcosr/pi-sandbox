@@ -13,18 +13,14 @@ import {
 import { buildLayout } from "../build-layout/index.js";
 import { connectAuditClient, type AuditClient } from "../audit/client.js";
 import { loadConfig } from "../config/index.js";
-import type {
-  EnvironmentVariables,
-  ManagedUserEnvironment,
-  SandboxConfig,
-} from "../domain/index.js";
+import type { EnvironmentVariables, ManagedEnvironment, SandboxConfig } from "../domain/index.js";
 import { overlayManagedEnvironment } from "../domain/index.js";
 import { createPiSandboxExtension } from "../extension/index.js";
 import { createHostCommandExecutor, type HostCommandExecutor } from "../host/index.js";
 import {
-  applyUserOverrides,
-  type BrokerUserResolver,
-  configureManagedUser,
+  applyIdentityOverrides,
+  type BrokerIdentityResolver,
+  configureManagedIdentity,
 } from "../identity/index.js";
 import { managedExtensionCatalog } from "../managed-extensions/registry.js";
 import type { ManagedExtensionCatalog } from "../managed-extensions/catalog.js";
@@ -151,23 +147,26 @@ export async function validateAdministrativeConfiguration(root = "/"): Promise<S
 export async function resolveEffectiveAdministrativeConfiguration(
   root = "/",
   environment: NodeJS.ProcessEnv = process.env,
-  resolveUser?: BrokerUserResolver,
+  resolveIdentity?: BrokerIdentityResolver,
 ): Promise<{
   readonly config: SandboxConfig;
   readonly modelsPath: string;
-  readonly userEnvironment: ManagedUserEnvironment;
+  readonly identityEnvironment: ManagedEnvironment;
 }> {
   const baseConfig = await loadAdministrativeConfig(root);
   assertExecutionPlatform(baseConfig);
-  const user = await configureManagedUser(baseConfig.identity, resolveUser);
-  const effectiveEnvironment = overlayManagedEnvironment(baseConfig.environment, user.environment);
+  const identity = await configureManagedIdentity(baseConfig.identity, resolveIdentity);
+  const effectiveEnvironment = overlayManagedEnvironment(
+    baseConfig.environment,
+    identity.environment,
+  );
   const lease = applyManagedEnvironment(effectiveEnvironment.pi, environment);
   try {
-    const config = applyUserOverrides(baseConfig, user.overrides);
+    const config = applyIdentityOverrides(baseConfig, identity.overrides);
     assertExecutionPlatform(config);
     const modelsPath = await readAdministrativeModels(config, root);
     await createConfiguredModelRuntime(modelsPath, { refreshOnCreate: false });
-    return { config, modelsPath, userEnvironment: effectiveEnvironment };
+    return { config, modelsPath, identityEnvironment: effectiveEnvironment };
   } finally {
     lease.restore();
   }
@@ -268,7 +267,7 @@ function actionableErrorMessage(error: unknown): string {
 }
 
 function validateExtensionEnvironment(
-  environment: ManagedUserEnvironment,
+  environment: ManagedEnvironment,
   instances: readonly ManagedExtensionInstance[],
 ): void {
   const selected = new Map(instances.map((instance) => [instance.extension.id, instance]));
@@ -324,7 +323,7 @@ function extensionHostEnvironment(
 /** Build one isolated host environment for each selected managed extension. */
 export function resolveManagedExtensionHostEnvironments(
   ambient: NodeJS.ProcessEnv,
-  environment: ManagedUserEnvironment,
+  environment: ManagedEnvironment,
   instances: readonly ManagedExtensionInstance[],
   catalog: ManagedExtensionCatalog = managedExtensionCatalog,
 ): Readonly<Record<string, NodeJS.ProcessEnv>> {
@@ -371,14 +370,14 @@ export async function runPiSandbox(args: string[]): Promise<void> {
   }
 
   const ambientHostEnvironment = { ...process.env };
-  const { config, modelsPath, userEnvironment } =
+  const { config, modelsPath, identityEnvironment } =
     await resolveEffectiveAdministrativeConfiguration();
   const cwd = process.cwd();
   const managedExtensions = instantiateConfiguredManagedExtensions(config);
   const piToolExtensions = selectConfiguredPiToolExtensions(config);
   const extensionEnvironments = resolveManagedExtensionHostEnvironments(
     ambientHostEnvironment,
-    userEnvironment,
+    identityEnvironment,
     managedExtensions,
   );
   const managedExecutables = managedExtensions.flatMap(
@@ -396,7 +395,7 @@ export async function runPiSandbox(args: string[]): Promise<void> {
   const executor = await createProbedExecutor(
     cwd,
     config,
-    userEnvironment.sandbox,
+    identityEnvironment.sandbox,
     ambientHostEnvironment,
   );
   const hostExecutors: Record<string, HostCommandExecutor> = {};
@@ -410,7 +409,7 @@ export async function runPiSandbox(args: string[]): Promise<void> {
         environment: extensionEnvironments[instance.extension.id]!,
       });
     }
-    const lease = applyManagedEnvironment(userEnvironment.pi);
+    const lease = applyManagedEnvironment(identityEnvironment.pi);
     try {
       const enabledTools = new Set(
         Object.keys(config.tools).filter((toolName) => config.tools[toolName]?.mode !== "disabled"),

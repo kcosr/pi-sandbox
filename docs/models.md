@@ -20,7 +20,7 @@ not runtime configuration. A normal upgrade preserves the active files under
 the compiled `config_dir`; `install.sh --replace-config` explicitly backs them up and
 replaces them with the packaged defaults.
 
-See [per-user environment and overrides](identity-broker.md) for optional broker
+See [user and group environment and overrides](identity-broker.md) for optional broker
 drop-ins, startup failure behavior, and use of arbitrary root-managed `pi`-scoped
 variables in `apiKey` or custom provider headers.
 
@@ -115,7 +115,7 @@ If Pi reports that no models are available:
 3. For an environment-based key, either export it in the process environment
    used to launch Pi Sandbox or configure that name under the effective
    global `environment.pi` scope in `/etc/pi-sandbox/config.toml`, optionally
-   overridden in `/etc/pi-sandbox/users.d/<uid>.toml`.
+   overridden in `/etc/pi-sandbox/users.d/*.toml` and `/etc/pi-sandbox/groups.d/*.toml`.
 
 4. For a command-based key, run the command as the invoking user and verify that
    it exits successfully and prints only the key.

@@ -74,7 +74,7 @@ flowchart LR
   required `models_file` selects the complete model catalog. Pi's internal model
   catalog is disabled.
 - The main configuration defines the global scoped environment. An optional
-  root broker can resolve a per-UID TOML patch for environment, model
+  root broker can combine named or numeric user/group rules into a patch for environment, model
   catalog, execution backend, network mode, CWD write access, and complete per-tool policy
   overrides without exposing other users' files.
   Pi, sandbox, and individual managed-extension variables remain isolated; the
@@ -151,9 +151,9 @@ The default distribution's administrative inputs are:
 ```
 
 Broker mode may additionally use root-managed
-`/etc/pi-sandbox/users.d/<uid>.toml` drop-ins. The directory is optional;
+`/etc/pi-sandbox/users.d/*.toml` and `/etc/pi-sandbox/groups.d/*.toml` drop-ins. Both directories are optional;
 without a matching file the main configuration applies unchanged.
-See [per-user environment and overrides](docs/identity-broker.md).
+See [user and group environment and overrides](docs/identity-broker.md).
 
 Policy configuration is strict and versioned. Every model tool must be present;
 missing, unreadable, invalid, and unknown policy fields stop startup. Details
@@ -189,7 +189,7 @@ These subject documents collectively describe the current product behavior.
 - [Architecture](docs/architecture.md)
 - [Configuration and approvals](docs/configuration.md)
 - [Models and authentication](docs/models.md)
-- [Per-user environment and overrides](docs/identity-broker.md)
+- [User and group environment and overrides](docs/identity-broker.md)
 - [Installation and operation](docs/installation.md)
 - [Security model](docs/security.md)
 - [Testing](docs/testing.md)

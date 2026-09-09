@@ -1,9 +1,9 @@
 export {
-  applyUserOverrides,
-  configureManagedUser,
+  applyIdentityOverrides,
+  configureManagedIdentity,
   IDENTITY_BROKER_PROTOCOL_VERSION,
   parseBrokerResponse,
-  resolveBrokerUser,
-  type BrokerUser,
-  type BrokerUserResolver,
+  resolveBrokerIdentity,
+  type BrokerIdentity,
+  type BrokerIdentityResolver,
 } from "./client.js";

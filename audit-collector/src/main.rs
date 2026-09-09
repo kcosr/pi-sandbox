@@ -6,7 +6,13 @@ use std::os::fd::RawFd;
 use std::os::unix::fs::{MetadataExt, OpenOptionsExt};
 use std::os::unix::net::UnixDatagram;
 use std::path::Path;
-use std::time::Duration;
+use std::time::{Duration, Instant};
+
+// The broker also uses this shared module's group lookup operations.
+#[allow(dead_code)]
+#[path = "../../native/host_identity.rs"]
+mod host_identity;
+use host_identity::HostIdentityResolver;
 
 use serde::{Deserialize, Serialize};
 
@@ -64,7 +70,7 @@ struct AuditConfig {
 struct Record<'a> {
     schema_version: u32,
     principal_uid: u32,
-    principal_gid: u32,
+    principal_user: Option<&'a str>,
     principal_pid: i32,
     audit_session_id: &'a str,
     sequence: u64,
@@ -290,8 +296,12 @@ fn serve(
     credentials: libc::ucred,
     session: &str,
     facility: u32,
+    resolve_user: impl FnOnce(u32) -> io::Result<Option<String>>,
     mut submit: impl FnMut(&[u8]) -> io::Result<()>,
 ) -> io::Result<()> {
+    let principal_user = resolve_user(credentials.uid).inspect_err(|error| {
+        eprintln!("pi-sandbox-audit-collector: account lookup failed: {error}");
+    })?;
     let mut sequence = 0_u64;
     let mut active_session: Option<String> = None;
     loop {
@@ -316,9 +326,9 @@ fn serve(
         }
         sequence = sequence.checked_add(1).ok_or_else(invalid)?;
         let record = Record {
-            schema_version: 1,
+            schema_version: 2,
             principal_uid: credentials.uid,
-            principal_gid: credentials.gid,
+            principal_user: principal_user.as_deref(),
             principal_pid: credentials.pid,
             audit_session_id: session,
             sequence,
@@ -393,6 +403,7 @@ fn run() -> io::Result<()> {
         .collect::<String>();
     let syslog = UnixDatagram::unbound()?;
     syslog.set_write_timeout(Some(Duration::from_secs(2)))?;
+    let resolver = HostIdentityResolver::new(Instant::now() + Duration::from_secs(4));
     // A datagram send is the delivery boundary; no persistence or forwarding promise.
     serve(
         &mut BufReader::new(io::stdin().lock()),
@@ -400,6 +411,11 @@ fn run() -> io::Result<()> {
         credentials,
         &session,
         facility,
+        |uid| {
+            resolver
+                .account(uid)
+                .map(|account| account.map(|account| account.user))
+        },
         |message| {
             if syslog.send_to(message, "/dev/log")? != message.len() {
                 return Err(io::Error::new(
@@ -456,6 +472,7 @@ mod tests {
             credentials(),
             "collector-session",
             16,
+            |_| Ok(Some("alice".to_owned())),
             |message| {
                 messages.push(message.to_vec());
                 Ok(())
@@ -469,7 +486,9 @@ mod tests {
         let record: serde_json::Value =
             serde_json::from_str(line.split_once(": ").unwrap().1).unwrap();
         assert_eq!(record["principal_uid"], 1001);
-        assert_eq!(record["principal_gid"], 1002);
+        assert_eq!(record["schema_version"], 2);
+        assert_eq!(record["principal_user"], "alice");
+        assert!(record.get("principal_gid").is_none());
         assert_eq!(record["principal_pid"], 42);
         assert_eq!(record["audit_session_id"], "collector-session");
         assert_eq!(record["sequence"], 2);
@@ -483,6 +502,59 @@ mod tests {
     }
 
     #[test]
+    fn resolves_kernel_uid_once_and_records_missing_user_as_null() {
+        let mut lookups = 0;
+        let mut messages = Vec::new();
+        serve(
+            &mut Cursor::new(lines(&[start("pi-1"), tool()])),
+            &mut Vec::new(),
+            credentials(),
+            "a",
+            16,
+            |uid| {
+                lookups += 1;
+                assert_eq!(uid, 1001);
+                Ok(None)
+            },
+            |message| {
+                messages.push(message.to_vec());
+                Ok(())
+            },
+        )
+        .unwrap();
+        assert_eq!(lookups, 1);
+        for message in messages {
+            let line = std::str::from_utf8(&message).unwrap();
+            let record: serde_json::Value =
+                serde_json::from_str(line.split_once(": ").unwrap().1).unwrap();
+            assert_eq!(record["principal_uid"], 1001);
+            assert_eq!(record.get("principal_user"), Some(&serde_json::Value::Null));
+            assert!(record.get("principal_gid").is_none());
+        }
+    }
+
+    #[test]
+    fn account_lookup_failure_submits_and_acknowledges_nothing() {
+        let mut output = Vec::new();
+        assert!(
+            serve(
+                &mut Cursor::new(lines(&[start("pi-1")])),
+                &mut output,
+                credentials(),
+                "a",
+                16,
+                |_| Err(io::Error::new(
+                    io::ErrorKind::TimedOut,
+                    "account lookup deadline exceeded"
+                )),
+                |_| panic!("must not submit without resolving identity"),
+            )
+            .is_err()
+        );
+        assert!(output.is_empty());
+    }
+
+    #[test]
     fn failed_submission_nacks_and_stops_without_retry() {
         let mut output = Vec::new();
         let mut attempts = 0;
@@ -492,6 +564,7 @@ mod tests {
             credentials(),
             "a",
             16,
+            |_| Ok(Some("alice".to_owned())),
             |_| {
                 attempts += 1;
                 Err(io::Error::other("sensitive internal failure"))
@@ -510,6 +583,8 @@ mod tests {
         for (field, value) in [
             ("contents", serde_json::json!("secret")),
             ("principal_uid", serde_json::json!(0)),
+            ("principal_user", serde_json::json!("root")),
+            ("principal_gid", serde_json::json!(0)),
             ("offset", serde_json::json!(1)),
             ("command", serde_json::json!("x".repeat(4097))),
         ] {
@@ -537,6 +612,7 @@ mod tests {
             credentials(),
             "a",
             16,
+            |_| Ok(Some("alice".to_owned())),
             |message| {
                 messages.push(message.to_vec());
                 Ok(())
@@ -586,6 +662,7 @@ mod tests {
             credentials(),
             "a",
             16,
+            |_| Ok(Some("alice".to_owned())),
             |_| {
                 count += 1;
                 Ok(())
@@ -605,6 +682,7 @@ mod tests {
                 credentials(),
                 "a",
                 16,
+                |_| Ok(Some("alice".to_owned())),
                 |_| Ok(()),
             )
             .unwrap();
@@ -661,6 +739,7 @@ mod tests {
             peer,
             "a",
             16,
+            |_| Ok(Some("alice".to_owned())),
             |message| sender.send(message).map(|_| ()),
         )
         .unwrap();

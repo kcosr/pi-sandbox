@@ -1,4 +1,4 @@
-import type { EnvironmentVariables, ManagedUserEnvironment } from "./policy.js";
+import type { EnvironmentVariables, ManagedEnvironment } from "./policy.js";
 
 export const MAXIMUM_ENVIRONMENT_VARIABLES_PER_SCOPE = 128;
 export const MAXIMUM_ENVIRONMENT_EXTENSIONS = 64;
@@ -43,7 +43,7 @@ const FIXED_SANDBOX_ENVIRONMENT_NAMES = new Set([
   "NO_COLOR",
 ]);
 
-export function emptyManagedEnvironment(): ManagedUserEnvironment {
+export function emptyManagedEnvironment(): ManagedEnvironment {
   return Object.freeze({
     pi: Object.freeze({}),
     sandbox: Object.freeze({}),
@@ -51,7 +51,7 @@ export function emptyManagedEnvironment(): ManagedUserEnvironment {
   });
 }
 
-export function parseManagedEnvironment(value: unknown): ManagedUserEnvironment {
+export function parseManagedEnvironment(value: unknown): ManagedEnvironment {
   if (!isRecord(value) || !hasExactKeys(value, ["pi", "sandbox", "extensions"])) {
     throw new Error("managed_environment_invalid");
   }
@@ -78,9 +78,9 @@ export function parseManagedEnvironment(value: unknown): ManagedUserEnvironment 
 }
 
 export function overlayManagedEnvironment(
-  base: ManagedUserEnvironment,
-  override: ManagedUserEnvironment,
-): ManagedUserEnvironment {
+  base: ManagedEnvironment,
+  override: ManagedEnvironment,
+): ManagedEnvironment {
   const extensionIds = new Set([
     ...Object.keys(base.extensions),
     ...Object.keys(override.extensions),
@@ -120,7 +120,7 @@ function parseEnvironmentVariables(value: unknown, sandbox: boolean): Environmen
   return Object.freeze(variables);
 }
 
-function validateAggregateLimits(environment: ManagedUserEnvironment): void {
+function validateAggregateLimits(environment: ManagedEnvironment): void {
   const scopes = [environment.pi, environment.sandbox, ...Object.values(environment.extensions)];
   const variableCount = scopes.reduce((total, scope) => total + Object.keys(scope).length, 0);
   const environmentBytes = scopes.reduce(

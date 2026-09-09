@@ -281,10 +281,17 @@ try {
 
   const unrelated = path.join(etcDirectory, "operator-note.txt");
   const usersDirectory = path.join(etcDirectory, "users.d");
+  const groupsDirectory = path.join(etcDirectory, "groups.d");
+  const groups = path.join(groupsDirectory, "admin.toml");
+  const groupContents =
+    'version = 7\ngroup = "admin"\n[overrides.tools.bash]\nmode = "ask"\nsession_grant = "offer"\n';
+  await assertMissing(groupsDirectory);
+  await mkdir(groupsDirectory, { mode: 0o755 });
+  await writeFile(groups, groupContents, { mode: 0o600 });
   const users = path.join(usersDirectory, "1000.toml");
   await writeFile(unrelated, "keep\n");
   await mkdir(usersDirectory, { mode: 0o755 });
-  await writeFile(users, 'version = 6\nuid = 1000\n\n[overrides.execution]\nbackend = "direct"\n', {
+  await writeFile(users, 'version = 7\nuid = 1000\n\n[overrides.execution]\nbackend = "direct"\n', {
     mode: 0o600,
   });
   run(path.join(release2, "uninstall.sh"), [], { DESTDIR: installRoot });
@@ -304,9 +311,10 @@ try {
   assertEqual(await readFile(unrelated, "utf8"), "keep\n", "unrelated configuration");
   assertEqual(
     await readFile(users, "utf8"),
-    'version = 6\nuid = 1000\n\n[overrides.execution]\nbackend = "direct"\n',
+    'version = 7\nuid = 1000\n\n[overrides.execution]\nbackend = "direct"\n',
     "retained user override",
   );
+  assertEqual(await readFile(groups, "utf8"), groupContents, "retained group override");
   assertEqual(
     await readFile(path.join(etcDirectory, configBackups[0]), "utf8"),
     operatorConfig,
