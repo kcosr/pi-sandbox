@@ -36,12 +36,22 @@ try {
     await readFile(join(runtimeDirectory, "release-manifest.json"), "utf8"),
   );
   const compiledLibexecDirectory = releaseManifest?.layout?.libexecDir;
+  const compiledConfigDirectory = releaseManifest?.layout?.configDir;
   if (
     typeof compiledLibexecDirectory !== "string" ||
     !compiledLibexecDirectory.startsWith("/") ||
     resolve(compiledLibexecDirectory) !== compiledLibexecDirectory
   ) {
     throw new Error("release manifest has an invalid compiled libexec directory");
+  }
+  if (
+    typeof compiledConfigDirectory !== "string" ||
+    !compiledConfigDirectory.startsWith("/") ||
+    resolve(compiledConfigDirectory) !== compiledConfigDirectory ||
+    releaseManifest.layout.configPath !== join(compiledConfigDirectory, "config.toml") ||
+    releaseManifest.layout.defaultModelsPath !== join(compiledConfigDirectory, "models.json")
+  ) {
+    throw new Error("release manifest has an invalid compiled config directory");
   }
   const bubblewrapExecutable = resolveSmokeBubblewrap(
     releaseManifest,
@@ -79,10 +89,10 @@ try {
       "/dev",
       "/dev",
       "--dir",
-      "/etc/pi-sandbox",
+      compiledConfigDirectory,
       "--ro-bind",
       defaultsDirectory,
-      "/etc/pi-sandbox",
+      compiledConfigDirectory,
       "--ro-bind",
       runtimeDirectory,
       compiledLibexecDirectory,
@@ -195,8 +205,8 @@ try {
     (message) => message.type === "extension_ui_request" && message.method === "notify",
   );
   if (
-    !notification?.message.includes("Config:      /etc/pi-sandbox/config.toml") ||
-    !notification.message.includes("Models:      /etc/pi-sandbox/models.json") ||
+    !notification?.message.includes(`Config:      ${releaseManifest.layout.configPath}`) ||
+    !notification.message.includes(`Models:      ${releaseManifest.layout.defaultModelsPath}`) ||
     !notification.message.includes("Extensions:  none") ||
     !notification.message.includes("Identity:    disabled")
   ) {
