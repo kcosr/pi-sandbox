@@ -1,4 +1,4 @@
-import type { ExtensionContext, ToolDefinition } from "@earendil-works/pi-coding-agent";
+import type { ExtensionToolContext, ToolDefinition } from "@earendil-works/pi-coding-agent";
 import { describe, expect, it, vi } from "vitest";
 import { SandboxExecutionError } from "../sandbox/index.js";
 import type { AuditClient, AuditEvent } from "./client.js";
@@ -16,7 +16,11 @@ function fixture(submit?: (event: AuditEvent) => Promise<void>) {
     close: () => Promise.resolve(),
   };
   const auditor = new ToolAuditor(client, "/workspace", "/home/user");
-  const ctx = { sessionManager: { getSessionId: () => session } } as ExtensionContext;
+  const ctx = {
+    sessionManager: { getSessionId: () => session },
+    tools: [],
+    executeTool: () => Promise.reject(new Error("Unexpected nested tool execution in fixture")),
+  } as unknown as ExtensionToolContext;
   const definition = (execute: ToolDefinition["execute"], name = "write") =>
     auditor.wrap({ name, execute } as ToolDefinition, "bubblewrap");
   const invoke = (tool: ToolDefinition, args = {}, signal?: AbortSignal) =>

@@ -453,7 +453,7 @@ function registerTools(
   }
   if (enabled.has("edit")) {
     // The stock edit call renderer performs an unapproved host filesystem preview. Keep every
-    // other 0.84.3 definition field, including prepareArguments and the settled-result renderer.
+    // other Pi 1.0 definition field, including prepareArguments and the settled-result renderer.
     const base = withoutToolFields(createEditToolDefinition(cwd), "execute", "renderCall");
     pi.registerTool({
       ...base,

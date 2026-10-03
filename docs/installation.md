@@ -52,6 +52,8 @@ directory rather than wrapper generations:
   assets/
   export-html/
   photon_rs_bg.wasm
+  native/linux/prebuilds/<platform>/
+    linux-platform-x11.node
   defaults/
     config.toml
     models.json
@@ -98,6 +100,8 @@ The default macOS layout omits both Rust services, their licenses, and systemd u
   assets/
   export-html/
   photon_rs_bg.wasm
+  native/darwin/prebuilds/<platform>/
+    darwin-platform.node
   defaults/
   licenses/
 
@@ -110,6 +114,10 @@ Broker mode may additionally read
 `/etc/pi-sandbox/users.d/*.toml` and `/etc/pi-sandbox/groups.d/*.toml`. The optional live directories and their
 root-owned mode-0600 drop-ins are deliberately absent from the release and are
 never created, replaced, backed up, or removed by the installer or uninstaller.
+
+The executable embeds Pi's image-resize and codemode workers and its QuickJS
+runtime data. Codemode remains disabled by the managed extension policy. The
+adjacent native helper matches the release platform and architecture.
 
 Only assets actually required by the pinned Pi build need to be present. The
 release process inspects the archive against this documented layout and records
@@ -227,7 +235,7 @@ packaged default config must point `models_file` at that layout's
 
 The build produces a native archive for its current Linux or macOS architecture.
 It downloads, or accepts a locally supplied copy of, the official Pi
-0.84.3 source archive pinned in `pi-source.lock.json`. It verifies the recorded
+1.0.0 source archive pinned in `pi-source.lock.json`. It verifies the recorded
 SHA-256 digest, extracts the source into temporary or ignored build storage,
 applies the small patch series in `patches/pi`, compiles Pi plus the separate Pi
 Sandbox extension and selected modules into the Bun application, and

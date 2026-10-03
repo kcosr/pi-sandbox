@@ -7,21 +7,17 @@ const workerMode =
   process.argv.length === 3 && process.argv[2] === INTERNAL_SANDBOX_WORKER_ARGUMENT;
 
 process.title = "pi-sandbox";
-process.env.PI_CODING_AGENT = "true";
-process.env.AI_AGENT = "pi";
 process.emitWarning = () => {};
 
 if (!workerMode) {
-  const [{ registerBunOAuthFlows }, { configureHttpDispatcher }, { restoreSandboxEnv }] =
-    await Promise.all([
-      import("@earendil-works/pi-ai/bun-oauth"),
-      import("../core/http-dispatcher.js"),
-      import("../bun/restore-sandbox-env.js"),
-    ]);
-
-  registerBunOAuthFlows();
-  restoreSandboxEnv();
+  // Restore the environment before Pi 1.0's runtime setup evaluates modules
+  // that capture it, then register Bun OAuth, Bedrock, and the embedded WASM.
+  await import("../bun/sandbox-env-setup.js");
+  await import("../bun/runtime-setup.js");
+  const { configureHttpDispatcher } = await import("../core/http-dispatcher.js");
   configureHttpDispatcher();
-  await import("../bun/register-bedrock.js");
+  process.title = "pi-sandbox";
 }
+process.env.PI_CODING_AGENT = "true";
+process.env.AI_AGENT = "pi";
 await import("./private-cli.js");

@@ -9,13 +9,13 @@ those patches to be reimplemented.
 
 `pi-source.lock.json` records the only admitted upstream source:
 
-| Field                  | Pinned value                                                                             |
-| ---------------------- | ---------------------------------------------------------------------------------------- |
-| Version                | `0.84.3`                                                                                 |
-| Tag                    | `v0.84.3`                                                                                |
-| Commit                 | `4e58f324fae8ebfa98a3d45181fb248072a2afac`                                               |
-| Source archive         | `https://github.com/earendil-works/pi/releases/download/v0.84.3/pi-0.84.3-source.tar.gz` |
-| Source archive SHA-256 | `056f84c467450fb5700ad4df9c8cc669bf7f6046976eed7a19eadbc7553b6500`                       |
+| Field                  | Pinned value                                                                           |
+| ---------------------- | -------------------------------------------------------------------------------------- |
+| Version                | `1.0.0`                                                                                |
+| Tag                    | `v1.0.0`                                                                               |
+| Commit                 | `a13d35a742c6ef8462812a28fbe1d8c8b7431c32`                                             |
+| Source archive         | `https://github.com/earendil-works/pi/releases/download/v1.0.0/pi-1.0.0-source.tar.gz` |
+| Source archive SHA-256 | `89089c82d41759b800124a77e212adaa867caaa9d1269d8012ef0df9bc86b92e`                     |
 
 The build may download that archive or accept the identical archive from a
 local path. It must verify the SHA-256 digest before extraction. It extracts Pi
@@ -25,7 +25,8 @@ committed to this repository or distributed to installed hosts.
 
 Moving any pinned field is an explicit Pi upgrade. A moving branch, version
 range, package-manager resolution, target-host download, or unverified source
-tree is not allowed.
+tree is not allowed. The integration targets Pi 1.0 only; it does not retain
+pre-1.0 API or launch compatibility paths.
 
 ## Product boundary
 
@@ -42,6 +43,8 @@ Sandbox factory through the inline extension-factory option. It must:
 - omit Pi's built-in extension factories;
 - disable and reject user/project extension discovery and explicit extension
   arguments;
+- disable Pi's built-in MCP, codemode, tool-search, and llama extensions and
+  reject the MCP management command;
 - disable Pi's built-in tools and reject any option that restores them;
 - reject Pi package install, remove, update, and configuration commands that
   could introduce executable code;
@@ -148,24 +151,32 @@ global scoped environment.
 
 ## Required Pi patch behavior
 
-Keep the patch series as small and generic as practical. Against Pi 0.84.3 it
+Keep the patch series as small and generic as practical. Against Pi 1.0.0 it
 provides these seams:
 
 1. `main()` accepts a caller-provided model-runtime factory and consistently
    uses it for interactive startup and supported authentication paths.
 2. Model-runtime construction can exclude the internal provider/model catalog
-   without preventing explicitly configured providers from using Pi's trusted
-   provider implementations.
-3. `main()` can omit Pi's built-in extension factories.
-4. The managed interactive distribution rejects `/share` without exporting
+   for every model type, including chat, image, and classifier models, without
+   preventing explicitly configured providers from using Pi's trusted provider
+   implementations. Refresh and provider recomposition must not restore excluded
+   providers or fall back to their built-in catalogs after errors.
+3. The managed interactive distribution rejects `/share` without exporting
    session content or invoking external sharing providers. It does not advertise
    that command; local `/export` remains available.
+
+Pi 1.0's resource loader separates built-in factories from ordinary inline
+factories. The forced `--no-extensions` flag disables the built-in factories and
+user/project discovery while retaining the mandatory Pi Sandbox inline factory.
+No separate `includeBuiltInExtensions` patch or invocation option is needed.
 
 Tests carried in the patch series must prove configured-only model exposure,
 absence of built-in fallback after configuration failure, and use of the
 injected runtime by every retained entry path, and rejection of external session
-sharing without accessing session content. Pi Sandbox tests separately prove
-the forced private-entry-point policy.
+sharing without accessing session content. They also prove that disabling
+extensions keeps the mandatory inline factory while omitting built-in and
+discovered factories. Pi Sandbox tests separately prove the forced
+private-entry-point policy.
 
 Do not solve upstream merge conflicts by adding compatibility aliases or by
 supporting both managed and obsolete launch shapes in Pi Sandbox. Reimplement

@@ -339,7 +339,7 @@ always allowed without a prompt because it is an action directly invoked by the
 user. Both use the configured backend. In direct mode they run as the current
 user without filesystem or network containment.
 
-Pi SDK 0.84.3 does not expose live `user_shell` replacement progress without
+Pi 1.0's `user_bash` replacement-result API does not expose live progress without
 using its stock operations, whose truncation path writes an artifact to host
 temporary storage. Pi Sandbox intentionally returns one final bounded, sanitized
 user-shell result instead. Model Bash retains ordinary tool update rendering;

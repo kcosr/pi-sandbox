@@ -1,4 +1,12 @@
-const MANAGED_COMMANDS = new Set(["config", "install", "list", "remove", "uninstall", "update"]);
+const MANAGED_COMMANDS = new Set([
+  "config",
+  "install",
+  "list",
+  "mcp",
+  "remove",
+  "uninstall",
+  "update",
+]);
 
 const RESERVED_ARGUMENTS = new Set([
   "--extension",
@@ -19,7 +27,7 @@ export class UnsafeManagedArgumentError extends Error {
   }
 }
 
-/** Reject caller input that could alter trusted code loading or enter Pi's package manager. */
+/** Reject caller input that could alter trusted code loading or manage packages or MCP servers. */
 export function validateManagedArguments(args: readonly string[]): void {
   const command = args[0];
   if (command !== undefined && MANAGED_COMMANDS.has(command)) {
