@@ -51,8 +51,8 @@ function rooted(root: string, absolutePath: string): string {
 describe("administrative configuration", () => {
   it("enforces the execution backend's platform contract", () => {
     const config = {
-      configVersion: 6,
-      filesystem: { cwdWritable: true },
+      configVersion: 7,
+      filesystem: { cwdWritable: true, hiddenPaths: [] },
       audit: { enabled: false, facility: "local0" },
       modelsFile: "/etc/pi-sandbox/models.json",
       execution: { backend: "bubblewrap" },
@@ -69,13 +69,27 @@ describe("administrative configuration", () => {
           ...config,
           execution: { backend: "direct" },
           network: { mode: "host" },
-          filesystem: { cwdWritable: false },
+          filesystem: { cwdWritable: true, hiddenPaths: ["/srv/runs"] },
+        },
+        "linux",
+      ),
+    ).toThrow("Direct execution requires filesystem.hidden_paths = []");
+    expect(() =>
+      assertExecutionPlatform(
+        {
+          ...config,
+          execution: { backend: "direct" },
+          network: { mode: "host" },
+          filesystem: { cwdWritable: false, hiddenPaths: [] },
         },
         "linux",
       ),
     ).toThrow("Direct execution requires filesystem.cwd_writable = true");
     expect(() =>
-      assertExecutionPlatform({ ...config, filesystem: { cwdWritable: false } }, "linux"),
+      assertExecutionPlatform(
+        { ...config, filesystem: { cwdWritable: false, hiddenPaths: [] } },
+        "linux",
+      ),
     ).not.toThrow();
 
     expect(() => assertExecutionPlatform(config, "darwin")).toThrow(
@@ -226,8 +240,8 @@ describe("administrative configuration", () => {
     ]);
     const allow = { audit: false, mode: "allow", sessionGrant: "never" } as const;
     const config = {
-      configVersion: 6,
-      filesystem: { cwdWritable: true },
+      configVersion: 7,
+      filesystem: { cwdWritable: true, hiddenPaths: [] },
       audit: { enabled: false, facility: "local0" },
       modelsFile: "/etc/pi-sandbox/models.json",
       execution: { backend: "bubblewrap" },
@@ -406,6 +420,22 @@ describe("administrative configuration", () => {
     );
   });
 
+  it.each(["/proc", "/tmp"])(
+    "rejects the reserved hidden path %s during installation validation",
+    async (hiddenPath) => {
+      const root = await createRoot();
+      const configPath = rooted(root, "/etc/pi-sandbox/config.toml");
+      const config = await readFile(configPath, "utf8");
+      await writeFile(
+        configPath,
+        config.replace("hidden_paths = []", `hidden_paths = ["${hiddenPath}"]`),
+      );
+      await expect(validateAdministrativeConfiguration(root)).rejects.toThrow(
+        "config.filesystem.hidden_paths must not overlap private system paths or hide /tmp",
+      );
+    },
+  );
+
   it("rejects read-only direct execution after applying identity overrides", async () => {
     const root = await createRoot();
     const configPath = rooted(root, "/etc/pi-sandbox/config.toml");
@@ -449,6 +479,31 @@ describe("administrative configuration", () => {
       ),
     ).rejects.toThrow();
     expect(environment).toEqual({ MODEL_TOKEN: "ambient", UNRELATED: "preserved" });
+  });
+
+  it("keeps hidden paths when a broker changes CWD permission and rejects direct execution", async () => {
+    const root = await createRoot();
+    const configPath = rooted(root, "/etc/pi-sandbox/config.toml");
+    const config = await readFile(configPath, "utf8");
+    await writeFile(
+      configPath,
+      config
+        .replace('mode = "disabled"', 'mode = "broker"')
+        .replace("hidden_paths = []", 'hidden_paths = ["/srv/runs"]'),
+    );
+    await expect(
+      resolveEffectiveAdministrativeConfiguration(root, {}, () =>
+        Promise.resolve({
+          environment: { pi: {}, sandbox: {}, extensions: {} },
+          overrides: {
+            execution: { backend: "direct" },
+            network: { mode: "host" },
+            filesystem: { cwdWritable: true },
+            tools: {},
+          },
+        }),
+      ),
+    ).rejects.toThrow("Direct execution requires filesystem.hidden_paths = []");
   });
 
   it("overrides a caller-supplied user models path with the administrative path", async () => {

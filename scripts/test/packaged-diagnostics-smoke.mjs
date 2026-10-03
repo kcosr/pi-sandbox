@@ -227,11 +227,15 @@ try {
   const notification = messages.find(
     (message) => message.type === "extension_ui_request" && message.method === "notify",
   );
+  const hasField = (name, value) =>
+    notification?.message
+      .split("\n")
+      .some((line) => line.startsWith(`${name}:`) && line.slice(name.length + 1).trim() === value);
   if (
-    !notification?.message.includes(`Config:      ${expectedConfigPath}`) ||
-    !notification.message.includes(`Models:      ${expectedModelsPath}`) ||
-    !notification.message.includes("Extensions:  none") ||
-    !notification.message.includes("Identity:    disabled")
+    !hasField("Config", expectedConfigPath) ||
+    !hasField("Models", expectedModelsPath) ||
+    !hasField("Extensions", "none") ||
+    !hasField("Identity", "disabled")
   ) {
     throw new Error("/sandbox did not report the isolated packaged smoke configuration");
   }

@@ -41,6 +41,7 @@ export type ExecutionBackend = (typeof EXECUTION_BACKENDS)[number];
 
 export interface FilesystemConfig {
   readonly cwdWritable: boolean;
+  readonly hiddenPaths: readonly string[];
 }
 
 export interface ExecutionConfig {
@@ -94,7 +95,7 @@ export interface IdentityOverrides {
   readonly modelsFile?: string;
   readonly execution?: ExecutionConfig;
   readonly network?: NetworkConfig;
-  readonly filesystem?: FilesystemConfig;
+  readonly filesystem?: Pick<FilesystemConfig, "cwdWritable">;
   readonly tools: Readonly<Partial<Record<string, SubjectPolicy>>>;
 }
 
@@ -107,7 +108,7 @@ export interface ManagedEnvironment {
 }
 
 export interface SandboxConfig {
-  readonly configVersion: 6;
+  readonly configVersion: 7;
   readonly audit: AuditConfig;
   readonly modelsFile: string;
   readonly execution: ExecutionConfig;

@@ -1,5 +1,18 @@
 export const MAXIMUM_ADMINISTRATIVE_PATH_BYTES = 4096;
 
+export const PRIVATE_SANDBOX_SYSTEM_PATHS = Object.freeze(["/proc", "/sys", "/dev", "/run"]);
+
+/** Host-independent exclusions for an otherwise normalized absolute hidden path. */
+export function isReservedHiddenDirectoryPath(value: string): boolean {
+  return (
+    value === "/" ||
+    value === "/tmp" ||
+    PRIVATE_SANDBOX_SYSTEM_PATHS.some(
+      (reserved) => value === reserved || value.startsWith(`${reserved}/`),
+    )
+  );
+}
+
 export function isNormalizedAbsoluteFilePath(value: unknown): value is string {
   if (
     typeof value !== "string" ||

@@ -70,8 +70,8 @@ function config(
   overrides: Partial<Record<ToolName, "allow" | "ask" | "deny" | "disabled">> = {},
 ): SandboxConfig {
   return {
-    configVersion: 6,
-    filesystem: { cwdWritable: true },
+    configVersion: 7,
+    filesystem: { cwdWritable: true, hiddenPaths: [] },
     audit: { enabled: false, facility: "local0" },
     modelsFile: "/etc/pi-sandbox/models.json",
     execution: { backend: "bubblewrap" },
@@ -662,9 +662,9 @@ describe("Pi Sandbox extension", () => {
     });
     await command?.handler("", ctx as never);
     expect(notices.at(-1)?.message).toContain("Pi Sandbox: initialized");
-    expect(notices.at(-1)?.message).toContain("Config:      /etc/pi-sandbox/config.toml");
-    expect(notices.at(-1)?.message).toContain("Extensions:  none");
-    expect(notices.at(-1)?.message).toContain("User state:  /home/test/.pi/agent");
+    expect(notices.at(-1)?.message).toContain("Config:        /etc/pi-sandbox/config.toml");
+    expect(notices.at(-1)?.message).toContain("Extensions:    none");
+    expect(notices.at(-1)?.message).toContain("User state:    /home/test/.pi/agent");
 
     await command?.handler("mounts", ctx as never);
     expect(notices.at(-1)?.message).toContain("/work/project  read/write  host launch directory");

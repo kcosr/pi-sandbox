@@ -5,10 +5,10 @@ import { formatSandboxMounts, formatSandboxPolicy, formatSandboxSummary } from "
 
 function diagnosticConfig(): SandboxConfig {
   return {
-    configVersion: 6,
+    configVersion: 7,
     audit: { enabled: false, facility: "local0" },
     modelsFile: "/etc/pi-sandbox/models.json",
-    filesystem: { cwdWritable: true },
+    filesystem: { cwdWritable: true, hiddenPaths: [] },
     execution: { backend: "bubblewrap" },
     identity: { mode: "disabled" },
     network: { mode: "none" },
@@ -35,7 +35,7 @@ describe("sandbox diagnostics", () => {
         cwd: "/work/project",
         configPath: "/etc/pi-sandbox/config.toml",
         modelsFile: "/etc/pi-sandbox/models.json",
-        filesystem: { cwdWritable: true },
+        filesystem: { cwdWritable: true, hiddenPaths: [] },
         execution: { backend: "bubblewrap" },
         identity: { mode: "disabled" },
         network: { mode: "none" },
@@ -44,16 +44,17 @@ describe("sandbox diagnostics", () => {
       }),
     ).toBe(`Pi Sandbox: initialized
 
-Launch CWD:  /work/project
-CWD access:  read/write
-Lifetime:    pi-sandbox process
-Execution:   Bubblewrap sandbox
-Network:     disabled (private namespace)
-Config:      /etc/pi-sandbox/config.toml
-Models:      /etc/pi-sandbox/models.json
-Extensions:  none
-Identity:    disabled
-User state:  /home/alice/.pi/agent
+Launch CWD:    /work/project
+Hidden paths:  none
+CWD access:    read/write
+Lifetime:      pi-sandbox process
+Execution:     Bubblewrap sandbox
+Network:       disabled (private namespace)
+Config:        /etc/pi-sandbox/config.toml
+Models:        /etc/pi-sandbox/models.json
+Extensions:    none
+Identity:      disabled
+User state:    /home/alice/.pi/agent
 
 Use /sandbox mounts or /sandbox policy for details.`);
   });
@@ -64,7 +65,7 @@ Use /sandbox mounts or /sandbox policy for details.`);
       cwd: "/work/project\nNetwork: enabled",
       configPath: "/etc/pi-sandbox/config.toml",
       modelsFile: "/etc/pi-sandbox/models\u001b[31m.json",
-      filesystem: { cwdWritable: true },
+      filesystem: { cwdWritable: true, hiddenPaths: [] },
       execution: { backend: "bubblewrap" },
       identity: { mode: "broker" },
       network: { mode: "host" },
@@ -74,7 +75,7 @@ Use /sandbox mounts or /sandbox policy for details.`);
     expect(output).toContain("/work/project\\u000aNetwork: enabled");
     expect(output).toContain("models\\u001b[31m.json");
     expect(output).toContain("broker via /run/pi-sandbox-identity/broker.sock");
-    expect(output).toContain("Extensions:  git, service-api");
+    expect(output).toContain("Extensions:    git, service-api");
     expect(output).toContain("/home/alice\\u2028forged");
     expect(output).not.toContain("/work/project\nNetwork: enabled");
     expect(output).not.toContain("\u001b");
@@ -85,7 +86,7 @@ Use /sandbox mounts or /sandbox policy for details.`);
     const output = formatSandboxMounts(
       "/work/project",
       { backend: "bubblewrap" },
-      { cwdWritable: true },
+      { cwdWritable: true, hiddenPaths: [] },
     );
     expect(output).toContain("Sandbox mounts");
     expect(output).toContain("/              read-only   host filesystem");
@@ -95,7 +96,7 @@ Use /sandbox mounts or /sandbox policy for details.`);
   });
 
   it("reports read-only CWD and keeps managed host tools outside that restriction", () => {
-    const config = { ...diagnosticConfig(), filesystem: { cwdWritable: false } };
+    const config = { ...diagnosticConfig(), filesystem: { cwdWritable: false, hiddenPaths: [] } };
     const mounts = formatSandboxMounts("/work/project", config.execution, config.filesystem);
     expect(mounts).toContain("/work/project  read-only");
     expect(mounts).toContain("Only private temporary/runtime storage is writable");
@@ -117,6 +118,23 @@ Use /sandbox mounts or /sandbox policy for details.`);
       "write",
     );
     expect(host).toContain("Is not restricted by the Bubblewrap boundary, its filesystem setting");
+  });
+
+  it("reports hidden directory masks and their tool scope", () => {
+    const config = {
+      ...diagnosticConfig(),
+      filesystem: { cwdWritable: true, hiddenPaths: ["/work", "/work/project/private"] },
+    };
+    const mounts = formatSandboxMounts("/work/project", config.execution, config.filesystem);
+    expect(mounts).toContain("/work");
+    expect(mounts).toContain("/work/project/private");
+    expect(mounts).toContain("hidden host directory (private mask)");
+    expect(
+      formatSandboxPolicy(
+        { config, hasSessionGrant: () => false, isToolActive: () => true },
+        "bash",
+      ),
+    ).toContain("Configured hidden directories are masked");
   });
 
   it("reports configured modes, session options, and memory-only active grants", () => {
@@ -160,7 +178,7 @@ Use /sandbox mounts or /sandbox policy for details.`);
       extensions: [],
       userStateDir: "/home/alice/.pi/agent",
     });
-    expect(summary).toContain("Network:     host (unrestricted)");
+    expect(summary).toContain("Network:       host (unrestricted)");
 
     const detail = formatSandboxPolicy(
       { config, hasSessionGrant: () => false, isToolActive: () => true },
@@ -187,7 +205,7 @@ Use /sandbox mounts or /sandbox policy for details.`);
       extensions: [],
       userStateDir: "/Users/alice/.pi/agent",
     });
-    expect(summary).toContain("Execution:   direct host execution (uncontained)");
+    expect(summary).toContain("Execution:     direct host execution (uncontained)");
     expect(formatSandboxMounts("/work/project", config.execution, config.filesystem)).toContain(
       "no mount namespace or filesystem containment boundary",
     );

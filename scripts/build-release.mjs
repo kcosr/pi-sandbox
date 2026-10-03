@@ -309,6 +309,7 @@ const REQUIRED_BUBBLEWRAP_OPTIONS = Object.freeze([
   "--assert-userns-disabled",
   "--json-status-fd",
   "--seccomp",
+  "--remount-ro",
 ]);
 
 async function validateBundledBubblewrap(bubblewrap, architecture) {

@@ -315,14 +315,15 @@ There is no implicit configuration replacement. This supports both complete
 archive deployments and systems where Salt or another configuration manager
 owns `/etc/pi-sandbox`.
 
-The installed configuration must include the
+The installed configuration uses `config_version = 7` and must include the
 `[audit]`, `[execution]`, `[filesystem]`, and `[extensions]` tables, an `audit` boolean on every
-base tool policy, and explicit `[environment.pi]`,
+base tool policy, explicit `filesystem.hidden_paths` (empty by default), and explicit `[environment.pi]`,
 `[environment.sandbox]`, and `[environment.extensions]` tables, even when the
 environment tables are empty. Set `execution.backend = "bubblewrap"` on Linux
 for containment, or `execution.backend = "direct"` on Linux/macOS for
 policy-gated execution in the user's host security context. Direct mode also
-requires `network.mode = "host"` and `filesystem.cwd_writable = true`; macOS
+requires `network.mode = "host"`, `filesystem.cwd_writable = true`, and
+`filesystem.hidden_paths = []`; macOS
 requires disabled identity. If a
 preserved site configuration does not satisfy the current schema, update the
 site-managed TOML first or use `--replace-config` to install the packaged
@@ -336,7 +337,7 @@ explicit permissions combine using least restrictive wins before overlaying defa
 match, the main configuration remains unchanged. An
 execution override may select `bubblewrap` or `direct`; the final effective
 configuration must still pair `direct` with `network.mode = "host"` and
-`filesystem.cwd_writable = true`.
+`filesystem.cwd_writable = true` with empty `filesystem.hidden_paths`.
 
 See [Models and authentication](models.md) for the distinction between the
 active catalog and packaged defaults, API-key resolution, and model

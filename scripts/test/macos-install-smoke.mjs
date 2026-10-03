@@ -166,7 +166,7 @@ shift
 root=
 if [ "\${1:-}" = --root ]; then root=$2; shift 2; fi
 [ "$#" -eq 0 ]
-grep -q '^config_version = 6$' "$root/etc/pi-sandbox/config.toml"
+grep -q '^config_version = 7$' "$root/etc/pi-sandbox/config.toml"
 grep -q '"providers"' "$root/etc/pi-sandbox/models.json"
 case "$operation" in
   --validate-installation) ;;
@@ -178,7 +178,7 @@ esac
   );
   await writeFile(
     join(payload, "defaults/config.toml"),
-    'config_version = 6\nmodels_file = "/etc/pi-sandbox/models.json"\n\n[audit]\nenabled = false\nfacility = "local0"\n\n[filesystem]\ncwd_writable = true\n\n[execution]\nbackend = "direct"\n\n[identity]\nmode = "disabled"\n\n[network]\nmode = "host"\n\n[environment.pi]\n\n[environment.sandbox]\n\n[environment.extensions]\n\n[extensions]\n',
+    'config_version = 7\nmodels_file = "/etc/pi-sandbox/models.json"\n\n[audit]\nenabled = false\nfacility = "local0"\n\n[filesystem]\ncwd_writable = true\nhidden_paths = []\n\n[execution]\nbackend = "direct"\n\n[identity]\nmode = "disabled"\n\n[network]\nmode = "host"\n\n[environment.pi]\n\n[environment.sandbox]\n\n[environment.extensions]\n\n[extensions]\n',
   );
   await writeFile(join(payload, "defaults/models.json"), '{"providers":{}}\n');
   await writeFile(join(payload, "package.json"), '{"name":"pi-sandbox"}\n');

@@ -4,10 +4,60 @@ import {
   assertSandboxCwd,
   buildBubblewrapArguments,
   describeBubblewrapMounts,
+  planHiddenDirectories,
   safeSandboxEnvironment,
 } from "./bubblewrap-policy.js";
 
 describe("Bubblewrap policy", () => {
+  it("orders private masks around CWD restoration and freezes them non-recursively", () => {
+    const hidden = [
+      "/srv/runs/a/private/nested",
+      "/srv/runs/b",
+      "/srv/runs/a/private",
+      "/srv/runs",
+      "/srv/transcripts",
+      "/srv/runs/a/..cache",
+    ];
+    const masks = planHiddenDirectories("/srv/runs/a", hidden);
+    expect(masks).toEqual({
+      beforeCwd: ["/srv/runs", "/srv/transcripts"],
+      afterCwd: ["/srv/runs/a/..cache", "/srv/runs/a/private"],
+    });
+    const args = buildBubblewrapArguments("/srv/runs/a", ["/bin/true"], "none", {}, true, hidden);
+    const cwdMount = sequenceIndex(args, ["--bind", "/srv/runs/a", "/srv/runs/a"]);
+    expect(sequenceIndex(args, ["--tmpfs", "/srv/runs"])).toBeLessThan(cwdMount);
+    expect(sequenceIndex(args, ["--tmpfs", "/srv/runs/a/private"])).toBeGreaterThan(cwdMount);
+    expect(sequenceIndex(args, ["--remount-ro", "/srv/runs"])).toBeGreaterThan(
+      sequenceIndex(args, ["--tmpfs", "/srv/runs/a/private"]),
+    );
+    expect(planHiddenDirectories("/srv/run", ["/srv/runs"])).toEqual({
+      beforeCwd: ["/srv/runs"],
+      afterCwd: [],
+    });
+    expect(describeBubblewrapMounts("/srv/runs/a", true, hidden)).toContainEqual({
+      target: "/srv/runs/a/private",
+      access: "read-only",
+      content: "hidden host directory (private mask)",
+    });
+  });
+
+  it.each([
+    "/",
+    "relative",
+    "/srv/runs/a",
+    "/proc",
+    "/sys",
+    "/dev/shm",
+    "/run",
+    "/run/pi-sandbox",
+    "/tmp",
+    "/srv/../runs",
+  ])("rejects an unsafe hidden path: %s", (target) => {
+    expect(() =>
+      buildBubblewrapArguments("/srv/runs/a", ["/bin/true"], "none", {}, true, [target]),
+    ).toThrow();
+  });
+
   it("preserves absolute paths and overlays only the launch directory writable", () => {
     const args = buildBubblewrapArguments("/home/person/project", ["/bin/echo", "hello"]);
 

@@ -25,7 +25,7 @@ function completeConfig(
     (toolName) =>
       `[tools.${toolName}]\naudit = false\n${overrides[toolName] ?? 'mode = "allow"\nsession_grant = "never"'}`,
   );
-  return `config_version = 6\nmodels_file = "/etc/pi-sandbox/models.json"\n\n[audit]\nenabled = false\nfacility = "local0"\n\n[filesystem]\ncwd_writable = true\n\n[execution]\nbackend = "bubblewrap"\n\n[identity]\nmode = "disabled"\n\n[network]\nmode = "none"\n\n[environment.pi]\n\n[environment.sandbox]\n\n[environment.extensions]\n\n[extensions]\n\n${sections.join("\n\n")}\n`;
+  return `config_version = 7\nmodels_file = "/etc/pi-sandbox/models.json"\n\n[audit]\nenabled = false\nfacility = "local0"\n\n[filesystem]\ncwd_writable = true\nhidden_paths = []\n\n[execution]\nbackend = "bubblewrap"\n\n[identity]\nmode = "disabled"\n\n[network]\nmode = "none"\n\n[environment.pi]\n\n[environment.sandbox]\n\n[environment.extensions]\n\n[extensions]\n\n${sections.join("\n\n")}\n`;
 }
 
 function parseConfig(
@@ -48,8 +48,8 @@ describe("parseConfig", () => {
     );
 
     expect(config).toEqual({
-      configVersion: 6,
-      filesystem: { cwdWritable: true },
+      configVersion: 7,
+      filesystem: { cwdWritable: true, hiddenPaths: [] },
       audit: { enabled: false, facility: "local0" },
       modelsFile: "/etc/pi-sandbox/models.json",
       execution: { backend: "bubblewrap" },
@@ -75,10 +75,10 @@ describe("parseConfig", () => {
   it("requires a strict filesystem policy and rejects unenforceable direct access", () => {
     const source = completeConfig();
     const readonly = source.replace("cwd_writable = true", "cwd_writable = false");
-    expect(parseConfig(readonly).filesystem).toEqual({ cwdWritable: false });
+    expect(parseConfig(readonly).filesystem).toEqual({ cwdWritable: false, hiddenPaths: [] });
     expect(Object.isFrozen(parseConfig(readonly).filesystem)).toBe(true);
     for (const invalid of [
-      source.replace("[filesystem]\ncwd_writable = true\n\n", ""),
+      source.replace("[filesystem]\ncwd_writable = true\nhidden_paths = []\n\n", ""),
       source.replace("cwd_writable = true", ""),
       source.replace("cwd_writable = true", 'cwd_writable = "false"'),
       source.replace("cwd_writable = true", "cwd_writable = 0"),
@@ -131,6 +131,67 @@ describe("parseConfig", () => {
     }
   });
 
+  it("requires explicit unique normalized hidden paths and rejects direct mode", () => {
+    const source = completeConfig();
+    for (const replacement of [
+      "",
+      'hidden_paths = "path"',
+      'hidden_paths = ["relative"]',
+      'hidden_paths = ["/"]',
+      'hidden_paths = ["/a/../b"]',
+      'hidden_paths = ["/a/"]',
+      'hidden_paths = ["/a", "/a"]',
+      "hidden_paths = [1]",
+    ]) {
+      expect(() => parseConfig(source.replace("hidden_paths = []", replacement))).toThrow(
+        ConfigError,
+      );
+    }
+    const configured = source.replace(
+      "hidden_paths = []",
+      'hidden_paths = ["/srv/runs", "/srv/transcripts"]',
+    );
+    expect(parseConfig(configured).filesystem.hiddenPaths).toEqual([
+      "/srv/runs",
+      "/srv/transcripts",
+    ]);
+    expect(Object.isFrozen(parseConfig(configured).filesystem.hiddenPaths)).toBe(true);
+    expect(() =>
+      parseConfig(
+        configured
+          .replace('backend = "bubblewrap"', 'backend = "direct"')
+          .replace('mode = "none"', 'mode = "host"'),
+      ),
+    ).toThrow("config.filesystem.hidden_paths must be empty");
+    expect(() => parseConfig(source.replace("config_version = 7", "config_version = 6"))).toThrow(
+      "integer 7",
+    );
+  });
+
+  it.each([
+    "/proc",
+    "/proc/self",
+    "/sys",
+    "/sys/kernel",
+    "/dev",
+    "/dev/shm",
+    "/run",
+    "/run/private",
+    "/tmp",
+  ])("rejects a reserved hidden path during configuration validation: %s", (target) => {
+    expect(() =>
+      parseConfig(completeConfig().replace("hidden_paths = []", `hidden_paths = ["${target}"]`)),
+    ).toThrow("config.filesystem.hidden_paths must not overlap private system paths or hide /tmp");
+  });
+
+  it("permits private-path name lookalikes and /tmp descendants without probing the host", () => {
+    const paths = ["/devices", "/process", "/runner", "/systems", "/tmp/runs"];
+    const config = parseConfig(
+      completeConfig().replace("hidden_paths = []", `hidden_paths = ${JSON.stringify(paths)}`),
+    );
+    expect(config.filesystem.hiddenPaths).toEqual(paths);
+  });
+
   it("rejects malformed TOML without returning a partial policy", () => {
     expect(() => parseConfig("config_version = [", "broken.toml")).toThrowError(
       new ConfigError("broken.toml", ["TOML syntax is invalid"]),
@@ -139,11 +200,11 @@ describe("parseConfig", () => {
 
   it("rejects unsupported config versions and types", () => {
     expect(() =>
-      parseConfig(completeConfig().replace("config_version = 6", 'config_version = "6"')),
-    ).toThrow("config.config_version must be the integer 6");
+      parseConfig(completeConfig().replace("config_version = 7", 'config_version = "6"')),
+    ).toThrow("config.config_version must be the integer 7");
     expect(() =>
-      parseConfig(completeConfig().replace("config_version = 6", "config_version = 4")),
-    ).toThrow("config.config_version must be the integer 6");
+      parseConfig(completeConfig().replace("config_version = 7", "config_version = 4")),
+    ).toThrow("config.config_version must be the integer 7");
   });
 
   it("requires models_file to be a normalized absolute file path", () => {
@@ -176,7 +237,7 @@ describe("parseConfig", () => {
   it("rejects unknown fields at every schema level", () => {
     expect(() =>
       parseConfig(
-        completeConfig().replace("config_version = 6", "config_version = 6\nunexpected = true"),
+        completeConfig().replace("config_version = 7", "config_version = 7\nunexpected = true"),
       ),
     ).toThrow("config.unexpected is not a recognized field");
     expect(() =>
@@ -314,12 +375,12 @@ describe("parseConfig", () => {
   });
 
   it("rejects missing root fields and tables with the wrong shape", () => {
-    expect(() => parseConfig(completeConfig().replace("config_version = 6\n", ""))).toThrow(
+    expect(() => parseConfig(completeConfig().replace("config_version = 7\n", ""))).toThrow(
       "config.config_version is required",
     );
     expect(() =>
       parseConfig(
-        'config_version = 6\nmodels_file = "/etc/pi-sandbox/models.json"\nexecution = "direct"\nidentity = "disabled"\nnetwork = "none"\nextensions = "none"\ntools = "all"\n',
+        'config_version = 7\nmodels_file = "/etc/pi-sandbox/models.json"\nexecution = "direct"\nidentity = "disabled"\nnetwork = "none"\nextensions = "none"\ntools = "all"\n',
       ),
     ).toThrow("config.tools must be a table");
     expect(() =>
@@ -353,7 +414,7 @@ describe("parseConfig", () => {
     expect(() =>
       parseConfig(
         completeConfig().replace(
-          '[audit]\nenabled = false\nfacility = "local0"\n\n[filesystem]\ncwd_writable = true\n\n[execution]\nbackend = "bubblewrap"\n\n',
+          '[audit]\nenabled = false\nfacility = "local0"\n\n[filesystem]\ncwd_writable = true\nhidden_paths = []\n\n[execution]\nbackend = "bubblewrap"\n\n',
           "",
         ),
       ),
@@ -431,8 +492,8 @@ describe("loadConfig", () => {
     await writeFile(path, completeConfig(), "utf8");
 
     await expect(loadConfig(path, EMPTY_EXTENSION_CATALOG)).resolves.toMatchObject({
-      configVersion: 6,
-      filesystem: { cwdWritable: true },
+      configVersion: 7,
+      filesystem: { cwdWritable: true, hiddenPaths: [] },
       audit: { enabled: false, facility: "local0" },
     });
   });

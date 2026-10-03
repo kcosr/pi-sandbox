@@ -111,6 +111,7 @@ describe("broker response", () => {
       { cwd_writable: "false" },
       { cwd_writable: 0 },
       { cwd_writable: true, extra: true },
+      { cwd_writable: true, hidden_paths: [] },
       { cwdWritable: true },
     ]) {
       expect(() => parseBrokerResponse(response(filesystem))).toThrow();
@@ -297,8 +298,8 @@ describe("identity overrides", () => {
   it("atomically replaces selected tools and inherits all omitted values", () => {
     const basePolicy = { audit: true, mode: "allow", sessionGrant: "never" } as const;
     const base = {
-      configVersion: 6,
-      filesystem: { cwdWritable: true },
+      configVersion: 7,
+      filesystem: { cwdWritable: true, hiddenPaths: ["/srv/runs"] },
       audit: { enabled: false, facility: "local0" },
       modelsFile: "/etc/pi-sandbox/models.json",
       execution: { backend: "bubblewrap" },
@@ -345,12 +346,12 @@ describe("identity overrides", () => {
     });
     expect(effective.tools.read).toBe(basePolicy);
     expect(effective.audit).toBe(base.audit);
-    expect(effective.filesystem).toBe(base.filesystem);
+    expect(effective.filesystem).toEqual(base.filesystem);
     const restricted = applyIdentityOverrides(base, {
       filesystem: { cwdWritable: false },
       tools: {},
     });
-    expect(restricted.filesystem).toEqual({ cwdWritable: false });
+    expect(restricted.filesystem).toEqual({ cwdWritable: false, hiddenPaths: ["/srv/runs"] });
     expect(restricted.execution).toBe(base.execution);
     const direct = applyIdentityOverrides(restricted, {
       execution: { backend: "direct" },
@@ -358,7 +359,7 @@ describe("identity overrides", () => {
       filesystem: { cwdWritable: true },
       tools: {},
     });
-    expect(direct.filesystem).toEqual({ cwdWritable: true });
+    expect(direct.filesystem).toEqual({ cwdWritable: true, hiddenPaths: ["/srv/runs"] });
     expect(direct.execution).toEqual({ backend: "direct" });
     expect(effective.identity).toBe(base.identity);
     expect(effective.extensions).toBe(base.extensions);

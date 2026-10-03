@@ -35,7 +35,7 @@ reimplemented rather than mechanically reapplied.
   an absolute system Bubblewrap executable or a verified bundled executable;
   runtime configuration cannot change that provider.
 - Preserve host absolute paths inside the sandbox.
-- Present the ordinary host filesystem read-only and explicitly bind the launch CWD at the identical path, read/write or read-only according to `filesystem.cwd_writable`. Preserve private writable runtime/temp locations; reject read-only CWD access with direct execution or CWD exactly `/tmp`.
+- Present the ordinary host filesystem read-only except main-policy `filesystem.hidden_paths`, which masks canonical existing directories with private read-only filesystems. Restore only the launch CWD through hidden ancestors at its identical path, read/write or read-only according to `filesystem.cwd_writable`, then honor explicit hidden descendants. User/group overrides cannot erase masks. Preserve private writable runtime/temp locations; reject hidden paths in direct mode and read-only CWD access with direct execution or CWD exactly `/tmp`.
 - Default Bubblewrap tool and shell networking to an isolated namespace with
   socket creation denied. Permit only the explicit administrator-selected
   `host` mode, which shares the complete host network namespace; provide no

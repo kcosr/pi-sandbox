@@ -52,12 +52,12 @@ const SANDBOX_SUBJECT_SCOPES: Readonly<Record<string, readonly string[]>> = Obje
   ],
   bash: [
     "Runs model-requested Bash inside the same sandbox.",
-    "May read the host filesystem and write inside the launch directory and private runtime filesystems.",
+    "May read visible host paths and write inside the launch directory and private runtime filesystems.",
     "Structured tool policies do not further restrict an approved Bash command.",
   ],
   user_shell: [
     "Runs user-invoked ! shell commands inside the same sandbox.",
-    "May read the host filesystem and write inside the launch directory and private runtime filesystems.",
+    "May read visible host paths and write inside the launch directory and private runtime filesystems.",
     "Structured tool policies do not further restrict an approved shell command.",
   ],
 });
@@ -65,6 +65,10 @@ const SANDBOX_SUBJECT_SCOPES: Readonly<Record<string, readonly string[]>> = Obje
 export function formatSandboxSummary(input: SandboxSummaryInput): string {
   const rows: Array<readonly [string, string]> = [
     ["Launch CWD", input.cwd],
+    [
+      "Hidden paths",
+      input.filesystem.hiddenPaths.length === 0 ? "none" : input.filesystem.hiddenPaths.join(", "),
+    ],
     [
       "CWD access",
       input.execution.backend === "direct"
@@ -96,7 +100,7 @@ export function formatSandboxMounts(
   if (execution.backend === "direct") {
     return "Execution mounts\n\nDirect execution uses the ordinary host filesystem as the current user.\nThere is no mount namespace or filesystem containment boundary.";
   }
-  const mounts = describeBubblewrapMounts(cwd, filesystem.cwdWritable);
+  const mounts = describeBubblewrapMounts(cwd, filesystem.cwdWritable, filesystem.hiddenPaths);
   const table = formatTable(
     ["TARGET", "ACCESS", "CONTENT"],
     mounts.map((mount) => [mount.target, mount.access, mount.content]),
@@ -182,6 +186,11 @@ function subjectScope(input: PolicyDiagnosticInput, subject: string): readonly s
   }
   return [
     ...sandboxSubjectScope(subject, input.config.filesystem.cwdWritable),
+    ...(input.config.filesystem.hiddenPaths.length > 0
+      ? [
+          "Configured hidden directories are masked, including explicit hidden paths inside the launch directory.",
+        ]
+      : []),
     networkScope(input.config.network),
   ];
 }

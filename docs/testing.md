@@ -36,6 +36,8 @@ unavailable namespaces.
 - strict offline and host network modes;
 - required CWD write-access configuration, parent inheritance and user/group overrides,
   with direct/read-only rejection before and after override application;
+- schema-7 required hidden paths, strict path syntax and uniqueness, immutable
+  main-policy inheritance, direct-mode rejection, and mount ordering around CWD;
 - all required model-tool policies and unknown-field rejection;
 - mode and session-grant decisions;
 - memory-only grants scoped by approval subject;
@@ -106,6 +108,11 @@ prove kernel-observable properties:
 - read-only `/tmp`-based workspaces remain visible, and private `/tmp` and `/run`
   remain writable without creating corresponding host files;
 - read-only CWD exactly `/tmp` is rejected before worker startup;
+- hidden runs parents restore only the launch CWD, with sibling/transcript/interior
+  contents inaccessible through absolute paths, `..`, and symlinks;
+- hidden masks remain read-only even after attempted chmod, while restored CWD
+  honors writable/read-only policy and ordinary utilities remain available;
+- missing hidden directories, files, and symlink entries/ancestors fail startup;
 - `/tmp` is writable, private from host `/tmp`, and persistent between calls in
   one Pi process;
 - commands are serialized through one stable sandbox namespace;

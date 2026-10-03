@@ -248,7 +248,13 @@ in packaged defaults. Root-managed user/group rules may replace that setting und
 The Bubblewrap backend always creates an explicit same-path CWD bind after its
 private mounts: writable with `--bind`, read-only with `--ro-bind`. This preserves
 visibility for `/tmp`-based workspaces independently of write permission and does
-not introduce a restricted host-visibility mode. Private temporary/runtime
+not by itself change host visibility. Schema 7 also requires
+`[filesystem].hidden_paths` (empty by default), a main-policy-only list of canonical
+existing directories masked by private read-only mounts. Hidden ancestors precede
+the CWD restore; explicit hidden descendants follow it. Broker filesystem overrides
+change only `cwd_writable` and cannot clear these masks. Effective direct execution
+requires empty hidden paths. Host Pi context/session loading remains outside the
+tool namespace. Private temporary/runtime
 storage remains writable. Read-only CWD exactly `/tmp` is rejected because its
 bind would mask private `/tmp`. Existing root and private-system-path overlap
 rejections remain enforced. The setting applies to built-ins and user shell;

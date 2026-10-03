@@ -9,6 +9,7 @@ import {
   BUBBLEWRAP_STATUS_FD,
   assertSandboxCwd,
   buildBubblewrapArguments,
+  planHiddenDirectories,
 } from "./bubblewrap-policy.js";
 import {
   DEFAULT_SANDBOX_OUTPUT_LIMIT_BYTES,
@@ -135,7 +136,13 @@ export async function createBubblewrapExecutor(
   ];
   validateWorkerCommand(workerCommand);
   const environment = Object.freeze({ ...(options.environment ?? {}) });
+  const hiddenPaths = Object.freeze([...(options.hiddenPaths ?? [])]);
   try {
+    planHiddenDirectories(cwd, hiddenPaths);
+    for (const target of hiddenPaths) {
+      if ((await realpath(target)) !== target) throw new Error("sandbox_hidden_path_not_canonical");
+      if (!(await stat(target)).isDirectory()) throw new Error("sandbox_hidden_path_not_directory");
+    }
     // Validate before allocating lifecycle state so an invalid policy cannot
     // leave close() waiting for a worker that was never spawned.
     buildBubblewrapArguments(
@@ -144,6 +151,7 @@ export async function createBubblewrapExecutor(
       options.networkMode ?? "none",
       environment,
       options.cwdWritable ?? true,
+      hiddenPaths,
     );
   } catch (cause) {
     throw new SandboxExecutionError("sandbox_start_failed", { cause });
@@ -163,6 +171,7 @@ export async function createBubblewrapExecutor(
     options.networkMode ?? "none",
     environment,
     options.cwdWritable ?? true,
+    hiddenPaths,
   );
   try {
     await executor.start(workerCommand);
@@ -207,6 +216,7 @@ class PersistentBubblewrapExecutor implements SandboxExecutor {
     private readonly networkMode: "none" | "host",
     private readonly environment: Readonly<Record<string, string>>,
     private readonly cwdWritable: boolean,
+    private readonly hiddenPaths: readonly string[],
   ) {
     let finish!: () => void;
     this.#finished = new Promise<void>((resolve) => {
@@ -225,6 +235,7 @@ class PersistentBubblewrapExecutor implements SandboxExecutor {
         this.networkMode,
         this.environment,
         this.cwdWritable,
+        this.hiddenPaths,
       ),
       {
         cwd: this.cwd,
