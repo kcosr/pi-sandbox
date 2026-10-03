@@ -3,15 +3,18 @@
 ## Administrative model catalog
 
 Pi Sandbox does not use Pi's internal model catalog. It loads the complete
-catalog from the absolute `models_file` selected in the distribution's compiled
-`config_dir/config.toml`, normally:
+catalog from the absolute `models_file` in the selected TOML policy. By default,
+that policy is the distribution's compiled `config_dir/config.toml`, normally:
 
 ```toml
 models_file = "/etc/pi-sandbox/models.json"
 ```
 
-The active path is administrative and cannot be changed by a CLI argument,
-environment variable, Pi setting, or project file. When broker mode is enabled,
+A build with `allow_config_override = true` permits an explicit leading
+`--config FILE` to select a different TOML and therefore a different
+`models_file`. The model path remains absolute. Managed builds reject the CLI
+option. Environment variables, Pi settings, and automatic project discovery
+cannot redirect either path. When broker mode is enabled,
 the root-managed drop-in for the calling UID may select another catalog.
 `--model` can select only a model from the effective catalog.
 

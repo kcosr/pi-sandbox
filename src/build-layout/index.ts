@@ -1,6 +1,7 @@
 import { compiledLayout } from "#pi-sandbox-compiled-layout";
 
 export interface CompiledLayout {
+  readonly allowConfigOverride: boolean;
   readonly configDir: string;
   readonly configPath: string;
   readonly defaultModelsPath: string;

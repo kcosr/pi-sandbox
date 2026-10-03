@@ -14,7 +14,8 @@ try {
   const path = join(temporaryDirectory, "distribution.toml");
   await writeFile(
     path,
-    `version = 2
+    `version = 3
+allow_config_override = false
 extension_manifests = ["./extension.json"]
 
 [platforms.linux]
@@ -31,8 +32,24 @@ path = "/opt/example/bin/bwrap"
 `,
   );
   const validManifest = await readFile(path, "utf8");
-  await writeFile(path, validManifest.replace("version = 2", "version = 1"));
-  await assert.rejects(loadDistribution(path, "linux"), /version must be 2/);
+  await writeFile(path, validManifest.replace("version = 3", "version = 1"));
+  await assert.rejects(loadDistribution(path, "linux"), /version must be 3/);
+  await writeFile(path, validManifest.replace("version = 3", "version = 2"));
+  await assert.rejects(loadDistribution(path, "linux"), /version must be 3/);
+  for (const declaration of ["", 'allow_config_override = "true"']) {
+    await writeFile(path, validManifest.replace("allow_config_override = false", declaration));
+    await assert.rejects(
+      loadDistribution(path, "linux"),
+      /allow_config_override must be a boolean/,
+    );
+  }
+  await writeFile(
+    path,
+    validManifest.replace("allow_config_override = false", "allow_config_override = true"),
+  );
+  const configurable = await loadDistribution(path, "linux");
+  assert.equal(configurable.layout.allowConfigOverride, true);
+  assert.match(createCompiledLayoutModule(configurable.layout), /"allowConfigOverride":true/);
   await writeFile(
     path,
     validManifest.replace('audit_socket_path = "/opt/example/run/collector.sock"', ""),
@@ -46,6 +63,7 @@ path = "/opt/example/bin/bwrap"
   await writeFile(path, validManifest);
   const distribution = await loadDistribution(path, "linux");
   assert.deepEqual(distribution.layout, {
+    allowConfigOverride: false,
     configDir: "/opt/example/etc",
     configPath: "/opt/example/etc/config.toml",
     defaultModelsPath: "/opt/example/etc/models.json",
@@ -93,7 +111,8 @@ unit=../../../libexec/pi-sandbox/systemd/pi-sandbox-identity-broker.socket
 
   await writeFile(
     path,
-    `version = 2
+    `version = 3
+allow_config_override = false
 extension_manifests = []
 
 [platforms.linux]
@@ -138,7 +157,7 @@ license_file = "./COPYING"
     "/usr/libexec/pi-sandbox/config /opt/pi-sandbox",
   );
 
-  await writeFile(path, `version = 2\nextension_manifests = []\nunknown = true\n`);
+  await writeFile(path, `version = 3\nextension_manifests = []\nunknown = true\n`);
   await assert.rejects(loadDistribution(path, "linux"), /unknown is not recognized/);
   process.stdout.write("distribution manifest tests passed\n");
 } finally {

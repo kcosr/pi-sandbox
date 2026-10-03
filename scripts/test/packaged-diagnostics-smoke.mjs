@@ -59,7 +59,29 @@ try {
     compiledLibexecDirectory,
   );
   const sandboxExecutable = join(compiledLibexecDirectory, "pi-sandbox");
-  const configuredModelIds = await readConfiguredModelIds(join(defaultsDirectory, "models.json"));
+  if (typeof releaseManifest.layout.allowConfigOverride !== "boolean") {
+    throw new Error("release manifest has an invalid config override policy");
+  }
+  let expectedConfigPath = releaseManifest.layout.configPath;
+  let expectedModelsPath = releaseManifest.layout.defaultModelsPath;
+  const configArguments = [];
+  const overrideDirectory = join(temporaryDirectory, "selected-policy");
+  await cp(defaultsDirectory, overrideDirectory, { recursive: true });
+  const overridePath = join(overrideDirectory, "config.toml");
+  const overrideModelsPath = join(overrideDirectory, "models.json");
+  const overrideConfig = parseToml(await readFile(overridePath, "utf8"));
+  overrideConfig.models_file = overrideModelsPath;
+  await writeFile(overridePath, stringifyToml(overrideConfig));
+  if (releaseManifest.layout.allowConfigOverride) {
+    configArguments.push("--config", overridePath);
+    expectedConfigPath = overridePath;
+    expectedModelsPath = overrideModelsPath;
+    // Prove that an explicit policy is selected even when the compiled default is invalid.
+    await writeFile(join(defaultsDirectory, "config.toml"), "invalid default TOML");
+  } else {
+    await assertConfigOverrideRejected(sourceExecutable, overridePath);
+  }
+  const configuredModelIds = await readConfiguredModelIds(overrideModelsPath);
   const workspace = join(temporaryDirectory, "workspace");
   const userState = join(workspace, ".pi-state");
   const testBin = join(workspace, ".test-bin");
@@ -103,6 +125,7 @@ try {
       workspace,
       "--",
       sandboxExecutable,
+      ...configArguments,
       "--mode",
       "rpc",
       "--no-session",
@@ -205,8 +228,8 @@ try {
     (message) => message.type === "extension_ui_request" && message.method === "notify",
   );
   if (
-    !notification?.message.includes(`Config:      ${releaseManifest.layout.configPath}`) ||
-    !notification.message.includes(`Models:      ${releaseManifest.layout.defaultModelsPath}`) ||
+    !notification?.message.includes(`Config:      ${expectedConfigPath}`) ||
+    !notification.message.includes(`Models:      ${expectedModelsPath}`) ||
     !notification.message.includes("Extensions:  none") ||
     !notification.message.includes("Identity:    disabled")
   ) {
@@ -253,6 +276,22 @@ function resolveSmokeBubblewrap(releaseManifest, runtimeDirectory, compiledLibex
     return join(runtimeDirectory, "bwrap");
   }
   throw new Error("release manifest has an unsupported Bubblewrap provider mode");
+}
+
+async function assertConfigOverrideRejected(executable, configPath) {
+  const result = spawn(executable, ["--config", configPath, "--validate-installation"], {
+    stdio: ["ignore", "ignore", "pipe"],
+    timeout: 15_000,
+  });
+  let errorOutput = "";
+  result.stderr.setEncoding("utf8");
+  result.stderr.on("data", (chunk) => {
+    errorOutput += chunk;
+  });
+  const exit = await waitForExit(result);
+  if (exit.code !== 1 || !errorOutput.includes("This build does not permit --config")) {
+    throw new Error("managed build did not reject the config override");
+  }
 }
 
 async function waitFor(predicate, description) {

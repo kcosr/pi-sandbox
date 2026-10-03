@@ -2,12 +2,36 @@
 
 ## Configuration ownership
 
-Pi Sandbox always reads the `config_dir/config.toml` path compiled from the
-distribution manifest; no CLI argument,
-environment variable, user setting, or project file can redirect it. The
-configuration contains a required absolute `models_file` path selected by the
-administrator. Pi Sandbox loads that file as the complete model catalog and
-disables Pi's internal model catalog.
+Pi Sandbox reads the `config_dir/config.toml` path compiled from the
+distribution manifest by default. Version 3 of that manifest requires an explicit
+`allow_config_override` boolean. The default distribution sets it to `false`
+and rejects `--config`. No environment variable, user setting, or project file
+can enable this capability.
+
+A distribution built with `allow_config_override = true` accepts a leading
+`--config FILE` (or `--config=FILE`) before all Pi arguments. Relative paths
+resolve against the launch directory. The option is consumed by Pi Sandbox;
+it is never passed to Pi. A missing, repeated, or misplaced option is an error.
+An unreadable or invalid selected file fails startup without falling back to
+the compiled default. With no option, the compiled default remains selected.
+
+```sh
+pi-sandbox --config ./lab/config.toml --model local/example
+pi-sandbox --config ./lab/config.toml --validate-installation
+```
+
+The selected TOML contains a required absolute `models_file` path. Relative
+model paths are not resolved against the TOML directory. Pi Sandbox loads this
+file as the complete model catalog and disables Pi's internal model catalog.
+`/sandbox` reports the selected TOML and effective models path.
+
+Enabling the CLI option lets the invoking user choose policy, including tool
+permissions and the execution backend. Use this build mode for development,
+evaluation, or other caller-controlled configurations. Forced extension loading,
+compiled tools, the root runtime check, and the build-selected Bubblewrap
+executable still apply. Identity broker and audit service sockets and their
+configuration remain independently installed; `--config` does not relocate
+service configuration or user/group drop-in directories.
 
 The main configuration contains the global `pi`, `sandbox`, and
 extension-specific scoped environment. The required `identity` table either
@@ -41,8 +65,9 @@ unreadable, or invalid configuration and model files are errors. Startup fails
 closed. Deployment is responsible for ownership and permissions; Pi Sandbox
 does not perform root-ownership or metadata checks on these files.
 
-Project-local files are untrusted content and cannot broaden the installed
-policy. The only merge combines administrator-owned user/group rules through the broker. Matching explicit permissions use least restrictive wins before overlaying defaults; user rules have no special precedence.
+In managed builds, project-local files are untrusted content and cannot broaden
+the installed policy. Configurable builds load a project policy only when the
+caller explicitly selects it with `--config`. The only merge combines administrator-owned user/group rules through the broker. Matching explicit permissions use least restrictive wins before overlaying defaults; user rules have no special precedence.
 
 `PI_CODING_AGENT_DIR` remains supported for user state such as credentials,
 sessions, settings, skills, themes, and logs. It never changes the administrative
@@ -189,7 +214,8 @@ switching a read-only base to direct execution also requires overriding
 
 `host` is deliberately unrestricted. Bubblewrap does not provide IP, port,
 hostname, or destination filtering, and Pi Sandbox does not imply such filtering
-when this mode is selected. There is no CLI or environment override. In broker
+when this mode is selected. There is no dedicated network CLI or environment
+override; the selected TOML supplies the mode. In broker
 mode, an administrator-owned user/group rule may replace the base network mode.
 Provider traffic from host-side Pi is unaffected by either setting.
 
@@ -297,7 +323,7 @@ Pi Sandbox registers one read-only diagnostic command:
 ```
 
 `/sandbox` reports whether the selected backend is initialized, its process
-lifetime, execution backend, launch directory, fixed configuration path,
+lifetime, execution backend, launch directory, selected configuration path,
 effective selected model file, identity mode, effective network mode, CWD access, and
 user-state directory. `/sandbox mounts` reports the semantic Bubblewrap mount
 policy or explicitly reports that direct mode has no mount boundary.

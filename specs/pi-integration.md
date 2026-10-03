@@ -63,15 +63,24 @@ the private entry point requires.
 
 ## Administrative configuration and models
 
-The executable always begins configuration resolution at:
+The executable begins configuration resolution at the build-selected path,
+normally:
 
 ```text
 /etc/pi-sandbox/config.toml
 ```
 
-That path is fixed. No CLI argument, environment variable, Pi setting, project
-file, or user file may redirect it. The strict configuration has a required
-normalized absolute `models_file`. In broker mode, a root-managed drop-in
+Version-3 distribution manifests require a boolean `allow_config_override`.
+With `false` (the default distribution), the path is fixed and the executable
+rejects `--config`. With `true`, a leading `--config FILE` or `--config=FILE`
+selects the TOML; relative paths resolve from the launch CWD. Pi Sandbox
+consumes the option before Pi argument handling. Reject missing, repeated, and
+misplaced flags. Invalid selected input must not fall back to the default.
+Validation commands and diagnostics must use and report the selected path.
+No environment variable, Pi setting, or automatic project discovery may enable
+or redirect this selection. The strict configuration has a required normalized
+absolute `models_file`; selecting a TOML does not alter model-path semantics,
+service sockets, or the broker/collector's own configuration directories. In broker mode, a root-managed drop-in
 selected by the kernel-authenticated account and its primary/supplementary groups may replace the model file,
 execution backend, network mode, CWD write access, and complete invocation
 permissions for a subset of model tools. The main TOML supplies the global scoped environment. An optional

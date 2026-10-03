@@ -38,6 +38,7 @@ import {
 import { createManagedPiArguments, selectManagedActiveTools } from "./arguments.js";
 import { applyManagedEnvironment } from "./environment.js";
 import { assertHostPrerequisites } from "./prerequisites.js";
+import type { SandboxArguments } from "./config-arguments.js";
 
 export const SYSTEM_CONFIG_PATH = buildLayout.configPath;
 
@@ -82,9 +83,8 @@ export function createManagedModelRuntimeFactory(modelsPath: string): ManagedMod
   return async (options = {}) => createConfiguredModelRuntime(modelsPath, options);
 }
 
-async function loadAdministrativeConfig(root = "/"): Promise<SandboxConfig> {
-  const configPath = pathUnderRoot(root, SYSTEM_CONFIG_PATH);
-  return loadConfig(configPath, managedExtensionCatalog);
+async function loadAdministrativeConfig(root: string, configPath: string): Promise<SandboxConfig> {
+  return loadConfig(pathUnderRoot(root, configPath), managedExtensionCatalog);
 }
 
 export function instantiateConfiguredManagedExtensions(
@@ -135,8 +135,11 @@ async function readAdministrativeModels(config: SandboxConfig, root = "/"): Prom
   return modelsPath;
 }
 
-export async function validateAdministrativeConfiguration(root = "/"): Promise<SandboxConfig> {
-  const config = await loadAdministrativeConfig(root);
+export async function validateAdministrativeConfiguration(
+  root = "/",
+  configPath = SYSTEM_CONFIG_PATH,
+): Promise<SandboxConfig> {
+  const config = await loadAdministrativeConfig(root, configPath);
   assertExecutionPlatform(config);
   const modelsPath = await readAdministrativeModels(config, root);
   await createConfiguredModelRuntime(modelsPath, { refreshOnCreate: false });
@@ -147,12 +150,13 @@ export async function resolveEffectiveAdministrativeConfiguration(
   root = "/",
   environment: NodeJS.ProcessEnv = process.env,
   resolveIdentity?: BrokerIdentityResolver,
+  configPath = SYSTEM_CONFIG_PATH,
 ): Promise<{
   readonly config: SandboxConfig;
   readonly modelsPath: string;
   readonly identityEnvironment: ManagedEnvironment;
 }> {
-  const baseConfig = await loadAdministrativeConfig(root);
+  const baseConfig = await loadAdministrativeConfig(root, configPath);
   assertExecutionPlatform(baseConfig);
   const identity = await configureManagedIdentity(baseConfig.identity, resolveIdentity);
   const effectiveEnvironment = overlayManagedEnvironment(
@@ -355,22 +359,22 @@ function parseBackendQueryRoot(args: readonly string[]): string | undefined {
   throw new Error("usage: pi-sandbox --print-execution-backend [--root DESTDIR]");
 }
 
-export async function runPiSandbox(args: string[]): Promise<void> {
+export async function runPiSandbox({ piArgs: args, configPath }: SandboxArguments): Promise<void> {
   const validationRoot = parseValidationRoot(args);
   if (validationRoot !== undefined) {
-    await validateAdministrativeConfiguration(validationRoot);
+    await validateAdministrativeConfiguration(validationRoot, configPath);
     return;
   }
   const backendQueryRoot = parseBackendQueryRoot(args);
   if (backendQueryRoot !== undefined) {
-    const config = await validateAdministrativeConfiguration(backendQueryRoot);
+    const config = await validateAdministrativeConfiguration(backendQueryRoot, configPath);
     process.stdout.write(`${config.execution.backend}\n`);
     return;
   }
 
   const ambientHostEnvironment = { ...process.env };
   const { config, modelsPath, identityEnvironment } =
-    await resolveEffectiveAdministrativeConfiguration();
+    await resolveEffectiveAdministrativeConfiguration("/", process.env, undefined, configPath);
   const cwd = process.cwd();
   const managedExtensions = instantiateConfiguredManagedExtensions(config);
   const piToolExtensions = selectConfiguredPiToolExtensions(config);
@@ -415,7 +419,7 @@ export async function runPiSandbox(args: string[]): Promise<void> {
       );
       const extension = createPiSandboxExtension({
         cwd,
-        configPath: SYSTEM_CONFIG_PATH,
+        configPath,
         userStateDir: getAgentDir(),
         activeTools: selectManagedActiveTools(args, enabledTools),
         loadConfig: () => Promise.resolve(config),
@@ -426,6 +430,11 @@ export async function runPiSandbox(args: string[]): Promise<void> {
         hostExecutors: Object.freeze(hostExecutors),
       });
       const managedMain = piMain as unknown as ManagedMain;
+      if (buildLayout.allowConfigOverride && (args[0] === "--help" || args[0] === "-h")) {
+        process.stdout.write(
+          "Pi Sandbox: --config FILE selects a TOML policy before Pi arguments.\n\n",
+        );
+      }
       await managedMain(createManagedPiArguments(args), {
         extensionFactories: [{ name: "pi-sandbox", factory: extension }],
         createModelRuntime: createManagedModelRuntimeFactory(modelsPath),

@@ -277,6 +277,33 @@ describe("administrative configuration", () => {
     await expect(validateAdministrativeConfiguration(root)).rejects.toThrow();
   });
 
+  it("loads the selected TOML and its model catalog without reading the compiled default", async () => {
+    const root = await createRoot();
+    const selectedPath = "/lab/custom.toml";
+    const modelsFile = "/lab/selected-models.json";
+    const fixture = await readFile(rooted(root, "/etc/pi-sandbox/config.toml"), "utf8");
+    await mkdir(rooted(root, "/lab"));
+    await writeFile(
+      rooted(root, selectedPath),
+      fixture.replace("/etc/pi-sandbox/models.json", modelsFile),
+    );
+    await writeFile(rooted(root, modelsFile), JSON.stringify({ providers: {} }));
+    await writeFile(rooted(root, "/etc/pi-sandbox/config.toml"), "invalid default TOML");
+
+    await expect(validateAdministrativeConfiguration(root, selectedPath)).resolves.toMatchObject({
+      modelsFile,
+    });
+    await expect(
+      resolveEffectiveAdministrativeConfiguration(root, {}, undefined, selectedPath),
+    ).resolves.toMatchObject({
+      modelsPath: rooted(root, modelsFile),
+      config: { modelsFile },
+    });
+    await expect(validateAdministrativeConfiguration(root, "/lab/missing.toml")).rejects.toThrow();
+    await writeFile(rooted(root, selectedPath), "invalid selected TOML");
+    await expect(validateAdministrativeConfiguration(root, selectedPath)).rejects.toThrow();
+  });
+
   it("fails closed when models.json is malformed", async () => {
     const root = await createRoot();
     await writeFile(rooted(root, "/etc/pi-sandbox/models.json"), "{not-json");

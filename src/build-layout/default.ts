@@ -1,4 +1,5 @@
 export const compiledLayout = Object.freeze({
+  allowConfigOverride: false,
   configDir: "/etc/pi-sandbox",
   configPath: "/etc/pi-sandbox/config.toml",
   defaultModelsPath: "/etc/pi-sandbox/models.json",

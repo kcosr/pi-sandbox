@@ -42,7 +42,7 @@ unavailable namespaces.
 - no-UI, prompt cancellation, and prompt failure denial;
 - managed-executable argument filtering;
 - rejection of Pi package-management commands;
-- fixed administrative configuration and model-path resolution;
+- build-gated configuration selection, rejection in managed builds, and absolute model-path resolution;
 - effective-UID root rejection for Pi, help, and worker execution, with only
   installer-owned validation commands admitted as root;
 - strict system-versus-bundled Bubblewrap distribution selection and immutable
@@ -176,7 +176,10 @@ Rust broker, and inspect the final Bun application and release archive. The
 packaged executable diagnostic also proves that only the administrative model
 catalog is exposed and that the forced Pi Sandbox extension is the only Pi
 extension while built-in MCP, codemode, tool-search, and llama factories remain
-disabled. A local source archive may replace the download so the entire
+disabled. For configurable builds it selects a temporary policy with `--config`
+and an invalid compiled default, proving the chosen TOML and model path appear
+in diagnostics. Managed builds must reject `--config` before reading policy.
+Both build modes should be exercised when changing configuration selection. A local source archive may replace the download so the entire
 release test remains offline.
 
 ## Local release verification
