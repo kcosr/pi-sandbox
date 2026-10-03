@@ -29,8 +29,8 @@ describe("managed Pi arguments", () => {
     expect(() => validateManagedArguments(args)).toThrow(UnsafeManagedArgumentError);
   });
 
-  it.each(["config", "install", "list", "remove", "uninstall", "update"])(
-    "rejects the Pi package command %s",
+  it.each(["config", "install", "list", "mcp", "remove", "uninstall", "update"])(
+    "rejects the Pi resource-management command %s",
     (command) => {
       expect(() => validateManagedArguments([command])).toThrow(UnsafeManagedArgumentError);
     },

@@ -1,6 +1,7 @@
 import type {
   ExtensionAPI,
   ExtensionContext,
+  ExtensionToolContext,
   ToolDefinition,
   UserBashEvent,
   UserBashEventResult,
@@ -94,18 +95,20 @@ function context(
     readonly notify?: (message: string, type?: "info" | "warning" | "error") => void;
     readonly signal?: AbortSignal;
   } = {},
-): ExtensionContext {
+): ExtensionToolContext {
   return {
     cwd: "/work/project",
     sessionManager: { getSessionId: () => "pi-session-1" },
     hasUI: options.hasUI ?? false,
     mode: "tui",
     signal: options.signal,
+    tools: [],
+    executeTool: () => Promise.reject(new Error("Unexpected nested tool execution in fixture")),
     ui: {
       select: options.select ?? (() => Promise.resolve(undefined)),
       notify: options.notify ?? (() => undefined),
     },
-  } as unknown as ExtensionContext;
+  } as unknown as ExtensionToolContext;
 }
 
 function fakeExecutor(): SandboxExecutor & {
@@ -695,7 +698,7 @@ describe("Pi Sandbox extension", () => {
     expect(executor.calls).toHaveLength(0);
   });
 
-  it("preserves Pi 0.84.3 definition metadata without the host edit preview renderer", async () => {
+  it("preserves Pi 1.0 definition metadata without the host edit preview renderer", async () => {
     const pi = fakePi();
     await start(pi, fakeExecutor());
     for (const tool of pi.tools.values()) {

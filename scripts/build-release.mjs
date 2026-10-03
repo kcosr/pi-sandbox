@@ -271,15 +271,20 @@ function hostPlatform() {
 }
 
 function releaseRequirements(os, bubblewrap) {
+  const nativeHelper = os === "linux" ? "linux-platform-x11.node" : "darwin-platform.node";
+  const requiredFiles = [
+    ...commonRequiredReleaseFiles,
+    `payload/pi-sandbox/native/${os}/prebuilds/${os}-${process.arch}/${nativeHelper}`,
+  ];
   if (os === "darwin") {
     return {
-      files: commonRequiredReleaseFiles,
+      files: requiredFiles,
       directories: commonRequiredReleaseDirectories,
     };
   }
   return {
     files: [
-      ...commonRequiredReleaseFiles,
+      ...requiredFiles,
       "payload/pi-sandbox/pi-sandbox-identity-broker",
       "payload/pi-sandbox/pi-sandbox-audit-collector",
       "payload/pi-sandbox/systemd/pi-sandbox-audit.socket",
@@ -573,7 +578,6 @@ async function main() {
       [
         "scripts/build-binaries.sh",
         "--offline-model-data",
-        "--skip-deps",
         "--platform",
         platform,
         "--out",
@@ -592,6 +596,8 @@ async function main() {
         "run",
         "packages/coding-agent/test/auth-check.test.ts",
         "packages/coding-agent/test/managed-model-runtime.test.ts",
+        "packages/coding-agent/test/managed-main.test.ts",
+        "packages/coding-agent/test/managed-extensions.test.ts",
         "packages/coding-agent/test/managed-session-sharing.test.ts",
       ],
       { cwd: sourceRoot, env: cleanEnvironment },
@@ -618,6 +624,7 @@ async function main() {
         `--target=${bunTarget}`,
         "./dist/pi-sandbox/private-entrypoint.mjs",
         "./src/utils/image-resize-worker.ts",
+        "./src/extensions/codemode/worker.ts",
         "--outfile",
         join(payload, "pi-sandbox"),
       ],

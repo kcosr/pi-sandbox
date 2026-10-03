@@ -25,10 +25,10 @@ index 9266ddb..e0056ed 100644
  		modelsStore: new InMemoryCodingAgentModelsStore(),
  		allowModelNetwork: false,
 diff --git a/packages/coding-agent/src/core/model-runtime.ts b/packages/coding-agent/src/core/model-runtime.ts
-index 6f4071b..24c1222 100644
+index 7edd440..028f463 100644
 --- a/packages/coding-agent/src/core/model-runtime.ts
 +++ b/packages/coding-agent/src/core/model-runtime.ts
-@@ -79,8 +79,12 @@ export interface CreateModelRuntimeOptions {
+@@ -120,8 +120,12 @@ export interface CreateModelRuntimeOptions {
  	signal?: AbortSignal;
  	/** Skip initial catalog and availability refresh. Static models remain available. */
  	refreshOnCreate?: boolean;
@@ -41,7 +41,7 @@ index 6f4071b..24c1222 100644
  export interface ModelRuntimeAuthOverrides extends AuthOperationOptions {
  	apiKey?: string;
  	env?: Record<string, string>;
-@@ -137,6 +141,7 @@ export class ModelRuntime implements Models {
+@@ -180,6 +184,7 @@ export class ModelRuntime implements Models {
  	private readonly compositionErrors = new Map<string, string>();
  	private readonly modelsPath: string | undefined;
  	private readonly modelNetworkEnabled: boolean;
@@ -49,7 +49,7 @@ index 6f4071b..24c1222 100644
  	private config: ModelConfig;
  	private snapshot: ModelRuntimeSnapshot = {
  		all: [],
-@@ -158,11 +163,13 @@ export class ModelRuntime implements Models {
+@@ -201,11 +206,13 @@ export class ModelRuntime implements Models {
  		modelsStore: ModelsStore,
  		providers: readonly Provider[],
  		modelNetworkEnabled: boolean,
@@ -63,7 +63,16 @@ index 6f4071b..24c1222 100644
  		this.defaultBuiltins = new Map(providers.map((provider) => [provider.id, provider]));
  		for (const [providerId, provider] of this.defaultBuiltins) this.builtins.set(providerId, provider);
  		this.models = createModels({ credentials, modelsStore });
-@@ -194,6 +201,7 @@ export class ModelRuntime implements Models {
+@@ -226,7 +233,7 @@ export class ModelRuntime implements Models {
+ 		const providers = builtinProviderCatalog
+ 			.builtinProviders()
+ 			.map((provider) =>
+-				provider.id === "radius"
++				options.includeBuiltinCatalog === false || provider.id === "radius"
+ 					? provider
+ 					: withRemoteCatalog(provider, options.catalogBaseUrl, builtinModelDataGeneratedAt),
+ 			);
+@@ -237,6 +244,7 @@ export class ModelRuntime implements Models {
  			modelsStore,
  			providers,
  			process.env.PI_OFFLINE === undefined,
@@ -71,7 +80,7 @@ index 6f4071b..24c1222 100644
  		);
  		runtime.configureRadiusProviders();
  		runtime.rebuildProviders();
-@@ -235,7 +243,7 @@ export class ModelRuntime implements Models {
+@@ -278,7 +286,7 @@ export class ModelRuntime implements Models {
  
  	private providerIds(): Set<string> {
  		return new Set([
@@ -80,37 +89,40 @@ index 6f4071b..24c1222 100644
  			...this.nativeExtensionProviders.keys(),
  			...this.config.getProviderIds(),
  			...this.extensionProviders.keys(),
-@@ -250,18 +258,22 @@ export class ModelRuntime implements Models {
- 			this.compositionErrors.delete(providerId);
- 			return;
- 		}
--		if (base && !this.config.getProvider(providerId) && !extension) {
-+		if (this.includeBuiltinCatalog && base && !this.config.getProvider(providerId) && !extension) {
+@@ -298,20 +306,24 @@ export class ModelRuntime implements Models {
+ 
+ 	/** The provider without virtual models, or undefined when nothing defines it. */
+ 	private composeProvider(providerId: string): Provider | undefined {
+-		const base = this.nativeExtensionProviders.get(providerId) ?? this.builtins.get(providerId);
++		const nativeExtension = this.nativeExtensionProviders.get(providerId);
++		const base = nativeExtension ?? this.builtins.get(providerId);
++		const includeBaseModels = this.includeBuiltinCatalog || nativeExtension !== undefined;
+ 		const extension = this.extensionProviders.get(providerId);
+ 		if (!this.config.getProvider(providerId) && !extension) {
  			// No overlays: use the builtin untouched so its auth/login/stream behavior is exact.
- 			this.models.setProvider(base);
  			this.compositionErrors.delete(providerId);
- 			return;
+-			return base;
++			return includeBaseModels ? base : undefined;
  		}
  		try {
--			this.models.setProvider(composeModelProvider(providerId, base, this.config, extension));
-+			this.models.setProvider(
-+				composeModelProvider(providerId, base, this.config, extension, {
-+					includeBuiltinModels: this.includeBuiltinCatalog,
-+				}),
-+			);
+-			const provider = composeModelProvider(providerId, base, this.config, extension);
++			const provider = composeModelProvider(providerId, base, this.config, extension, {
++				includeBuiltinModels: includeBaseModels,
++			});
  			this.compositionErrors.delete(providerId);
+ 			return provider;
  		} catch (error) {
  			this.compositionErrors.set(providerId, error instanceof Error ? error.message : String(error));
--			if (base) this.models.setProvider(base);
-+			if (this.includeBuiltinCatalog && base) this.models.setProvider(base);
- 			else this.models.deleteProvider(providerId);
+-			return base;
++			return this.includeBuiltinCatalog ? base : undefined;
  		}
  	}
+ 
 diff --git a/packages/coding-agent/src/core/provider-composer.ts b/packages/coding-agent/src/core/provider-composer.ts
-index 1be7fcd..5053fb5 100644
+index caa5023..0fb8c0c 100644
 --- a/packages/coding-agent/src/core/provider-composer.ts
 +++ b/packages/coding-agent/src/core/provider-composer.ts
-@@ -422,6 +422,7 @@ export function composeModelProvider(
+@@ -525,20 +525,19 @@ export function composeModelProvider(
  	base: Provider | undefined,
  	modelConfig: ModelConfig,
  	extension: ProviderConfigInput | undefined,
@@ -118,20 +130,49 @@ index 1be7fcd..5053fb5 100644
  ): Provider {
  	const config = modelConfig.getProvider(providerId);
  	let extensionOAuthCredential: OAuthCredentials | undefined;
-@@ -433,7 +434,7 @@ export function composeModelProvider(
- 	const getModels = () => {
- 		let models = applyExtension(
- 			providerId,
--			applyModelsJson(providerId, base?.getModels() ?? [], config),
-+			applyModelsJson(providerId, options.includeBuiltinModels === false ? [] : (base?.getModels() ?? []), config),
- 			currentExtension(),
- 		);
+ 	let refreshedExtensionModels: ProviderConfigInput["models"];
+ 	const currentExtension = (): ProviderConfigInput | undefined =>
+ 		extension && refreshedExtensionModels ? { ...extension, models: refreshedExtensionModels } : extension;
++	const baseModels = () => (options.includeBuiltinModels === false ? [] : getAllProviderModels(base));
++	const refreshBaseModels = options.includeBuiltinModels === false ? undefined : base?.refreshModels;
+ 	// models.json modelOverrides are the topmost user-config layer: they apply once,
+ 	// after custom-model upserts, extension model replacement, and legacy OAuth projection.
+ 	const getAllModels = (): AnyModel[] => {
+-		let models = applyExtension(
+-			providerId,
+-			applyModelsJson(providerId, getAllProviderModels(base), config),
+-			currentExtension(),
+-		);
++		let models = applyExtension(providerId, applyModelsJson(providerId, baseModels(), config), currentExtension());
  		if (extensionOAuthCredential && extension?.oauth?.modifyModels) {
+ 			// The extension hook is chat-only; other model types pass through untouched.
+ 			models = [
+@@ -592,9 +591,9 @@ export function composeModelProvider(
+ 		getModels: () => getAllModels().filter((model) => isModelType(model, "chat")),
+ 		getAllModels,
+ 		refreshModels:
+-			base?.refreshModels || extension?.refreshModels || extension?.oauth?.modifyModels
++			refreshBaseModels || extension?.refreshModels || extension?.oauth?.modifyModels
+ 				? async (context) => {
+-						await base?.refreshModels?.(context);
++						await refreshBaseModels?.(context);
+ 						let refreshed: NonNullable<ProviderConfigInput["models"]> | undefined;
+ 						if (extension?.refreshModels) refreshed = await extension.refreshModels(context);
+ 						if (context.signal.aborted) return;
+@@ -603,7 +602,7 @@ export function composeModelProvider(
+ 							update: () => {
+ 								if (refreshed) {
+ 									// Validate before publishing the new synchronous list.
+-									applyExtension(providerId, applyModelsJson(providerId, getAllProviderModels(base), config), {
++									applyExtension(providerId, applyModelsJson(providerId, baseModels(), config), {
+ 										...extension,
+ 										models: refreshed,
+ 									});
 diff --git a/packages/coding-agent/src/index.ts b/packages/coding-agent/src/index.ts
-index 210b840..b918a36 100644
+index 9e2d993..07d1dbb 100644
 --- a/packages/coding-agent/src/index.ts
 +++ b/packages/coding-agent/src/index.ts
-@@ -185,6 +185,7 @@ export {
+@@ -230,6 +230,7 @@ export {
  	type CredentialSynchronizationOperation,
  	ModelRuntime,
  	type ModelRuntimeAuthOverrides,
@@ -140,7 +181,7 @@ index 210b840..b918a36 100644
  export type {
  	PackageManager,
 diff --git a/packages/coding-agent/src/main.ts b/packages/coding-agent/src/main.ts
-index 23b4d42..b39eb0b 100644
+index d9c6ce3..d626736 100644
 --- a/packages/coding-agent/src/main.ts
 +++ b/packages/coding-agent/src/main.ts
 @@ -5,6 +5,7 @@
@@ -150,8 +191,8 @@ index 23b4d42..b39eb0b 100644
 +import { join } from "node:path";
  import { createInterface } from "node:readline";
  import { type ImageContent, modelsAreEqual } from "@earendil-works/pi-ai";
- import chalk from "chalk";
-@@ -45,7 +46,7 @@ import { exportFromFile } from "./core/export-html/index.ts";
+ import { setCapabilityOverrides } from "@earendil-works/pi-tui";
+@@ -46,7 +47,7 @@ import { exportFromFile } from "./core/export-html/index.ts";
  import type { InlineExtension } from "./core/extensions/types.ts";
  import { applyHttpProxySettings, configureHttpDispatcher } from "./core/http-dispatcher.ts";
  import { resolveCliModel, resolveModelScope, type ScopedModel } from "./core/model-resolver.ts";
@@ -160,7 +201,7 @@ index 23b4d42..b39eb0b 100644
  import { restoreStdout, takeOverStdout } from "./core/output-guard.ts";
  import { type AppMode, resolveProjectTrusted } from "./core/project-trust.ts";
  import type { CreateAgentSessionOptions } from "./core/sdk.ts";
-@@ -127,7 +128,10 @@ function isPlainRuntimeMetadataCommand(parsed: Args): boolean {
+@@ -130,7 +131,10 @@ function isPlainRuntimeMetadataCommand(parsed: Args): boolean {
  	return !parsed.print && parsed.mode === undefined && (parsed.help === true || parsed.listModels !== undefined);
  }
  
@@ -172,7 +213,7 @@ index 23b4d42..b39eb0b 100644
  	if (isAuthCommandHelp(args)) {
  		printAuthCommandHelp();
  		return true;
-@@ -158,7 +162,7 @@ async function runAuthCommand(args: string[]): Promise<boolean> {
+@@ -161,7 +165,7 @@ async function runAuthCommand(args: string[]): Promise<boolean> {
  		}
  		if (command.kind !== "check") {
  			const signal = AbortSignal.timeout(15_000);
@@ -181,7 +222,7 @@ index 23b4d42..b39eb0b 100644
  			const credential = await resolveCredentialForPrint(
  				parsed,
  				modelRuntime,
-@@ -175,7 +179,7 @@ async function runAuthCommand(args: string[]): Promise<boolean> {
+@@ -178,7 +182,7 @@ async function runAuthCommand(args: string[]): Promise<boolean> {
  		let credential: string | undefined;
  		try {
  			const credentials = command.noRefresh ? new ReadOnlyAuthStorage() : AuthStorage.create();
@@ -190,24 +231,15 @@ index 23b4d42..b39eb0b 100644
  			result = await checkProviderAuth(parsed, modelRuntime, { refresh: !command.noRefresh });
  			if (command.credentials && result.status === "ready") {
  				credential = await getProviderCredential(result.provider, modelRuntime, credentials, {
-@@ -555,18 +559,23 @@ async function promptForMissingSessionCwd(
+@@ -568,6 +572,7 @@ async function promptForMissingSessionCwd(
  
  export interface MainOptions {
  	extensionFactories?: InlineExtension[];
-+	includeBuiltInExtensions?: boolean;
 +	createModelRuntime?: ModelRuntimeFactory;
  }
  
  export async function main(args: string[], options?: MainOptions) {
- 	resetTimings();
--	const extensionFactories = [...builtInExtensions, ...(options?.extensionFactories ?? [])];
-+	const extensionFactories = [
-+		...(options?.includeBuiltInExtensions === false ? [] : builtInExtensions),
-+		...(options?.extensionFactories ?? []),
-+	];
- 	const offlineMode = args.includes("--offline") || isTruthyEnvFlag(process.env.PI_OFFLINE);
- 	if (offlineMode) {
- 		process.env.PI_OFFLINE = "1";
+@@ -579,7 +584,7 @@ export async function main(args: string[], options?: MainOptions) {
  		process.env.PI_SKIP_VERSION_CHECK = "1";
  	}
  
@@ -216,7 +248,7 @@ index 23b4d42..b39eb0b 100644
  		return;
  	}
  
-@@ -727,10 +736,18 @@ export async function main(args: string[], options?: MainOptions) {
+@@ -746,10 +751,18 @@ export async function main(args: string[], options?: MainOptions) {
  				parsed.projectTrustOverride ??
  				(!hasTrustRequiringResources || trustStore.get(cwd) === true));
  		const runtimeSettingsManager = SettingsManager.create(cwd, agentDir, { projectTrusted });
@@ -256,17 +288,161 @@ index 5f1ce63..49bd9d4 100644
 +		);
  	});
  });
+diff --git a/packages/coding-agent/test/managed-extensions.test.ts b/packages/coding-agent/test/managed-extensions.test.ts
+new file mode 100644
+index 0000000..cf94854
+--- /dev/null
++++ b/packages/coding-agent/test/managed-extensions.test.ts
+@@ -0,0 +1,36 @@
++import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
++import { tmpdir } from "node:os";
++import { join } from "node:path";
++import { describe, expect, test, vi } from "vitest";
++import { DefaultResourceLoader } from "../src/core/resource-loader.ts";
++import { builtInExtensions } from "../src/extensions/index.ts";
++
++describe("managed inline extension", () => {
++	test("loads only the forced inline factory with noExtensions, including after reload", async () => {
++		const tempDir = mkdtempSync(join(tmpdir(), "pi-managed-extensions-"));
++		const agentDir = join(tempDir, "agent");
++		const cwd = join(tempDir, "project");
++		const factory = vi.fn();
++		try {
++			for (const root of [agentDir, join(cwd, ".pi")]) {
++				mkdirSync(join(root, "extensions"), { recursive: true });
++				writeFileSync(join(root, "extensions", "unexpected.ts"), 'throw new Error("Must not load");');
++				writeFileSync(join(root, "settings.json"), JSON.stringify({ extensions: ["+builtin:mcp"] }));
++			}
++			const loader = new DefaultResourceLoader({
++				cwd,
++				agentDir,
++				noExtensions: true,
++				extensionFactories: [...builtInExtensions, { name: "managed", factory }],
++			});
++			for (let reload = 0; reload < 2; reload++) {
++				await loader.reload();
++				expect(loader.getExtensions().errors).toEqual([]);
++				expect(loader.getExtensions().extensions.map((extension) => extension.path)).toEqual(["<inline:managed>"]);
++			}
++			expect(factory).toHaveBeenCalledTimes(2);
++		} finally {
++			rmSync(tempDir, { recursive: true, force: true });
++		}
++	});
++});
+diff --git a/packages/coding-agent/test/managed-main.test.ts b/packages/coding-agent/test/managed-main.test.ts
+new file mode 100644
+index 0000000..04def0a
+--- /dev/null
++++ b/packages/coding-agent/test/managed-main.test.ts
+@@ -0,0 +1,96 @@
++import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
++import { tmpdir } from "node:os";
++import { join } from "node:path";
++import { InMemoryModelsStore } from "@earendil-works/pi-ai";
++import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
++import { AuthStorage } from "../src/core/auth-storage.ts";
++import { ModelRuntime, type ModelRuntimeFactory } from "../src/core/model-runtime.ts";
++import { restoreStdout } from "../src/core/output-guard.ts";
++import { main } from "../src/main.ts";
++
++describe("managed main runtime injection", () => {
++	let tempDir: string;
++	let agentDir: string;
++	let modelsPath: string;
++	let originalExitCode: typeof process.exitCode;
++
++	beforeEach(() => {
++		tempDir = mkdtempSync(join(tmpdir(), "pi-managed-main-"));
++		agentDir = join(tempDir, "agent");
++		mkdirSync(agentDir);
++		modelsPath = join(tempDir, "models.json");
++		writeFileSync(join(agentDir, "settings.json"), JSON.stringify({ setupComplete: true }));
++		writeFileSync(
++			modelsPath,
++			JSON.stringify({
++				providers: {
++					openai: { api: "openai-responses", baseUrl: "https://example.invalid/v1", models: [{ id: "managed" }] },
++					"openai-codex": {
++						api: "openai-codex-responses",
++						baseUrl: "https://example.invalid/v1",
++						models: [{ id: "managed" }],
++					},
++				},
++			}),
++		);
++		vi.stubEnv("PI_CODING_AGENT_DIR", agentDir);
++		vi.stubEnv("PI_OFFLINE", "1");
++		originalExitCode = process.exitCode;
++		process.exitCode = undefined;
++	});
++
++	afterEach(() => {
++		restoreStdout();
++		process.exitCode = originalExitCode;
++		vi.restoreAllMocks();
++		vi.unstubAllEnvs();
++		rmSync(tempDir, { recursive: true, force: true });
++	});
++
++	test.each([["--help"], ["--list-models"], ["--print"], ["--mode", "json"], ["--mode", "rpc"]])(
++		"fails startup through the injected factory for %s",
++		async (...args) => {
++			const failure = new Error("Managed initialization failed");
++			const createModelRuntime = vi.fn<ModelRuntimeFactory>().mockRejectedValue(failure);
++			await expect(
++				main([...args, "--no-session", "--no-extensions", "--no-skills", "--no-context-files"], {
++					createModelRuntime,
++				}),
++			).rejects.toBe(failure);
++			expect(createModelRuntime).toHaveBeenCalledExactlyOnceWith(
++				expect.objectContaining({
++					authPath: join(agentDir, "auth.json"),
++					modelsPath: join(agentDir, "models.json"),
++				}),
++			);
++		},
++	);
++
++	test.each([
++		{ args: ["auth", "check", "--json", "--provider", "openai"], output: '"status":"ready"' },
++		{ args: ["auth", "check", "--json", "--no-refresh", "--provider", "openai"], output: '"status":"ready"' },
++		{ args: ["auth", "print-api-key", "--provider", "openai"], output: "managed-key" },
++		{ args: ["auth", "print-bearer-token", "--provider", "openai-codex"], output: "managed-token" },
++	])("uses the injected catalog for $args", async ({ args, output }) => {
++		const credentials = AuthStorage.inMemory({
++			openai: { type: "api_key", key: "managed-key" },
++			"openai-codex": { type: "oauth", access: "managed-token", refresh: "unused", expires: Date.now() + 3_600_000 },
++		});
++		const createModelRuntime = vi.fn<ModelRuntimeFactory>((options) =>
++			ModelRuntime.create({
++				...options,
++				credentials,
++				modelsPath,
++				modelsStore: new InMemoryModelsStore(),
++				includeBuiltinCatalog: false,
++				allowModelNetwork: false,
++				refreshOnCreate: false,
++			}),
++		);
++		const write = vi.spyOn(process.stdout, "write").mockReturnValue(true);
++		await main(args, { createModelRuntime });
++		expect(createModelRuntime).toHaveBeenCalledOnce();
++		expect(write.mock.calls.map(([chunk]) => String(chunk)).join("")).toContain(output);
++		expect(process.exitCode ?? 0).toBe(0);
++	});
++});
 diff --git a/packages/coding-agent/test/managed-model-runtime.test.ts b/packages/coding-agent/test/managed-model-runtime.test.ts
 new file mode 100644
-index 0000000..b282547
+index 0000000..8976712
 --- /dev/null
 +++ b/packages/coding-agent/test/managed-model-runtime.test.ts
-@@ -0,0 +1,74 @@
+@@ -0,0 +1,128 @@
 +import { mkdirSync, rmSync, writeFileSync } from "node:fs";
 +import { tmpdir } from "node:os";
 +import { join } from "node:path";
 +import { InMemoryModelsStore } from "@earendil-works/pi-ai";
-+import { afterEach, beforeEach, describe, expect, test } from "vitest";
++import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 +import { AuthStorage } from "../src/core/auth-storage.ts";
 +import { ModelRuntime } from "../src/core/model-runtime.ts";
 +
@@ -284,11 +460,11 @@ index 0000000..b282547
 +		rmSync(tempDir, { recursive: true, force: true });
 +	});
 +
-+	async function createRuntime(): Promise<ModelRuntime> {
++	async function createRuntime(modelsStore = new InMemoryModelsStore()): Promise<ModelRuntime> {
 +		return ModelRuntime.create({
 +			credentials: AuthStorage.inMemory({ openai: { type: "api_key", key: "test-key" } }),
 +			modelsPath,
-+			modelsStore: new InMemoryModelsStore(),
++			modelsStore,
 +			allowModelNetwork: false,
 +			refreshOnCreate: false,
 +			includeBuiltinCatalog: false,
@@ -313,8 +489,19 @@ index 0000000..b282547
 +
 +		expect(runtime.getError()).toBeUndefined();
 +		expect(runtime.getModels().map((model) => `${model.provider}/${model.id}`)).toEqual(["openai/managed-model"]);
++		expect(runtime.getAllModels()).toEqual(runtime.getModels());
++		expect(runtime.getModelsOfType("image")).toEqual([]);
++		expect(runtime.getModelsOfType("classifier")).toEqual([]);
 +		expect(runtime.getProvider("openai")).toBeDefined();
 +		expect(runtime.getProvider("anthropic")).toBeUndefined();
++		await expect(runtime.getAuth("openai")).resolves.toMatchObject({ auth: { apiKey: "test-key" } });
++		await expect(runtime.getAllAvailable()).resolves.toEqual(runtime.getModels());
++		await runtime.refresh({ allowNetwork: false });
++		expect(runtime.getAllModels().map((model) => model.id)).toEqual(["managed-model"]);
++		writeFileSync(modelsPath, JSON.stringify({ providers: {} }));
++		await runtime.refresh({ allowNetwork: false, providers: ["openai", "anthropic"] });
++		expect(runtime.getAllModels()).toEqual([]);
++		expect(runtime.getProviders()).toEqual([]);
 +	});
 +
 +	test("does not restore a built-in provider after configured composition fails", async () => {
@@ -325,6 +512,49 @@ index 0000000..b282547
 +		expect(runtime.getError()).toContain('Provider "openai"');
 +		expect(runtime.getProvider("openai")).toBeUndefined();
 +		expect(runtime.getModels()).toEqual([]);
++	});
++
++	test("does not restore builtin models from a persisted catalog or fetch a remote catalog", async () => {
++		writeFileSync(modelsPath, JSON.stringify({ providers: { openai: { baseUrl: "https://example.invalid/v1" } } }));
++		const modelsStore = new InMemoryModelsStore();
++		const stock = await ModelRuntime.create({
++			credentials: AuthStorage.inMemory(),
++			modelsPath: null,
++			modelsStore: new InMemoryModelsStore(),
++			refreshOnCreate: false,
++		});
++		await modelsStore.write("openai", { models: stock.getAllModels("openai"), lastModified: Date.now() });
++		const read = vi.spyOn(modelsStore, "read");
++		const fetch = vi.spyOn(globalThis, "fetch").mockRejectedValue(new Error("Unexpected network access"));
++		try {
++			const runtime = await createRuntime(modelsStore);
++			await runtime.refresh({ allowNetwork: true });
++			expect(runtime.getError()).toBeUndefined();
++			expect(runtime.getAllModels()).toEqual([]);
++			expect(read).not.toHaveBeenCalled();
++			expect(fetch).not.toHaveBeenCalled();
++		} finally {
++			fetch.mockRestore();
++		}
++	});
++
++	test("does not expose builtin models for a missing or invalid administrative catalog", async () => {
++		for (const content of [undefined, "{broken", JSON.stringify({ providers: { openai: { models: "invalid" } } })]) {
++			if (content !== undefined) writeFileSync(modelsPath, content);
++			const runtime = await createRuntime();
++			if (content !== undefined) expect(runtime.getError()).toBeDefined();
++			expect(runtime.getAllModels()).toEqual([]);
++			expect(runtime.getProviders()).toEqual([]);
++		}
++	});
++
++	test("unregistering a provider cannot revive its builtin catalog", async () => {
++		writeFileSync(modelsPath, JSON.stringify({ providers: {} }));
++		const runtime = await createRuntime();
++		runtime.unregisterProvider("openai");
++		await runtime.refresh({ allowNetwork: false });
++		expect(runtime.getProviders()).toEqual([]);
++		expect(runtime.getAllModels()).toEqual([]);
 +	});
 +
 +	test("does not expose any built-in model when the administrative catalog is empty", async () => {

@@ -49,7 +49,6 @@ type ManagedModelRuntimeFactory = (options?: CreateModelRuntimeOptions) => Promi
 
 interface ManagedMainOptions {
   readonly extensionFactories: Array<{ readonly name: string; readonly factory: ExtensionFactory }>;
-  readonly includeBuiltInExtensions: false;
   readonly createModelRuntime: ManagedModelRuntimeFactory;
 }
 
@@ -429,7 +428,6 @@ export async function runPiSandbox(args: string[]): Promise<void> {
       const managedMain = piMain as unknown as ManagedMain;
       await managedMain(createManagedPiArguments(args), {
         extensionFactories: [{ name: "pi-sandbox", factory: extension }],
-        includeBuiltInExtensions: false,
         createModelRuntime: createManagedModelRuntimeFactory(modelsPath),
       });
     } finally {

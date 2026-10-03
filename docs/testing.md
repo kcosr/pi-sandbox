@@ -16,7 +16,7 @@ env -u NODE_ENV npm run verify:release
 To use a previously downloaded pinned Pi source archive, pass it through:
 
 ```sh
-env -u NODE_ENV npm run verify:release -- --pi-source-archive /path/to/pi-0.84.3-source.tar.gz
+env -u NODE_ENV npm run verify:release -- --pi-source-archive /path/to/pi-1.0.0-source.tar.gz
 ```
 
 The verifier runs formatting, lint, type checking, Rust service checks, unit,
@@ -170,12 +170,13 @@ the absence of runtime extension loading, bundled Bubblewrap input digest,
 architecture, version, required options, license packaging, installer mode, and
 release-manifest consistency.
 They verify the `pi-source.lock.json` source-archive checksum, apply
-the patch series to a clean temporary Pi 0.84.3 tree, run relevant upstream Pi
-tests, prove the configured-only model catalog, build and inspect the static
+the patch series to a clean temporary Pi 1.0.0 tree, run relevant upstream Pi
+tests, prove the configured-only catalog across model types and refreshes, build and inspect the static
 Rust broker, and inspect the final Bun application and release archive. The
 packaged executable diagnostic also proves that only the administrative model
 catalog is exposed and that the forced Pi Sandbox extension is the only Pi
-extension. A local source archive may replace the download so the entire
+extension while built-in MCP, codemode, tool-search, and llama factories remain
+disabled. A local source archive may replace the download so the entire
 release test remains offline.
 
 ## Local release verification
