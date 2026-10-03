@@ -3,7 +3,7 @@ import { dirname, isAbsolute, normalize, resolve } from "node:path";
 
 import { parse as parseToml } from "@iarna/toml";
 
-const ROOT_KEYS = new Set(["version", "extension_manifests", "platforms"]);
+const ROOT_KEYS = new Set(["version", "allow_config_override", "extension_manifests", "platforms"]);
 const PLATFORM_KEYS = new Set([
   "config_dir",
   "libexec_dir",
@@ -123,7 +123,10 @@ export async function loadDistribution(path, platform = process.platform) {
   }
   const root = object(parsed, `distribution manifest ${distributionPath}`);
   rejectUnknown(root, ROOT_KEYS, `distribution manifest ${distributionPath}`);
-  if (root.version !== 2) throw new Error("distribution manifest version must be 2");
+  if (root.version !== 3) throw new Error("distribution manifest version must be 3");
+  if (typeof root.allow_config_override !== "boolean") {
+    throw new Error("distribution allow_config_override must be a boolean");
+  }
   if (
     !Array.isArray(root.extension_manifests) ||
     root.extension_manifests.some((entry) => typeof entry !== "string" || entry.length === 0)
@@ -188,6 +191,7 @@ export async function loadDistribution(path, platform = process.platform) {
     extensionManifests: Object.freeze(extensionManifests),
     ...(bubblewrap === undefined ? {} : { bubblewrap }),
     layout: Object.freeze({
+      allowConfigOverride: root.allow_config_override,
       configDir,
       configPath: `${configDir}/config.toml`,
       defaultModelsPath: `${configDir}/models.json`,

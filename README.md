@@ -138,8 +138,8 @@ only when intentionally deploying the configuration packaged with a release.
 See [installation and operation](docs/installation.md).
 
 `PI_CODING_AGENT_DIR` continues to select user-owned sessions, settings, skills,
-themes, and logs. Administrative policy, the selected model catalog, and
-extension loading remain independently fixed.
+themes, and logs. It does not redirect policy, the selected model catalog, or
+extension loading.
 
 ## Configuration
 
@@ -149,6 +149,11 @@ The default distribution's administrative inputs are:
 /etc/pi-sandbox/config.toml
 /etc/pi-sandbox/models.json
 ```
+
+A version-3 distribution manifest with `allow_config_override = true` enables
+a leading `--config FILE` option for caller-selected policy. Managed builds
+set it to `false` and reject the flag. The selected TOML still requires an
+absolute `models_file`; no built-in model catalog is enabled.
 
 Broker mode may additionally use root-managed
 `/etc/pi-sandbox/users.d/*.toml` and `/etc/pi-sandbox/groups.d/*.toml` drop-ins. Both directories are optional;

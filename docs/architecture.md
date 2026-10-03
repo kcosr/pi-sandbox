@@ -61,8 +61,12 @@ tool implementations. Skills and user tool-selection options remain available:
 they may provide instructions or narrow the visible catalog, but all executable
 tool authority still comes from the forced extension.
 
-Administrative configuration begins at the distribution's compiled
-`config_dir/config.toml`. When configured, the Bun process asks the
+Configuration begins at the distribution's compiled `config_dir/config.toml`.
+Version-3 distribution manifests explicitly select `allow_config_override`;
+when true, a leading `--config FILE` selects a different TOML for this process.
+The flag is consumed before Pi argument handling, and invalid selected input
+fails closed. Managed builds set the switch to false and reject the flag.
+When configured, the Bun process asks the
 separate static Rust broker for the caller's combined user/group rules. The broker uses kernel
 peer credentials, resolves account and primary/supplementary membership through
 the host NSS resolver, and reads protected root-owned rules. It accepts one

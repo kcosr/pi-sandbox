@@ -126,9 +126,10 @@ compiled extension kinds, identifiers, versions, tool names, manifest and entryp
 digests, optional repository/revision provenance, private bundle digest, and
 the selected Bubblewrap provider, runtime path, version, and binary digest.
 
-`/etc/pi-sandbox/config.toml` is the fixed policy entry point. Its required
-`models_file` setting normally points to `/etc/pi-sandbox/models.json`, but the
-administrator may select another absolute managed path. Pi Sandbox performs no
+`/etc/pi-sandbox/config.toml` is the default policy entry point. Managed builds
+reject CLI policy selection. A distribution built with `allow_config_override = true`
+accepts a leading `--config FILE`; the selected TOML then supplies the required
+absolute `models_file`. See [configuration modes](configuration.md). Pi Sandbox performs no
 root-ownership or file-mode checks; deployment tooling is responsible for
 ownership and permissions.
 
@@ -152,7 +153,8 @@ env -u NODE_ENV npm run verify:release -- \
 ```
 
 ```toml
-version = 2
+version = 3
+allow_config_override = false
 extension_manifests = [
   "/path/to/pi-sandbox-extension.json",
   "/path/to/private-extension/pi-sandbox-extension.json",
@@ -226,10 +228,19 @@ Then select it with an empty `[extensions.example-tools]` table and provide a
 complete `[tools.example_lookup]` policy. Factories that register commands,
 event handlers, renderers, flags, or other non-tool features are rejected.
 
+The version-3 distribution manifest requires `allow_config_override = false`
+for managed installations or `true` to expose the runtime `--config FILE` prefix.
+This is compiled into the executable and recorded in the release manifest.
+Older distribution manifest versions are rejected. The switch does not change
+installer generation or installation paths: the installer still manages the
+compiled layout and packaged defaults. A local test may extract the payload
+and run its executable directly with `--config`, without installing services.
+
 The distribution manifest also sets `config_dir`, `libexec_dir`,
 `launcher_path`, `identity_socket_path`, `audit_socket_path`, and, on Linux, `service_dir` for each
-platform, plus the Linux Bubblewrap provider. All runtime paths are normalized
-absolute paths and immutable at runtime. A
+platform, plus the Linux Bubblewrap provider. These installation paths are
+normalized absolute paths fixed at build time. Only the application policy path
+can be selected at launch, when the build enables `--config`. A
 packaged default config must point `models_file` at that layout's
 `config_dir/models.json`.
 

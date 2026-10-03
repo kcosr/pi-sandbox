@@ -1,4 +1,5 @@
-version = 2
+version = 3
+allow_config_override = false
 extension_manifests = ["../../src/managed-extensions/git-clone/pi-sandbox-extension.json"]
 
 [platforms.linux]

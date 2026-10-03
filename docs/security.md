@@ -62,11 +62,17 @@ tool backed by its declared boundary. The seven replacements and user shell use
 the configured Bubblewrap or direct executor. Explicit managed host tools use only
 their compiled direct-argument implementation; sandbox failure never changes a
 tool into a host operation. Direct execution is admitted only from the
-effective root-managed administrative configuration and is never selected
+effective selected configuration and is never selected
 after a Bubblewrap failure.
 
-The distribution's compiled `config_dir/config.toml` is the fixed global policy
-and scoped-environment source. In broker mode, optional root-only rules in
+In managed builds (`allow_config_override = false`), the distribution's
+compiled `config_dir/config.toml` is the fixed global policy and
+scoped-environment source. A build with `allow_config_override = true` instead
+allows the caller to explicitly select that source with a leading `--config FILE`.
+This build mode delegates policy choice to the caller and is unsuitable for
+forcing staff to use administrator-selected permissions. The option cannot
+change the compiled extension catalog, root runtime check, or Bubblewrap binary.
+Service sockets and service-owned configuration remain build-selected. In broker mode, optional root-only rules in
 `config_dir/users.d/*.toml` and `config_dir/groups.d/*.toml` may provide matching account/group scoped-environment
 and administrator-selected model/execution/network/filesystem/tool patch. If no rules
 match, the main configuration remains unchanged. Pi's
