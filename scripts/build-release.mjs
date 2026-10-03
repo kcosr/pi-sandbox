@@ -599,6 +599,7 @@ async function main() {
         "packages/coding-agent/test/managed-main.test.ts",
         "packages/coding-agent/test/managed-extensions.test.ts",
         "packages/coding-agent/test/managed-session-sharing.test.ts",
+        "packages/coding-agent/test/managed-session-cwd.test.ts",
       ],
       { cwd: sourceRoot, env: cleanEnvironment },
     );

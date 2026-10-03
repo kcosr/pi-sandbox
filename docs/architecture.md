@@ -32,6 +32,30 @@ managed-extension tools may instead declare host execution. Those tools still us
 approval machinery, but run only their fixed executable and argument shape as
 the invoking user outside Bubblewrap.
 
+## RPC and session lifecycle
+
+The same managed executable accepts Pi's `--mode rpc`. A supervisor selects its
+workspace using the operating-system CWD when spawning the process; Sandbox
+adds no CWD flag or RPC parameter. The canonical launch path, effective policy,
+and executor remain fixed for that process. Pi session creation, resume,
+fork/clone, import, and reload must retain exactly that canonical CWD. A different
+workspace requires a new process. Alternate spellings and symlink aliases are
+rejected even when they resolve to the same directory, because Pi also discovers
+ancestor instructions using the supplied path.
+
+The generic Pi workspace admission hook runs before a target's settings or
+resources are loaded and, for replacement, before the healthy outgoing runtime
+is invalidated. Each replacement binds the new extension runtime exactly once.
+Shutdown clears outgoing approval grants and ends its audit session; the new
+runtime starts with fresh grants and audit identity while retaining the same
+process-owned executor. An accidental duplicate start disables that extension
+runtime's tool and shell access instead of reinitializing policy.
+
+An exact `--version` request reports the pinned Pi version without loading policy,
+probing an executor, or selecting a workspace. Argument and root-user validation
+still run. This lets supervisors probe the executable from their own directory
+before spawning an actual worker in its requested workspace.
+
 ## Managed application and identity broker
 
 The installed application is one prebuilt Bun executable. Its private entry

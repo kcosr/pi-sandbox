@@ -29,6 +29,16 @@ the host authority described below. Direct execution is a separate explicit
 operating mode, not a containment boundary: every approved built-in tool and
 user `!` shell runs with the invoking user's ordinary host authority.
 
+RPC mode uses the same execution boundary and policy as interactive mode. The
+trusted caller chooses the launch directory and RPC endpoint access. Session
+replacement cannot change the process workspace: a selected session must name
+the exact canonical launch CWD, and its current real path must still match.
+Validation precedes target-project discovery and outgoing-session teardown.
+Aliases are rejected because ancestor instruction discovery depends on path
+spelling. Session approval grants do not survive replacement or reload.
+Workspace pathname replacement during a process lifetime is outside the trusted
+launcher contract; admission checks do not make host-side resource reads atomic.
+
 ## Outside the boundary
 
 Pi runs on the host. Its provider API requests, authentication material, UI,
@@ -78,7 +88,8 @@ and administrator-selected model/execution/network/filesystem/tool patch. If no 
 match, the main configuration remains unchanged. Pi's
 internal model catalog is disabled. `PI_CODING_AGENT_DIR` may
 redirect user state but cannot redirect these administrative inputs. Missing,
-unreadable, or invalid effective inputs abort startup. The broker requires the
+unreadable, or invalid effective inputs abort operational startup. An exact
+`--version` is metadata-only and does not read those inputs. The broker requires the
 drop-in directory to be root-owned and not group/other writable, and matching
 files to be root-owned regular files with mode `0600`; ownership and
 permissions for the main TOML and model files remain deployment responsibilities.

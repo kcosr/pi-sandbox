@@ -1163,6 +1163,50 @@ describe("Pi Sandbox extension", () => {
     expect(result.result?.exitCode).toBe(1);
   });
 
+  it("revokes tool and shell access when the same extension runtime is started twice", async () => {
+    const pi = fakePi();
+    const executor = fakeExecutor();
+    await start(pi, executor);
+    await expect(pi.handlers.get("session_start")?.(undefined as never, context())).rejects.toThrow(
+      "started more than once",
+    );
+    await expect(executeTool(pi, "write", { path: "blocked", content: "blocked" })).rejects.toThrow(
+      "not available",
+    );
+    const result = (await pi.handlers.get("user_bash")?.(
+      { type: "user_bash", command: "pwd" } as never,
+      context(),
+    )) as UserBashEventResult;
+    expect(result.result?.exitCode).toBe(1);
+    expect(executor.calls).toHaveLength(0);
+  });
+
+  it("does not carry session approval grants into a replacement extension runtime", async () => {
+    const executor = fakeExecutor();
+    const cfg = config({ write: "ask" });
+    const granted = {
+      ...cfg,
+      tools: { ...cfg.tools, write: { ...cfg.tools.write!, sessionGrant: "offer" as const } },
+    };
+    const first = fakePi();
+    await start(first, executor, granted);
+    const select = vi.fn(() => Promise.resolve("Allow for session"));
+    const ctx = context({ hasUI: true, select });
+    const invoke = (pi: FakePi) =>
+      pi.tools
+        .get("write")!
+        .execute("call", { path: "note", content: "safe" }, undefined, undefined, ctx);
+    await invoke(first);
+    await invoke(first);
+    expect(select).toHaveBeenCalledTimes(1);
+    await first.handlers.get("session_shutdown")?.(undefined as never, context());
+    await expect(invoke(first)).rejects.toThrow("not available");
+    const second = fakePi();
+    await start(second, executor, granted);
+    await invoke(second);
+    expect(select).toHaveBeenCalledTimes(2);
+  });
+
   it("reuses the process-owned executor across logical extension sessions", async () => {
     const executor = fakeExecutor();
     const first = fakePi();

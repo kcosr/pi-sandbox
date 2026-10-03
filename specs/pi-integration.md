@@ -174,6 +174,17 @@ provides these seams:
    session content or invoking external sharing providers. It does not advertise
    that command; local `/export` remains available.
 
+4. `main()` and the session runtime accept a generic synchronous workspace
+   admission hook. It runs for initial session selection and every runtime
+   recreation before target settings, instructions, or resources load. Resume and
+   import validate before outgoing teardown; reload validates before resource
+   refresh. Pi Sandbox supplies an exact canonical-launch-CWD check. The policy,
+   executor, and workspace cannot be replaced through session RPC.
+5. RPC replacement handlers rely on the runtime's single rebind callback for
+   new/resume/fork/clone. They must not bind a replacement twice. Every genuine
+   runtime gets a fresh forced extension instance; shutdown ends audit state and
+   clears approval grants, while the process-owned executor stays available.
+
 Pi 1.0's resource loader separates built-in factories from ordinary inline
 factories. The forced `--no-extensions` flag disables the built-in factories and
 user/project discovery while retaining the mandatory Pi Sandbox inline factory.

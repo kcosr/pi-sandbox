@@ -8,6 +8,8 @@ import { setTimeout as delay } from "node:timers/promises";
 
 import { parse as parseToml, stringify as stringifyToml } from "@iarna/toml";
 
+import { testRpcSessionLifecycle } from "./rpc-lifecycle-smoke.mjs";
+
 const SANDBOX_TOOL_NAMES = Object.freeze(["read", "grep", "find", "ls", "write", "edit", "bash"]);
 
 if (process.argv.length !== 4) {
@@ -236,6 +238,8 @@ try {
     throw new Error("/sandbox did not report the isolated packaged smoke configuration");
   }
 
+  await testRpcSessionLifecycle({ child, messages, waitFor, workspace });
+
   child.stdin.end();
   const exit = await exitPromise;
   if (exit.code !== 0) {
@@ -247,7 +251,7 @@ try {
     throw new Error(`compiled executable emitted invalid RPC output: ${JSON.stringify(messages)}`);
   }
 
-  console.log("packaged /sandbox diagnostic smoke test passed");
+  console.log("packaged /sandbox diagnostics and RPC lifecycle smoke tests passed");
 } finally {
   if (child !== undefined && child.exitCode === null && child.signalCode === null) {
     child.kill("SIGTERM");

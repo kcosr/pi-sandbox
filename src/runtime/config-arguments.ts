@@ -1,4 +1,4 @@
-import { resolve } from "node:path";
+import { isAbsolute, resolve } from "node:path";
 
 import { buildLayout, type CompiledLayout } from "../build-layout/index.js";
 import { validateManagedArguments } from "./arguments.js";
@@ -12,7 +12,7 @@ export interface SandboxArguments {
 export function parseSandboxArguments(
   args: readonly string[],
   layout: Pick<CompiledLayout, "configPath" | "allowConfigOverride"> = buildLayout,
-  cwd = process.cwd(),
+  cwd?: string,
 ): SandboxArguments {
   let configPath = layout.configPath;
   let piArgs = [...args];
@@ -28,7 +28,7 @@ export function parseSandboxArguments(
     ) {
       throw new Error("--config requires a TOML file path");
     }
-    configPath = resolve(cwd, value);
+    configPath = isAbsolute(value) ? resolve(value) : resolve(cwd ?? process.cwd(), value);
     piArgs = args.slice(first === "--config" ? 2 : 1);
   }
   for (const argument of piArgs) {

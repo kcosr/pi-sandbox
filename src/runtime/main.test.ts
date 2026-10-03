@@ -2,7 +2,9 @@ import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
+
+import { parseSandboxArguments } from "./config-arguments.js";
 
 import { InMemoryCredentialStore } from "@earendil-works/pi-ai";
 
@@ -16,6 +18,7 @@ import {
 } from "../managed-extensions/sdk.js";
 import {
   createManagedModelRuntimeFactory,
+  runPiSandbox,
   assertExecutionPlatform,
   instantiateConfiguredManagedExtensions,
   resolveEffectiveAdministrativeConfiguration,
@@ -49,6 +52,26 @@ function rooted(root: string, absolutePath: string): string {
 }
 
 describe("administrative configuration", () => {
+  it("reports the pinned Pi version without reading policy or inspecting the probe workspace", async () => {
+    const write = vi.spyOn(process.stdout, "write").mockReturnValue(true);
+    const cwd = vi.spyOn(process, "cwd").mockImplementation(() => {
+      throw new Error("probe has no workspace");
+    });
+    try {
+      await runPiSandbox(
+        parseSandboxArguments(["--version"], {
+          configPath: "/nonexistent/config.toml",
+          allowConfigOverride: false,
+        }),
+      );
+      expect(write).toHaveBeenCalledWith("1.0.0\n");
+      expect(cwd).not.toHaveBeenCalled();
+    } finally {
+      cwd.mockRestore();
+      write.mockRestore();
+    }
+  });
+
   it("enforces the execution backend's platform contract", () => {
     const config = {
       configVersion: 6,
