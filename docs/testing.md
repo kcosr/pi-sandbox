@@ -181,7 +181,15 @@ the patch series to a clean temporary Pi 1.0.0 tree, run relevant upstream Pi
 tests, prove the configured-only catalog across model types and refreshes, build and inspect the static
 Rust broker, and inspect the final Bun application and release archive. The
 packaged executable diagnostic also proves that only the administrative model
-catalog is exposed and that the forced Pi Sandbox extension is the only Pi
+catalog is exposed. Its offline RPC lifecycle checks create new sessions, resume
+same-workspace transcripts, clone/fork, reject a foreign-workspace resume without
+discarding the current session, and run `/sandbox` and user Bash after each
+transition. They reject all extension errors, including duplicate `session_start`.
+Unit tests additionally verify revoked old-runtime access, fresh session grants,
+and canonical-path/alias rejection. Upstream patch tests prove rejection before
+target settings/resources, before outgoing teardown, and before reload reads.
+The exact version-probe test requires no policy or working-directory access.
+The packaged diagnostic also proves that the forced Pi Sandbox extension is the only Pi
 extension while built-in MCP, codemode, tool-search, and llama factories remain
 disabled. For configurable builds it selects a temporary policy with `--config`
 and an invalid compiled default, proving the chosen TOML and model path appear

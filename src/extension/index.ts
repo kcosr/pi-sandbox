@@ -738,7 +738,13 @@ export function createPiSandboxExtension(
     });
 
     pi.on("session_start", async (_event, ctx) => {
-      if (state.started) throw new Error("Pi Sandbox session was started more than once");
+      if (state.started || state.stopped) {
+        state.stopped = true;
+        state.executor = undefined;
+        state.policy?.clearSessionGrants();
+        await state.auditor?.end();
+        throw new Error("Pi Sandbox session was started more than once");
+      }
       state.started = true;
       const config = await dependencies.loadConfig();
       state.config = config;

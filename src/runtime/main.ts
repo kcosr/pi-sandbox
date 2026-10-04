@@ -6,6 +6,7 @@ import {
   getAgentDir,
   main as piMain,
   ModelRuntime,
+  VERSION,
   type CreateModelRuntimeOptions,
   type ExtensionFactory,
 } from "@earendil-works/pi-coding-agent";
@@ -38,6 +39,7 @@ import {
 import { createManagedPiArguments, selectManagedActiveTools } from "./arguments.js";
 import { applyManagedEnvironment } from "./environment.js";
 import { assertHostPrerequisites } from "./prerequisites.js";
+import { createWorkspaceBoundary } from "./workspace.js";
 import type { SandboxArguments } from "./config-arguments.js";
 
 export const SYSTEM_CONFIG_PATH = buildLayout.configPath;
@@ -51,6 +53,7 @@ type ManagedModelRuntimeFactory = (options?: CreateModelRuntimeOptions) => Promi
 interface ManagedMainOptions {
   readonly extensionFactories: Array<{ readonly name: string; readonly factory: ExtensionFactory }>;
   readonly createModelRuntime: ManagedModelRuntimeFactory;
+  readonly validateSessionCwd: (cwd: string) => void;
 }
 
 type ManagedMain = (args: string[], options: ManagedMainOptions) => Promise<void>;
@@ -364,6 +367,11 @@ function parseBackendQueryRoot(args: readonly string[]): string | undefined {
 }
 
 export async function runPiSandbox({ piArgs: args, configPath }: SandboxArguments): Promise<void> {
+  // Supervisors probe the worker before selecting its workspace. Metadata needs no authority.
+  if (args.length === 1 && args[0] === "--version") {
+    process.stdout.write(`${VERSION}\n`);
+    return;
+  }
   const validationRoot = parseValidationRoot(args);
   if (validationRoot !== undefined) {
     await validateAdministrativeConfiguration(validationRoot, configPath);
@@ -379,7 +387,7 @@ export async function runPiSandbox({ piArgs: args, configPath }: SandboxArgument
   const ambientHostEnvironment = { ...process.env };
   const { config, modelsPath, identityEnvironment } =
     await resolveEffectiveAdministrativeConfiguration("/", process.env, undefined, configPath);
-  const cwd = process.cwd();
+  const { cwd, validateSessionCwd } = createWorkspaceBoundary(process.cwd());
   const managedExtensions = instantiateConfiguredManagedExtensions(config);
   const piToolExtensions = selectConfiguredPiToolExtensions(config);
   const extensionEnvironments = resolveManagedExtensionHostEnvironments(
@@ -442,6 +450,7 @@ export async function runPiSandbox({ piArgs: args, configPath }: SandboxArgument
       await managedMain(createManagedPiArguments(args), {
         extensionFactories: [{ name: "pi-sandbox", factory: extension }],
         createModelRuntime: createManagedModelRuntimeFactory(modelsPath),
+        validateSessionCwd,
       });
     } finally {
       lease.restore();

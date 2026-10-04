@@ -1,0 +1,433 @@
+diff --git a/packages/coding-agent/src/core/agent-session-runtime.ts b/packages/coding-agent/src/core/agent-session-runtime.ts
+index c1d7655..0087254 100644
+--- a/packages/coding-agent/src/core/agent-session-runtime.ts
++++ b/packages/coding-agent/src/core/agent-session-runtime.ts
+@@ -79,6 +79,7 @@ export class AgentSessionRuntime {
+ 	private readonly createRuntime: CreateAgentSessionRuntimeFactory;
+ 	private _diagnostics: AgentSessionRuntimeDiagnostic[];
+ 	private _modelFallbackMessage?: string;
++	private readonly validateSessionCwd?: (cwd: string) => void;
+ 
+ 	constructor(
+ 		_session: AgentSession,
+@@ -86,12 +87,14 @@ export class AgentSessionRuntime {
+ 		createRuntime: CreateAgentSessionRuntimeFactory,
+ 		_diagnostics: AgentSessionRuntimeDiagnostic[] = [],
+ 		_modelFallbackMessage?: string,
++		validateSessionCwd?: (cwd: string) => void,
+ 	) {
+ 		this._session = _session;
+ 		this._services = _services;
+ 		this.createRuntime = createRuntime;
+ 		this._diagnostics = _diagnostics;
+ 		this._modelFallbackMessage = _modelFallbackMessage;
++		this.validateSessionCwd = validateSessionCwd;
+ 	}
+ 
+ 	get services(): AgentSessionServices {
+@@ -209,6 +212,7 @@ export class AgentSessionRuntime {
+ 		const previousSessionFile = this.session.sessionFile;
+ 		const sessionManager = SessionManager.open(sessionPath, undefined, options?.cwdOverride);
+ 		assertSessionCwdExists(sessionManager, this.cwd);
++		this.validateSessionCwd?.(sessionManager.getCwd());
+ 		await this.teardownCurrent("resume", sessionManager.getSessionFile());
+ 		this.apply(
+ 			await this.createRuntime({
+@@ -242,6 +246,7 @@ export class AgentSessionRuntime {
+ 			sessionManager.newSession({ parentSession: options.parentSession });
+ 		}
+ 
++		this.validateSessionCwd?.(sessionManager.getCwd());
+ 		await this.teardownCurrent("new", sessionManager.getSessionFile());
+ 		this.apply(
+ 			await this.createRuntime({
+@@ -296,6 +301,7 @@ export class AgentSessionRuntime {
+ 			if (!targetLeafId) {
+ 				const sessionManager = SessionManager.create(this.cwd, sessionDir);
+ 				sessionManager.newSession({ parentSession: currentSessionFile });
++				this.validateSessionCwd?.(sessionManager.getCwd());
+ 				await this.teardownCurrent("fork", sessionManager.getSessionFile());
+ 				this.apply(
+ 					await this.createRuntime({
+@@ -313,10 +319,12 @@ export class AgentSessionRuntime {
+ 				throw new Error("This session has not been saved yet. Send a message before cloning or forking it.");
+ 			}
+ 			const sessionManager = SessionManager.open(currentSessionFile, sessionDir);
++			this.validateSessionCwd?.(sessionManager.getCwd());
+ 			const forkedSessionPath = sessionManager.createBranchedSession(targetLeafId);
+ 			if (!forkedSessionPath) {
+ 				throw new Error("Failed to create forked session");
+ 			}
++			this.validateSessionCwd?.(sessionManager.getCwd());
+ 			await this.teardownCurrent("fork", sessionManager.getSessionFile());
+ 			this.apply(
+ 				await this.createRuntime({
+@@ -331,6 +339,7 @@ export class AgentSessionRuntime {
+ 		}
+ 
+ 		const sessionManager = this.session.sessionManager;
++		this.validateSessionCwd?.(sessionManager.getCwd());
+ 		await this.teardownCurrent("fork", sessionManager.getSessionFile());
+ 		if (!targetLeafId) {
+ 			sessionManager.newSession({ parentSession: previousSessionFile });
+@@ -362,6 +371,8 @@ export class AgentSessionRuntime {
+ 			throw new SessionImportFileNotFoundError(resolvedPath);
+ 		}
+ 
++		const sourceSession = SessionManager.open(resolvedPath, undefined, cwdOverride);
++		this.validateSessionCwd?.(sourceSession.getCwd());
+ 		const sessionDir = this.session.sessionManager.getSessionDir();
+ 		if (!existsSync(sessionDir)) {
+ 			mkdirSync(sessionDir, { recursive: true });
+@@ -388,6 +399,7 @@ export class AgentSessionRuntime {
+ 
+ 		const sessionManager = SessionManager.open(destinationPath, sessionDir, cwdOverride);
+ 		assertSessionCwdExists(sessionManager, this.cwd);
++		this.validateSessionCwd?.(sessionManager.getCwd());
+ 		await this.teardownCurrent("resume", sessionManager.getSessionFile());
+ 		this.apply(
+ 			await this.createRuntime({
+@@ -424,8 +436,11 @@ export async function createAgentSessionRuntime(
+ 		agentDir: string;
+ 		sessionManager: SessionManager;
+ 		sessionStartEvent?: SessionStartEvent;
++		validateSessionCwd?: (cwd: string) => void;
+ 	},
+ ): Promise<AgentSessionRuntime> {
++	options.validateSessionCwd?.(options.cwd);
++	options.validateSessionCwd?.(options.sessionManager.getCwd());
+ 	assertSessionCwdExists(options.sessionManager, options.cwd);
+ 	const result = await createRuntime(options);
+ 	return new AgentSessionRuntime(
+@@ -434,6 +449,7 @@ export async function createAgentSessionRuntime(
+ 		createRuntime,
+ 		result.diagnostics,
+ 		result.modelFallbackMessage,
++		options.validateSessionCwd,
+ 	);
+ }
+ 
+diff --git a/packages/coding-agent/src/core/agent-session-services.ts b/packages/coding-agent/src/core/agent-session-services.ts
+index 9673ba6..8f541f8 100644
+--- a/packages/coding-agent/src/core/agent-session-services.ts
++++ b/packages/coding-agent/src/core/agent-session-services.ts
+@@ -52,6 +52,7 @@ export interface CreateAgentSessionServicesOptions {
+  * have been resolved against those services.
+  */
+ export interface CreateAgentSessionFromServicesOptions {
++	validateSessionCwd?: (cwd: string) => void;
+ 	services: AgentSessionServices;
+ 	sessionManager: SessionManager;
+ 	sessionStartEvent?: SessionStartEvent;
+@@ -216,6 +217,7 @@ export async function createAgentSessionFromServices(
+ ): Promise<CreateAgentSessionResult> {
+ 	return createAgentSession({
+ 		cwd: options.services.cwd,
++		validateSessionCwd: options.validateSessionCwd,
+ 		agentDir: options.services.agentDir,
+ 		modelRuntime: options.services.modelRuntime,
+ 		settingsManager: options.services.settingsManager,
+diff --git a/packages/coding-agent/src/core/agent-session.ts b/packages/coding-agent/src/core/agent-session.ts
+index 63aa588..2178a79 100644
+--- a/packages/coding-agent/src/core/agent-session.ts
++++ b/packages/coding-agent/src/core/agent-session.ts
+@@ -244,6 +244,7 @@ function withoutDeletedHeaders(headers: ProviderHeaders | undefined): Record<str
+ }
+ 
+ export interface AgentSessionConfig {
++	validateSessionCwd?: (cwd: string) => void;
+ 	agent: Agent;
+ 	sessionManager: SessionManager;
+ 	settingsManager: SettingsManager;
+@@ -433,6 +434,7 @@ export class AgentSession {
+ 	private _allowedToolNames?: Set<string>;
+ 	private _excludedToolNames?: Set<string>;
+ 	private _baseToolsOverride?: Record<string, AgentTool>;
++	private readonly validateSessionCwd?: (cwd: string) => void;
+ 	private _sessionStartEvent: SessionStartEvent;
+ 	private _extensionUIContext?: ExtensionUIContext;
+ 	private _extensionMode: ExtensionMode = "print";
+@@ -467,6 +469,7 @@ export class AgentSession {
+ 		this._resourceLoader = config.resourceLoader;
+ 		this._customTools = config.customTools ?? [];
+ 		this._cwd = config.cwd;
++		this.validateSessionCwd = config.validateSessionCwd;
+ 		this._modelRuntime = config.modelRuntime;
+ 		this._cacheWarmer = config.cacheWarmer;
+ 		if (this._cacheWarmer) {
+@@ -3610,6 +3613,8 @@ export class AgentSession {
+ 	}
+ 
+ 	async reload(options?: { beforeSessionStart?: () => void | Promise<void> }): Promise<void> {
++		this.validateSessionCwd?.(this._cwd);
++		this.validateSessionCwd?.(this.sessionManager.getCwd());
+ 		const oldRunner = this._extensionRunner;
+ 		const previousFlagValues = oldRunner.getFlagValues();
+ 		await emitSessionShutdownEvent(oldRunner, { type: "session_shutdown", reason: "reload" });
+diff --git a/packages/coding-agent/src/core/sdk.ts b/packages/coding-agent/src/core/sdk.ts
+index 035304a..e8c6234 100644
+--- a/packages/coding-agent/src/core/sdk.ts
++++ b/packages/coding-agent/src/core/sdk.ts
+@@ -41,6 +41,8 @@ setDefaultStreamFn(streamSimple);
+ export interface CreateAgentSessionOptions {
+ 	/** Working directory for project-local discovery. Default: process.cwd() */
+ 	cwd?: string;
++	/** Workspace admission check, also applied before reload. */
++	validateSessionCwd?: (cwd: string) => void;
+ 	/** Global config directory. Default: ~/.pi/agent */
+ 	agentDir?: string;
+ 
+@@ -174,6 +176,8 @@ function getDefaultAgentDir(): string {
+  */
+ export async function createAgentSession(options: CreateAgentSessionOptions = {}): Promise<CreateAgentSessionResult> {
+ 	const cwd = resolvePath(options.cwd ?? options.sessionManager?.getCwd() ?? process.cwd());
++	options.validateSessionCwd?.(cwd);
++	if (options.sessionManager) options.validateSessionCwd?.(options.sessionManager.getCwd());
+ 	const agentDir = options.agentDir ? resolvePath(options.agentDir) : getDefaultAgentDir();
+ 	let resourceLoader = options.resourceLoader;
+ 
+@@ -439,6 +443,7 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
+ 		sessionManager,
+ 		settingsManager,
+ 		cwd,
++		validateSessionCwd: options.validateSessionCwd,
+ 		scopedModels: options.scopedModels,
+ 		resourceLoader,
+ 		customTools: options.customTools,
+diff --git a/packages/coding-agent/src/main.ts b/packages/coding-agent/src/main.ts
+index d626736..cec254a 100644
+--- a/packages/coding-agent/src/main.ts
++++ b/packages/coding-agent/src/main.ts
+@@ -573,6 +573,8 @@ async function promptForMissingSessionCwd(
+ export interface MainOptions {
+ 	extensionFactories?: InlineExtension[];
+ 	createModelRuntime?: ModelRuntimeFactory;
++	/** Reject a target workspace before reading its settings or resources. */
++	validateSessionCwd?: (cwd: string) => void;
+ }
+ 
+ export async function main(args: string[], options?: MainOptions) {
+@@ -696,6 +698,7 @@ export async function main(args: string[], options?: MainOptions) {
+ 		(envSessionDir ? expandTildePath(envSessionDir) : undefined) ??
+ 		startupSettingsManager.getSessionDir();
+ 	let sessionManager = await createSessionManager(parsed, cwd, sessionDir, startupSettingsManager);
++	options?.validateSessionCwd?.(sessionManager.getCwd());
+ 	const missingSessionCwdIssue = getMissingSessionCwdIssue(sessionManager, cwd);
+ 	if (missingSessionCwdIssue) {
+ 		if (appMode === "interactive") {
+@@ -739,6 +742,8 @@ export async function main(args: string[], options?: MainOptions) {
+ 		sessionStartEvent,
+ 		projectTrustContext,
+ 	}) => {
++		options?.validateSessionCwd?.(cwd);
++		options?.validateSessionCwd?.(sessionManager.getCwd());
+ 		const isInitialRuntime = sessionStartEvent === undefined;
+ 		const projectTrustDiagnostics: AgentSessionRuntimeDiagnostic[] = [];
+ 		const cachedProjectTrust = projectTrustByCwd.get(cwd);
+@@ -859,6 +864,7 @@ export async function main(args: string[], options?: MainOptions) {
+ 			excludeTools: sessionOptions.excludeTools,
+ 			noTools: sessionOptions.noTools,
+ 			customTools: sessionOptions.customTools,
++			validateSessionCwd: options?.validateSessionCwd,
+ 		});
+ 		const cliThinkingOverride = parsed.thinking !== undefined || cliThinkingFromModel;
+ 		if (created.session.model && cliThinkingOverride) {
+@@ -873,6 +879,7 @@ export async function main(args: string[], options?: MainOptions) {
+ 	};
+ 	time("createRuntime");
+ 	const runtime = await createAgentSessionRuntime(createRuntime, {
++		validateSessionCwd: options?.validateSessionCwd,
+ 		cwd: sessionManager.getCwd(),
+ 		agentDir,
+ 		sessionManager,
+diff --git a/packages/coding-agent/src/modes/rpc/rpc-mode.ts b/packages/coding-agent/src/modes/rpc/rpc-mode.ts
+index 1c0995d..262a55b 100644
+--- a/packages/coding-agent/src/modes/rpc/rpc-mode.ts
++++ b/packages/coding-agent/src/modes/rpc/rpc-mode.ts
+@@ -435,9 +435,6 @@ export async function runRpcMode(runtimeHost: AgentSessionRuntime): Promise<neve
+ 			case "new_session": {
+ 				const options = command.parentSession ? { parentSession: command.parentSession } : undefined;
+ 				const result = await runtimeHost.newSession(options);
+-				if (!result.cancelled) {
+-					await rebindSession();
+-				}
+ 				return success(id, "new_session", result);
+ 			}
+ 
+@@ -602,17 +599,11 @@ export async function runRpcMode(runtimeHost: AgentSessionRuntime): Promise<neve
+ 
+ 			case "switch_session": {
+ 				const result = await runtimeHost.switchSession(command.sessionPath);
+-				if (!result.cancelled) {
+-					await rebindSession();
+-				}
+ 				return success(id, "switch_session", result);
+ 			}
+ 
+ 			case "fork": {
+ 				const result = await runtimeHost.fork(command.entryId);
+-				if (!result.cancelled) {
+-					await rebindSession();
+-				}
+ 				return success(id, "fork", { text: result.selectedText, cancelled: result.cancelled });
+ 			}
+ 
+@@ -622,9 +613,6 @@ export async function runRpcMode(runtimeHost: AgentSessionRuntime): Promise<neve
+ 					return error(id, "clone", "Cannot clone session: no current entry selected");
+ 				}
+ 				const result = await runtimeHost.fork(leafId, { position: "at" });
+-				if (!result.cancelled) {
+-					await rebindSession();
+-				}
+ 				return success(id, "clone", { cancelled: result.cancelled });
+ 			}
+ 
+diff --git a/packages/coding-agent/test/managed-session-cwd.test.ts b/packages/coding-agent/test/managed-session-cwd.test.ts
+new file mode 100644
+index 0000000..1f41371
+--- /dev/null
++++ b/packages/coding-agent/test/managed-session-cwd.test.ts
+@@ -0,0 +1,143 @@
++import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
++import { tmpdir } from "node:os";
++import { join } from "node:path";
++import { afterEach, describe, expect, test, vi } from "vitest";
++import type { AgentSession } from "../src/core/agent-session.ts";
++import { createAgentSessionRuntime, type CreateAgentSessionRuntimeFactory } from "../src/core/agent-session-runtime.ts";
++import {
++	createAgentSessionServices,
++	createAgentSessionFromServices,
++	type AgentSessionServices,
++} from "../src/core/agent-session-services.ts";
++import { ModelRuntime } from "../src/core/model-runtime.ts";
++import { AuthStorage } from "../src/core/auth-storage.ts";
++import { SessionManager } from "../src/core/session-manager.ts";
++import { SettingsManager } from "../src/core/settings-manager.ts";
++import { restoreStdout } from "../src/core/output-guard.ts";
++import { main } from "../src/main.ts";
++
++const roots: string[] = [];
++afterEach(() => {
++	restoreStdout();
++	vi.restoreAllMocks();
++	vi.unstubAllEnvs();
++	for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true });
++});
++function fixture() {
++	const root = mkdtempSync(join(tmpdir(), "managed-session-cwd-"));
++	roots.push(root);
++	const cwd = join(root, "current");
++	const other = join(root, "foreign");
++	const agentDir = join(root, "agent");
++	for (const dir of [cwd, other, agentDir]) mkdirSync(dir);
++	const path = join(root, "foreign.jsonl");
++	writeFileSync(
++		path,
++		JSON.stringify({
++			type: "session",
++			version: 3,
++			id: "12345678-1234-4123-8123-123456789abc",
++			timestamp: new Date().toISOString(),
++			cwd: other,
++		}) + "\n",
++	);
++	const validateSessionCwd = vi.fn((candidate: string) => {
++		if (candidate !== cwd) throw new Error("Workspace rejected");
++	});
++	return { root, cwd, other, agentDir, path, validateSessionCwd };
++}
++
++describe("managed session workspace admission", () => {
++	test("checks initial CLI session selection before target settings and resources", async () => {
++		const f = fixture();
++		vi.stubEnv("PI_CODING_AGENT_DIR", f.agentDir);
++		vi.stubEnv("PI_OFFLINE", "1");
++		writeFileSync(join(f.agentDir, "settings.json"), JSON.stringify({ setupComplete: true }));
++		const settings = vi.spyOn(SettingsManager, "create");
++		const createModelRuntime = vi.fn().mockRejectedValue(new Error("Unexpected model initialization"));
++		await expect(
++			main(["--mode", "rpc", "--session", f.path, "--no-extensions"], {
++				validateSessionCwd: f.validateSessionCwd,
++				createModelRuntime,
++			}),
++		).rejects.toThrow("Workspace rejected");
++		expect(settings.mock.calls.some(([cwd]) => cwd === f.other)).toBe(false);
++		expect(createModelRuntime).not.toHaveBeenCalled();
++	});
++	test("rejects initial runtime before invoking its factory", async () => {
++		const f = fixture();
++		const factory = vi.fn<CreateAgentSessionRuntimeFactory>();
++		await expect(
++			createAgentSessionRuntime(factory, {
++				cwd: f.other,
++				agentDir: f.agentDir,
++				sessionManager: SessionManager.open(f.path),
++				validateSessionCwd: f.validateSessionCwd,
++			}),
++		).rejects.toThrow("Workspace rejected");
++		expect(factory).not.toHaveBeenCalled();
++	});
++	test("rejects switch and import before invalidating the healthy session or loading target resources", async () => {
++		const f = fixture();
++		const abort = vi.fn(async () => {});
++		const dispose = vi.fn();
++		const manager = SessionManager.create(f.cwd, join(f.root, "sessions"));
++		const session = {
++			sessionManager: manager,
++			sessionFile: manager.getSessionFile(),
++			abort,
++			dispose,
++			extensionRunner: { hasHandlers: () => false },
++		} as unknown as AgentSession;
++		const factory = vi.fn<CreateAgentSessionRuntimeFactory>().mockResolvedValue({
++			session,
++			services: { cwd: f.cwd, agentDir: f.agentDir } as AgentSessionServices,
++			diagnostics: [],
++			extensionsResult: {} as never,
++		});
++		const host = await createAgentSessionRuntime(factory, {
++			cwd: f.cwd,
++			agentDir: f.agentDir,
++			sessionManager: manager,
++			validateSessionCwd: f.validateSessionCwd,
++		});
++		await expect(host.switchSession(f.path)).rejects.toThrow("Workspace rejected");
++		await expect(host.importFromJsonl(f.path)).rejects.toThrow("Workspace rejected");
++		expect(factory).toHaveBeenCalledTimes(1);
++		expect(abort).not.toHaveBeenCalled();
++		expect(dispose).not.toHaveBeenCalled();
++		expect(host.session).toBe(session);
++	});
++	test("rejects reload before project settings or resources are read", async () => {
++		const f = fixture();
++		const modelRuntime = await ModelRuntime.create({
++			credentials: AuthStorage.inMemory(),
++			modelsPath: null,
++			includeBuiltinCatalog: false,
++			refreshOnCreate: false,
++		});
++		const services = await createAgentSessionServices({
++			cwd: f.cwd,
++			agentDir: f.agentDir,
++			modelRuntime,
++			resourceLoaderOptions: { noExtensions: true, noSkills: true, noThemes: true, noPromptTemplates: true },
++		});
++		const { session } = await createAgentSessionFromServices({
++			services,
++			sessionManager: SessionManager.inMemory(f.cwd),
++			validateSessionCwd: f.validateSessionCwd,
++		});
++		const settings = vi.spyOn(services.settingsManager, "reload");
++		const resources = vi.spyOn(services.resourceLoader, "reload");
++		f.validateSessionCwd.mockImplementation(() => {
++			throw new Error("Workspace changed");
++		});
++		try {
++			await expect(session.reload()).rejects.toThrow("Workspace changed");
++			expect(settings).not.toHaveBeenCalled();
++			expect(resources).not.toHaveBeenCalled();
++		} finally {
++			session.dispose();
++		}
++	});
++});
