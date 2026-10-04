@@ -52,6 +52,7 @@ class FakePi {
     registerCommand: (name: string, options: CommandOptions): void => {
       this.commands.set(name, options);
     },
+    registerToolRenderer: (): void => undefined,
     on: (event: string, handler: EventHandler): void => {
       const handlers = this.handlers.get(event) ?? [];
       handlers.push(handler);
