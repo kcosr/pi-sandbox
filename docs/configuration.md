@@ -399,13 +399,15 @@ compiled extensions.
 
 The extension freezes an exact request snapshot before policy evaluation and
 executes that same snapshot after approval. Pi's built-in renderers present
-their normal request details. Managed API version 3 tools may provide a short,
-single-line call summary that Pi Sandbox bounds and renders in the same tool
-card. `git_clone` shows its repository locator. A standard Pi extension keeps
-its own tool renderer, if supplied. The approval selector
-therefore contains only `Allow <subject>?` and the configured choices. The
-internal immutable snapshot and integrity fingerprint are not repeated in the
-UI.
+their normal request details, except that edit calls show only the path: Pi's
+edit diff preview reads the target file in the host process before approval, so
+Pi Sandbox replaces it for every edit call, including while `edit` is disabled.
+Managed API version 3 tools may provide a short, single-line call summary that
+Pi Sandbox bounds and renders in the same tool card. `git_clone` shows its
+repository locator. A standard Pi extension keeps its own tool renderer, if
+supplied. The approval selector therefore contains only `Allow <subject>?` and
+the configured choices. The internal immutable snapshot and integrity
+fingerprint are not repeated in the UI.
 
 An approval-required operation is denied when:
 

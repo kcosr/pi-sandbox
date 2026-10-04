@@ -3,6 +3,7 @@ import type {
   ExtensionContext,
   ExtensionToolContext,
   ToolDefinition,
+  ToolRendererResolver,
   UserBashEvent,
   UserBashEventResult,
 } from "@earendil-works/pi-coding-agent";
@@ -31,6 +32,7 @@ interface FakePi {
   readonly handlers: Map<string, Handler>;
   readonly tools: Map<string, ToolDefinition>;
   readonly commands: Map<string, CommandOptions>;
+  readonly toolRenderers: ToolRendererResolver[];
   readonly activeTools: string[][];
 }
 
@@ -42,6 +44,7 @@ function fakePi(): FakePi {
   const handlers = new Map<string, Handler>();
   const tools = new Map<string, ToolDefinition>();
   const commands = new Map<string, CommandOptions>();
+  const toolRenderers: ToolRendererResolver[] = [];
   const activeTools: string[][] = [];
   const api = {
     on(name: string, handler: Handler) {
@@ -53,6 +56,9 @@ function fakePi(): FakePi {
     registerCommand(name: string, options: CommandOptions) {
       commands.set(name, options);
     },
+    registerToolRenderer(resolver: ToolRendererResolver) {
+      toolRenderers.push(resolver);
+    },
     setActiveTools(names: string[]) {
       activeTools.push([...names]);
     },
@@ -63,7 +69,7 @@ function fakePi(): FakePi {
       Promise.resolve({ code: 0, stdout: "standard output", stderr: "", killed: false }),
     ),
   } as unknown as ExtensionAPI;
-  return { api, handlers, tools, commands, activeTools };
+  return { api, handlers, tools, commands, toolRenderers, activeTools };
 }
 
 function config(
@@ -729,6 +735,34 @@ describe("Pi Sandbox extension", () => {
       { lastComponent: undefined } as Parameters<typeof renderer>[2],
     );
     expect(component.render(80)[0]?.trimEnd()).toBe("edit a.txt");
+  });
+
+  it("draws edit calls without the host preview even while edit is disabled", async () => {
+    const pi = fakePi();
+    await start(pi, fakeExecutor(), config({ edit: "disabled" }));
+    expect(pi.tools.has("edit")).toBe(false);
+    const [resolver] = pi.toolRenderers;
+    if (resolver === undefined) throw new Error("missing tool renderer resolver");
+
+    const stock = { renderCall: vi.fn(), renderResult: vi.fn() };
+    const renderers = resolver("edit", () => stock);
+    expect(renderers?.renderResult).toBe(stock.renderResult);
+    const renderer = renderers?.renderCall;
+    if (renderer === undefined || renderer === stock.renderCall) {
+      throw new Error("missing safe edit renderer");
+    }
+    const component = renderer(
+      { path: "missing.txt", edits: [{ oldText: "a", newText: "b" }] },
+      {
+        fg: (_color: string, text: string) => text,
+        bold: (text: string) => text,
+      } as Parameters<typeof renderer>[1],
+      { lastComponent: undefined, argsComplete: true } as Parameters<typeof renderer>[2],
+    );
+    expect(component.render(80)[0]?.trimEnd()).toBe("edit missing.txt");
+
+    const read = { renderCall: vi.fn() };
+    expect(resolver("read", () => read)).toBe(read);
   });
 
   it("routes all seven tools through the sandbox executor", async () => {
