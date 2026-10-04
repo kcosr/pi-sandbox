@@ -11,11 +11,11 @@ those patches to be reimplemented.
 
 | Field                  | Pinned value                                                                           |
 | ---------------------- | -------------------------------------------------------------------------------------- |
-| Version                | `1.0.0`                                                                                |
-| Tag                    | `v1.0.0`                                                                               |
-| Commit                 | `a13d35a742c6ef8462812a28fbe1d8c8b7431c32`                                             |
-| Source archive         | `https://github.com/earendil-works/pi/releases/download/v1.0.0/pi-1.0.0-source.tar.gz` |
-| Source archive SHA-256 | `89089c82d41759b800124a77e212adaa867caaa9d1269d8012ef0df9bc86b92e`                     |
+| Version                | `1.0.2`                                                                                |
+| Tag                    | `v1.0.2`                                                                               |
+| Commit                 | `cd32f7725fdbddbaecdff5b1e68491563394e0ca`                                             |
+| Source archive         | `https://github.com/earendil-works/pi/releases/download/v1.0.2/pi-1.0.2-source.tar.gz` |
+| Source archive SHA-256 | `fee98d8778c42432906066728b7e6325e315a0df6c12177ce61fc4f7262f0473`                     |
 
 The build may download that archive or accept the identical archive from a
 local path. It must verify the SHA-256 digest before extraction. It extracts Pi
@@ -160,7 +160,7 @@ global scoped environment.
 
 ## Required Pi patch behavior
 
-Keep the patch series as small and generic as practical. Against Pi 1.0.0 it
+Keep the patch series as small and generic as practical. Against Pi 1.0.2 it
 provides these seams:
 
 1. `main()` accepts a caller-provided model-runtime factory and consistently

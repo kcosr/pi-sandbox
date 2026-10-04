@@ -246,7 +246,7 @@ packaged default config must point `models_file` at that layout's
 
 The build produces a native archive for its current Linux or macOS architecture.
 It downloads, or accepts a locally supplied copy of, the official Pi
-1.0.0 source archive pinned in `pi-source.lock.json`. It verifies the recorded
+1.0.2 source archive pinned in `pi-source.lock.json`. It verifies the recorded
 SHA-256 digest, extracts the source into temporary or ignored build storage,
 applies the small patch series in `patches/pi`, compiles Pi plus the separate Pi
 Sandbox extension and selected modules into the Bun application, and

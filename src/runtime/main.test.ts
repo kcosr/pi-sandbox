@@ -64,7 +64,7 @@ describe("administrative configuration", () => {
           allowConfigOverride: false,
         }),
       );
-      expect(write).toHaveBeenCalledWith("1.0.0\n");
+      expect(write).toHaveBeenCalledWith("1.0.2\n");
       expect(cwd).not.toHaveBeenCalled();
     } finally {
       cwd.mockRestore();
