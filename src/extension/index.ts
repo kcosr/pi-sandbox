@@ -11,6 +11,7 @@ import {
   type ExtensionContext,
   type ExtensionHandler,
   type ToolDefinition,
+  type ToolRenderers,
   type UserBashEvent,
   type UserBashEventResult,
 } from "@earendil-works/pi-coding-agent";
@@ -406,6 +407,20 @@ function hasControlCharacter(value: string): boolean {
   return false;
 }
 
+// Pi's stock edit call renderer reads the target file in this host process to preview a diff,
+// before approval and outside the sandbox. Draw every edit call with the path only, including
+// calls Pi renders while the edit tool is disabled and therefore unregistered.
+const renderEditCall: NonNullable<ToolRenderers["renderCall"]> = (args, theme, context) => {
+  const component =
+    context.lastComponent instanceof Text ? context.lastComponent : new Text("", 0, 0);
+  const path =
+    typeof args === "object" && args !== null && "path" in args && typeof args.path === "string"
+      ? args.path
+      : "[invalid path]";
+  component.setText(`${theme.fg("toolTitle", theme.bold("edit"))} ${theme.fg("accent", path)}`);
+  return component;
+};
+
 function registerTools(
   pi: ExtensionAPI,
   state: ExtensionState,
@@ -452,20 +467,12 @@ function registerTools(
     });
   }
   if (enabled.has("edit")) {
-    // The stock edit call renderer performs an unapproved host filesystem preview. Keep every
-    // other Pi 1.0 definition field, including prepareArguments and the settled-result renderer.
+    // Keep every other Pi 1.0 definition field, including prepareArguments and the settled-result
+    // renderer.
     const base = withoutToolFields(createEditToolDefinition(cwd), "execute", "renderCall");
     pi.registerTool({
       ...base,
-      renderCall(args, theme, context) {
-        const component =
-          context.lastComponent instanceof Text ? context.lastComponent : new Text("", 0, 0);
-        const path = typeof args?.path === "string" ? args.path : "[invalid path]";
-        component.setText(
-          `${theme.fg("toolTitle", theme.bold("edit"))} ${theme.fg("accent", path)}`,
-        );
-        return component;
-      },
+      renderCall: renderEditCall,
       async execute(_id, params, signal, _onUpdate, ctx) {
         const args = await authorize(
           state,
@@ -661,6 +668,10 @@ export function createPiSandboxExtension(
       stopped: false,
       auditor: undefined,
     };
+
+    pi.registerToolRenderer((toolName, next) =>
+      toolName === "edit" ? { ...next(), renderCall: renderEditCall } : next(),
+    );
 
     pi.registerCommand("sandbox", {
       description: "Show Pi Sandbox status, mounts, or effective policy",
