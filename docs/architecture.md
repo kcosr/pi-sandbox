@@ -239,7 +239,7 @@ With `filesystem.cwd_writable = true` (the packaged default), the captured
 launch CWD subtree is the maximum persistent host mutation authority for
 Bubblewrap operations. With `false`, the CWD remains readable but cannot be
 modified through the sandbox. In both cases the broader ordinary host tree is
-readable and read-only.
+readable and read-only except for the main configuration's `hidden_paths`.
 
 Both modes create an explicit same-path CWD bind after the private mounts:
 `--bind` for writable access, `--ro-bind` for read-only access. Private `/tmp`
@@ -250,10 +250,20 @@ When CWD is exactly `/tmp`, only writable access is supported; that explicit hos
 bind masks the private `/tmp` mount. Read-only CWD exactly `/tmp` is rejected.
 CWD `/` and overlaps with `/proc`, `/sys`, `/dev`, or `/run` remain rejected.
 
+Hidden directories are private tmpfs masks. Startup checks that every target is
+an existing canonical directory with no symlink components. Mount planning
+applies outer masks before restoring CWD and interior masks afterward. Nested
+redundant entries are reduced separately in these groups; the final masks are
+remounted read-only without recursively changing CWD permissions. This retains
+ordinary host utility access while removing siblings beneath a hidden runs
+parent. Exact CWD, `/`, `/tmp`, and private-system overlaps are rejected. The
+policy is immutable for the process and is not supplied by user/group overrides.
+
 Structured tools validate their inputs and report errors coherently, but the
 mount namespace enforces filesystem permissions. An approved Bash command can
 write private temporary state even when the CWD is read-only. Tool approval
 cannot broaden filesystem access. Direct mode requires `cwd_writable = true`
+and empty `hidden_paths`
 and does not provide a filesystem ceiling. Managed host tools retain their
 separate host authority.
 

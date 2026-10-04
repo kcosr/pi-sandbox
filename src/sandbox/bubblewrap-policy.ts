@@ -1,6 +1,11 @@
 import path from "node:path";
 
-import type { NetworkMode } from "../domain/index.js";
+import {
+  PRIVATE_SANDBOX_SYSTEM_PATHS,
+  isNormalizedAbsoluteFilePath,
+  isReservedHiddenDirectoryPath,
+  type NetworkMode,
+} from "../domain/index.js";
 
 const SAFE_ENVIRONMENT = Object.freeze({
   HOME: "/run/pi-sandbox/home",
@@ -37,8 +42,6 @@ const RESERVED_ENVIRONMENT_VARIABLES = new Set([
   "SHELLOPTS",
 ]);
 
-const PRIVATE_SYSTEM_PATHS = Object.freeze(["/proc", "/sys", "/dev", "/run"]);
-
 export interface SandboxMountDescription {
   readonly target: string;
   readonly access: "read-only" | "read/write" | "private" | "limited";
@@ -61,8 +64,10 @@ export function buildBubblewrapArguments(
   networkMode: NetworkMode = "none",
   environment: Readonly<Record<string, string>> = {},
   cwdWritable = true,
+  hiddenPaths: readonly string[] = [],
 ): readonly string[] {
   assertSandboxCwd(cwd, cwdWritable);
+  const masks = planHiddenDirectories(cwd, hiddenPaths);
   assertNetworkMode(networkMode);
   const customEnvironment = validateSandboxEnvironment(environment);
   if (!path.isAbsolute(argv[0])) {
@@ -108,14 +113,22 @@ export function buildBubblewrapArguments(
     "/run/pi-sandbox/config",
     "--dir",
     "/run/pi-sandbox/state",
-    // This is needed when the launch directory is below /tmp, whose host
-    // contents were intentionally hidden by the private tmpfs above.
+  ];
+  for (const target of masks.beforeCwd) args.push("--tmpfs", target);
+  args.push(
+    // Restore only the launch workspace through any hidden ancestor.
     "--dir",
     cwd,
     cwdWritable ? "--bind" : "--ro-bind",
     cwd,
     cwd,
-  ];
+  );
+  for (const target of masks.afterCwd) args.push("--tmpfs", target);
+  // Freeze masks after creating the CWD's private ancestor skeleton. This
+  // remount is non-recursive, preserving the CWD's configured access.
+  for (const target of [...masks.beforeCwd, ...masks.afterCwd]) {
+    args.push("--remount-ro", target);
+  }
   for (const [key, value] of Object.entries(SAFE_ENVIRONMENT)) {
     args.push("--setenv", key, value);
   }
@@ -167,15 +180,27 @@ function assertNetworkMode(networkMode: NetworkMode): void {
 export function describeBubblewrapMounts(
   cwd: string,
   cwdWritable = true,
+  hiddenPaths: readonly string[] = [],
 ): readonly SandboxMountDescription[] {
   assertSandboxCwd(cwd, cwdWritable);
+  const masks = planHiddenDirectories(cwd, hiddenPaths);
   return Object.freeze([
     { target: "/", access: "read-only", content: "host filesystem" },
+    ...masks.beforeCwd.map((target) => ({
+      target,
+      access: "read-only" as const,
+      content: "hidden host directory (private mask)",
+    })),
     {
       target: cwd,
       access: cwdWritable ? "read/write" : "read-only",
       content: "host launch directory",
     },
+    ...masks.afterCwd.map((target) => ({
+      target,
+      access: "read-only" as const,
+      content: "hidden host directory (private mask)",
+    })),
     ...(cwd === "/tmp"
       ? []
       : [{ target: "/tmp", access: "read/write" as const, content: "private tmpfs" }]),
@@ -197,7 +222,7 @@ export function assertSandboxCwd(cwd: string, cwdWritable = true): void {
   ) {
     throw new Error("sandbox_cwd_invalid");
   }
-  for (const protectedPath of PRIVATE_SYSTEM_PATHS) {
+  for (const protectedPath of PRIVATE_SANDBOX_SYSTEM_PATHS) {
     if (isWithin(protectedPath, cwd) || isWithin(cwd, protectedPath)) {
       throw new Error("sandbox_cwd_overlaps_private_system_path");
     }
@@ -216,7 +241,42 @@ function hasControlCharacter(value: string): boolean {
 
 function isWithin(root: string, candidate: string): boolean {
   const relative = path.relative(root, candidate);
-  return relative === "" || (!relative.startsWith("..") && !path.isAbsolute(relative));
+  return (
+    relative === "" ||
+    (relative !== ".." && !relative.startsWith(`..${path.sep}`) && !path.isAbsolute(relative))
+  );
+}
+
+/** Pure mount planning; the executor additionally checks host existence and realpath. */
+export function planHiddenDirectories(
+  cwd: string,
+  hiddenPaths: readonly string[],
+): { readonly beforeCwd: readonly string[]; readonly afterCwd: readonly string[] } {
+  if (!Array.isArray(hiddenPaths) || new Set(hiddenPaths).size !== hiddenPaths.length) {
+    throw new Error("sandbox_hidden_paths_invalid");
+  }
+  const ordered: string[] = [];
+  for (const target of hiddenPaths) {
+    if (!isNormalizedAbsoluteFilePath(target)) throw new Error("sandbox_hidden_path_invalid");
+    if (target === cwd) throw new Error("sandbox_hidden_path_is_cwd");
+    if (isReservedHiddenDirectoryPath(target)) {
+      throw new Error("sandbox_hidden_path_overlaps_private_system_path");
+    }
+    ordered.push(target);
+  }
+  ordered.sort((left, right) => left.length - right.length || left.localeCompare(right));
+  const minimal = (paths: readonly string[]): readonly string[] =>
+    Object.freeze(
+      paths.filter(
+        (target, index) => !paths.slice(0, index).some((ancestor) => isWithin(ancestor, target)),
+      ),
+    );
+  // A mask inside CWD must survive restoration even when a configured parent
+  // outside CWD already covers it. Reduce redundancy separately on each side.
+  return Object.freeze({
+    beforeCwd: minimal(ordered.filter((target) => !isWithin(cwd, target))),
+    afterCwd: minimal(ordered.filter((target) => isWithin(cwd, target))),
+  });
 }
 
 export function safeSandboxEnvironment(): Readonly<Record<string, string>> {

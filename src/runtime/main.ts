@@ -193,6 +193,7 @@ async function createProbedExecutor(
         bubblewrapPath: bubblewrap.path,
         networkMode: config.network.mode,
         cwdWritable: config.filesystem.cwdWritable,
+        hiddenPaths: config.filesystem.hiddenPaths,
         environment,
       });
     } else {
@@ -243,6 +244,9 @@ export function assertExecutionPlatform(
   }
   if (config.execution.backend === "direct" && !config.filesystem.cwdWritable) {
     throw new Error("Direct execution requires filesystem.cwd_writable = true");
+  }
+  if (config.execution.backend === "direct" && config.filesystem.hiddenPaths.length > 0) {
+    throw new Error("Direct execution requires filesystem.hidden_paths = []");
   }
   if (platform === "darwin" && config.identity.mode !== "disabled") {
     throw new Error(

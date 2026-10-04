@@ -1,4 +1,4 @@
-config_version = 6
+config_version = 7
 models_file = "/etc/pi-sandbox/models.json"
 
 [audit]
@@ -7,6 +7,7 @@ facility = "local0"
 
 [filesystem]
 cwd_writable = true
+hidden_paths = []
 
 [execution]
 backend = "direct"

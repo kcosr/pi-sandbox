@@ -166,13 +166,13 @@ export function applyIdentityOverrides(
     ]),
   ) as Record<string, ToolPolicy>;
   return Object.freeze({
-    configVersion: 6,
+    configVersion: 7,
     audit: base.audit,
     modelsFile: overrides.modelsFile ?? base.modelsFile,
     execution: overrides.execution ?? base.execution,
     identity: base.identity,
     network: overrides.network ?? base.network,
-    filesystem: overrides.filesystem ?? base.filesystem,
+    filesystem: Object.freeze({ ...base.filesystem, ...overrides.filesystem }),
     environment: base.environment,
     extensions: base.extensions,
     tools: Object.freeze(tools),
@@ -199,7 +199,7 @@ function parseIdentityOverrides(value: unknown): IdentityOverrides {
     }
     execution = Object.freeze({ backend: value.execution.backend as ExecutionConfig["backend"] });
   }
-  let filesystem: FilesystemConfig | undefined;
+  let filesystem: Pick<FilesystemConfig, "cwdWritable"> | undefined;
   if (Object.hasOwn(value, "filesystem")) {
     if (
       !isRecord(value.filesystem) ||

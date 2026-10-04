@@ -173,7 +173,9 @@ broker socket, change mount locations or host visibility, or change the fixed
 human-shell behavior. Environment values cannot enable tools or grant approval.
 
 The combined effective configuration is validated again: direct execution
-requires `network.mode = "host"` and `filesystem.cwd_writable = true`.
+requires `network.mode = "host"`, `filesystem.cwd_writable = true`, and empty
+`filesystem.hidden_paths`. Hidden paths belong exclusively to the main configuration;
+user/group rules cannot replace or erase them.
 Unknown fields, invalid policy combinations, malformed environment names,
 reserved runtime-injection variables, exposed permissions, and symlinks are
 rejected. All `.toml` files are validated, including unmatched rules. The two

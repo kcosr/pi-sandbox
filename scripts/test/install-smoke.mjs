@@ -391,7 +391,7 @@ grep -q '"valid":true' "$root$models_path"
   if (bundledBubblewrap) {
     await writeFile(
       path.join(payload, "bwrap"),
-      "#!/bin/sh\n[ \"${1:-}\" != --help ] || printf '%s\\n' '--unshare-user --disable-userns --assert-userns-disabled --json-status-fd --seccomp'\n",
+      "#!/bin/sh\n[ \"${1:-}\" != --help ] || printf '%s\\n' '--unshare-user --disable-userns --assert-userns-disabled --json-status-fd --seccomp --remount-ro'\n",
       { mode: 0o755 },
     );
   }

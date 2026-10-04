@@ -17,6 +17,7 @@ import {
   type ToolPolicy,
   type ToolPolicies,
   isNormalizedAbsoluteFilePath,
+  isReservedHiddenDirectoryPath,
   parseManagedEnvironment,
 } from "../domain/index.js";
 import type { ManagedExtensionCatalog } from "../managed-extensions/catalog.js";
@@ -277,13 +278,30 @@ function parseFilesystem(value: unknown, issues: string[]): FilesystemConfig | u
     issues.push("config.filesystem must be a table");
     return undefined;
   }
-  inspectKeys(value, ["cwd_writable"], "config.filesystem", issues);
+  inspectKeys(value, ["cwd_writable", "hidden_paths"], "config.filesystem", issues);
   const cwdWritable = own(value, "cwd_writable");
   if (typeof cwdWritable !== "boolean") {
     issues.push("config.filesystem.cwd_writable must be a boolean");
     return undefined;
   }
-  return Object.freeze({ cwdWritable });
+  const hiddenPaths = own(value, "hidden_paths");
+  if (
+    !Array.isArray(hiddenPaths) ||
+    !hiddenPaths.every(isNormalizedAbsoluteFilePath) ||
+    new Set(hiddenPaths).size !== hiddenPaths.length
+  ) {
+    issues.push(
+      "config.filesystem.hidden_paths must be an array of unique normalized absolute directory paths",
+    );
+    return undefined;
+  }
+  if (hiddenPaths.some(isReservedHiddenDirectoryPath)) {
+    issues.push(
+      "config.filesystem.hidden_paths must not overlap private system paths or hide /tmp",
+    );
+    return undefined;
+  }
+  return Object.freeze({ cwdWritable, hiddenPaths: Object.freeze([...hiddenPaths].sort()) });
 }
 
 function parseExecution(value: unknown, issues: string[]): ExecutionConfig | undefined {
@@ -322,8 +340,8 @@ export function parseConfig(
   inspectKeys(parsed, ROOT_KEYS, "config", issues);
 
   const configVersion = own(parsed, "config_version");
-  if (configVersion !== 6) {
-    issues.push("config.config_version must be the integer 6");
+  if (configVersion !== 7) {
+    issues.push("config.config_version must be the integer 7");
   }
 
   const modelsFileValue = own(parsed, "models_file");
@@ -349,6 +367,15 @@ export function parseConfig(
   if (execution?.backend === "direct" && filesystem?.cwdWritable === false) {
     issues.push(
       'config.filesystem.cwd_writable must be true when config.execution.backend is "direct"',
+    );
+  }
+  if (
+    execution?.backend === "direct" &&
+    filesystem !== undefined &&
+    filesystem.hiddenPaths.length > 0
+  ) {
+    issues.push(
+      'config.filesystem.hidden_paths must be empty when config.execution.backend is "direct"',
     );
   }
   const extensions = parseExtensions(own(parsed, "extensions"), catalog, issues);
@@ -381,7 +408,7 @@ export function parseConfig(
   }
 
   return Object.freeze({
-    configVersion: 6,
+    configVersion: 7,
     audit,
     modelsFile,
     execution,

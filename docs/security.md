@@ -15,7 +15,7 @@ services such as an SSH server where existing host controls permit it.
 
 The default Linux Bubblewrap ceiling is:
 
-- ordinary host filesystem readable;
+- ordinary host filesystem readable except configured `filesystem.hidden_paths`;
 - only the captured launch CWD persistently writable by default; setting
   `filesystem.cwd_writable = false` also makes that host directory read-only;
 - private temporary/runtime storage writable, except when host `/tmp` itself is
@@ -150,9 +150,29 @@ The sandbox receives its own process and device views and private writable temp
 and runtime locations. Host pseudo-filesystems and privileged sockets are not
 bind-mounted as host resources.
 
-Broad read access is intentional. Pi Sandbox does not attempt to keep ordinary
-host data secret from the model. Operators must not use it as a confidentiality
-boundary.
+Broad read access is the default. `filesystem.hidden_paths` masks selected
+canonical existing host directories with private read-only filesystems. The
+launch CWD is restored through a hidden ancestor; explicit hidden directories
+inside CWD are then masked again. Redundant nested masks are reduced on either
+side of the CWD restore. No hidden entry may equal CWD, `/`, or `/tmp`, or overlap
+the private process, device, system, or runtime paths. Mask mounts are remounted
+read-only non-recursively after the CWD skeleton is built, so CWD retains its
+configured permissions and tools cannot change mask contents or permissions.
+
+This is pathname isolation for sandboxed tools, not an inode confidentiality
+boundary. A symlink to a hidden pathname resolves through the hidden view, but
+pre-existing hard links and separate host bind-mount aliases outside the hidden
+tree can expose the same data. The trusted host must keep configured paths and
+ancestors stable while a worker is being created; hiding a pathname does not
+track host-side directory renames. Hidden entries with symlink components are
+rejected at startup rather than silently resolving to another policy target.
+
+Host Pi instruction/resource loading and managed host tools remain outside these
+mounts. In particular, ancestor `AGENTS.md` files, sessions, logs, and model
+configuration may still be read by trusted host code. Hide shared transcripts
+and logs separately if they are stored outside the runs parent, and select
+trusted host context inputs separately. The mask does not prevent a permitted
+host extension or reachable network service from returning hidden data.
 
 Direct mode has no filesystem ceiling. Typed read/search tools use their
 approved path arguments, typed write/edit tools may mutate any approved path

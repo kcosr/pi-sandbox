@@ -33,7 +33,12 @@ export type {
   ToolName,
   ToolPolicies,
 } from "./policy.js";
-export { MAXIMUM_ADMINISTRATIVE_PATH_BYTES, isNormalizedAbsoluteFilePath } from "./paths.js";
+export {
+  MAXIMUM_ADMINISTRATIVE_PATH_BYTES,
+  PRIVATE_SANDBOX_SYSTEM_PATHS,
+  isNormalizedAbsoluteFilePath,
+  isReservedHiddenDirectoryPath,
+} from "./paths.js";
 export {
   MAXIMUM_ENVIRONMENT_BYTES,
   MAXIMUM_ENVIRONMENT_EXTENSIONS,

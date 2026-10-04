@@ -1302,10 +1302,10 @@
               class="compact"
               aria-label="Example global Pi Sandbox configuration"
             ><code># /etc/pi-sandbox/config.toml — excerpt
-config_version = 6
+config_version = 7
 models_file = "/etc/pi-sandbox/models.json"
 audit = { enabled = false, facility = "local0" }
-filesystem = { cwd_writable = true }
+filesystem = { cwd_writable = true, hidden_paths = [] }
 [execution]
 backend = "bubblewrap"
 [identity]

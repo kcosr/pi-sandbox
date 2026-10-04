@@ -40,6 +40,8 @@ export interface CreateBubblewrapExecutorOptions {
   readonly cwd: string;
   /** Whether the launch directory permits host writes. Omitted means writable. */
   readonly cwdWritable?: boolean;
+  /** Existing canonical absolute directories hidden from sandboxed tools. */
+  readonly hiddenPaths?: readonly string[];
   /** Tool and shell network authority. Omitted means a private offline namespace. */
   readonly networkMode?: NetworkMode;
   /** Administrator-provided variables added to the fixed sandbox environment. */

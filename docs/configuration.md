@@ -79,7 +79,7 @@ Provider definitions and API-key resolution are documented separately in
 ## Complete example
 
 ```toml
-config_version = 6
+config_version = 7
 models_file = "/etc/pi-sandbox/models.json"
 
 [audit]
@@ -88,6 +88,7 @@ facility = "local0"
 
 [filesystem]
 cwd_writable = true
+hidden_paths = []
 
 [execution]
 backend = "bubblewrap"
@@ -171,11 +172,12 @@ effective file.
 
 ## Launch directory access
 
-The required `[filesystem]` table contains exactly one boolean:
+Configuration schema 7 requires both keys in `[filesystem]`:
 
 ```toml
 [filesystem]
 cwd_writable = true
+hidden_paths = []
 ```
 
 `true` is the packaged default and permits Bubblewrap operations to write in
@@ -193,17 +195,71 @@ beneath `/tmp` therefore remain visible. CWD exactly `/tmp` is rejected when
 With `true`, the existing host-`/tmp` CWD behavior is retained. CWD `/` and paths
 overlapping `/proc`, `/sys`, `/dev`, or `/run` remain invalid.
 
-Direct execution requires `cwd_writable = true`; it cannot enforce a read-only
+Direct execution requires `cwd_writable = true` and `hidden_paths = []`; it cannot enforce a read-only
 host CWD. Managed host tools remain outside this restriction and can still
 write according to their compiled operation and the invoking user's authority.
-The setting changes write access only; it does not restrict host filesystem
-visibility. Ordinary host filesystem reads remain governed by Unix permissions.
+`cwd_writable` changes write access only. Use `hidden_paths` to remove selected
+host directories from the sandboxed tools' filesystem view.
 
 A root-managed user/group rule may override this setting with
 `[overrides.filesystem] cwd_writable = false`. Omission inherits the parent
 value. The final backend/filesystem combination is validated after overrides;
 switching a read-only base to direct execution also requires overriding
 `cwd_writable` to `true`.
+
+### Hidden directories
+
+`hidden_paths` is an explicit array of unique, normalized absolute directory
+paths. The default empty array preserves the ordinary read-only host view.
+Every entry must exist and be canonical at worker startup; symlinks in the
+entry or any ancestor, missing paths, and regular files are rejected. To hide a
+file, hide its containing directory. `/`, `/tmp`, and paths overlapping `/proc`,
+`/sys`, `/dev`, or `/run` are rejected. The exact launch CWD cannot be hidden.
+Keep the runtime executable and its dependencies outside the effective hidden
+view; unavailable runtime resources cause startup or prerequisite checks to fail.
+
+For an evaluation worker launched in `/srv/evaluations/runs/run-a`:
+
+```toml
+[filesystem]
+cwd_writable = true
+hidden_paths = ["/srv/evaluations/runs", "/srv/evaluations/transcripts"]
+```
+
+Sandboxed tools see a private read-only mask at the runs parent, with only
+`run-a` restored at its identical path. Sibling runs and the shared transcript
+directory contents are hidden. An additional entry inside `run-a` hides that
+subdirectory even after the workspace is restored. Redundant nested entries
+are reduced deterministically without losing these interior masks. Mask
+directories remain visible as empty directories (or the private ancestor
+skeleton leading to CWD), and cannot be written or made writable by tools.
+
+The setting belongs only to the main TOML. User/group `cwd_writable` overrides
+preserve it; rules cannot set or clear `hidden_paths`. A rule switching the
+backend to direct execution is rejected if hidden paths are configured.
+
+Masks govern tools and human shell commands. Trusted host Pi resource loading,
+including ancestor instructions, session files, and managed host extensions,
+retains host access. Select these inputs deliberately and hide transcript/log
+storage separately when it lives outside the runs directory. Existing hard
+links or separate host bind-mount aliases can still expose the same data through
+other visible paths. See [security.md](security.md#filesystem-details).
+
+For isolated evaluations, use a harness-controlled `PI_CODING_AGENT_DIR` and
+pass task instructions explicitly through RPC. Disable automatic instruction,
+skill, prompt-template, and theme discovery with:
+
+```sh
+--no-context-files --no-skills --no-prompt-templates --no-themes \
+  --system-prompt "" --append-system-prompt ""
+```
+
+The empty prompt arguments retain Pi's built-in prompt while suppressing
+automatic `SYSTEM.md` and `APPEND_SYSTEM.md` loading, which `--no-context-files`
+alone does not disable. Alternatively, supply explicit trusted prompt text or
+files outside writable workspaces. Do not add untrusted explicit resource paths.
+A tool mount cannot stop host Pi from following a context-file symlink into a
+hidden directory.
 
 ## Network modes
 
