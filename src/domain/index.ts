@@ -28,6 +28,7 @@ export type {
   IdentityOverrides,
   PolicyMode,
   SandboxConfig,
+  SessionsConfig,
   SessionGrantPolicy,
   SubjectPolicy,
   ToolName,

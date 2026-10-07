@@ -339,7 +339,7 @@ case "$execution_backend" in
         echo "Bubblewrap execution is configured but $bubblewrap_probe cannot run" >&2
         exit 1
       }
-      for required_option in --unshare-user --disable-userns --assert-userns-disabled --json-status-fd --seccomp; do
+      for required_option in --unshare-user --disable-userns --assert-userns-disabled --json-status-fd --seccomp --remount-ro --ro-bind-data; do
         case "$bubblewrap_help" in
           *"$required_option"*) ;;
           *)

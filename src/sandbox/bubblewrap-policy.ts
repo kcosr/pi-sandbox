@@ -50,6 +50,12 @@ export interface SandboxMountDescription {
 
 export const BUBBLEWRAP_STATUS_FD = 3;
 export const BUBBLEWRAP_SECCOMP_FD = 4;
+export const BUBBLEWRAP_FILE_MASK_FIRST_FD = 5;
+
+export interface HiddenPathMask {
+  readonly target: string;
+  readonly kind: "directory" | "file";
+}
 
 /**
  * Construct the process-lifetime boundary for the internal command worker. The
@@ -64,10 +70,14 @@ export function buildBubblewrapArguments(
   networkMode: NetworkMode = "none",
   environment: Readonly<Record<string, string>> = {},
   cwdWritable = true,
-  hiddenPaths: readonly string[] = [],
+  hiddenMasks: readonly HiddenPathMask[] = [],
 ): readonly string[] {
   assertSandboxCwd(cwd, cwdWritable);
-  const masks = planHiddenDirectories(cwd, hiddenPaths);
+  const masks = planHiddenPaths(
+    cwd,
+    hiddenMasks.map(({ target }) => target),
+  );
+  const kinds = new Map(hiddenMasks.map(({ target, kind }) => [target, kind]));
   assertNetworkMode(networkMode);
   const customEnvironment = validateSandboxEnvironment(environment);
   if (!path.isAbsolute(argv[0])) {
@@ -114,7 +124,17 @@ export function buildBubblewrapArguments(
     "--dir",
     "/run/pi-sandbox/state",
   ];
-  for (const target of masks.beforeCwd) args.push("--tmpfs", target);
+  let nextFileMaskFd = BUBBLEWRAP_FILE_MASK_FIRST_FD;
+  const addMask = (target: string): void => {
+    if (kinds.get(target) === "file") {
+      // Bubblewrap consumes and closes each data FD, so every file has its own
+      // empty input. The resulting bind mount is private and read-only.
+      args.push("--ro-bind-data", String(nextFileMaskFd++), target);
+    } else {
+      args.push("--tmpfs", target);
+    }
+  };
+  for (const target of masks.beforeCwd) addMask(target);
   args.push(
     // Restore only the launch workspace through any hidden ancestor.
     "--dir",
@@ -123,11 +143,11 @@ export function buildBubblewrapArguments(
     cwd,
     cwd,
   );
-  for (const target of masks.afterCwd) args.push("--tmpfs", target);
+  for (const target of masks.afterCwd) addMask(target);
   // Freeze masks after creating the CWD's private ancestor skeleton. This
   // remount is non-recursive, preserving the CWD's configured access.
   for (const target of [...masks.beforeCwd, ...masks.afterCwd]) {
-    args.push("--remount-ro", target);
+    if (kinds.get(target) === "directory") args.push("--remount-ro", target);
   }
   for (const [key, value] of Object.entries(SAFE_ENVIRONMENT)) {
     args.push("--setenv", key, value);
@@ -183,13 +203,13 @@ export function describeBubblewrapMounts(
   hiddenPaths: readonly string[] = [],
 ): readonly SandboxMountDescription[] {
   assertSandboxCwd(cwd, cwdWritable);
-  const masks = planHiddenDirectories(cwd, hiddenPaths);
+  const masks = planHiddenPaths(cwd, hiddenPaths);
   return Object.freeze([
     { target: "/", access: "read-only", content: "host filesystem" },
     ...masks.beforeCwd.map((target) => ({
       target,
       access: "read-only" as const,
-      content: "hidden host directory (private mask)",
+      content: "hidden host path (private mask)",
     })),
     {
       target: cwd,
@@ -199,7 +219,7 @@ export function describeBubblewrapMounts(
     ...masks.afterCwd.map((target) => ({
       target,
       access: "read-only" as const,
-      content: "hidden host directory (private mask)",
+      content: "hidden host path (private mask)",
     })),
     ...(cwd === "/tmp"
       ? []
@@ -248,7 +268,7 @@ function isWithin(root: string, candidate: string): boolean {
 }
 
 /** Pure mount planning; the executor additionally checks host existence and realpath. */
-export function planHiddenDirectories(
+export function planHiddenPaths(
   cwd: string,
   hiddenPaths: readonly string[],
 ): { readonly beforeCwd: readonly string[]; readonly afterCwd: readonly string[] } {

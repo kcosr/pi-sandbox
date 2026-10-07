@@ -10,6 +10,7 @@ export interface ExtensionDependencies {
   readonly userStateDir: string;
   readonly activeTools?: readonly ToolName[];
   readonly loadConfig: () => Promise<SandboxConfig>;
+  readonly onSessionStart?: (file: string | undefined) => Promise<void>;
   readonly executor: SandboxExecutor;
   readonly auditClient?: AuditClient;
   readonly managedExtensions?: readonly ManagedExtensionInstance[];

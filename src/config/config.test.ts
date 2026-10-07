@@ -25,7 +25,7 @@ function completeConfig(
     (toolName) =>
       `[tools.${toolName}]\naudit = false\n${overrides[toolName] ?? 'mode = "allow"\nsession_grant = "never"'}`,
   );
-  return `config_version = 7\nmodels_file = "/etc/pi-sandbox/models.json"\n\n[audit]\nenabled = false\nfacility = "local0"\n\n[filesystem]\ncwd_writable = true\nhidden_paths = []\n\n[execution]\nbackend = "bubblewrap"\n\n[identity]\nmode = "disabled"\n\n[network]\nmode = "none"\n\n[environment.pi]\n\n[environment.sandbox]\n\n[environment.extensions]\n\n[extensions]\n\n${sections.join("\n\n")}\n`;
+  return `config_version = 8\nmodels_file = "/etc/pi-sandbox/models.json"\n\n[sessions]\nretention_days = 0\n\n[audit]\nenabled = false\nfacility = "local0"\n\n[filesystem]\ncwd_writable = true\nhidden_paths = []\n\n[execution]\nbackend = "bubblewrap"\n\n[identity]\nmode = "disabled"\n\n[network]\nmode = "none"\n\n[environment.pi]\n\n[environment.sandbox]\n\n[environment.extensions]\n\n[extensions]\n\n${sections.join("\n\n")}\n`;
 }
 
 function parseConfig(
@@ -48,7 +48,8 @@ describe("parseConfig", () => {
     );
 
     expect(config).toEqual({
-      configVersion: 7,
+      configVersion: 8,
+      sessions: { retentionDays: 0 },
       filesystem: { cwdWritable: true, hiddenPaths: [] },
       audit: { enabled: false, facility: "local0" },
       modelsFile: "/etc/pi-sandbox/models.json",
@@ -70,6 +71,34 @@ describe("parseConfig", () => {
     expect(Object.isFrozen(config)).toBe(true);
     expect(Object.isFrozen(config.tools)).toBe(true);
     expect(Object.isFrozen(config.tools.read)).toBe(true);
+  });
+
+  it("requires a strict bounded session retention policy", () => {
+    const source = completeConfig();
+    for (const retentionDays of [0, 1, 365, 36_500]) {
+      const config = parseConfig(
+        source.replace("retention_days = 0", `retention_days = ${retentionDays}`),
+      );
+      expect(config.sessions).toEqual({ retentionDays });
+      expect(Object.isFrozen(config.sessions)).toBe(true);
+    }
+    for (const retentionDays of ["-1", "36501", "1.5", '"365"', "false", "[]", "inf", "nan"]) {
+      expect(() =>
+        parseConfig(source.replace("retention_days = 0", `retention_days = ${retentionDays}`)),
+      ).toThrow("config.sessions.retention_days must be an integer between 0 and 36500");
+    }
+    expect(() => parseConfig(source.replace("[sessions]\nretention_days = 0\n\n", ""))).toThrow(
+      "config.sessions is required",
+    );
+    expect(() => parseConfig(source.replace("retention_days = 0", ""))).toThrow(
+      "config.sessions.retention_days is required",
+    );
+    expect(() =>
+      parseConfig(source.replace("[sessions]\nretention_days = 0", "sessions = false")),
+    ).toThrow("config.sessions must be a table");
+    expect(() =>
+      parseConfig(source.replace("retention_days = 0", "retention_days = 0\nextra = true")),
+    ).toThrow("config.sessions.extra is not a recognized field");
   });
 
   it("requires a strict filesystem policy and rejects unenforceable direct access", () => {
@@ -163,8 +192,8 @@ describe("parseConfig", () => {
           .replace('mode = "none"', 'mode = "host"'),
       ),
     ).toThrow("config.filesystem.hidden_paths must be empty");
-    expect(() => parseConfig(source.replace("config_version = 7", "config_version = 6"))).toThrow(
-      "integer 7",
+    expect(() => parseConfig(source.replace("config_version = 8", "config_version = 7"))).toThrow(
+      "integer 8",
     );
   });
 
@@ -200,11 +229,11 @@ describe("parseConfig", () => {
 
   it("rejects unsupported config versions and types", () => {
     expect(() =>
-      parseConfig(completeConfig().replace("config_version = 7", 'config_version = "6"')),
-    ).toThrow("config.config_version must be the integer 7");
+      parseConfig(completeConfig().replace("config_version = 8", 'config_version = "8"')),
+    ).toThrow("config.config_version must be the integer 8");
     expect(() =>
-      parseConfig(completeConfig().replace("config_version = 7", "config_version = 4")),
-    ).toThrow("config.config_version must be the integer 7");
+      parseConfig(completeConfig().replace("config_version = 8", "config_version = 4")),
+    ).toThrow("config.config_version must be the integer 8");
   });
 
   it("requires models_file to be a normalized absolute file path", () => {
@@ -237,7 +266,7 @@ describe("parseConfig", () => {
   it("rejects unknown fields at every schema level", () => {
     expect(() =>
       parseConfig(
-        completeConfig().replace("config_version = 7", "config_version = 7\nunexpected = true"),
+        completeConfig().replace("config_version = 8", "config_version = 8\nunexpected = true"),
       ),
     ).toThrow("config.unexpected is not a recognized field");
     expect(() =>
@@ -375,12 +404,12 @@ describe("parseConfig", () => {
   });
 
   it("rejects missing root fields and tables with the wrong shape", () => {
-    expect(() => parseConfig(completeConfig().replace("config_version = 7\n", ""))).toThrow(
+    expect(() => parseConfig(completeConfig().replace("config_version = 8\n", ""))).toThrow(
       "config.config_version is required",
     );
     expect(() =>
       parseConfig(
-        'config_version = 7\nmodels_file = "/etc/pi-sandbox/models.json"\nexecution = "direct"\nidentity = "disabled"\nnetwork = "none"\nextensions = "none"\ntools = "all"\n',
+        'config_version = 8\nmodels_file = "/etc/pi-sandbox/models.json"\nexecution = "direct"\nidentity = "disabled"\nnetwork = "none"\nextensions = "none"\ntools = "all"\n',
       ),
     ).toThrow("config.tools must be a table");
     expect(() =>
@@ -492,7 +521,8 @@ describe("loadConfig", () => {
     await writeFile(path, completeConfig(), "utf8");
 
     await expect(loadConfig(path, EMPTY_EXTENSION_CATALOG)).resolves.toMatchObject({
-      configVersion: 7,
+      configVersion: 8,
+      sessions: { retentionDays: 0 },
       filesystem: { cwdWritable: true, hiddenPaths: [] },
       audit: { enabled: false, facility: "local0" },
     });

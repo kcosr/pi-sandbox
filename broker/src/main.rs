@@ -1072,6 +1072,22 @@ session_grant = "offer"
     }
 
     #[test]
+    fn rejects_session_retention_in_user_and_group_records() {
+        for (kind, selector) in [
+            (RecordKind::User, "uid = 7"),
+            (RecordKind::Group, "gid = 7"),
+        ] {
+            for table in ["sessions", "overrides.sessions"] {
+                let source = format!("version = 7\n{selector}\n[{table}]\nretention_days = 0\n");
+                assert!(matches!(
+                    parse_record(source.as_bytes(), kind),
+                    Err(LookupError::InvalidFile)
+                ));
+            }
+        }
+    }
+
+    #[test]
     fn rejects_invalid_and_oversized_environment_values() {
         let cases: &[&[u8]] = &[
             b"version = 7\nuid = 7\n[environment.pi]\nBad-Name = \"x\"\n",

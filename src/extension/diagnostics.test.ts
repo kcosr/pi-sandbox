@@ -5,7 +5,8 @@ import { formatSandboxMounts, formatSandboxPolicy, formatSandboxSummary } from "
 
 function diagnosticConfig(): SandboxConfig {
   return {
-    configVersion: 7,
+    configVersion: 8,
+    sessions: { retentionDays: 0 },
     audit: { enabled: false, facility: "local0" },
     modelsFile: "/etc/pi-sandbox/models.json",
     filesystem: { cwdWritable: true, hiddenPaths: [] },
@@ -128,7 +129,7 @@ Use /sandbox mounts or /sandbox policy for details.`);
     const mounts = formatSandboxMounts("/work/project", config.execution, config.filesystem);
     expect(mounts).toContain("/work");
     expect(mounts).toContain("/work/project/private");
-    expect(mounts).toContain("hidden host directory (private mask)");
+    expect(mounts).toContain("hidden host path (private mask)");
     expect(
       formatSandboxPolicy(
         { config, hasSessionGrant: () => false, isToolActive: () => true },

@@ -74,7 +74,8 @@ describe("administrative configuration", () => {
 
   it("enforces the execution backend's platform contract", () => {
     const config = {
-      configVersion: 7,
+      configVersion: 8,
+      sessions: { retentionDays: 0 },
       filesystem: { cwdWritable: true, hiddenPaths: [] },
       audit: { enabled: false, facility: "local0" },
       modelsFile: "/etc/pi-sandbox/models.json",
@@ -263,7 +264,8 @@ describe("administrative configuration", () => {
     ]);
     const allow = { audit: false, mode: "allow", sessionGrant: "never" } as const;
     const config = {
-      configVersion: 7,
+      configVersion: 8,
+      sessions: { retentionDays: 0 },
       filesystem: { cwdWritable: true, hiddenPaths: [] },
       audit: { enabled: false, facility: "local0" },
       modelsFile: "/etc/pi-sandbox/models.json",

@@ -14,6 +14,7 @@ import {
   type FilesystemConfig,
   type NetworkConfig,
   type SandboxConfig,
+  type SessionsConfig,
   type ToolPolicy,
   type ToolPolicies,
   isNormalizedAbsoluteFilePath,
@@ -29,6 +30,7 @@ const ROOT_KEYS = [
   "config_version",
   "models_file",
   "audit",
+  "sessions",
   "execution",
   "filesystem",
   "identity",
@@ -251,6 +253,25 @@ function parseAudit(value: unknown, issues: string[]): AuditConfig | undefined {
   return Object.freeze({ enabled, facility });
 }
 
+function parseSessions(value: unknown, issues: string[]): SessionsConfig | undefined {
+  if (!isRecord(value)) {
+    issues.push("config.sessions must be a table");
+    return undefined;
+  }
+  inspectKeys(value, ["retention_days"], "config.sessions", issues);
+  const retentionDays = own(value, "retention_days");
+  if (
+    typeof retentionDays !== "number" ||
+    !Number.isSafeInteger(retentionDays) ||
+    retentionDays < 0 ||
+    retentionDays > 36_500
+  ) {
+    issues.push("config.sessions.retention_days must be an integer between 0 and 36500");
+    return undefined;
+  }
+  return Object.freeze({ retentionDays });
+}
+
 function parseIdentity(value: unknown, issues: string[]): IdentityConfig | undefined {
   if (!isRecord(value)) {
     issues.push("config.identity must be a table");
@@ -291,7 +312,7 @@ function parseFilesystem(value: unknown, issues: string[]): FilesystemConfig | u
     new Set(hiddenPaths).size !== hiddenPaths.length
   ) {
     issues.push(
-      "config.filesystem.hidden_paths must be an array of unique normalized absolute directory paths",
+      "config.filesystem.hidden_paths must be an array of unique normalized absolute paths",
     );
     return undefined;
   }
@@ -340,8 +361,8 @@ export function parseConfig(
   inspectKeys(parsed, ROOT_KEYS, "config", issues);
 
   const configVersion = own(parsed, "config_version");
-  if (configVersion !== 7) {
-    issues.push("config.config_version must be the integer 7");
+  if (configVersion !== 8) {
+    issues.push("config.config_version must be the integer 8");
   }
 
   const modelsFileValue = own(parsed, "models_file");
@@ -351,6 +372,7 @@ export function parseConfig(
   }
 
   const audit = parseAudit(own(parsed, "audit"), issues);
+  const sessions = parseSessions(own(parsed, "sessions"), issues);
   const identity = parseIdentity(own(parsed, "identity"), issues);
   const execution = parseExecution(own(parsed, "execution"), issues);
   const filesystem = parseFilesystem(own(parsed, "filesystem"), issues);
@@ -396,6 +418,7 @@ export function parseConfig(
     issues.length > 0 ||
     modelsFile === undefined ||
     audit === undefined ||
+    sessions === undefined ||
     identity === undefined ||
     execution === undefined ||
     network === undefined ||
@@ -408,8 +431,9 @@ export function parseConfig(
   }
 
   return Object.freeze({
-    configVersion: 7,
+    configVersion: 8,
     audit,
+    sessions,
     modelsFile,
     execution,
     identity,

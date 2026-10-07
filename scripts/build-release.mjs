@@ -310,6 +310,7 @@ const REQUIRED_BUBBLEWRAP_OPTIONS = Object.freeze([
   "--json-status-fd",
   "--seccomp",
   "--remount-ro",
+  "--ro-bind-data",
 ]);
 
 async function validateBundledBubblewrap(bubblewrap, architecture) {
@@ -601,6 +602,7 @@ async function main() {
         "packages/coding-agent/test/managed-extensions.test.ts",
         "packages/coding-agent/test/managed-session-sharing.test.ts",
         "packages/coding-agent/test/managed-session-cwd.test.ts",
+        "packages/coding-agent/test/managed-session-maintenance.test.ts",
       ],
       { cwd: sourceRoot, env: cleanEnvironment },
     );

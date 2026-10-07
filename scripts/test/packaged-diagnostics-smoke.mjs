@@ -1,7 +1,20 @@
 #!/usr/bin/env node
 
+import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
-import { chmod, cp, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { randomUUID } from "node:crypto";
+import {
+  chmod,
+  cp,
+  mkdir,
+  mkdtemp,
+  readFile,
+  readdir,
+  rm,
+  stat,
+  utimes,
+  writeFile,
+} from "node:fs/promises";
 import { dirname, join, resolve } from "node:path";
 import { createInterface } from "node:readline";
 import { setTimeout as delay } from "node:timers/promises";
@@ -33,7 +46,16 @@ try {
   if (resolve(sourceDefaultsDirectory) !== resolve(dirname(sourceExecutable), "defaults")) {
     throw new Error("defaults directory must be adjacent to the packaged executable");
   }
-  await prepareHostIndependentSmokeConfig(join(defaultsDirectory, "config.toml"));
+  const workspace = join(temporaryDirectory, "workspace");
+  const userState = join(workspace, ".pi-state");
+  await mkdir(userState, { recursive: true });
+  const hiddenFile = join(workspace, ".private-credentials");
+  await writeFile(hiddenFile, "smoke-private-credential\n");
+  const maskedFile = await prepareHostIndependentSmokeConfig(
+    join(defaultsDirectory, "config.toml"),
+    hiddenFile,
+  );
+  const sessionFixtures = await prepareSessionRetentionFixtures(userState, workspace);
   const releaseManifest = JSON.parse(
     await readFile(join(runtimeDirectory, "release-manifest.json"), "utf8"),
   );
@@ -84,10 +106,7 @@ try {
     await assertConfigOverrideRejected(sourceExecutable, overridePath);
   }
   const configuredModelIds = await readConfiguredModelIds(overrideModelsPath);
-  const workspace = join(temporaryDirectory, "workspace");
-  const userState = join(workspace, ".pi-state");
   const testBin = join(workspace, ".test-bin");
-  await mkdir(userState, { recursive: true });
   await mkdir(testBin);
   const fdStub = join(testBin, "fd");
   await writeFile(fdStub, "#!/bin/sh\nexit 0\n");
@@ -99,6 +118,7 @@ try {
     PI_CODING_AGENT_DIR: userState,
   };
   delete environment.NODE_ENV;
+  delete environment.PI_CODING_AGENT_SESSION_DIR;
   child = spawn(
     bubblewrapExecutable,
     [
@@ -130,7 +150,8 @@ try {
       ...configArguments,
       "--mode",
       "rpc",
-      "--no-session",
+      "--session",
+      sessionFixtures.selected,
     ],
     { env: environment, stdio: ["pipe", "pipe", "pipe"] },
   );
@@ -165,6 +186,22 @@ try {
     "get_commands response",
   );
   const commandResponse = messages.find((message) => message.id === "commands");
+  await assert.rejects(stat(sessionFixtures.expired), { code: "ENOENT" });
+  assert((await stat(sessionFixtures.recent)).isFile(), "recent sessions must survive cleanup");
+  assert(
+    (await stat(sessionFixtures.selected)).mtimeMs >= sessionFixtures.startedAt - 1000,
+    "selected old session must survive startup and refresh its last-use time",
+  );
+  const stateDirectory = join(userState, "pi-sandbox", "retention");
+  const stateFiles = (await readdir(stateDirectory)).filter((file) => file.endsWith(".json"));
+  assert.equal(
+    stateFiles.length,
+    1,
+    "startup must record one retention attempt for the default session root",
+  );
+  const state = JSON.parse(await readFile(join(stateDirectory, stateFiles[0]), "utf8"));
+  assert.equal(state.retentionDays, 365);
+  assert(state.lastAttemptAt >= sessionFixtures.startedAt);
   const commands = commandResponse?.data?.commands;
   const extensionCommands = Array.isArray(commands)
     ? commands.filter((command) => command.source === "extension").map((command) => command.name)
@@ -242,7 +279,13 @@ try {
     throw new Error("/sandbox did not report the isolated packaged smoke configuration");
   }
 
-  await testRpcSessionLifecycle({ child, messages, waitFor, workspace });
+  await testRpcSessionLifecycle({
+    child,
+    messages,
+    waitFor,
+    workspace,
+    hiddenFile: maskedFile ? hiddenFile : undefined,
+  });
 
   child.stdin.end();
   const exit = await exitPromise;
@@ -254,6 +297,10 @@ try {
   if (messages.some((message) => message.type === "extension_error" || "malformed" in message)) {
     throw new Error(`compiled executable emitted invalid RPC output: ${JSON.stringify(messages)}`);
   }
+  assert(
+    !stderr.includes("Checking for old sessions"),
+    "RPC cleanup must not emit interactive progress",
+  );
 
   console.log("packaged /sandbox diagnostics and RPC lifecycle smoke tests passed");
 } finally {
@@ -318,7 +365,7 @@ async function waitFor(predicate, description) {
   throw new Error(`timed out waiting for ${description}`);
 }
 
-async function prepareHostIndependentSmokeConfig(configPath) {
+async function prepareHostIndependentSmokeConfig(configPath, hiddenFile) {
   const config = parseToml(await readFile(configPath, "utf8"));
   const tools = config.tools;
   if (typeof tools !== "object" || tools === null || Array.isArray(tools)) {
@@ -329,6 +376,9 @@ async function prepareHostIndependentSmokeConfig(configPath) {
   // The release builder already validates the real selected extension config and inventory;
   // this smoke test exercises the packaged Pi application with its core sandbox tools.
   config.identity = { mode: "disabled" };
+  config.sessions = { retention_days: 365 };
+  const masksFile = config.execution?.backend === "bubblewrap";
+  if (masksFile) config.filesystem.hidden_paths = [hiddenFile];
   config.extensions = {};
   config.tools = Object.fromEntries(
     SANDBOX_TOOL_NAMES.map((name) => {
@@ -340,6 +390,32 @@ async function prepareHostIndependentSmokeConfig(configPath) {
     }),
   );
   await writeFile(configPath, stringifyToml(config), { mode: 0o644 });
+  return masksFile;
+}
+
+async function prepareSessionRetentionFixtures(agentDir, workspace) {
+  const startedAt = Date.now();
+  const old = new Date(startedAt - 400 * 86_400_000);
+  const encodedWorkspace = `--${workspace.replace(/^[/\\]/, "").replace(/[/\\:]/g, "-")}--`;
+  const directory = join(agentDir, "sessions", encodedWorkspace);
+  await mkdir(directory, { recursive: true });
+  const fixtures = { startedAt };
+  for (const name of ["expired", "recent", "selected"]) {
+    const file = join(directory, `${name}.jsonl`);
+    await writeFile(
+      file,
+      `${JSON.stringify({
+        type: "session",
+        version: 3,
+        id: randomUUID(),
+        timestamp: old.toISOString(),
+        cwd: workspace,
+      })}\n`,
+    );
+    if (name !== "recent") await utimes(file, old, old);
+    fixtures[name] = file;
+  }
+  return fixtures;
 }
 
 async function readConfiguredModelIds(modelsPath) {

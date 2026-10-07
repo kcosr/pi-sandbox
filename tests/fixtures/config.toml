@@ -1,5 +1,8 @@
-config_version = 7
+config_version = 8
 models_file = "/etc/pi-sandbox/models.json"
+
+[sessions]
+retention_days = 0
 
 [audit]
 enabled = false

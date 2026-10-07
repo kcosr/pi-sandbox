@@ -36,8 +36,14 @@ unavailable namespaces.
 - strict offline and host network modes;
 - required CWD write-access configuration, parent inheritance and user/group overrides,
   with direct/read-only rejection before and after override application;
-- schema-7 required hidden paths, strict path syntax and uniqueness, immutable
+- schema-8 required hidden paths, strict path syntax and uniqueness, immutable
   main-policy inheritance, direct-mode rejection, and mount ordering around CWD;
+- required session retention, integer bounds, explicit zero-disable behavior,
+  and rejection of user/group retention overrides;
+- last-use timestamp updates, daily scheduling and policy-change retries,
+  shallow default/custom storage scans, bounded expired-header checks, symlink
+  and malformed-file skips, current-session preservation, and nonfatal failures;
+- delayed interactive cleanup progress without output in print, JSON, or RPC;
 - all required model-tool policies and unknown-field rejection;
 - mode and session-grant decisions;
 - memory-only grants scoped by approval subject;
@@ -88,7 +94,9 @@ provider. It proves that:
 - `/sandbox` diagnostics report the admitted mount policy, effective tool
   policy, and current session grants without invoking the executor;
 - every user-shell error explicitly blocks instead of falling through; and
-- session shutdown clears grants without closing the process-owned sandbox.
+- session shutdown clears grants without closing the process-owned sandbox;
+- enabled retention refreshes session modification time on logical session
+  activation, and disabled retention performs no timestamp maintenance.
 
 Host-tool integration uses a mocked host executor and local fixtures only. It
 proves that `git_clone` constructs `/usr/bin/git clone --` with one derived
@@ -112,7 +120,13 @@ prove kernel-observable properties:
   contents inaccessible through absolute paths, `..`, and symlinks;
 - hidden masks remain read-only even after attempted chmod, while restored CWD
   honors writable/read-only policy and ordinary utilities remain available;
-- missing hidden directories, files, and symlink entries/ancestors fail startup;
+- hidden regular files read as empty through absolute, relative, and symlink
+  references, including beneath a restored CWD or private `/tmp`;
+- attempts to write after chmod, unlink, rename, or overwrite hidden file mounts
+  fail while original host contents and permissions remain unchanged;
+- missing hidden targets, special files, and symlink entries/ancestors fail startup;
+- file-mask input descriptors close on worker startup failure, and a Bun-hosted
+  executor establishes multiple file masks without waiting on empty JS pipes;
 - `/tmp` is writable, private from host `/tmp`, and persistent between calls in
   one Pi process;
 - commands are serialized through one stable sandbox namespace;
@@ -188,6 +202,11 @@ transition. They reject all extension errors, including duplicate `session_start
 Unit tests additionally verify revoked old-runtime access, fresh session grants,
 and canonical-path/alias rejection. Upstream patch tests prove rejection before
 target settings/resources, before outgoing teardown, and before reload reads.
+The startup-maintenance patch tests prove that the generic `beforeRun` hook is
+awaited before stdin consumption, theme initialization, and each interface
+runner. They verify resolved custom storage from CLI, environment, or settings,
+including with `--no-session`, and omission of maintenance for metadata and
+authentication exits.
 The exact version-probe test requires no policy or working-directory access.
 The packaged diagnostic also proves that the forced Pi Sandbox extension is the only Pi
 extension while built-in MCP, codemode, tool-search, and llama factories remain

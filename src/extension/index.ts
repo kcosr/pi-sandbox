@@ -760,6 +760,7 @@ export function createPiSandboxExtension(
       const config = await dependencies.loadConfig();
       state.config = config;
       state.policy = new PolicyEngine(createApprovalPolicies(config));
+      await dependencies.onSessionStart?.(ctx.sessionManager.getSessionFile());
       try {
         state.executor = dependencies.executor;
         if (config.audit.enabled) {

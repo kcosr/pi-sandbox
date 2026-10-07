@@ -1,10 +1,11 @@
 import { describe, expect, it } from "vitest";
 import {
+  BUBBLEWRAP_FILE_MASK_FIRST_FD,
   BUBBLEWRAP_SECCOMP_FD,
   assertSandboxCwd,
   buildBubblewrapArguments,
   describeBubblewrapMounts,
-  planHiddenDirectories,
+  planHiddenPaths,
   safeSandboxEnvironment,
 } from "./bubblewrap-policy.js";
 
@@ -18,26 +19,33 @@ describe("Bubblewrap policy", () => {
       "/srv/transcripts",
       "/srv/runs/a/..cache",
     ];
-    const masks = planHiddenDirectories("/srv/runs/a", hidden);
+    const masks = planHiddenPaths("/srv/runs/a", hidden);
     expect(masks).toEqual({
       beforeCwd: ["/srv/runs", "/srv/transcripts"],
       afterCwd: ["/srv/runs/a/..cache", "/srv/runs/a/private"],
     });
-    const args = buildBubblewrapArguments("/srv/runs/a", ["/bin/true"], "none", {}, true, hidden);
+    const args = buildBubblewrapArguments(
+      "/srv/runs/a",
+      ["/bin/true"],
+      "none",
+      {},
+      true,
+      hidden.map((target) => ({ target, kind: "directory" })),
+    );
     const cwdMount = sequenceIndex(args, ["--bind", "/srv/runs/a", "/srv/runs/a"]);
     expect(sequenceIndex(args, ["--tmpfs", "/srv/runs"])).toBeLessThan(cwdMount);
     expect(sequenceIndex(args, ["--tmpfs", "/srv/runs/a/private"])).toBeGreaterThan(cwdMount);
     expect(sequenceIndex(args, ["--remount-ro", "/srv/runs"])).toBeGreaterThan(
       sequenceIndex(args, ["--tmpfs", "/srv/runs/a/private"]),
     );
-    expect(planHiddenDirectories("/srv/run", ["/srv/runs"])).toEqual({
+    expect(planHiddenPaths("/srv/run", ["/srv/runs"])).toEqual({
       beforeCwd: ["/srv/runs"],
       afterCwd: [],
     });
     expect(describeBubblewrapMounts("/srv/runs/a", true, hidden)).toContainEqual({
       target: "/srv/runs/a/private",
       access: "read-only",
-      content: "hidden host directory (private mask)",
+      content: "hidden host path (private mask)",
     });
   });
 
@@ -54,8 +62,33 @@ describe("Bubblewrap policy", () => {
     "/srv/../runs",
   ])("rejects an unsafe hidden path: %s", (target) => {
     expect(() =>
-      buildBubblewrapArguments("/srv/runs/a", ["/bin/true"], "none", {}, true, [target]),
+      buildBubblewrapArguments("/srv/runs/a", ["/bin/true"], "none", {}, true, [
+        { target, kind: "directory" },
+      ]),
     ).toThrow();
+  });
+
+  it("uses separate empty-data FDs for file masks and restores masks beneath a hidden CWD ancestor", () => {
+    const args = buildBubblewrapArguments("/srv/runs/a", ["/bin/true"], "none", {}, true, [
+      { target: "/srv/runs/a/token", kind: "file" },
+      { target: "/srv/runs/b/token", kind: "file" },
+      { target: "/srv/runs", kind: "directory" },
+      { target: "/srv/token", kind: "file" },
+    ]);
+    const cwdMount = sequenceIndex(args, ["--bind", "/srv/runs/a", "/srv/runs/a"]);
+    expect(
+      sequenceIndex(args, ["--ro-bind-data", String(BUBBLEWRAP_FILE_MASK_FIRST_FD), "/srv/token"]),
+    ).toBeLessThan(cwdMount);
+    expect(
+      sequenceIndex(args, [
+        "--ro-bind-data",
+        String(BUBBLEWRAP_FILE_MASK_FIRST_FD + 1),
+        "/srv/runs/a/token",
+      ]),
+    ).toBeGreaterThan(cwdMount);
+    expect(args).not.toContain("/srv/runs/b/token");
+    expect(hasSequence(args, ["--tmpfs", "/srv/runs/a/token"])).toBe(false);
+    expect(hasSequence(args, ["--remount-ro", "/srv/runs/a/token"])).toBe(false);
   });
 
   it("preserves absolute paths and overlays only the launch directory writable", () => {

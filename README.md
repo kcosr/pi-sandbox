@@ -56,7 +56,7 @@ flowchart LR
 
 ## What it enforces
 
-- The ordinary host filesystem, except configured hidden directories, is visible at its normal absolute paths and
+- The ordinary host filesystem, except configured hidden files and directories, is visible at its normal absolute paths and
   mounted read-only. The launch directory is explicitly bound at the same path,
   read/write or read-only according to `filesystem.cwd_writable`, and is the
   working directory for every built-in tool and shell operation.

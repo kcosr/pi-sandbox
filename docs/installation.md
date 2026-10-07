@@ -10,6 +10,9 @@ bundled Bubblewrap executable. Linux direct mode does not use Bubblewrap. Both L
 `fd` (or Debian's `fdfind`), Ripgrep (`rg`), `file`, Bash, a POSIX `/bin/sh`, and
 the fixed GNU utilities used by typed tools.
 
+The build and installer validate required Bubblewrap options, including
+`--remount-ro` for directory masks and `--ro-bind-data` for empty file masks.
+
 macOS supports direct mode only and requires Homebrew `coreutils`, `findutils`,
 `grep`, `gawk`, `fd`, and `ripgrep`, plus system Bash, `sh`, and `file`. The
 runtime resolves the Homebrew prefix for Apple silicon or Intel and fails
@@ -315,8 +318,8 @@ There is no implicit configuration replacement. This supports both complete
 archive deployments and systems where Salt or another configuration manager
 owns `/etc/pi-sandbox`.
 
-The installed configuration uses `config_version = 7` and must include the
-`[audit]`, `[execution]`, `[filesystem]`, and `[extensions]` tables, an `audit` boolean on every
+The installed configuration uses `config_version = 8` and must include the
+`[audit]`, `[sessions]`, `[execution]`, `[filesystem]`, and `[extensions]` tables, an `audit` boolean on every
 base tool policy, explicit `filesystem.hidden_paths` (empty by default), and explicit `[environment.pi]`,
 `[environment.sandbox]`, and `[environment.extensions]` tables, even when the
 environment tables are empty. Set `execution.backend = "bubblewrap"` on Linux
@@ -328,6 +331,13 @@ requires disabled identity. If a
 preserved site configuration does not satisfy the current schema, update the
 site-managed TOML first or use `--replace-config` to install the packaged
 defaults.
+
+`[sessions] retention_days = 365` is the packaged conversation-retention
+default. The required value is an integer from `0` to `36500`; use `0` to disable
+cleanup and last-use timestamp updates. This policy belongs to the main TOML
+and is not accepted in user/group overrides. Schema 7 configurations are not
+automatically migrated: update the version and add the required session policy
+before upgrading, or explicitly replace configuration with the packaged defaults.
 
 When the optional identity broker is enabled, `users.d/*.toml` and `groups.d/*.toml` may overlay
 scoped environment and supply model, execution, network, filesystem, and complete
@@ -379,6 +389,23 @@ credentials, sessions, settings, skills, themes, logs, and caches. It does not
 change `/etc/pi-sandbox/config.toml`, the resolved `models_file`, extension
 loading, or tool implementations.
 
+Default session files are grouped by workspace under `<agent-dir>/sessions/`.
+Configured custom session directories use a flat layout. Enabled retention
+scans the selected store before an operational Pi interface starts, normally at
+most once every 24 hours, using last-use modification times. The selected
+startup session is preserved and refreshed; resumed sessions are also
+refreshed. Expired regular session files are removed without loading their
+transcript bodies or recursively exploring unrelated directories.
+
+Small scheduling files live in
+`<agent-dir>/pi-sandbox/retention/<root-and-layout-hash>.json`. Each stores the
+last attempt time and retention value; a policy change triggers another check.
+Deleting this state schedules a new sweep on the next launch. No state or
+transcript maintenance occurs when `retention_days = 0`. User-state files remain
+owned by the invoking user and are not installed or managed by the root
+installer. See [session retention](configuration.md#session-retention) for
+skip conditions and concurrent-use limits.
+
 ## Launch
 
 Change to the project directory and invoke the canonical command:
@@ -394,6 +421,13 @@ calling account and groups, validates the selected extensions, effective model c
 tool policy, and conditional executable prerequisites, and probes a real
 Bubblewrap operation for the launch directory. Any failure stops startup. No
 stock tool or host-execution fallback is available.
+
+After selecting the Pi session, startup also awaits optional retention cleanup
+before the TUI opens or a noninteractive prompt runs. An interactive sweep
+lasting more than about one second prints `Checking for old sessions…`; quick
+checks and skipped daily sweeps print nothing. Print, JSON, and RPC modes never
+print that message. Cleanup failures are silently tolerated and do not block
+startup. Metadata and authentication exits do not run retention maintenance.
 
 The captured directory remains the current directory inside every sandbox
 operation and appears at the same absolute path. User/project extensions and Pi
