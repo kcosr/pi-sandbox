@@ -64,6 +64,7 @@ reimplemented rather than mechanically reapplied.
 
 ## Development
 
+- Keep `CHANGELOG.md` Unreleased entries concise and add PR links once their numbers are known.
 - Prefer end-state contracts without compatibility aliases or fallback parsers.
 - Keep Pi-specific changes as a minimal documented patch series against the exact source release pinned in `pi-source.lock.json`; never commit an extracted Pi worktree.
 - Keep all tests offline. Do not invoke live LLM providers.
