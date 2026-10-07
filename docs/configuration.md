@@ -79,12 +79,15 @@ Provider definitions and API-key resolution are documented separately in
 ## Complete example
 
 ```toml
-config_version = 7
+config_version = 8
 models_file = "/etc/pi-sandbox/models.json"
 
 [audit]
 enabled = false
 facility = "local0"
+
+[sessions]
+retention_days = 365
 
 [filesystem]
 cwd_writable = true
@@ -172,7 +175,7 @@ effective file.
 
 ## Launch directory access
 
-Configuration schema 7 requires both keys in `[filesystem]`:
+Configuration schema 8 requires both keys in `[filesystem]`:
 
 ```toml
 [filesystem]
@@ -199,7 +202,7 @@ Direct execution requires `cwd_writable = true` and `hidden_paths = []`; it cann
 host CWD. Managed host tools remain outside this restriction and can still
 write according to their compiled operation and the invoking user's authority.
 `cwd_writable` changes write access only. Use `hidden_paths` to remove selected
-host directories from the sandboxed tools' filesystem view.
+host file and directory contents from the sandboxed tools' filesystem view.
 
 A root-managed user/group rule may override this setting with
 `[overrides.filesystem] cwd_writable = false`. Omission inherits the parent
@@ -207,13 +210,14 @@ value. The final backend/filesystem combination is validated after overrides;
 switching a read-only base to direct execution also requires overriding
 `cwd_writable` to `true`.
 
-### Hidden directories
+### Hidden files and directories
 
-`hidden_paths` is an explicit array of unique, normalized absolute directory
+`hidden_paths` is an explicit array of unique, normalized absolute file or directory
 paths. The default empty array preserves the ordinary read-only host view.
 Every entry must exist and be canonical at worker startup; symlinks in the
-entry or any ancestor, missing paths, and regular files are rejected. To hide a
-file, hide its containing directory. `/`, `/tmp`, and paths overlapping `/proc`,
+entry or any ancestor, missing paths, and special files are rejected. Files must
+be regular files. Paths are literal: `~`, environment expansion, and globs are
+not supported. `/`, `/tmp`, and paths overlapping `/proc`,
 `/sys`, `/dev`, or `/run` are rejected. The exact launch CWD cannot be hidden.
 Keep the runtime executable and its dependencies outside the effective hidden
 view; unavailable runtime resources cause startup or prerequisite checks to fail.
@@ -228,11 +232,18 @@ hidden_paths = ["/srv/evaluations/runs", "/srv/evaluations/transcripts"]
 
 Sandboxed tools see a private read-only mask at the runs parent, with only
 `run-a` restored at its identical path. Sibling runs and the shared transcript
-directory contents are hidden. An additional entry inside `run-a` hides that
-subdirectory even after the workspace is restored. Redundant nested entries
+directory contents are hidden. An additional file or directory entry inside
+`run-a` masks its contents even after the workspace is restored. Redundant nested entries
 are reduced deterministically without losing these interior masks. Mask
 directories remain visible as empty directories (or the private ancestor
 skeleton leading to CWD), and cannot be written or made writable by tools.
+
+Individual files remain visible as empty regular files. For example,
+`hidden_paths = ["/home/alice/.ssh", "/home/alice/.netrc"]` masks the first
+directory and the second file. File masks prevent content changes, unlinking,
+and replacement even when the containing CWD is writable. Both mask types are
+private to the sandbox and leave the host contents untouched; neither removes
+the configured name from directory listings.
 
 The setting belongs only to the main TOML. User/group `cwd_writable` overrides
 preserve it; rules cannot set or clear `hidden_paths`. A rule switching the
@@ -260,6 +271,54 @@ alone does not disable. Alternatively, supply explicit trusted prompt text or
 files outside writable workspaces. Do not add untrusted explicit resource paths.
 A tool mount cannot stop host Pi from following a context-file symlink into a
 hidden directory.
+
+## Session retention
+
+Schema 8 requires an administrator-owned session policy in the main TOML:
+
+```toml
+[sessions]
+retention_days = 365
+```
+
+`retention_days` must be an integer from `0` through `36500`. The packaged
+default is `365`; `0` disables cleanup and last-use timestamp updates.
+User/group rules cannot override it. This setting governs Pi conversation
+JSONL files, not the system audit log; audit retention remains the host logging
+service's responsibility.
+
+Retention uses each session file's modification time, not its creation time or
+filesystem access time. Pi advances modification time when it writes session
+records. When retention is enabled, Pi Sandbox also refreshes the selected
+session on startup and on logical session activation or resume, so reopening an
+old conversation keeps it even without another message. The current startup
+session is excluded from that process's sweep.
+
+Before starting the TUI or processing a noninteractive prompt, startup checks a
+small scheduling record. A sweep normally runs at most once per 24 hours for
+the selected storage root. Changing `retention_days` triggers a fresh sweep.
+The attempt is recorded before scanning, so interrupted or unsuccessful sweeps
+wait until a later day. If an interactive sweep takes more than about one
+second, stderr displays `Checking for old sessions…` before the TUI launches.
+Quick sweeps, daily skips, print, JSON, and RPC modes stay silent. Cleanup errors
+never prevent a session from starting.
+
+For normal Pi storage, cleanup streams the immediate workspace directories
+under `<agent-dir>/sessions` and their session files. An explicit custom session
+directory is scanned as one flat directory; there is no arbitrary recursive
+walk. Only regular `.jsonl` files older than the retention cutoff are opened,
+and only the first 4096 bytes are read to validate a Pi session header.
+Malformed headers or a first line that does not fit in that bound are skipped.
+Transcript bodies are never loaded. Directory and file symlinks within the
+session tree are not followed.
+
+Scheduling state is user state under
+`<agent-dir>/pi-sandbox/retention/<root-and-layout-hash>.json`, following
+`PI_CODING_AGENT_DIR`. Each record contains the last attempt time and retention
+value. Concurrent launches may duplicate a sweep; missing files and failed
+deletions are harmless. There is no active-session registry or locking, so a
+rare concurrent-resume race remains. This is best-effort housekeeping, not an
+enforced data-retention guarantee.
 
 ## Network modes
 

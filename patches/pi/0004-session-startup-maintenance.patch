@@ -1,0 +1,216 @@
+diff --git a/packages/coding-agent/src/main.ts b/packages/coding-agent/src/main.ts
+index cec254a..332c34c 100644
+--- a/packages/coding-agent/src/main.ts
++++ b/packages/coding-agent/src/main.ts
+@@ -575,6 +575,12 @@ export interface MainOptions {
+ 	createModelRuntime?: ModelRuntimeFactory;
+ 	/** Reject a target workspace before reading its settings or resources. */
+ 	validateSessionCwd?: (cwd: string) => void;
++	/** Complete startup maintenance before reading input or starting the selected interface. */
++	beforeRun?: (context: {
++		mode: AppMode;
++		sessionManager: SessionManager;
++		sessionDir: string | undefined;
++	}) => Promise<void>;
+ }
+ 
+ export async function main(args: string[], options?: MainOptions) {
+@@ -907,6 +913,12 @@ export async function main(args: string[], options?: MainOptions) {
+ 		process.exit(0);
+ 	}
+ 
++	await options?.beforeRun?.({
++		mode: appMode,
++		sessionManager,
++		sessionDir: sessionDir ? resolvePath(sessionDir, cwd) : undefined,
++	});
++
+ 	// Read piped stdin content (if any) - skip for RPC mode which uses stdin for JSON-RPC
+ 	let stdinContent: string | undefined;
+ 	if (appMode !== "rpc") {
+diff --git a/packages/coding-agent/test/managed-session-maintenance.test.ts b/packages/coding-agent/test/managed-session-maintenance.test.ts
+new file mode 100644
+index 0000000..8f7cc57
+--- /dev/null
++++ b/packages/coding-agent/test/managed-session-maintenance.test.ts
+@@ -0,0 +1,180 @@
++import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
++import { tmpdir } from "node:os";
++import { join } from "node:path";
++import { InMemoryModelsStore } from "@earendil-works/pi-ai";
++import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
++import { ENV_SESSION_DIR } from "../src/config.ts";
++import { AuthStorage } from "../src/core/auth-storage.ts";
++import { ModelRuntime, type ModelRuntimeFactory } from "../src/core/model-runtime.ts";
++import { restoreStdout } from "../src/core/output-guard.ts";
++import { type MainOptions, main } from "../src/main.ts";
++import * as theme from "../src/modes/interactive/theme/theme.ts";
++
++const modes = vi.hoisted(() => ({ interactive: vi.fn(), print: vi.fn(), rpc: vi.fn() }));
++vi.mock("../src/modes/index.ts", () => ({
++	InteractiveMode: class {
++		run = modes.interactive;
++	},
++	runPrintMode: modes.print,
++	runRpcMode: modes.rpc,
++}));
++
++describe("managed startup maintenance", () => {
++	let root: string;
++	let agentDir: string;
++	let createModelRuntime: ModelRuntimeFactory;
++	let originalStdinTTY: PropertyDescriptor | undefined;
++	let originalStdoutTTY: PropertyDescriptor | undefined;
++	let originalExitCode: typeof process.exitCode;
++	const safeArgs = ["--no-extensions", "--no-skills", "--no-context-files", "--no-prompt-templates", "--no-themes"];
++
++	beforeEach(() => {
++		root = mkdtempSync(join(tmpdir(), "managed-session-maintenance-"));
++		agentDir = join(root, "agent");
++		mkdirSync(agentDir);
++		writeFileSync(join(agentDir, "settings.json"), JSON.stringify({ setupComplete: true }));
++		const modelsPath = join(root, "models.json");
++		writeFileSync(
++			modelsPath,
++			JSON.stringify({
++				providers: {
++					openai: { api: "openai-responses", baseUrl: "https://example.invalid/v1", models: [{ id: "managed" }] },
++				},
++			}),
++		);
++		createModelRuntime = (options) =>
++			ModelRuntime.create({
++				...options,
++				credentials: AuthStorage.inMemory({ openai: { type: "api_key", key: "unused" } }),
++				modelsPath,
++				modelsStore: new InMemoryModelsStore(),
++				includeBuiltinCatalog: false,
++				allowModelNetwork: false,
++				refreshOnCreate: false,
++			});
++		vi.stubEnv("PI_CODING_AGENT_DIR", agentDir);
++		vi.stubEnv("PI_OFFLINE", "1");
++		vi.stubEnv(ENV_SESSION_DIR, "");
++		vi.spyOn(process, "cwd").mockReturnValue(root);
++		vi.spyOn(theme, "initTheme").mockImplementation(() => {});
++		vi.spyOn(process.stdout, "write").mockReturnValue(true);
++		originalStdinTTY = Object.getOwnPropertyDescriptor(process.stdin, "isTTY");
++		originalStdoutTTY = Object.getOwnPropertyDescriptor(process.stdout, "isTTY");
++		Object.defineProperty(process.stdin, "isTTY", { configurable: true, value: true });
++		Object.defineProperty(process.stdout, "isTTY", { configurable: true, value: true });
++		originalExitCode = process.exitCode;
++		process.exitCode = undefined;
++		modes.interactive.mockReset().mockResolvedValue(undefined);
++		modes.print.mockReset().mockResolvedValue(0);
++		modes.rpc.mockReset().mockResolvedValue(undefined);
++	});
++
++	afterEach(() => {
++		restoreStdout();
++		process.exitCode = originalExitCode;
++		vi.restoreAllMocks();
++		vi.unstubAllEnvs();
++		if (originalStdinTTY) Object.defineProperty(process.stdin, "isTTY", originalStdinTTY);
++		else Reflect.deleteProperty(process.stdin, "isTTY");
++		if (originalStdoutTTY) Object.defineProperty(process.stdout, "isTTY", originalStdoutTTY);
++		else Reflect.deleteProperty(process.stdout, "isTTY");
++		rmSync(root, { recursive: true, force: true });
++	});
++
++	test.each([
++		{ args: [], mode: "interactive", runner: modes.interactive },
++		{ args: ["--print"], mode: "print", runner: modes.print },
++		{ args: ["--mode", "json"], mode: "json", runner: modes.print },
++		{ args: ["--mode", "rpc"], mode: "rpc", runner: modes.rpc },
++	])("awaits maintenance before launching $mode", async ({ args, mode, runner }) => {
++		const entered = Promise.withResolvers<void>();
++		const finish = Promise.withResolvers<void>();
++		const beforeRun = vi.fn<NonNullable<MainOptions["beforeRun"]>>(async () => {
++			entered.resolve();
++			await finish.promise;
++		});
++		const running = main([...args, ...safeArgs, "--no-session"], { createModelRuntime, beforeRun });
++		await entered.promise;
++		expect(beforeRun).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({ mode, sessionDir: undefined }));
++		expect(beforeRun.mock.calls[0][0].sessionManager.getSessionFile()).toBeUndefined();
++		expect(theme.initTheme).not.toHaveBeenCalled();
++		expect(runner).not.toHaveBeenCalled();
++		finish.resolve();
++		await running;
++		expect(theme.initTheme).toHaveBeenCalledOnce();
++		expect(runner).toHaveBeenCalledOnce();
++	});
++
++	test("waits before consuming piped input", async () => {
++		Object.defineProperty(process.stdin, "isTTY", { configurable: true, value: false });
++		const resume = vi.spyOn(process.stdin, "resume");
++		const stop = new Error("Maintenance stopped startup");
++		const beforeRun = vi.fn<NonNullable<MainOptions["beforeRun"]>>(async ({ mode }) => {
++			expect(mode).toBe("print");
++			await Promise.resolve();
++			throw stop;
++		});
++		await expect(main([...safeArgs, "--no-session"], { createModelRuntime, beforeRun })).rejects.toBe(stop);
++		expect(resume).not.toHaveBeenCalled();
++		expect(modes.print).not.toHaveBeenCalled();
++	});
++
++	test("passes the selected session and normalized custom directory", async () => {
++		const file = join(root, "selected.jsonl");
++		writeFileSync(
++			file,
++			`${JSON.stringify({ type: "session", version: 3, id: "12345678-1234-4123-8123-123456789abc", timestamp: new Date().toISOString(), cwd: root })}\n`,
++		);
++		const beforeRun = vi.fn<NonNullable<MainOptions["beforeRun"]>>(async () => {});
++		const custom = join(root, "custom");
++		await main([...safeArgs, "--mode", "rpc", "--session", file, "--session-dir", `${custom}/../custom`], {
++			createModelRuntime,
++			beforeRun,
++		});
++		expect(beforeRun.mock.calls[0][0].sessionManager.getSessionFile()).toBe(file);
++		expect(beforeRun.mock.calls[0][0].sessionDir).toBe(custom);
++	});
++
++	test.each(["cli", "environment", "settings"])(
++		"preserves the custom directory from %s with --no-session",
++		async (source) => {
++			const args = [...safeArgs, "--mode", "rpc", "--no-session"];
++			if (source === "cli") args.push("--session-dir", "custom");
++			if (source === "environment") vi.stubEnv(ENV_SESSION_DIR, "custom");
++			if (source === "settings")
++				writeFileSync(
++					join(agentDir, "settings.json"),
++					JSON.stringify({ setupComplete: true, sessionDir: "custom" }),
++				);
++			const beforeRun = vi.fn<NonNullable<MainOptions["beforeRun"]>>(async () => {});
++			await main(args, { createModelRuntime, beforeRun });
++			expect(beforeRun.mock.calls[0][0].sessionDir).toBe(join(root, "custom"));
++			expect(beforeRun.mock.calls[0][0].sessionManager.getSessionFile()).toBeUndefined();
++		},
++	);
++
++	test("treats an empty session directory setting as default storage", async () => {
++		writeFileSync(join(agentDir, "settings.json"), JSON.stringify({ setupComplete: true, sessionDir: "" }));
++		const beforeRun = vi.fn<NonNullable<MainOptions["beforeRun"]>>(async () => {});
++		await main([...safeArgs, "--mode", "rpc"], { createModelRuntime, beforeRun });
++		expect(beforeRun.mock.calls[0][0].sessionDir).toBeUndefined();
++		expect(beforeRun.mock.calls[0][0].sessionManager.getSessionDir()).toContain(join(agentDir, "sessions"));
++	});
++
++	test.each([["--help"], ["--list-models"], ["--version"]])("skips maintenance for %s", async (...args) => {
++		const exit = new Error("Metadata exit");
++		vi.spyOn(process, "exit").mockImplementation(() => {
++			throw exit;
++		});
++		const beforeRun = vi.fn<NonNullable<MainOptions["beforeRun"]>>();
++		await expect(main([...args, ...safeArgs], { createModelRuntime, beforeRun })).rejects.toBe(exit);
++		expect(beforeRun).not.toHaveBeenCalled();
++	});
++
++	test("skips maintenance for authentication commands", async () => {
++		const beforeRun = vi.fn<NonNullable<MainOptions["beforeRun"]>>();
++		await main(["auth", "print-api-key", "--provider", "openai"], { createModelRuntime, beforeRun });
++		expect(beforeRun).not.toHaveBeenCalled();
++		expect(process.exitCode ?? 0).toBe(0);
++	});
++});

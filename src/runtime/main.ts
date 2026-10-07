@@ -41,6 +41,11 @@ import { applyManagedEnvironment } from "./environment.js";
 import { assertHostPrerequisites } from "./prerequisites.js";
 import { createWorkspaceBoundary } from "./workspace.js";
 import type { SandboxArguments } from "./config-arguments.js";
+import {
+  createSessionMaintenance,
+  touchSessionFile,
+  type SessionMaintenanceContext,
+} from "./session-retention.js";
 
 export const SYSTEM_CONFIG_PATH = buildLayout.configPath;
 
@@ -54,6 +59,7 @@ interface ManagedMainOptions {
   readonly extensionFactories: Array<{ readonly name: string; readonly factory: ExtensionFactory }>;
   readonly createModelRuntime: ManagedModelRuntimeFactory;
   readonly validateSessionCwd: (cwd: string) => void;
+  readonly beforeRun: (context: SessionMaintenanceContext) => Promise<void>;
 }
 
 type ManagedMain = (args: string[], options: ManagedMainOptions) => Promise<void>;
@@ -426,13 +432,15 @@ export async function runPiSandbox({ piArgs: args, configPath }: SandboxArgument
     }
     const lease = applyManagedEnvironment(identityEnvironment.pi);
     try {
+      const userStateDir = getAgentDir();
       const enabledTools = new Set(
         Object.keys(config.tools).filter((toolName) => config.tools[toolName]?.mode !== "disabled"),
       );
       const extension = createPiSandboxExtension({
         cwd,
         configPath,
-        userStateDir: getAgentDir(),
+        userStateDir,
+        ...(config.sessions.retentionDays === 0 ? {} : { onSessionStart: touchSessionFile }),
         activeTools: selectManagedActiveTools(args, enabledTools),
         loadConfig: () => Promise.resolve(config),
         executor,
@@ -451,6 +459,13 @@ export async function runPiSandbox({ piArgs: args, configPath }: SandboxArgument
         extensionFactories: [{ name: "pi-sandbox", factory: extension }],
         createModelRuntime: createManagedModelRuntimeFactory(modelsPath),
         validateSessionCwd,
+        beforeRun: createSessionMaintenance({
+          agentDir: userStateDir,
+          retentionDays: config.sessions.retentionDays,
+          reportProgress: () => {
+            process.stderr.write("Checking for old sessions…\n");
+          },
+        }),
       });
     } finally {
       lease.restore();

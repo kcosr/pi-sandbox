@@ -1,6 +1,6 @@
 import { spawn, type ChildProcess } from "node:child_process";
-import { constants as fsConstants } from "node:fs";
-import { access, realpath, stat } from "node:fs/promises";
+import { closeSync, constants as fsConstants, openSync } from "node:fs";
+import { access, lstat, realpath, stat } from "node:fs/promises";
 import path from "node:path";
 import type { Writable } from "node:stream";
 
@@ -9,7 +9,8 @@ import {
   BUBBLEWRAP_STATUS_FD,
   assertSandboxCwd,
   buildBubblewrapArguments,
-  planHiddenDirectories,
+  planHiddenPaths,
+  type HiddenPathMask,
 } from "./bubblewrap-policy.js";
 import {
   DEFAULT_SANDBOX_OUTPUT_LIMIT_BYTES,
@@ -137,11 +138,21 @@ export async function createBubblewrapExecutor(
   validateWorkerCommand(workerCommand);
   const environment = Object.freeze({ ...(options.environment ?? {}) });
   const hiddenPaths = Object.freeze([...(options.hiddenPaths ?? [])]);
+  const hiddenMasks: HiddenPathMask[] = [];
   try {
-    planHiddenDirectories(cwd, hiddenPaths);
+    const plan = planHiddenPaths(cwd, hiddenPaths);
+    const effectivePaths = new Set([...plan.beforeCwd, ...plan.afterCwd]);
     for (const target of hiddenPaths) {
       if ((await realpath(target)) !== target) throw new Error("sandbox_hidden_path_not_canonical");
-      if (!(await stat(target)).isDirectory()) throw new Error("sandbox_hidden_path_not_directory");
+      const targetStat = await lstat(target);
+      if (!targetStat.isDirectory() && !targetStat.isFile()) {
+        throw new Error("sandbox_hidden_path_not_file_or_directory");
+      }
+      if (effectivePaths.has(target)) {
+        hiddenMasks.push(
+          Object.freeze({ target, kind: targetStat.isFile() ? "file" : "directory" }),
+        );
+      }
     }
     // Validate before allocating lifecycle state so an invalid policy cannot
     // leave close() waiting for a worker that was never spawned.
@@ -151,7 +162,7 @@ export async function createBubblewrapExecutor(
       options.networkMode ?? "none",
       environment,
       options.cwdWritable ?? true,
-      hiddenPaths,
+      hiddenMasks,
     );
   } catch (cause) {
     throw new SandboxExecutionError("sandbox_start_failed", { cause });
@@ -171,7 +182,7 @@ export async function createBubblewrapExecutor(
     options.networkMode ?? "none",
     environment,
     options.cwdWritable ?? true,
-    hiddenPaths,
+    Object.freeze(hiddenMasks),
   );
   try {
     await executor.start(workerCommand);
@@ -216,7 +227,7 @@ class PersistentBubblewrapExecutor implements SandboxExecutor {
     private readonly networkMode: "none" | "host",
     private readonly environment: Readonly<Record<string, string>>,
     private readonly cwdWritable: boolean,
-    private readonly hiddenPaths: readonly string[],
+    private readonly hiddenMasks: readonly HiddenPathMask[],
   ) {
     let finish!: () => void;
     this.#finished = new Promise<void>((resolve) => {
@@ -227,24 +238,40 @@ class PersistentBubblewrapExecutor implements SandboxExecutor {
 
   public async start(workerCommand: readonly [string, ...string[]]): Promise<void> {
     if (this.#child !== undefined) throw new SandboxExecutionError("sandbox_start_failed");
-    const child = spawn(
-      this.bubblewrapPath,
-      buildBubblewrapArguments(
-        this.cwd,
-        workerCommand,
-        this.networkMode,
-        this.environment,
-        this.cwdWritable,
-        this.hiddenPaths,
-      ),
-      {
-        cwd: this.cwd,
-        detached: true,
-        env: {},
-        stdio: ["pipe", "pipe", "pipe", "pipe", "pipe"],
-      },
-    );
-    this.#child = child;
+    const fileMaskCount = this.hiddenMasks.filter(({ kind }) => kind === "file").length;
+    const fileMaskInputs: number[] = [];
+    let emptyInput: number | undefined;
+    let child: ChildProcess;
+    try {
+      if (fileMaskCount > 0) {
+        // Bun does not reliably deliver EOF when an extra JS pipe is ended
+        // without data. Inherit actual read-only EOF descriptors instead.
+        emptyInput = openSync("/dev/null", fsConstants.O_RDONLY);
+        for (let index = 0; index < fileMaskCount; index++) fileMaskInputs.push(emptyInput);
+      }
+      child = spawn(
+        this.bubblewrapPath,
+        buildBubblewrapArguments(
+          this.cwd,
+          workerCommand,
+          this.networkMode,
+          this.environment,
+          this.cwdWritable,
+          this.hiddenMasks,
+        ),
+        {
+          cwd: this.cwd,
+          detached: true,
+          env: {},
+          stdio: ["pipe", "pipe", "pipe", "pipe", "pipe", ...fileMaskInputs],
+        },
+      );
+      this.#child = child;
+    } catch (cause) {
+      throw new SandboxExecutionError("sandbox_start_failed", { cause });
+    } finally {
+      if (emptyInput !== undefined) closeSync(emptyInput);
+    }
     this.#stdin = child.stdin ?? undefined;
 
     child.stdout?.on("data", (chunk: Buffer) => this.receiveWorkerData(chunk));
@@ -374,7 +401,10 @@ class PersistentBubblewrapExecutor implements SandboxExecutor {
       for (const pending of this.#pending.values()) {
         this.failPending(pending.id, new SandboxExecutionError("sandbox_closed"));
       }
-      if (this.#child !== undefined && !this.#settled) {
+      if (this.#child === undefined) {
+        this.#settled = true;
+        this.#finish();
+      } else if (!this.#settled) {
         await this.send({ type: "shutdown" }).catch(() => undefined);
         const child = this.#child;
         const timer = setTimeout(() => signalProcessGroup(child, "SIGKILL"), TERMINATE_GRACE_MS);

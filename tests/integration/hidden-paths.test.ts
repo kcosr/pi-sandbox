@@ -1,6 +1,8 @@
 import { existsSync } from "node:fs";
-import { mkdir, mkdtemp, readFile, rm, symlink, writeFile } from "node:fs/promises";
+import { execFile, spawnSync } from "node:child_process";
+import { mkdir, mkdtemp, readFile, rm, stat, symlink, writeFile } from "node:fs/promises";
 import path from "node:path";
+import { promisify } from "node:util";
 import { afterEach, describe, expect, it } from "vitest";
 
 import { createBubblewrapExecutor, type SandboxExecutor } from "../../src/sandbox/index.js";
@@ -10,6 +12,7 @@ const bubblewrapPath = process.env.PI_SANDBOX_BWRAP_PATH ?? "/usr/bin/bwrap";
 const available = process.platform === "linux" && existsSync(bubblewrapPath);
 const roots: string[] = [];
 const executors: SandboxExecutor[] = [];
+const execFileAsync = promisify(execFile);
 
 afterEach(async () => {
   await Promise.all(executors.splice(0).map((executor) => executor.close()));
@@ -36,7 +39,7 @@ async function fixture(parent = "/var/tmp") {
   return { root, runs, cwd, sibling, privateDirectory, transcripts };
 }
 
-describe.skipIf(!available)("hidden directories through real Bubblewrap", () => {
+describe.skipIf(!available)("hidden paths through real Bubblewrap", () => {
   it.each([
     [true, "/var/tmp"],
     [false, "/var/tmp"],
@@ -114,13 +117,112 @@ describe.skipIf(!available)("hidden directories through real Bubblewrap", () => 
     },
   );
 
-  it("fails closed on missing paths, files, symlinks, and symlink ancestors", async () => {
+  it.each([
+    [true, "/var/tmp"],
+    [false, "/var/tmp"],
+    [true, "/tmp"],
+    [false, "/tmp"],
+  ] as const)(
+    "masks regular files and preserves host content (writable=%s, parent=%s)",
+    async (cwdWritable, parent) => {
+      const { root, cwd, runs, privateDirectory } = await fixture(parent);
+      const hiddenFile = path.join(cwd, "credentials");
+      const siblingFile = path.join(root, "visible.txt");
+      const redundantFile = path.join(privateDirectory, "secret.txt");
+      await writeFile(hiddenFile, "private credential");
+      const originalFileMode = (await stat(hiddenFile)).mode;
+      await symlink(hiddenFile, path.join(cwd, "credential-link"));
+      const executor = await createBubblewrapExecutor({
+        cwd,
+        cwdWritable,
+        bubblewrapPath,
+        hiddenPaths: [hiddenFile, siblingFile, runs, privateDirectory, redundantFile],
+        workerCommand: testSandboxWorkerCommand(),
+      });
+      executors.push(executor);
+      await executor.probe();
+      const execute = (script: string, ...args: string[]) =>
+        executor.execute({ argv: ["/bin/bash", "-c", script, "hidden-file-test", ...args] });
+      for (const target of [hiddenFile, "credentials", "credential-link", siblingFile]) {
+        const result = await execute('test -f "$1" && ! test -s "$1" && cat -- "$1"', target);
+        expect(result.exitCode, target).toBe(0);
+        expect(result.stdout.toString(), target).toBe("");
+        for (const script of [
+          'printf changed > "$1"',
+          'chmod 777 "$1"; printf changed > "$1"',
+          ...(target === "credential-link" ? [] : ['rm -- "$1"', 'mv -- "$1" "$1-renamed"']),
+        ]) {
+          expect((await execute(script, target)).exitCode, `${script} ${target}`).not.toBe(0);
+        }
+      }
+      if (cwdWritable) {
+        expect(
+          (await execute("printf replacement > replacement; mv -f replacement credentials"))
+            .exitCode,
+        ).not.toBe(0);
+        expect(
+          (await execute("printf replacement > replacement; cp replacement credentials")).exitCode,
+        ).not.toBe(0);
+        expect(
+          (await execute('rm -f credentials; ln -s "$1" credentials', siblingFile)).exitCode,
+        ).not.toBe(0);
+      }
+      expect(await readFile(hiddenFile, "utf8")).toBe("private credential");
+      expect((await stat(hiddenFile)).mode).toBe(originalFileMode);
+      expect(await readFile(siblingFile, "utf8")).toBe("ordinary host data");
+      expect(await readFile(redundantFile, "utf8")).toBe(`secret:${privateDirectory}`);
+      const stillMasked = await execute('cat credentials "$1"', siblingFile);
+      expect(stillMasked.exitCode).toBe(0);
+      expect(stillMasked.stdout.toString()).toBe("");
+    },
+  );
+
+  it("closes file-mask input descriptors when the worker fails to start", async () => {
     const { root, cwd } = await fixture();
+    await expect(
+      createBubblewrapExecutor({
+        cwd,
+        bubblewrapPath,
+        hiddenPaths: [path.join(root, "visible.txt"), path.join(cwd, "secret.txt")],
+        workerCommand: ["/bin/false"],
+      }),
+    ).rejects.toMatchObject({ code: "sandbox_start_failed" });
+  });
+
+  it("starts file masks when the host executor runs under Bun", async () => {
+    const { root, cwd } = await fixture();
+    const hiddenPaths = [path.join(root, "visible.txt"), path.join(cwd, "secret.txt")];
+    const workerCommand = testSandboxWorkerCommand();
+    const source = `
+      import { createBubblewrapExecutor } from ${JSON.stringify(path.resolve("src/sandbox/bubblewrap-executor.ts"))};
+      const executor = await createBubblewrapExecutor(${JSON.stringify({ cwd, bubblewrapPath, hiddenPaths, workerCommand })});
+      try {
+        const result = await executor.execute({ argv: ["/bin/cat", ${hiddenPaths.map((target) => JSON.stringify(target)).join(", ")}] });
+        if (result.exitCode !== 0 || result.stdout.length !== 0) throw new Error("Bun file masks did not hide contents");
+        console.log("bun-file-masks-ok");
+      } finally {
+        await executor.close();
+      }
+    `;
+    const { stdout } = await execFileAsync(workerCommand[0], ["--eval", source], {
+      timeout: 12_000,
+    });
+    expect(stdout.trim()).toBe("bun-file-masks-ok");
+  }, 15_000);
+
+  it("fails closed on missing paths, special files, symlinks, and symlink ancestors", async () => {
+    const { root, cwd } = await fixture();
+    const fifo = path.join(root, "fifo");
+    expect(spawnSync("/usr/bin/mkfifo", [fifo]).status).toBe(0);
+    const fileLink = path.join(root, "file-link");
+    await symlink(path.join(root, "visible.txt"), fileLink);
     for (const hiddenPath of [
       path.join(root, "missing"),
-      path.join(root, "visible.txt"),
+      fifo,
+      fileLink,
       path.join(root, "alias"),
       path.join(root, "alias", "b"),
+      path.join(root, "alias", "a", "secret.txt"),
     ]) {
       await expect(
         createBubblewrapExecutor({

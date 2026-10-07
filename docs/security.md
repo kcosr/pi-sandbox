@@ -162,13 +162,20 @@ and runtime locations. Host pseudo-filesystems and privileged sockets are not
 bind-mounted as host resources.
 
 Broad read access is the default. `filesystem.hidden_paths` masks selected
-canonical existing host directories with private read-only filesystems. The
-launch CWD is restored through a hidden ancestor; explicit hidden directories
+canonical existing host directories with private read-only filesystems and
+regular files with private empty read-only file data. The
+launch CWD is restored through a hidden ancestor; explicit hidden files and directories
 inside CWD are then masked again. Redundant nested masks are reduced on either
 side of the CWD restore. No hidden entry may equal CWD, `/`, or `/tmp`, or overlap
-the private process, device, system, or runtime paths. Mask mounts are remounted
+the private process, device, system, or runtime paths. Directory masks are remounted
 read-only non-recursively after the CWD skeleton is built, so CWD retains its
-configured permissions and tools cannot change mask contents or permissions.
+configured permissions and tools cannot change directory mask contents or
+permissions. File masks use empty `--ro-bind-data` inputs and prevent content
+changes or replacement through a writable containing CWD. Their private inode
+permissions may still be changed on kernels using sealed file data; that cannot
+make the contents writable and does not alter host permissions. Names remain
+visible, and neither mask type modifies the original host object. Missing
+targets, special files, and symlink components fail startup.
 
 This is pathname isolation for sandboxed tools, not an inode confidentiality
 boundary. A symlink to a hidden pathname resolves through the hidden view, but
@@ -197,6 +204,26 @@ The read-only CWD setting is a Bubblewrap filesystem restriction. It applies to
 model Bash and human shell commands as well as typed tools; an approval cannot
 bypass it. Direct mode rejects the setting, and managed host tools retain their
 explicit host authority. Writable private runtime/temp storage remains available.
+
+## Session retention
+
+The administrator controls conversation cleanup through the required main
+`[sessions]` policy; user/group rules cannot replace it. Cleanup runs as the
+invoking user on the host, outside the tool namespace, and may delete expired
+Pi session JSONL files from the selected session store. It does not affect
+audit-log persistence or retention.
+
+The sweep does not follow session-tree symlinks or traverse arbitrary nested
+directories. It validates only a bounded header of expired regular candidates
+and rechecks file identity and modification time before unlinking. Startup
+protects its selected session and refreshes its last-use timestamp; logical
+session activation also refreshes that timestamp. There is no cross-process
+active-session lock, and a concurrent resume can still race with final deletion.
+
+This is best-effort housekeeping. The trusted account owner controls session
+files, modification times, and scheduling state; malformed files and cleanup
+failures are skipped. It does not guarantee deletion by a deadline or override
+host filesystem permissions. Zero retention disables the maintenance entirely.
 
 ## Network details
 

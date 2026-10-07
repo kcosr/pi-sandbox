@@ -151,6 +151,7 @@ describe("broker response", () => {
       '{"version":6,"status":"ok","environment":{"pi":{},"pi":{},"sandbox":{},"extensions":{}},"overrides":{}}',
       '{"version":6,"status":"ok","environment":{"pi":{"TOKEN":"one","T\\u004fKEN":"two"},"sandbox":{},"extensions":{}},"overrides":{}}',
       '{"version":6,"status":"ok","environment":{"pi":{},"sandbox":{},"extensions":{}},"overrides":{"audit":{"enabled":false,"facility":"local0"}}}',
+      '{"version":6,"status":"ok","environment":{"pi":{},"sandbox":{},"extensions":{}},"overrides":{"sessions":{"retention_days":0}}}',
       '{"version":6,"status":"ok","environment":{"pi":{},"sandbox":{},"extensions":{}},"overrides":{"tools":{"write":{"mode":"ask","session_grant":"never","audit":false}}}}',
       '{"version":6,"status":"ok","environment":{"pi":{},"sandbox":{},"extensions":{}},"overrides":{"unknown":true}}',
       '{"version":6,"status":"ok","environment":{"pi":{},"sandbox":{},"extensions":{}},"overrides":{"models_file":"relative.json"}}',
@@ -298,7 +299,8 @@ describe("identity overrides", () => {
   it("atomically replaces selected tools and inherits all omitted values", () => {
     const basePolicy = { audit: true, mode: "allow", sessionGrant: "never" } as const;
     const base = {
-      configVersion: 7,
+      configVersion: 8,
+      sessions: { retentionDays: 365 },
       filesystem: { cwdWritable: true, hiddenPaths: ["/srv/runs"] },
       audit: { enabled: false, facility: "local0" },
       modelsFile: "/etc/pi-sandbox/models.json",
@@ -346,6 +348,7 @@ describe("identity overrides", () => {
     });
     expect(effective.tools.read).toBe(basePolicy);
     expect(effective.audit).toBe(base.audit);
+    expect(effective.sessions).toBe(base.sessions);
     expect(effective.filesystem).toEqual(base.filesystem);
     const restricted = applyIdentityOverrides(base, {
       filesystem: { cwdWritable: false },

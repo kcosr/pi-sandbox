@@ -73,6 +73,10 @@ export interface AuditConfig {
   readonly facility: AuditFacility;
 }
 
+export interface SessionsConfig {
+  readonly retentionDays: number;
+}
+
 export type ToolPolicies = Readonly<Record<string, ToolPolicy>>;
 
 export interface ExtensionConfig {
@@ -108,8 +112,9 @@ export interface ManagedEnvironment {
 }
 
 export interface SandboxConfig {
-  readonly configVersion: 7;
+  readonly configVersion: 8;
   readonly audit: AuditConfig;
+  readonly sessions: SessionsConfig;
   readonly modelsFile: string;
   readonly execution: ExecutionConfig;
   readonly identity: IdentityConfig;

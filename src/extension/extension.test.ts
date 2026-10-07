@@ -76,7 +76,8 @@ function config(
   overrides: Partial<Record<ToolName, "allow" | "ask" | "deny" | "disabled">> = {},
 ): SandboxConfig {
   return {
-    configVersion: 7,
+    configVersion: 8,
+    sessions: { retentionDays: 0 },
     filesystem: { cwdWritable: true, hiddenPaths: [] },
     audit: { enabled: false, facility: "local0" },
     modelsFile: "/etc/pi-sandbox/models.json",
@@ -100,11 +101,15 @@ function context(
     readonly select?: (title: string) => Promise<string | undefined>;
     readonly notify?: (message: string, type?: "info" | "warning" | "error") => void;
     readonly signal?: AbortSignal;
+    readonly sessionFile?: string;
   } = {},
 ): ExtensionToolContext {
   return {
     cwd: "/work/project",
-    sessionManager: { getSessionId: () => "pi-session-1" },
+    sessionManager: {
+      getSessionId: () => "pi-session-1",
+      getSessionFile: () => options.sessionFile,
+    },
     hasUI: options.hasUI ?? false,
     mode: "tui",
     signal: options.signal,
@@ -1174,6 +1179,89 @@ describe("Pi Sandbox extension", () => {
       context(),
     )) as UserBashEventResult;
     expect(result.result?.exitCode).toBe(1);
+  });
+
+  it("awaits session maintenance before making tools available", async () => {
+    const pi = fakePi();
+    let enter!: () => void;
+    let finish!: () => void;
+    const entered = new Promise<void>((resolve) => {
+      enter = resolve;
+    });
+    const finished = new Promise<void>((resolve) => {
+      finish = resolve;
+    });
+    const onSessionStart = vi.fn<(file: string | undefined) => Promise<void>>(async () => {
+      enter();
+      await finished;
+    });
+    createPiSandboxExtension({
+      cwd: "/work/project",
+      configPath: "/etc/pi-sandbox/config.toml",
+      userStateDir: "/home/test/.pi/agent",
+      loadConfig: () => Promise.resolve(config()),
+      executor: fakeExecutor(),
+      onSessionStart,
+    })(pi.api);
+    const file = "/home/test/.pi/agent/sessions/--work-project--/initial.jsonl";
+    const pending = pi.handlers.get("session_start")?.(
+      undefined as never,
+      context({ sessionFile: file }),
+    );
+    await entered;
+    expect(onSessionStart).toHaveBeenCalledExactlyOnceWith(file);
+    expect(pi.tools.size).toBe(0);
+    expect(pi.activeTools).toHaveLength(0);
+    finish();
+    await pending;
+    expect(pi.tools.size).toBe(7);
+    expect(pi.activeTools).toHaveLength(1);
+  });
+
+  it("tracks the current file on initial, resumed, and new replacement sessions", async () => {
+    const onSessionStart = vi.fn(() => Promise.resolve());
+    const extension = createPiSandboxExtension({
+      cwd: "/work/project",
+      configPath: "/etc/pi-sandbox/config.toml",
+      userStateDir: "/home/test/.pi/agent",
+      loadConfig: () => Promise.resolve(config()),
+      executor: fakeExecutor(),
+      onSessionStart,
+    });
+    const files = [
+      "/home/test/.pi/agent/sessions/--work-project--/initial.jsonl",
+      "/home/test/.pi/agent/sessions/--work-project--/old-resumed.jsonl",
+      undefined,
+    ];
+    for (const file of files) {
+      const pi = fakePi();
+      extension(pi.api);
+      const ctx = context(file === undefined ? {} : { sessionFile: file });
+      await pi.handlers.get("session_start")?.(undefined as never, ctx);
+      await pi.handlers.get("session_shutdown")?.(undefined as never, ctx);
+    }
+    expect(onSessionStart.mock.calls).toEqual(files.map((file) => [file]));
+  });
+
+  it("starts normally without an optional session maintenance callback", async () => {
+    const pi = fakePi();
+    const getSessionFile = vi.fn(() => {
+      throw new Error("Session file access was unnecessary");
+    });
+    const ctx = context();
+    createPiSandboxExtension({
+      cwd: "/work/project",
+      configPath: "/etc/pi-sandbox/config.toml",
+      userStateDir: "/home/test/.pi/agent",
+      loadConfig: () => Promise.resolve(config()),
+      executor: fakeExecutor(),
+    })(pi.api);
+    await pi.handlers.get("session_start")?.(undefined as never, {
+      ...ctx,
+      sessionManager: { ...ctx.sessionManager, getSessionFile },
+    });
+    expect(getSessionFile).not.toHaveBeenCalled();
+    expect(pi.tools.size).toBe(7);
   });
 
   it("clears session state without closing the process-owned executor", async () => {

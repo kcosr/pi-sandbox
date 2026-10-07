@@ -274,7 +274,8 @@ describe("PolicyEngine", () => {
 
   it("creates policies from the configured model tools", () => {
     const config: SandboxConfig = {
-      configVersion: 7,
+      configVersion: 8,
+      sessions: { retentionDays: 0 },
       filesystem: { cwdWritable: true, hiddenPaths: [] },
       audit: { enabled: false, facility: "local0" },
       modelsFile: "/etc/pi-sandbox/models.json",

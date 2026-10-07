@@ -56,6 +56,33 @@ probing an executor, or selecting a workspace. Argument and root-user validation
 still run. This lets supervisors probe the executable from their own directory
 before spawning an actual worker in its requested workspace.
 
+## Session maintenance
+
+The main TOML's required `[sessions].retention_days` controls host-side Pi
+conversation retention. The private entry point supplies the generic awaited
+Pi `beforeRun` hook introduced by patch `0004-session-startup-maintenance`.
+After session selection and metadata-only exits, this hook receives the
+resolved interface mode, session manager, and optional effective custom session
+directory. It finishes before stdin consumption, theme initialization, or any
+TUI, print, JSON, or RPC runner starts. Retention policy remains in Pi Sandbox,
+outside the upstream hook.
+
+With retention enabled, startup touches the selected session's modification
+time, excludes it from deletion, and checks a small per-storage-root attempt
+record under the agent directory. A due sweep streams one level of workspace
+directories for default storage or one flat custom directory. It checks file
+metadata in bounded concurrent batches and reads only a bounded header for expired regular JSONL candidates;
+it never parses transcript bodies. The sweep is awaited and normally runs once
+per 24 hours, with a delayed progress message only for interactive mode. A
+retention-policy change makes it due immediately. Recording the attempt before
+scanning limits repeated startup work after an error or interruption.
+
+Logical session activation also refreshes modification time through the forced
+extension's session-start callback. All maintenance failures are nonfatal and
+silent. Duplicate concurrent sweeps are tolerated without locks or a process
+registry. Disabling retention skips both sweeping and timestamp updates. This
+maintenance is independent of host-managed audit-log retention.
+
 ## Managed application and identity broker
 
 The installed application is one prebuilt Bun executable. Its private entry
@@ -274,11 +301,17 @@ When CWD is exactly `/tmp`, only writable access is supported; that explicit hos
 bind masks the private `/tmp` mount. Read-only CWD exactly `/tmp` is rejected.
 CWD `/` and overlaps with `/proc`, `/sys`, `/dev`, or `/run` remain rejected.
 
-Hidden directories are private tmpfs masks. Startup checks that every target is
-an existing canonical directory with no symlink components. Mount planning
+Hidden directories are private tmpfs masks; hidden regular files use
+`--ro-bind-data` with a distinct inherited read-only EOF descriptor for each
+effective file mask. The host opens `/dev/null` once, duplicates that input into
+the child's descriptor slots, and closes its descriptor immediately after
+spawning. Bubblewrap consumes those inputs during startup and creates private
+empty file masks without persistent host placeholders. Startup checks that every target is
+an existing canonical directory or regular file with no symlink components. Mount planning
 applies outer masks before restoring CWD and interior masks afterward. Nested
-redundant entries are reduced separately in these groups; the final masks are
-remounted read-only without recursively changing CWD permissions. This retains
+redundant entries are reduced separately in these groups; the final directory masks are
+remounted read-only without recursively changing CWD permissions, while file
+mask data is read-only from creation. This retains
 ordinary host utility access while removing siblings beneath a hidden runs
 parent. Exact CWD, `/`, `/tmp`, and private-system overlaps are rejected. The
 policy is immutable for the process and is not supplied by user/group overrides.

@@ -116,6 +116,32 @@ logs, and caches. It must not affect:
 Interactive authentication and retained credentials therefore remain
 per-user, while the administrator controls the available model definitions.
 
+The main schema-8 configuration requires `[sessions].retention_days`, an integer
+from `0` through `36500`, defaulted to `365` in packaged TOML. User/group rules
+cannot override it. Zero disables both cleanup and last-use timestamp updates.
+Otherwise, use session-file modification time as the retention clock, refreshing
+the selected session at operational startup and each logical session activation
+or resume, even when no message is appended.
+
+Before starting an interface, Pi Sandbox awaits a best-effort sweep when the
+selected storage root has not been checked within 24 hours or retention policy
+has changed. Default storage is the agent directory's `sessions` tree with one
+workspace-directory level; explicit custom session storage is flat. Never
+perform an arbitrary recursive scan or load transcript bodies. Only expired
+regular `.jsonl` files are opened, with at most 4096 bytes read to validate a
+complete first-line Pi session header. Skip malformed or oversized headers,
+symlink paths within the store, and the currently selected session. Recheck
+identity and age before deletion; tolerate deletion races and other failures.
+
+Scheduling records live under the selected agent directory at
+`pi-sandbox/retention/<root-and-layout-hash>.json`; write the attempt time and
+retention value before the sweep. Do not add an active-session registry or
+cross-process lock. Concurrent sweeps and a rare concurrent-resume race are
+accepted best-effort behavior. Only an interactive sweep lasting more than
+about one second displays `Checking for old sessions…`, before the TUI starts;
+other modes and cleanup errors remain silent. System audit-log retention is
+independent and remains host-owned.
+
 ## User and group resolution
 
 The optional identity broker is a separate static native executable, activated
@@ -184,6 +210,14 @@ provides these seams:
    new/resume/fork/clone. They must not bind a replacement twice. Every genuine
    runtime gets a fresh forced extension instance; shutdown ends audit state and
    clears approval grants, while the process-owned executor stays available.
+6. `main()` exposes a generic asynchronous `beforeRun` hook. After session
+   selection and metadata/authentication exits, it passes the resolved mode,
+   session manager, and optional resolved custom session directory and awaits
+   completion before reading piped stdin, initializing themes, or starting any
+   interface. Preserve custom storage selected through CLI, environment, or
+   settings even with `--no-session`. Patch
+   `0004-session-startup-maintenance.patch` supplies this seam; retention policy,
+   scanning, scheduling, and progress output remain in Pi Sandbox.
 
 Pi 1.0's resource loader separates built-in factories from ordinary inline
 factories. The forced `--no-extensions` flag disables the built-in factories and
@@ -197,6 +231,11 @@ sharing without accessing session content. They also prove that disabling
 extensions keeps the mandatory inline factory while omitting built-in and
 discovered factories. Pi Sandbox tests separately prove the forced
 private-entry-point policy.
+
+Startup-hook tests must prove the awaited ordering for TUI, print, JSON, and
+RPC, before stdin consumption and theme initialization, as well as the absence
+of maintenance for metadata and authentication exits. Cover selected-session
+access and effective custom session storage without adding cleanup logic to Pi.
 
 Do not solve upstream merge conflicts by adding compatibility aliases or by
 supporting both managed and obsolete launch shapes in Pi Sandbox. Reimplement
@@ -259,9 +298,13 @@ in packaged defaults. Root-managed user/group rules may replace that setting und
 The Bubblewrap backend always creates an explicit same-path CWD bind after its
 private mounts: writable with `--bind`, read-only with `--ro-bind`. This preserves
 visibility for `/tmp`-based workspaces independently of write permission and does
-not by itself change host visibility. Schema 7 also requires
+not by itself change host visibility. Schema 8 also requires
 `[filesystem].hidden_paths` (empty by default), a main-policy-only list of canonical
-existing directories masked by private read-only mounts. Hidden ancestors precede
+existing directories or regular files. Directories use private read-only tmpfs
+masks; files use separate empty inputs to `--ro-bind-data`. Both retain the
+configured name while masking original contents, without persistent host
+placeholders or host-file mutations. Reject missing paths, symlink components,
+and special files. Hidden ancestors precede
 the CWD restore; explicit hidden descendants follow it. Broker filesystem overrides
 change only `cwd_writable` and cannot clear these masks. Effective direct execution
 requires empty hidden paths. Host Pi context/session loading remains outside the
