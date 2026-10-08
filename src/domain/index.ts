@@ -38,6 +38,7 @@ export {
   MAXIMUM_ADMINISTRATIVE_PATH_BYTES,
   PRIVATE_SANDBOX_SYSTEM_PATHS,
   isNormalizedAbsoluteFilePath,
+  isNormalizedHiddenPath,
   isReservedHiddenDirectoryPath,
 } from "./paths.js";
 export {
@@ -51,3 +52,4 @@ export {
   overlayManagedEnvironment,
   parseManagedEnvironment,
 } from "./environment.js";
+export { expandManagedHomePaths } from "./home-expansion.js";

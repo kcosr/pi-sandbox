@@ -19,6 +19,13 @@ runtime resolves the Homebrew prefix for Apple silicon or Intel and fails
 closed if a GNU command is missing. A macOS release build additionally requires
 Homebrew GNU tar (`gtar`) for reproducible archives.
 
+Configured home-directory expansion requires `/usr/bin/getent` on Linux or
+the system `/usr/bin/dscacheutil` on macOS. The runtime queries the effective
+user's OS account with a five-second deadline and a cleared environment; it
+does not use `HOME` as a fallback. This lookup runs only when a configured
+hidden path or scoped environment value needs expansion. A missing command,
+missing account, invalid home, or lookup failure stops operational startup.
+
 Selected managed extensions add conditional absolute-executable requirements.
 The Git extension requires `/usr/bin/git`. Startup validates the requirements
 for every selected managed extension; separately maintained executables and
@@ -318,7 +325,7 @@ There is no implicit configuration replacement. This supports both complete
 archive deployments and systems where Salt or another configuration manager
 owns `/etc/pi-sandbox`.
 
-The installed configuration uses `config_version = 8` and must include the
+The installed configuration uses `config_version = 9` and must include the
 `[audit]`, `[sessions]`, `[execution]`, `[filesystem]`, and `[extensions]` tables, an `audit` boolean on every
 base tool policy, explicit `filesystem.hidden_paths` (empty by default), and explicit `[environment.pi]`,
 `[environment.sandbox]`, and `[environment.extensions]` tables, even when the
@@ -335,9 +342,17 @@ defaults.
 `[sessions] retention_days = 365` is the packaged conversation-retention
 default. The required value is an integer from `0` to `36500`; use `0` to disable
 cleanup and last-use timestamp updates. This policy belongs to the main TOML
-and is not accepted in user/group overrides. Schema 7 configurations are not
-automatically migrated: update the version and add the required session policy
-before upgrading, or explicitly replace configuration with the packaged defaults.
+and is not accepted in user/group overrides. Older configurations are not
+automatically migrated. Schema 9 adds home-directory expansion in hidden paths
+and configured scoped environment values; review values equal to `~` or
+starting with `~/` before updating the version. Configurations older than
+schema 8 also need the required session policy. Alternatively, explicitly
+replace configuration with the packaged defaults.
+
+Installer validation checks home-relative syntax without expanding it to the
+root installer's home or requiring per-user hidden paths to exist. Operational
+startup expands against the invoking effective user's OS account home and
+validates the resulting paths. Model and installation paths remain absolute.
 
 When the optional identity broker is enabled, `users.d/*.toml` and `groups.d/*.toml` may overlay
 scoped environment and supply model, execution, network, filesystem, and complete

@@ -116,7 +116,19 @@ logs, and caches. It must not affect:
 Interactive authentication and retained credentials therefore remain
 per-user, while the administrator controls the available model definitions.
 
-The main schema-8 configuration requires `[sessions].retention_days`, an integer
+Schema 9 expands bare `~` and a leading `~/` in main-policy hidden paths and
+configured scoped environment values, including user/group values after the
+broker merge. Resolve the invoking effective user's home from the OS account
+database once at operational startup, before applying any configured environment
+or constructing executors. Ambient or configured `HOME` and CWD must not affect
+this resolution. Preserve nonmatching environment strings literally and recheck
+expanded bounds and hidden-path restrictions. Installation validation must not
+expand against the installer's account. This behavior belongs to Pi Sandbox,
+not the upstream Pi patch series; it does not extend to model/configuration/
+installation paths, arbitrary extension settings, inherited environment, or
+compiled fixed extension values.
+
+The main schema-9 configuration requires `[sessions].retention_days`, an integer
 from `0` through `36500`, defaulted to `365` in packaged TOML. User/group rules
 cannot override it. Zero disables both cleanup and last-use timestamp updates.
 Otherwise, use session-file modification time as the retention clock, refreshing
@@ -298,7 +310,7 @@ in packaged defaults. Root-managed user/group rules may replace that setting und
 The Bubblewrap backend always creates an explicit same-path CWD bind after its
 private mounts: writable with `--bind`, read-only with `--ro-bind`. This preserves
 visibility for `/tmp`-based workspaces independently of write permission and does
-not by itself change host visibility. Schema 8 also requires
+not by itself change host visibility. Schema 9 also requires
 `[filesystem].hidden_paths` (empty by default), a main-policy-only list of canonical
 existing directories or regular files. Directories use private read-only tmpfs
 masks; files use separate empty inputs to `--ro-bind-data`. Both retain the

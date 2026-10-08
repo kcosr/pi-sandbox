@@ -177,6 +177,14 @@ make the contents writable and does not alter host permissions. Names remain
 visible, and neither mask type modifies the original host object. Missing
 targets, special files, and symlink components fail startup.
 
+Home-relative hidden paths (`~` or `~/...`) are expanded using the invoking
+effective user's OS account home, independently of ambient or configured
+`HOME`. All reserved-path, canonical-path, and existing-target checks apply to
+the result. The same prefix convention expands configured scoped environment
+values after the broker merge without granting access to hidden paths or
+bypassing variable admission and size limits. It does not evaluate shell
+expressions or expand arbitrary configuration strings.
+
 This is pathname isolation for sandboxed tools, not an inode confidentiality
 boundary. A symlink to a hidden pathname resolves through the hidden view, but
 pre-existing hard links and separate host bind-mount aliases outside the hidden

@@ -47,13 +47,22 @@ try {
     throw new Error("defaults directory must be adjacent to the packaged executable");
   }
   const workspace = join(temporaryDirectory, "workspace");
-  const userState = join(workspace, ".pi-state");
+  const accountHome = join(temporaryDirectory, "account-home");
+  const decoyHome = join(temporaryDirectory, "decoy-home");
+  const userState = join(accountHome, ".pi-state");
+  await mkdir(workspace);
+  await mkdir(decoyHome);
   await mkdir(userState, { recursive: true });
   const hiddenFile = join(workspace, ".private-credentials");
+  const homeHiddenFile = join(accountHome, ".private-home-credentials");
   await writeFile(hiddenFile, "smoke-private-credential\n");
+  await writeFile(homeHiddenFile, "smoke-private-credential\n");
+  const passwdFile = join(temporaryDirectory, "passwd");
+  await prepareAccountHome(passwdFile, accountHome);
   const maskedFile = await prepareHostIndependentSmokeConfig(
     join(defaultsDirectory, "config.toml"),
     hiddenFile,
+    decoyHome,
   );
   const sessionFixtures = await prepareSessionRetentionFixtures(userState, workspace);
   const releaseManifest = JSON.parse(
@@ -115,7 +124,8 @@ try {
   const environment = {
     ...process.env,
     PATH: `${testBin}:${process.env.PATH ?? "/usr/bin:/bin"}`,
-    PI_CODING_AGENT_DIR: userState,
+    HOME: decoyHome,
+    PI_CODING_AGENT_DIR: join(decoyHome, "ambient-state"),
   };
   delete environment.NODE_ENV;
   delete environment.PI_CODING_AGENT_SESSION_DIR;
@@ -140,6 +150,12 @@ try {
       "--ro-bind",
       runtimeDirectory,
       compiledLibexecDirectory,
+      "--ro-bind",
+      passwdFile,
+      "/etc/passwd",
+      "--bind",
+      accountHome,
+      accountHome,
       "--bind",
       workspace,
       workspace,
@@ -284,7 +300,8 @@ try {
     messages,
     waitFor,
     workspace,
-    hiddenFile: maskedFile ? hiddenFile : undefined,
+    hiddenFiles: maskedFile ? [hiddenFile, homeHiddenFile] : [],
+    expectedHomeExpansion: join(accountHome, "cache"),
   });
 
   child.stdin.end();
@@ -365,7 +382,27 @@ async function waitFor(predicate, description) {
   throw new Error(`timed out waiting for ${description}`);
 }
 
-async function prepareHostIndependentSmokeConfig(configPath, hiddenFile) {
+async function prepareAccountHome(passwdFile, accountHome) {
+  const uid = process.geteuid();
+  const lines = (await readFile("/etc/passwd", "utf8")).trimEnd().split("\n");
+  let found = false;
+  const rewritten = lines.map((line) => {
+    const fields = line.split(":");
+    if (fields.length === 7 && Number(fields[2]) === uid) {
+      fields[5] = accountHome;
+      found = true;
+      return fields.join(":");
+    }
+    return line;
+  });
+  if (!found) {
+    rewritten.push(`pi-sandbox-smoke:x:${uid}:${process.getegid()}:Smoke:${accountHome}:/bin/sh`);
+  }
+  // Only the outer smoke namespace sees this account record; host account files stay untouched.
+  await writeFile(passwdFile, `${rewritten.join("\n")}\n`);
+}
+
+async function prepareHostIndependentSmokeConfig(configPath, hiddenFile, decoyHome) {
   const config = parseToml(await readFile(configPath, "utf8"));
   const tools = config.tools;
   if (typeof tools !== "object" || tools === null || Array.isArray(tools)) {
@@ -378,7 +415,12 @@ async function prepareHostIndependentSmokeConfig(configPath, hiddenFile) {
   config.identity = { mode: "disabled" };
   config.sessions = { retention_days: 365 };
   const masksFile = config.execution?.backend === "bubblewrap";
-  if (masksFile) config.filesystem.hidden_paths = [hiddenFile];
+  if (masksFile) config.filesystem.hidden_paths = [hiddenFile, "~/.private-home-credentials"];
+  config.environment = {
+    pi: { PI_CODING_AGENT_DIR: "~/.pi-state", HOME: decoyHome },
+    sandbox: { HOME_EXPANSION_CHECK: "~/cache" },
+    extensions: {},
+  };
   config.extensions = {};
   config.tools = Object.fromEntries(
     SANDBOX_TOOL_NAMES.map((name) => {

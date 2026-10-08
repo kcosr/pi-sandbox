@@ -5,6 +5,7 @@ import path from "node:path";
 import { promisify } from "node:util";
 import { afterEach, describe, expect, it } from "vitest";
 
+import { expandManagedHomePaths } from "../../src/domain/index.js";
 import { createBubblewrapExecutor, type SandboxExecutor } from "../../src/sandbox/index.js";
 import { testSandboxWorkerCommand } from "../helpers/sandbox-worker.js";
 
@@ -40,6 +41,50 @@ async function fixture(parent = "/var/tmp") {
 }
 
 describe.skipIf(!available)("hidden paths through real Bubblewrap", () => {
+  it.each([false, true])(
+    "expands home masks independently of CWD and preserves the workspace exception (inside=%s)",
+    async (insideHome) => {
+      const { root, runs, cwd, privateDirectory } = await fixture();
+      const launch = insideHome ? cwd : path.join(root, "outside-home-workspace");
+      await mkdir(launch, { recursive: true });
+      const expanded = expandManagedHomePaths(
+        { cwdWritable: true, hiddenPaths: ["~", "~/a/private"] },
+        { pi: {}, sandbox: { ACCOUNT_CACHE: "~/cache" }, extensions: {} },
+        () => runs,
+      );
+      const executor = await createBubblewrapExecutor({
+        cwd: launch,
+        bubblewrapPath,
+        ...expanded.filesystem,
+        environment: expanded.environment.sandbox,
+        workerCommand: testSandboxWorkerCommand(),
+      });
+      executors.push(executor);
+      await executor.probe();
+      const result = await executor.execute({
+        argv: [
+          "/bin/bash",
+          "-c",
+          'printf "%s\\n" "$ACCOUNT_CACHE"; ls -A -- "$1"',
+          "home-expansion-test",
+          runs,
+        ],
+      });
+      expect(result.exitCode).toBe(0);
+      expect(result.stdout.toString()).toBe(`${runs}/cache\n${insideHome ? "a\n" : ""}`);
+      if (insideHome) {
+        const contents = await executor.execute({
+          argv: ["/bin/bash", "-c", "cat secret.txt; ls -A private"],
+        });
+        expect(contents.exitCode).toBe(0);
+        expect(contents.stdout.toString()).toBe(`secret:${cwd}`);
+      }
+      expect(await readFile(path.join(privateDirectory, "secret.txt"), "utf8")).toBe(
+        `secret:${privateDirectory}`,
+      );
+    },
+  );
+
   it.each([
     [true, "/var/tmp"],
     [false, "/var/tmp"],

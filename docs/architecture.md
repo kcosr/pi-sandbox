@@ -136,6 +136,13 @@ catalog. `PI_CODING_AGENT_DIR` still selects user credentials, sessions,
 settings, skills, themes, and logs, but cannot redirect administrative policy,
 broker selection, or models. Missing or invalid effective inputs abort startup.
 
+Before applying the effective environment or starting executors, operational
+startup expands bare `~` and leading `~/` in configured scoped environment
+values and hidden paths using the invoking effective user's OS account home.
+Expansion follows the broker merge and is independent of `$HOME` and CWD.
+Expanded values retain the existing environment bounds and filesystem checks.
+Installation validation checks syntax without expanding the installer's home.
+
 The distribution manifest fixes the config directory, libexec directory,
 launcher path, identity and event-collector sockets, Linux systemd unit directory, and Linux
 Bubblewrap provider at build time. A system provider names an unmanaged

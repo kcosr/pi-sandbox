@@ -4,7 +4,14 @@ import { mkdir, readFile, stat, utimes, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 
 /** Offline checks against the real packaged executable, using the caller's isolated RPC launch. */
-export async function testRpcSessionLifecycle({ child, messages, waitFor, workspace, hiddenFile }) {
+export async function testRpcSessionLifecycle({
+  child,
+  messages,
+  waitFor,
+  workspace,
+  hiddenFiles,
+  expectedHomeExpansion,
+}) {
   let sequence = 0;
   async function request(type, fields = {}, success = true) {
     const id = `lifecycle-${++sequence}`;
@@ -34,17 +41,22 @@ export async function testRpcSessionLifecycle({ child, messages, waitFor, worksp
     const shell = await request("bash", { command: "pwd" });
     assert.equal(shell.data.exitCode, 0, JSON.stringify(shell));
     assert.equal(shell.data.output.trim(), workspace);
+    const environment = await request("bash", {
+      command: 'printf "%s" "$HOME_EXPANSION_CHECK"',
+    });
+    assert.equal(environment.data.exitCode, 0, JSON.stringify(environment));
+    assert.equal(environment.data.output, expectedHomeExpansion);
   }
 
   const initial = (await request("get_state")).data.sessionId;
-  if (hiddenFile !== undefined) {
+  for (const hiddenFile of hiddenFiles) {
+    const target = `'${hiddenFile.replaceAll("'", "'\\''")}'`;
     const read = await request("bash", {
-      command:
-        "test -f .private-credentials && test ! -s .private-credentials && cat .private-credentials",
+      command: `test -f ${target} && test ! -s ${target} && cat ${target}`,
     });
     assert.equal(read.data.exitCode, 0, JSON.stringify(read));
     assert.equal(read.data.output, "", "packaged file mask must hide host contents");
-    const write = await request("bash", { command: "printf changed > .private-credentials" });
+    const write = await request("bash", { command: `printf changed > ${target}` });
     assert.notEqual(write.data.exitCode, 0, "packaged file mask must deny writes");
     assert.equal(await readFile(hiddenFile, "utf8"), "smoke-private-credential\n");
   }

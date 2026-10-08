@@ -18,6 +18,7 @@ import {
   type ToolPolicy,
   type ToolPolicies,
   isNormalizedAbsoluteFilePath,
+  isNormalizedHiddenPath,
   isReservedHiddenDirectoryPath,
   parseManagedEnvironment,
 } from "../domain/index.js";
@@ -308,11 +309,11 @@ function parseFilesystem(value: unknown, issues: string[]): FilesystemConfig | u
   const hiddenPaths = own(value, "hidden_paths");
   if (
     !Array.isArray(hiddenPaths) ||
-    !hiddenPaths.every(isNormalizedAbsoluteFilePath) ||
+    !hiddenPaths.every(isNormalizedHiddenPath) ||
     new Set(hiddenPaths).size !== hiddenPaths.length
   ) {
     issues.push(
-      "config.filesystem.hidden_paths must be an array of unique normalized absolute paths",
+      "config.filesystem.hidden_paths must be an array of unique normalized absolute or home-relative paths",
     );
     return undefined;
   }
@@ -361,8 +362,8 @@ export function parseConfig(
   inspectKeys(parsed, ROOT_KEYS, "config", issues);
 
   const configVersion = own(parsed, "config_version");
-  if (configVersion !== 8) {
-    issues.push("config.config_version must be the integer 8");
+  if (configVersion !== 9) {
+    issues.push("config.config_version must be the integer 9");
   }
 
   const modelsFileValue = own(parsed, "models_file");
@@ -431,7 +432,7 @@ export function parseConfig(
   }
 
   return Object.freeze({
-    configVersion: 8,
+    configVersion: 9,
     audit,
     sessions,
     modelsFile,

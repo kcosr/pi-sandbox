@@ -29,3 +29,15 @@ export function isNormalizedAbsoluteFilePath(value: unknown): value is string {
     .split("/")
     .every((component) => component.length > 0 && component !== "." && component !== "..");
 }
+
+/** Configuration syntax only: home-relative paths are resolved for the invoking account later. */
+export function isNormalizedHiddenPath(value: unknown): value is string {
+  return (
+    isNormalizedAbsoluteFilePath(value) ||
+    value === "~" ||
+    (typeof value === "string" &&
+      value.startsWith("~/") &&
+      Buffer.byteLength(value) <= MAXIMUM_ADMINISTRATIVE_PATH_BYTES &&
+      isNormalizedAbsoluteFilePath(value.slice(1)))
+  );
+}
