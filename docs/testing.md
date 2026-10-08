@@ -36,8 +36,12 @@ unavailable namespaces.
 - strict offline and host network modes;
 - required CWD write-access configuration, parent inheritance and user/group overrides,
   with direct/read-only rejection before and after override application;
-- schema-8 required hidden paths, strict path syntax and uniqueness, immutable
+- schema-9 required hidden paths, strict path syntax and uniqueness, immutable
   main-policy inheritance, direct-mode rejection, and mount ordering around CWD;
+- account-home expansion for configured hidden paths and all scoped environment
+  values after broker merge, independence from ambient `HOME` and CWD, literal
+  nonmatching strings, post-expansion bounds, and installation validation without
+  account-home lookup;
 - required session retention, integer bounds, explicit zero-disable behavior,
   and rejection of user/group retention overrides;
 - last-use timestamp updates, daily scheduling and policy-change retries,

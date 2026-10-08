@@ -1,5 +1,5 @@
 import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
-import { tmpdir } from "node:os";
+import { tmpdir, userInfo } from "node:os";
 import { join } from "node:path";
 
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -19,6 +19,7 @@ import {
 import {
   createManagedModelRuntimeFactory,
   runPiSandbox,
+  SYSTEM_CONFIG_PATH,
   assertExecutionPlatform,
   instantiateConfiguredManagedExtensions,
   resolveEffectiveAdministrativeConfiguration,
@@ -74,7 +75,7 @@ describe("administrative configuration", () => {
 
   it("enforces the execution backend's platform contract", () => {
     const config = {
-      configVersion: 8,
+      configVersion: 9,
       sessions: { retentionDays: 0 },
       filesystem: { cwdWritable: true, hiddenPaths: [] },
       audit: { enabled: false, facility: "local0" },
@@ -264,7 +265,7 @@ describe("administrative configuration", () => {
     ]);
     const allow = { audit: false, mode: "allow", sessionGrant: "never" } as const;
     const config = {
-      configVersion: 8,
+      configVersion: 9,
       sessions: { retentionDays: 0 },
       filesystem: { cwdWritable: true, hiddenPaths: [] },
       audit: { enabled: false, facility: "local0" },
@@ -314,6 +315,168 @@ describe("administrative configuration", () => {
     const root = await createRoot();
 
     await expect(validateAdministrativeConfiguration(root)).rejects.toThrow();
+  });
+
+  it("keeps home-relative policy unresolved during installation validation", async () => {
+    const root = await createRoot();
+    const configPath = rooted(root, SYSTEM_CONFIG_PATH);
+    const source = await readFile(configPath, "utf8");
+    await writeFile(
+      configPath,
+      source
+        .replace("hidden_paths = []", 'hidden_paths = ["~/.ssh"]')
+        .replace("[environment.pi]", '[environment.pi]\nPI_CODING_AGENT_DIR = "~/.pi/agent"'),
+    );
+    await writeFile(rooted(root, "/etc/pi-sandbox/models.json"), '{"providers":{}}');
+
+    const config = await validateAdministrativeConfiguration(root);
+    expect(config.filesystem.hiddenPaths).toEqual(["~/.ssh"]);
+    expect(config.environment.pi.PI_CODING_AGENT_DIR).toBe("~/.pi/agent");
+  });
+
+  it("uses the OS account home for effective policy and preserves the caller environment", async () => {
+    const root = await createRoot();
+    const configPath = rooted(root, SYSTEM_CONFIG_PATH);
+    const source = await readFile(configPath, "utf8");
+    await writeFile(
+      configPath,
+      source
+        .replace("hidden_paths = []", 'hidden_paths = ["~/.ssh"]')
+        .replace(
+          "[environment.pi]",
+          '[environment.pi]\nHOME = "/policy-home"\nPI_CODING_AGENT_DIR = "~/agent"',
+        )
+        .replace("[environment.sandbox]", '[environment.sandbox]\nCACHE = "~/cache"'),
+    );
+    await writeFile(rooted(root, "/etc/pi-sandbox/models.json"), '{"providers":{}}');
+    const callerEnvironment = { HOME: "/caller-home", INHERITED: "~/literal" };
+    const home = userInfo().homedir;
+
+    const effective = await resolveEffectiveAdministrativeConfiguration(root, callerEnvironment);
+    expect(effective.config.filesystem.hiddenPaths).toEqual([join(home, ".ssh")]);
+    expect(effective.identityEnvironment).toEqual({
+      pi: { HOME: "/policy-home", PI_CODING_AGENT_DIR: join(home, "agent") },
+      sandbox: { CACHE: join(home, "cache") },
+      extensions: {},
+    });
+    expect(effective.config.environment).toBe(effective.identityEnvironment);
+    expect(callerEnvironment).toEqual({ HOME: "/caller-home", INHERITED: "~/literal" });
+  });
+
+  it("expands the merged broker environment once before applying it", async () => {
+    const root = await createRoot();
+    const configPath = rooted(root, SYSTEM_CONFIG_PATH);
+    const source = await readFile(configPath, "utf8");
+    await writeFile(
+      configPath,
+      source
+        .replace('mode = "disabled"', 'mode = "broker"')
+        .replace("hidden_paths = []", 'hidden_paths = ["~/private"]')
+        .replace(
+          "[environment.pi]",
+          '[environment.pi]\nHOME = "/policy-home"\nFROM_BASE = "~/base"\nREPLACED = "~/unused"',
+        ),
+    );
+    await writeFile(rooted(root, "/etc/pi-sandbox/models.json"), '{"providers":{}}');
+    const callerEnvironment = { HOME: "/caller-home" };
+    const getHome = vi.fn(() => {
+      expect(callerEnvironment.HOME).toBe("/caller-home");
+      return "/accounts/alice";
+    });
+    const effective = await resolveEffectiveAdministrativeConfiguration(
+      root,
+      callerEnvironment,
+      () =>
+        Promise.resolve({
+          environment: {
+            pi: { REPLACED: "broker-literal", FROM_BROKER: "~/broker" },
+            sandbox: { CACHE: "~/cache" },
+            extensions: { service: { CACHE: "~/service" } },
+          },
+          overrides: { filesystem: { cwdWritable: false }, tools: {} },
+        }),
+      SYSTEM_CONFIG_PATH,
+      getHome,
+    );
+    expect(getHome).toHaveBeenCalledOnce();
+    expect(effective.config.filesystem).toEqual({
+      cwdWritable: false,
+      hiddenPaths: ["/accounts/alice/private"],
+    });
+    expect(effective.identityEnvironment).toEqual({
+      pi: {
+        HOME: "/policy-home",
+        FROM_BASE: "/accounts/alice/base",
+        REPLACED: "broker-literal",
+        FROM_BROKER: "/accounts/alice/broker",
+      },
+      sandbox: { CACHE: "/accounts/alice/cache" },
+      extensions: { service: { CACHE: "/accounts/alice/service" } },
+    });
+    expect(callerEnvironment).toEqual({ HOME: "/caller-home" });
+  });
+
+  it("does not resolve account home when broker overrides remove the last expansion", async () => {
+    const root = await createRoot();
+    const configPath = rooted(root, SYSTEM_CONFIG_PATH);
+    const source = await readFile(configPath, "utf8");
+    await writeFile(
+      configPath,
+      source
+        .replace('mode = "disabled"', 'mode = "broker"')
+        .replace("[environment.pi]", '[environment.pi]\nCACHE = "~/unused"'),
+    );
+    await writeFile(rooted(root, "/etc/pi-sandbox/models.json"), '{"providers":{}}');
+    const getHome = vi.fn((): string => {
+      throw new Error("account unavailable");
+    });
+    const effective = await resolveEffectiveAdministrativeConfiguration(
+      root,
+      {},
+      () =>
+        Promise.resolve({
+          environment: { pi: { CACHE: "/var/cache/shared" }, sandbox: {}, extensions: {} },
+          overrides: { tools: {} },
+        }),
+      SYSTEM_CONFIG_PATH,
+      getHome,
+    );
+    expect(effective.identityEnvironment.pi.CACHE).toBe("/var/cache/shared");
+    expect(getHome).not.toHaveBeenCalled();
+  });
+
+  it("fails before applying environment when account lookup or expanded paths are invalid", async () => {
+    const root = await createRoot();
+    const configPath = rooted(root, SYSTEM_CONFIG_PATH);
+    const source = await readFile(configPath, "utf8");
+    await writeFile(
+      configPath,
+      source
+        .replace("hidden_paths = []", 'hidden_paths = ["~"]')
+        .replace("[environment.pi]", '[environment.pi]\nADDED = "configured"'),
+    );
+    const callerEnvironment = { KEEP: "original" };
+    await expect(
+      resolveEffectiveAdministrativeConfiguration(
+        root,
+        callerEnvironment,
+        undefined,
+        SYSTEM_CONFIG_PATH,
+        () => {
+          throw new Error("account unavailable");
+        },
+      ),
+    ).rejects.toThrow("account unavailable");
+    await expect(
+      resolveEffectiveAdministrativeConfiguration(
+        root,
+        callerEnvironment,
+        undefined,
+        SYSTEM_CONFIG_PATH,
+        () => "/run/account-home",
+      ),
+    ).rejects.toThrow("private system paths");
+    expect(callerEnvironment).toEqual({ KEEP: "original" });
   });
 
   it("loads the selected TOML and its model catalog without reading the compiled default", async () => {

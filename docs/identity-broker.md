@@ -65,6 +65,7 @@ The main configuration owns the global environment inherited by every user:
 ```toml
 [environment.pi]
 ORGANIZATION_MODEL_TOKEN = "shared-model-value"
+PI_CODING_AGENT_DIR = "~/.pi/agent"
 
 [environment.sandbox]
 ORGANIZATION_ENVIRONMENT = "production"
@@ -87,6 +88,15 @@ The three scopes are intentionally separate:
 
 Environment entries never select an extension, add or enable a tool, change a
 policy, or grant an invocation.
+
+Configured values equal to `~` or starting with `~/` expand to the invoking
+effective user's OS account home at application startup. This applies to all
+three scopes, including values overlaid from matching user/group rules. The
+broker returns unexpanded values; conflict checks compare the configured
+strings before expansion. The application expands the merged environment once,
+independently of `$HOME`, the broker's root account, and the launch directory,
+then rechecks its bounds. Other values remain literal. See
+[home-directory expansion](configuration.md#home-directory-expansion).
 
 ## User and group rules
 
@@ -208,7 +218,8 @@ patch, not unrelated rule contents or annotations. Administrators can atomically
 replace files without restarting the socket.
 
 The Bun client independently validates the response, overlays the patch on the
-main configuration, and validates effective policy. It then applies the `pi`
+main configuration, expands configured home-relative values, and validates
+effective policy. It then applies the `pi`
 environment while loading models and validates extension environments before
 starting executors and Pi. Unavailable brokers, invalid rules or responses,
 conflicting matching values, and invalid effective models stop startup. Missing

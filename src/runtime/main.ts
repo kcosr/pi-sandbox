@@ -15,7 +15,7 @@ import { buildLayout } from "../build-layout/index.js";
 import { connectAuditClient, type AuditClient } from "../audit/client.js";
 import { loadConfig } from "../config/index.js";
 import type { EnvironmentVariables, ManagedEnvironment, SandboxConfig } from "../domain/index.js";
-import { overlayManagedEnvironment } from "../domain/index.js";
+import { expandManagedHomePaths, overlayManagedEnvironment } from "../domain/index.js";
 import { createPiSandboxExtension } from "../extension/index.js";
 import { createHostCommandExecutor, type HostCommandExecutor } from "../host/index.js";
 import {
@@ -40,6 +40,7 @@ import { createManagedPiArguments, selectManagedActiveTools } from "./arguments.
 import { applyManagedEnvironment } from "./environment.js";
 import { assertHostPrerequisites } from "./prerequisites.js";
 import { createWorkspaceBoundary } from "./workspace.js";
+import { readAccountHomeDirectory } from "./account-home.js";
 import type { SandboxArguments } from "./config-arguments.js";
 import {
   createSessionMaintenance,
@@ -160,6 +161,7 @@ export async function resolveEffectiveAdministrativeConfiguration(
   environment: NodeJS.ProcessEnv = process.env,
   resolveIdentity?: BrokerIdentityResolver,
   configPath = SYSTEM_CONFIG_PATH,
+  getHomeDirectory: () => string = readAccountHomeDirectory,
 ): Promise<{
   readonly config: SandboxConfig;
   readonly modelsPath: string;
@@ -168,14 +170,27 @@ export async function resolveEffectiveAdministrativeConfiguration(
   const baseConfig = await loadAdministrativeConfig(root, configPath);
   assertExecutionPlatform(baseConfig);
   const identity = await configureManagedIdentity(baseConfig.identity, resolveIdentity);
-  const effectiveEnvironment = overlayManagedEnvironment(
+  const combinedEnvironment = overlayManagedEnvironment(
     baseConfig.environment,
     identity.environment,
   );
+  const overridden = applyIdentityOverrides(baseConfig, identity.overrides);
+  assertExecutionPlatform(overridden);
+  // Resolve only effective configured values, before any managed HOME takes
+  // effect. The account lookup must not trust the process's HOME value.
+  const expanded = expandManagedHomePaths(
+    overridden.filesystem,
+    combinedEnvironment,
+    getHomeDirectory,
+  );
+  const effectiveEnvironment = expanded.environment;
+  const config = Object.freeze({
+    ...overridden,
+    filesystem: expanded.filesystem,
+    environment: effectiveEnvironment,
+  });
   const lease = applyManagedEnvironment(effectiveEnvironment.pi, environment);
   try {
-    const config = applyIdentityOverrides(baseConfig, identity.overrides);
-    assertExecutionPlatform(config);
     const modelsPath = await readAdministrativeModels(config, root);
     await createConfiguredModelRuntime(modelsPath, { refreshOnCreate: false });
     return { config, modelsPath, identityEnvironment: effectiveEnvironment };

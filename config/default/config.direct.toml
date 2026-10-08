@@ -1,4 +1,4 @@
-config_version = 8
+config_version = 9
 models_file = "/etc/pi-sandbox/models.json"
 
 [sessions]

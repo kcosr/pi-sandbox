@@ -76,10 +76,36 @@ configuration path or `models_file`.
 Provider definitions and API-key resolution are documented separately in
 [Models and authentication](models.md).
 
+### Home-directory expansion
+
+Schema 9 expands bare `~` and a leading `~/` in `filesystem.hidden_paths` and
+every configured value under `environment.pi`, `environment.sandbox`, and
+`environment.extensions.<id>`. Expansion happens once at operational startup,
+after broker rules are merged, using the operating system's account home for
+the invoking effective user. It does not use `$HOME` or the launch directory.
+For example, `~/.ssh` becomes `/home/alice/.ssh` for an account with that home.
+Missing or invalid account-home information fails startup when expansion is needed.
+The lookup uses `/usr/bin/getent` on Linux or `/usr/bin/dscacheutil` on macOS,
+with a cleared environment, bounded output, and a five-second deadline.
+
+Environment values that do not match either prefix remain literal; Pi Sandbox
+does not expand embedded tildes, `~otheruser`, `$VARIABLE`, globs, or shell
+expressions. This convention also applies to configured environment values in
+user/group rules. Existing reserved-name, extension-admission, and size limits
+still apply after expansion. Ambient inherited variables and compiled fixed
+extension values are not expanded by this feature; downstream programs may
+interpret their own inputs independently.
+
+`models_file`, configuration-file locations, build-time installation paths, and
+arbitrary extension settings do not support this expansion. Installation
+validation checks configured syntax without substituting the installer's home
+or requiring per-user hidden targets to exist. Operational startup validates
+the expanded paths before applying masks.
+
 ## Complete example
 
 ```toml
-config_version = 8
+config_version = 9
 models_file = "/etc/pi-sandbox/models.json"
 
 [audit]
@@ -175,7 +201,7 @@ effective file.
 
 ## Launch directory access
 
-Configuration schema 8 requires both keys in `[filesystem]`:
+Configuration schema 9 requires both keys in `[filesystem]`:
 
 ```toml
 [filesystem]
@@ -213,11 +239,14 @@ switching a read-only base to direct execution also requires overriding
 ### Hidden files and directories
 
 `hidden_paths` is an explicit array of unique, normalized absolute file or directory
-paths. The default empty array preserves the ordinary read-only host view.
-Every entry must exist and be canonical at worker startup; symlinks in the
-entry or any ancestor, missing paths, and special files are rejected. Files must
-be regular files. Paths are literal: `~`, environment expansion, and globs are
-not supported. `/`, `/tmp`, and paths overlapping `/proc`,
+paths, or home-relative paths written as `~` or `~/...`. The default empty
+array preserves the ordinary read-only host view. Every expanded entry must
+exist and be canonical at worker startup; symlinks in the entry or any ancestor,
+missing paths, and special files are rejected. Files must be regular files.
+Home-relative paths must also be normalized: `~/.ssh` is valid, while `~/../other`
+and `~/.ssh/` are not. Paths must remain unique after expansion. Environment-variable
+substitution and globs are not supported.
+`/`, `/tmp`, and paths overlapping `/proc`,
 `/sys`, `/dev`, or `/run` are rejected. The exact launch CWD cannot be hidden.
 Keep the runtime executable and its dependencies outside the effective hidden
 view; unavailable runtime resources cause startup or prerequisite checks to fail.
@@ -239,8 +268,8 @@ directories remain visible as empty directories (or the private ancestor
 skeleton leading to CWD), and cannot be written or made writable by tools.
 
 Individual files remain visible as empty regular files. For example,
-`hidden_paths = ["/home/alice/.ssh", "/home/alice/.netrc"]` masks the first
-directory and the second file. File masks prevent content changes, unlinking,
+`hidden_paths = ["~/.ssh", "~/.netrc"]` masks the invoking account's `.ssh`
+directory and `.netrc` file. Both must exist for that account. File masks prevent content changes, unlinking,
 and replacement even when the containing CWD is writable. Both mask types are
 private to the sandbox and leave the host contents untouched; neither removes
 the configured name from directory listings.
@@ -274,7 +303,7 @@ hidden directory.
 
 ## Session retention
 
-Schema 8 requires an administrator-owned session policy in the main TOML:
+Schema 9 requires an administrator-owned session policy in the main TOML:
 
 ```toml
 [sessions]

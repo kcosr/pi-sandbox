@@ -25,7 +25,7 @@ function completeConfig(
     (toolName) =>
       `[tools.${toolName}]\naudit = false\n${overrides[toolName] ?? 'mode = "allow"\nsession_grant = "never"'}`,
   );
-  return `config_version = 8\nmodels_file = "/etc/pi-sandbox/models.json"\n\n[sessions]\nretention_days = 0\n\n[audit]\nenabled = false\nfacility = "local0"\n\n[filesystem]\ncwd_writable = true\nhidden_paths = []\n\n[execution]\nbackend = "bubblewrap"\n\n[identity]\nmode = "disabled"\n\n[network]\nmode = "none"\n\n[environment.pi]\n\n[environment.sandbox]\n\n[environment.extensions]\n\n[extensions]\n\n${sections.join("\n\n")}\n`;
+  return `config_version = 9\nmodels_file = "/etc/pi-sandbox/models.json"\n\n[sessions]\nretention_days = 0\n\n[audit]\nenabled = false\nfacility = "local0"\n\n[filesystem]\ncwd_writable = true\nhidden_paths = []\n\n[execution]\nbackend = "bubblewrap"\n\n[identity]\nmode = "disabled"\n\n[network]\nmode = "none"\n\n[environment.pi]\n\n[environment.sandbox]\n\n[environment.extensions]\n\n[extensions]\n\n${sections.join("\n\n")}\n`;
 }
 
 function parseConfig(
@@ -48,7 +48,7 @@ describe("parseConfig", () => {
     );
 
     expect(config).toEqual({
-      configVersion: 8,
+      configVersion: 9,
       sessions: { retentionDays: 0 },
       filesystem: { cwdWritable: true, hiddenPaths: [] },
       audit: { enabled: false, facility: "local0" },
@@ -192,9 +192,38 @@ describe("parseConfig", () => {
           .replace('mode = "none"', 'mode = "host"'),
       ),
     ).toThrow("config.filesystem.hidden_paths must be empty");
-    expect(() => parseConfig(source.replace("config_version = 8", "config_version = 7"))).toThrow(
-      "integer 8",
+    expect(() => parseConfig(source.replace("config_version = 9", "config_version = 8"))).toThrow(
+      "integer 9",
     );
+  });
+
+  it("accepts home-relative hidden paths without resolving installation-time identity", () => {
+    const configured = completeConfig()
+      .replace("hidden_paths = []", 'hidden_paths = ["~/.ssh", "~", "/srv/private"]')
+      .replace("[environment.pi]", '[environment.pi]\nPI_CODING_AGENT_DIR = "~/.pi/agent"');
+    const config = parseConfig(configured);
+    expect(config.filesystem.hiddenPaths).toEqual(["/srv/private", "~", "~/.ssh"]);
+    expect(config.environment.pi.PI_CODING_AGENT_DIR).toBe("~/.pi/agent");
+  });
+
+  it.each(["~/", "~user/.ssh", "~//.ssh", "~/./.ssh", "~/../.ssh", "~/.ssh/", "$HOME/.ssh"])(
+    "rejects malformed or unsupported home-relative hidden paths: %s",
+    (target) => {
+      expect(() =>
+        parseConfig(completeConfig().replace("hidden_paths = []", `hidden_paths = ["${target}"]`)),
+      ).toThrow("unique normalized absolute or home-relative paths");
+    },
+  );
+
+  it("keeps models_file outside home expansion", () => {
+    expect(() =>
+      parseConfig(
+        completeConfig().replace(
+          'models_file = "/etc/pi-sandbox/models.json"',
+          'models_file = "~/models.json"',
+        ),
+      ),
+    ).toThrow("config.models_file must be a normalized absolute file path");
   });
 
   it.each([
@@ -229,11 +258,11 @@ describe("parseConfig", () => {
 
   it("rejects unsupported config versions and types", () => {
     expect(() =>
-      parseConfig(completeConfig().replace("config_version = 8", 'config_version = "8"')),
-    ).toThrow("config.config_version must be the integer 8");
+      parseConfig(completeConfig().replace("config_version = 9", 'config_version = "9"')),
+    ).toThrow("config.config_version must be the integer 9");
     expect(() =>
-      parseConfig(completeConfig().replace("config_version = 8", "config_version = 4")),
-    ).toThrow("config.config_version must be the integer 8");
+      parseConfig(completeConfig().replace("config_version = 9", "config_version = 4")),
+    ).toThrow("config.config_version must be the integer 9");
   });
 
   it("requires models_file to be a normalized absolute file path", () => {
@@ -266,7 +295,7 @@ describe("parseConfig", () => {
   it("rejects unknown fields at every schema level", () => {
     expect(() =>
       parseConfig(
-        completeConfig().replace("config_version = 8", "config_version = 8\nunexpected = true"),
+        completeConfig().replace("config_version = 9", "config_version = 9\nunexpected = true"),
       ),
     ).toThrow("config.unexpected is not a recognized field");
     expect(() =>
@@ -404,12 +433,12 @@ describe("parseConfig", () => {
   });
 
   it("rejects missing root fields and tables with the wrong shape", () => {
-    expect(() => parseConfig(completeConfig().replace("config_version = 8\n", ""))).toThrow(
+    expect(() => parseConfig(completeConfig().replace("config_version = 9\n", ""))).toThrow(
       "config.config_version is required",
     );
     expect(() =>
       parseConfig(
-        'config_version = 8\nmodels_file = "/etc/pi-sandbox/models.json"\nexecution = "direct"\nidentity = "disabled"\nnetwork = "none"\nextensions = "none"\ntools = "all"\n',
+        'config_version = 9\nmodels_file = "/etc/pi-sandbox/models.json"\nexecution = "direct"\nidentity = "disabled"\nnetwork = "none"\nextensions = "none"\ntools = "all"\n',
       ),
     ).toThrow("config.tools must be a table");
     expect(() =>
@@ -521,7 +550,7 @@ describe("loadConfig", () => {
     await writeFile(path, completeConfig(), "utf8");
 
     await expect(loadConfig(path, EMPTY_EXTENSION_CATALOG)).resolves.toMatchObject({
-      configVersion: 8,
+      configVersion: 9,
       sessions: { retentionDays: 0 },
       filesystem: { cwdWritable: true, hiddenPaths: [] },
       audit: { enabled: false, facility: "local0" },

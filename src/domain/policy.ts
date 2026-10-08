@@ -112,7 +112,7 @@ export interface ManagedEnvironment {
 }
 
 export interface SandboxConfig {
-  readonly configVersion: 8;
+  readonly configVersion: 9;
   readonly audit: AuditConfig;
   readonly sessions: SessionsConfig;
   readonly modelsFile: string;
