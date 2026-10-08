@@ -45,7 +45,7 @@ describe("Bubblewrap policy", () => {
     expect(describeBubblewrapMounts("/srv/runs/a", true, hidden)).toContainEqual({
       target: "/srv/runs/a/private",
       access: "read-only",
-      content: "hidden host path (private mask)",
+      content: "hidden host path (mask if present at startup)",
     });
   });
 

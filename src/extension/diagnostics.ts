@@ -105,7 +105,7 @@ export function formatSandboxMounts(
     ["TARGET", "ACCESS", "CONTENT"],
     mounts.map((mount) => [mount.target, mount.access, mount.content]),
   );
-  return `Sandbox mounts\n\n${table}\n\nHOME: ${safeSandboxEnvironment().HOME}\n${filesystem.cwdWritable ? "Only the launch directory persists writes to the host." : "The launch directory is read-only. Only private temporary/runtime storage is writable."}`;
+  return `Sandbox mounts (configured policy)\n\n${table}\n\nHOME: ${safeSandboxEnvironment().HOME}\n${filesystem.cwdWritable ? "Only the launch directory persists writes to the host." : "The launch directory is read-only. Only private temporary/runtime storage is writable."}`;
 }
 
 export function formatSandboxPolicy(
@@ -188,7 +188,7 @@ function subjectScope(input: PolicyDiagnosticInput, subject: string): readonly s
     ...sandboxSubjectScope(subject, input.config.filesystem.cwdWritable),
     ...(input.config.filesystem.hiddenPaths.length > 0
       ? [
-          "Configured hidden directories are masked, including explicit hidden paths inside the launch directory.",
+          "Configured hidden files and directories are masked when present at startup, including inside the launch directory. Missing paths are skipped.",
         ]
       : []),
     networkScope(input.config.network),

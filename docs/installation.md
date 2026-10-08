@@ -352,7 +352,8 @@ replace configuration with the packaged defaults.
 Installer validation checks home-relative syntax without expanding it to the
 root installer's home or requiring per-user hidden paths to exist. Operational
 startup expands against the invoking effective user's OS account home and
-validates the resulting paths. Model and installation paths remain absolute.
+validates the resulting paths, silently skipping missing hidden targets.
+Model and installation paths remain absolute.
 
 When the optional identity broker is enabled, `users.d/*.toml` and `groups.d/*.toml` may overlay
 scoped environment and supply model, execution, network, filesystem, and complete

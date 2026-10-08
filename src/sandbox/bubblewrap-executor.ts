@@ -143,16 +143,8 @@ export async function createBubblewrapExecutor(
     const plan = planHiddenPaths(cwd, hiddenPaths);
     const effectivePaths = new Set([...plan.beforeCwd, ...plan.afterCwd]);
     for (const target of hiddenPaths) {
-      if ((await realpath(target)) !== target) throw new Error("sandbox_hidden_path_not_canonical");
-      const targetStat = await lstat(target);
-      if (!targetStat.isDirectory() && !targetStat.isFile()) {
-        throw new Error("sandbox_hidden_path_not_file_or_directory");
-      }
-      if (effectivePaths.has(target)) {
-        hiddenMasks.push(
-          Object.freeze({ target, kind: targetStat.isFile() ? "file" : "directory" }),
-        );
-      }
+      const mask = await inspectHiddenPath(target);
+      if (mask !== undefined && effectivePaths.has(target)) hiddenMasks.push(mask);
     }
     // Validate before allocating lifecycle state so an invalid policy cannot
     // leave close() waiting for a worker that was never spawned.
@@ -190,6 +182,42 @@ export async function createBubblewrapExecutor(
   } catch (cause) {
     await executor.close().catch(() => undefined);
     throw cause;
+  }
+}
+
+async function inspectHiddenPath(target: string): Promise<HiddenPathMask | undefined> {
+  let candidate = target;
+  for (;;) {
+    let candidateStat;
+    try {
+      candidateStat = await lstat(candidate);
+    } catch (cause) {
+      if (
+        typeof cause !== "object" ||
+        cause === null ||
+        !("code" in cause) ||
+        cause.code !== "ENOENT"
+      ) {
+        throw cause;
+      }
+      // ENOENT can mean a dangling ancestor symlink. Check the nearest existing
+      // prefix before treating a target as absent; no host placeholders are made.
+      const parent = path.dirname(candidate);
+      if (parent === candidate) throw cause;
+      candidate = parent;
+      continue;
+    }
+    if (candidateStat.isSymbolicLink() || (await realpath(candidate)) !== candidate) {
+      throw new Error("sandbox_hidden_path_not_canonical");
+    }
+    if (candidate !== target) {
+      if (!candidateStat.isDirectory()) throw new Error("sandbox_hidden_path_parent_not_directory");
+      return undefined;
+    }
+    if (!candidateStat.isDirectory() && !candidateStat.isFile()) {
+      throw new Error("sandbox_hidden_path_not_file_or_directory");
+    }
+    return Object.freeze({ target, kind: candidateStat.isFile() ? "file" : "directory" });
   }
 }
 

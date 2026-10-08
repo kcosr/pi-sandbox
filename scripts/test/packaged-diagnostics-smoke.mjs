@@ -6,6 +6,7 @@ import { randomUUID } from "node:crypto";
 import {
   chmod,
   cp,
+  lstat,
   mkdir,
   mkdtemp,
   readFile,
@@ -202,6 +203,12 @@ try {
     "get_commands response",
   );
   const commandResponse = messages.find((message) => message.id === "commands");
+  for (const missingPath of [
+    join(accountHome, ".gitconfig"),
+    join(accountHome, "missing-config", "nested"),
+  ]) {
+    await assert.rejects(lstat(missingPath), { code: "ENOENT" });
+  }
   await assert.rejects(stat(sessionFixtures.expired), { code: "ENOENT" });
   assert((await stat(sessionFixtures.recent)).isFile(), "recent sessions must survive cleanup");
   assert(
@@ -318,6 +325,7 @@ try {
     !stderr.includes("Checking for old sessions"),
     "RPC cleanup must not emit interactive progress",
   );
+  assert(!stderr.includes(".gitconfig"), "missing exclusions must not emit startup warnings");
 
   console.log("packaged /sandbox diagnostics and RPC lifecycle smoke tests passed");
 } finally {
@@ -415,7 +423,14 @@ async function prepareHostIndependentSmokeConfig(configPath, hiddenFile, decoyHo
   config.identity = { mode: "disabled" };
   config.sessions = { retention_days: 365 };
   const masksFile = config.execution?.backend === "bubblewrap";
-  if (masksFile) config.filesystem.hidden_paths = [hiddenFile, "~/.private-home-credentials"];
+  if (masksFile) {
+    config.filesystem.hidden_paths = [
+      hiddenFile,
+      "~/.private-home-credentials",
+      "~/.gitconfig",
+      "~/missing-config/nested",
+    ];
+  }
   config.environment = {
     pi: { PI_CODING_AGENT_DIR: "~/.pi-state", HOME: decoyHome },
     sandbox: { HOME_EXPANSION_CHECK: "~/cache" },

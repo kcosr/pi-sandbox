@@ -128,7 +128,12 @@ prove kernel-observable properties:
   references, including beneath a restored CWD or private `/tmp`;
 - attempts to write after chmod, unlink, rename, or overwrite hidden file mounts
   fail while original host contents and permissions remain unchanged;
-- missing hidden targets, special files, and symlink entries/ancestors fail startup;
+- missing hidden targets are silently skipped without creating host placeholders;
+  existing targets remain masked, and skipped paths created later on the host can
+  become visible until restart;
+- permission errors, non-directory ancestors, special files, and symlink
+  entries/ancestors fail startup, including dangling links and symlink ancestors
+  of missing targets;
 - file-mask input descriptors close on worker startup failure, and a Bun-hosted
   executor establishes multiple file masks without waiting on empty JS pipes;
 - `/tmp` is writable, private from host `/tmp`, and persistent between calls in

@@ -311,12 +311,15 @@ The Bubblewrap backend always creates an explicit same-path CWD bind after its
 private mounts: writable with `--bind`, read-only with `--ro-bind`. This preserves
 visibility for `/tmp`-based workspaces independently of write permission and does
 not by itself change host visibility. Schema 9 also requires
-`[filesystem].hidden_paths` (empty by default), a main-policy-only list of canonical
-existing directories or regular files. Directories use private read-only tmpfs
+`[filesystem].hidden_paths` (empty by default), a main-policy-only list of paths to
+canonical directories or regular files. Directories use private read-only tmpfs
 masks; files use separate empty inputs to `--ro-bind-data`. Both retain the
 configured name while masking original contents, without persistent host
-placeholders or host-file mutations. Reject missing paths, symlink components,
-and special files. Hidden ancestors precede
+placeholders or host-file mutations. Silently skip missing targets at worker
+startup; paths created later on the host may be visible until restart unless
+another mask covers them. Reject permission errors, non-directory ancestors,
+special files, and symlink components, including dangling links and symlink
+ancestors of missing targets. Hidden ancestors precede
 the CWD restore; explicit hidden descendants follow it. Broker filesystem overrides
 change only `cwd_writable` and cannot clear these masks. Effective direct execution
 requires empty hidden paths. Host Pi context/session loading remains outside the

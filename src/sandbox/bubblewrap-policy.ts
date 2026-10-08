@@ -196,7 +196,7 @@ function assertNetworkMode(networkMode: NetworkMode): void {
   }
 }
 
-/** Describe the effective mount policy without exposing Bubblewrap's raw argv or mountinfo noise. */
+/** Describe the configured mount policy without probing paths or exposing Bubblewrap's raw argv. */
 export function describeBubblewrapMounts(
   cwd: string,
   cwdWritable = true,
@@ -209,7 +209,7 @@ export function describeBubblewrapMounts(
     ...masks.beforeCwd.map((target) => ({
       target,
       access: "read-only" as const,
-      content: "hidden host path (private mask)",
+      content: "hidden host path (mask if present at startup)",
     })),
     {
       target: cwd,
@@ -219,7 +219,7 @@ export function describeBubblewrapMounts(
     ...masks.afterCwd.map((target) => ({
       target,
       access: "read-only" as const,
-      content: "hidden host path (private mask)",
+      content: "hidden host path (mask if present at startup)",
     })),
     ...(cwd === "/tmp"
       ? []

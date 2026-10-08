@@ -16,7 +16,7 @@ production services.
 In the default Linux Bubblewrap mode, Pi Sandbox runs model tools and
 user-invoked `!` shell commands inside a Bubblewrap boundary. By default, direct filesystem changes are confined to the directory
 from which the user launched it, while the rest of the ordinary host filesystem
-is mounted read-only. `filesystem.hidden_paths` masks selected directories while
+is mounted read-only. `filesystem.hidden_paths` masks selected existing files and directories while
 restoring the launch workspace through a hidden parent. Setting
 `filesystem.cwd_writable = false` also makes the
 launch directory read-only, while preserving writable private temporary storage. Within the launch directory, administrators determine
