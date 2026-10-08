@@ -313,8 +313,12 @@ Hidden directories are private tmpfs masks; hidden regular files use
 effective file mask. The host opens `/dev/null` once, duplicates that input into
 the child's descriptor slots, and closes its descriptor immediately after
 spawning. Bubblewrap consumes those inputs during startup and creates private
-empty file masks without persistent host placeholders. Startup checks that every target is
-an existing canonical directory or regular file with no symlink components. Mount planning
+empty file masks without persistent host placeholders. Startup silently skips
+missing targets and requires existing targets to be canonical directories or
+regular files. Symlink components, including dangling links and ancestors of
+missing targets, permission errors, non-directory ancestors, and special files
+fail startup. Skipped paths created later on the host may remain visible until
+restart unless another mask covers them. Mount planning
 applies outer masks before restoring CWD and interior masks afterward. Nested
 redundant entries are reduced separately in these groups; the final directory masks are
 remounted read-only without recursively changing CWD permissions, while file

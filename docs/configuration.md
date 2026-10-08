@@ -240,9 +240,12 @@ switching a read-only base to direct execution also requires overriding
 
 `hidden_paths` is an explicit array of unique, normalized absolute file or directory
 paths, or home-relative paths written as `~` or `~/...`. The default empty
-array preserves the ordinary read-only host view. Every expanded entry must
-exist and be canonical at worker startup; symlinks in the entry or any ancestor,
-missing paths, and special files are rejected. Files must be regular files.
+array preserves the ordinary read-only host view. Missing targets are silently
+skipped at worker startup, so shared policies can include optional files such as
+`~/.gitconfig`. Existing targets must be canonical directories or regular files.
+Symlinks in the entry or any existing ancestor are rejected, including dangling
+links and symlink ancestors of missing targets. Permission errors, non-directory
+ancestors, and special files also fail startup.
 Home-relative paths must also be normalized: `~/.ssh` is valid, while `~/../other`
 and `~/.ssh/` are not. Paths must remain unique after expansion. Environment-variable
 substitution and globs are not supported.
@@ -269,10 +272,13 @@ skeleton leading to CWD), and cannot be written or made writable by tools.
 
 Individual files remain visible as empty regular files. For example,
 `hidden_paths = ["~/.ssh", "~/.netrc"]` masks the invoking account's `.ssh`
-directory and `.netrc` file. Both must exist for that account. File masks prevent content changes, unlinking,
+directory and `.netrc` file when present. File masks prevent content changes, unlinking,
 and replacement even when the containing CWD is writable. Both mask types are
 private to the sandbox and leave the host contents untouched; neither removes
 the configured name from directory listings.
+
+Skipped paths are not monitored. If created on the host later, they may be visible
+to the running sandbox until restart unless another mask already hides them.
 
 The setting belongs only to the main TOML. User/group `cwd_writable` overrides
 preserve it; rules cannot set or clear `hidden_paths`. A rule switching the

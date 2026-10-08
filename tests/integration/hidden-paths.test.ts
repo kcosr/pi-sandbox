@@ -1,6 +1,6 @@
 import { existsSync } from "node:fs";
 import { execFile, spawnSync } from "node:child_process";
-import { mkdir, mkdtemp, readFile, rm, stat, symlink, writeFile } from "node:fs/promises";
+import { chmod, mkdir, mkdtemp, readFile, rm, stat, symlink, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { promisify } from "node:util";
 import { afterEach, describe, expect, it } from "vitest";
@@ -41,6 +41,55 @@ async function fixture(parent = "/var/tmp") {
 }
 
 describe.skipIf(!available)("hidden paths through real Bubblewrap", () => {
+  it.each([false, true])(
+    "skips absent files and directories without creating placeholders (existing masks=%s)",
+    async (includeExistingMasks) => {
+      const { root, runs, cwd, privateDirectory } = await fixture();
+      const missingFile = path.join(cwd, ".gitconfig");
+      const missingDirectory = path.join(root, "not-created", "nested-directory");
+      const missingMaskedChild = path.join(privateDirectory, "absent", "child");
+      const existingFile = path.join(cwd, "secret.txt");
+      const executor = await createBubblewrapExecutor({
+        cwd,
+        bubblewrapPath,
+        hiddenPaths: [
+          missingFile,
+          missingDirectory,
+          missingMaskedChild,
+          ...(includeExistingMasks ? [runs, privateDirectory, existingFile] : []),
+        ],
+        workerCommand: testSandboxWorkerCommand(),
+      });
+      executors.push(executor);
+      await executor.probe();
+      for (const target of [missingFile, missingDirectory, missingMaskedChild]) {
+        const result = await executor.execute({ argv: ["/usr/bin/test", "!", "-e", target] });
+        expect(result.exitCode, target).toBe(0);
+        expect(result.stdout.length).toBe(0);
+        expect(result.stderr.length).toBe(0);
+        expect(existsSync(target), target).toBe(false);
+      }
+      expect(existsSync(path.dirname(missingDirectory))).toBe(false);
+      if (includeExistingMasks) {
+        const result = await executor.execute({
+          argv: ["/bin/bash", "-c", "cat secret.txt; ls -A private"],
+        });
+        expect(result.exitCode).toBe(0);
+        expect(result.stdout.toString()).toBe("");
+        expect(await readFile(existingFile, "utf8")).toBe(`secret:${cwd}`);
+        expect(await readFile(path.join(privateDirectory, "secret.txt"), "utf8")).toBe(
+          `secret:${privateDirectory}`,
+        );
+      }
+      // A skipped target is not monitored: a later host creation is visible
+      // through the existing CWD bind mount for this worker's lifetime.
+      await writeFile(missingFile, "created after startup");
+      const later = await executor.execute({ argv: ["/bin/cat", missingFile] });
+      expect(later.exitCode).toBe(0);
+      expect(later.stdout.toString()).toBe("created after startup");
+    },
+  );
+
   it.each([false, true])(
     "expands home masks independently of CWD and preserves the workspace exception (inside=%s)",
     async (insideHome) => {
@@ -255,19 +304,31 @@ describe.skipIf(!available)("hidden paths through real Bubblewrap", () => {
     expect(stdout.trim()).toBe("bun-file-masks-ok");
   }, 15_000);
 
-  it("fails closed on missing paths, special files, symlinks, and symlink ancestors", async () => {
+  it("fails closed on special files, symlinks, and invalid ancestors, including missing suffixes", async () => {
     const { root, cwd } = await fixture();
     const fifo = path.join(root, "fifo");
     expect(spawnSync("/usr/bin/mkfifo", [fifo]).status).toBe(0);
     const fileLink = path.join(root, "file-link");
     await symlink(path.join(root, "visible.txt"), fileLink);
+    const danglingLink = path.join(root, "dangling-link");
+    await symlink(path.join(root, "not-created"), danglingLink);
+    const loopingLink = path.join(root, "looping-link");
+    await symlink(loopingLink, loopingLink);
     for (const hiddenPath of [
-      path.join(root, "missing"),
       fifo,
+      path.join(fifo, "missing"),
       fileLink,
+      danglingLink,
+      path.join(danglingLink, "missing", "child"),
+      loopingLink,
+      path.join(loopingLink, "missing"),
+      path.join(root, "visible.txt", "missing"),
       path.join(root, "alias"),
       path.join(root, "alias", "b"),
       path.join(root, "alias", "a", "secret.txt"),
+      path.join(root, "alias", "missing"),
+      path.join(root, "alias", "missing", "child"),
+      path.join(root, "alias", "a", "missing", "child"),
     ]) {
       await expect(
         createBubblewrapExecutor({
@@ -279,4 +340,26 @@ describe.skipIf(!available)("hidden paths through real Bubblewrap", () => {
       ).rejects.toMatchObject({ code: "sandbox_start_failed" });
     }
   });
+
+  it.skipIf(process.geteuid?.() === 0)(
+    "fails closed when absence cannot be checked due to permissions",
+    async () => {
+      const { root, cwd } = await fixture();
+      const inaccessible = path.join(root, "inaccessible");
+      await mkdir(inaccessible);
+      await chmod(inaccessible, 0);
+      try {
+        await expect(
+          createBubblewrapExecutor({
+            cwd,
+            bubblewrapPath,
+            hiddenPaths: [path.join(inaccessible, "missing", "child")],
+            workerCommand: testSandboxWorkerCommand(),
+          }),
+        ).rejects.toMatchObject({ code: "sandbox_start_failed", cause: { code: "EACCES" } });
+      } finally {
+        await chmod(inaccessible, 0o700);
+      }
+    },
+  );
 });

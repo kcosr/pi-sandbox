@@ -174,12 +174,15 @@ permissions. File masks use empty `--ro-bind-data` inputs and prevent content
 changes or replacement through a writable containing CWD. Their private inode
 permissions may still be changed on kernels using sealed file data; that cannot
 make the contents writable and does not alter host permissions. Names remain
-visible, and neither mask type modifies the original host object. Missing
-targets, special files, and symlink components fail startup.
+visible, and neither mask type modifies the original host object. Missing targets
+are silently skipped at worker startup. Permission errors, non-directory
+ancestors, special files, and symlink components fail startup, including dangling
+links and symlink ancestors of missing targets. Skipped paths created later on
+the host may be visible until restart unless another mask already hides them.
 
 Home-relative hidden paths (`~` or `~/...`) are expanded using the invoking
 effective user's OS account home, independently of ambient or configured
-`HOME`. All reserved-path, canonical-path, and existing-target checks apply to
+`HOME`. All reserved-path, canonical-path, and target-type checks apply to
 the result. The same prefix convention expands configured scoped environment
 values after the broker merge without granting access to hidden paths or
 bypassing variable admission and size limits. It does not evaluate shell

@@ -121,7 +121,7 @@ Use /sandbox mounts or /sandbox policy for details.`);
     expect(host).toContain("Is not restricted by the Bubblewrap boundary, its filesystem setting");
   });
 
-  it("reports hidden directory masks and their tool scope", () => {
+  it("reports configured masks as conditional on presence at startup", () => {
     const config = {
       ...diagnosticConfig(),
       filesystem: { cwdWritable: true, hiddenPaths: ["/work", "/work/project/private"] },
@@ -129,13 +129,14 @@ Use /sandbox mounts or /sandbox policy for details.`);
     const mounts = formatSandboxMounts("/work/project", config.execution, config.filesystem);
     expect(mounts).toContain("/work");
     expect(mounts).toContain("/work/project/private");
-    expect(mounts).toContain("hidden host path (private mask)");
+    expect(mounts).toContain("Sandbox mounts (configured policy)");
+    expect(mounts).toContain("hidden host path (mask if present at startup)");
     expect(
       formatSandboxPolicy(
         { config, hasSessionGrant: () => false, isToolActive: () => true },
         "bash",
       ),
-    ).toContain("Configured hidden directories are masked");
+    ).toContain("Missing paths are skipped.");
   });
 
   it("reports configured modes, session options, and memory-only active grants", () => {
