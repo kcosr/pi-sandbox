@@ -13,7 +13,7 @@ const http: McpHttpServerConfig = {
   ...base,
   id: "docs",
   transport: "http",
-  url: "https://example.com/mcp/{{username}}?uid={{uid}}",
+  url: "https://example.com/mcp?user=alice&uid=1001&literal=a%2fb",
   headers: {},
   headersFromEnv: { Authorization: "TOKEN" },
 };
@@ -30,7 +30,7 @@ const account = () => ({ username: "alice+team", uid: 1001, homeDirectory: "/hom
 const executable = vi.fn(async () => {});
 
 describe("MCP per-account resolution", () => {
-  it("resolves URL components and passes complete explicit credential values", async () => {
+  it("preserves the literal URL and passes complete explicit credential values", async () => {
     const [server] = await resolveMcpServers(
       { servers: { docs: http } },
       { TOKEN: "Bearer secret" },
@@ -39,7 +39,7 @@ describe("MCP per-account resolution", () => {
     );
     expect(server).toMatchObject({
       status: "ready",
-      url: "https://example.com/mcp/alice%2Bteam?uid=1001",
+      url: http.url,
       headers: { Authorization: "Bearer secret" },
     });
   });
@@ -95,33 +95,40 @@ describe("MCP per-account resolution", () => {
     expect(identity).not.toHaveBeenCalled();
     expect(check).not.toHaveBeenCalled();
   });
-  it.each(["http", "stdio"])(
-    "fails operational startup for a missing trusted account needed by %s",
-    async (transport) => {
-      await expect(
-        resolveMcpServers(
-          { servers: { selected: transport === "http" ? http : stdio } },
-          { TOKEN: "secret" },
-          () => {
-            throw new Error("sensitive OS lookup metadata");
-          },
-          executable,
-        ),
-      ).rejects.toThrow("Unable to resolve the invoking account identity");
-    },
-  );
+  it("fails operational startup for a missing trusted account needed by stdio", async () => {
+    await expect(
+      resolveMcpServers(
+        { servers: { local: stdio } },
+        { TOKEN: "secret" },
+        () => {
+          throw new Error("sensitive OS lookup metadata");
+        },
+        executable,
+      ),
+    ).rejects.toThrow("Unable to resolve the invoking account identity");
+  });
 
-  it("keeps account lookup lazy for literal HTTP endpoints", async () => {
+  it("never looks up account identity for literal HTTP URL data", async () => {
     const identity = vi.fn(() => {
       throw new Error("not needed");
     });
     const [server] = await resolveMcpServers(
-      { servers: { docs: { ...http, url: "https://example.com/mcp" } } },
+      {
+        servers: {
+          docs: {
+            ...http,
+            url: "https://example.com/%7b%7busername%7d%7d?uid=%7B%7Buid%7D%7D&literal=a%2fb",
+          },
+        },
+      },
       { TOKEN: "secret" },
       identity,
       executable,
     );
-    expect(server!.status).toBe("ready");
+    expect(server).toMatchObject({
+      status: "ready",
+      url: "https://example.com/%7b%7busername%7d%7d?uid=%7B%7Buid%7D%7D&literal=a%2fb",
+    });
     expect(identity).not.toHaveBeenCalled();
   });
 
@@ -182,13 +189,4 @@ describe("MCP per-account resolution", () => {
       expect(identity).not.toHaveBeenCalled();
     },
   );
-  it("degrades a per-account URL failure without returning account data", async () => {
-    const [server] = await resolveMcpServers(
-      { servers: { docs: http } },
-      { TOKEN: "secret" },
-      () => ({ ...account(), username: ".." }),
-      executable,
-    );
-    expect(server).toEqual({ policy: http, status: "configuration-value-unavailable" });
-  });
 });

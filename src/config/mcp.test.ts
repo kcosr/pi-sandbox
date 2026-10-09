@@ -10,7 +10,7 @@ const http = {
   enabled: true,
   transport: "http",
   exposure: "direct",
-  url: "https://mcp.example/mcp?user={{username}}",
+  url: "https://mcp.example/mcp?user=alice&uid=1001&literal=a%2fb",
   default_policy: policy,
 };
 const stdio = {
@@ -81,6 +81,8 @@ describe("MCP administrative configuration", () => {
   });
   it.each([
     { ...http, command: "/usr/bin/server" },
+    { ...http, url: "https://mcp.example/{{username}}" },
+    { ...http, url: "https://mcp.example/mcp?uid={{uid}}" },
     { ...stdio, url: "https://mcp.example" },
     { ...http, unknown: true },
     { ...http, enabled: "yes" },

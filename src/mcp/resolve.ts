@@ -1,7 +1,6 @@
 import { access, constants } from "node:fs/promises";
 import {
   expandAccountValue,
-  expandMcpUrl,
   type AccountIdentity,
   type McpServerConfig,
   type SandboxConfig,
@@ -105,7 +104,7 @@ export async function resolveMcpServers(
     let literals: Readonly<Record<string, string>>;
     try {
       if (policy.transport === "http") {
-        url = expandMcpUrl(policy.url, account);
+        url = policy.url;
         literals = checkedMap({ ...policy.headers }, true);
       } else {
         const user = account();

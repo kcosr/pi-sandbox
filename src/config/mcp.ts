@@ -4,7 +4,7 @@ import {
   isNormalizedAbsoluteFilePath,
   isManagedEnvironmentName,
   validateAccountTemplate,
-  validateMcpUrlTemplate,
+  validateMcpUrl,
   type CodeModeConfig,
   type McpConfig,
   type McpServerConfig,
@@ -193,8 +193,8 @@ export function parseMcpConfig(value: unknown, codemode: CodeModeConfig | undefi
       timeoutMs: timeout(server.timeout_ms, 60000, `${path}.timeout_ms`),
     };
     if (transport === "http") {
-      if (typeof server.url !== "string") throw new Error(`${path}.url must be a URL template`);
-      validateMcpUrlTemplate(server.url);
+      if (typeof server.url !== "string") throw new Error(`${path}.url must be a literal URL`);
+      validateMcpUrl(server.url);
       const headers = valueMap(server.headers, `${path}.headers`, true, false);
       const headersFromEnv = valueMap(
         server.headers_from_env,

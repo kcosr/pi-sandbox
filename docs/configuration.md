@@ -76,7 +76,7 @@ configuration path or `models_file`.
 Provider definitions and API-key resolution are documented separately in
 [Models and authentication](models.md).
 
-### Home-directory expansion
+### Home-directory and account expansion
 
 Schema 10 expands bare `~` and a leading `~/` in `filesystem.hidden_paths`,
 every configured value under `environment.pi`, `environment.sandbox`, and
@@ -99,15 +99,12 @@ reserved names, normalized paths, extension admission, uniqueness, and size limi
 after expansion. Ambient inherited values, compiled fixed extension values, and
 values obtained through MCP `*_from_env` mappings are not templated.
 
-HTTP MCP URLs accept account macros only in path segments and query parameter
-values, such as `https://mcp.example/mcp/{{username}}?uid={{uid}}`. Substitutions
-are percent-encoded as component data; literal percent escapes are preserved.
-Scheme, host, port, and query keys are literal. Dot segments, userinfo and fragments
-are rejected. These account values select routing; they do not authenticate the
-user to the MCP service.
+HTTP MCP URLs are literal, including ordinary query parameters and percent
+escapes. They do not support macro interpolation. Raw braces, dot segments,
+userinfo, and fragments are rejected; encoded braces remain literal URL data.
 
 `models_file`, configuration-file locations, build-time installation paths, MCP
-executable paths and argv, literal HTTP headers, and arbitrary extension settings
+URLs, executable paths and argv, literal HTTP headers, and arbitrary extension settings
 do not support expansion. Installation validation checks syntax without looking
 up the installer's identity, resolving per-user credentials, or requiring hidden
 targets to exist. Operational startup validates expanded paths before masking.
@@ -239,7 +236,7 @@ structurally but do not resolve credentials, connect, or start a process.
 [mcp.servers.docs]
 enabled = true
 transport = "http"
-url = "https://mcp.example/mcp?user={{username}}"
+url = "https://mcp.example/mcp?workspace=shared"
 exposure = "direct"
 headers_from_env = { Authorization = "DOCS_AUTHORIZATION" }
 

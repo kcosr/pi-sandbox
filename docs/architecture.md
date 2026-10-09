@@ -47,8 +47,7 @@ per-server wildcard policies. User/project MCP configuration, extension-register
 servers, OAuth, mutable management, resources and prompts are disabled. HTTP
 headers and stdio environment values are explicit projections of a startup
 snapshot; stdio does not inherit the complete host environment. Account macros
-can personalize endpoint path segments and query values without changing the
-configured host.
+can personalize configured paths and environment values. MCP URLs remain literal.
 
 Each logical session owns its MCP connections and admitted catalog. Whole-catalog
 validation precedes publication. Wrappers retain typed original server/tool

@@ -84,10 +84,9 @@ transparently replayed. MCP server-side cancellation is best effort. Stdio
 shutdown reaps owned process groups; trusted servers that deliberately daemonize
 remain outside the containment guarantee.
 
-Account macros use the invoking effective OS identity, not ambient environment
-variables. Endpoint replacements are encoded as path-segment/query-value data;
-they cannot select a different authority. A username or UID in a URL identifies a
-route and does not authenticate a user to the service.
+Account macros in configured paths and environment values use the invoking
+effective OS identity, not ambient environment variables. MCP URLs remain
+literal. Account identifiers do not authenticate a user to a remote service.
 
 ## Fail-closed guarantees
 

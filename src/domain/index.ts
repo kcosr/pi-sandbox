@@ -66,8 +66,7 @@ export type {
 } from "./mcp.js";
 export {
   expandAccountValue,
-  expandMcpUrl,
   validateAccountTemplate,
-  validateMcpUrlTemplate,
   type AccountIdentity,
 } from "./account-macros.js";
+export { validateMcpUrl } from "./mcp-url.js";

@@ -258,7 +258,7 @@ shipped with the matching application.
 ## Managed MCP and code mode
 
 Offline fixtures verify administrator-only configuration, credential projection,
-account macros and query preservation, original-name wildcard policies, bounded
+path/environment account macros and literal URL query preservation, original-name wildcard policies, bounded
 approvals, exact grants, stale-catalog revocation, tool narrowing and session
 cleanup. HTTP and stdio transports share policy tests. Patched-source tests cover
 bounded HTTP JSON/error/SSE reads, stdio process-group cleanup, inline results,

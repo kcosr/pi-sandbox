@@ -44,6 +44,7 @@ export async function testManagedMcpCodemode({
   username,
   uid,
 }) {
+  const httpPath = "/mcp/shared?tenant=shared%2Bteam&literal=a%2fb&tag=one&tag=two";
   const receivedHttp = [];
   const providerRequests = [];
   const prompts = [];
@@ -123,13 +124,14 @@ export async function testManagedMcpCodemode({
         url: request.url,
         authorization: request.headers.authorization,
       });
-      assert.equal(url.pathname, `/mcp/${encodeURIComponent(username)}`);
-      assert.equal(url.searchParams.get("user"), username);
-      assert.equal(url.searchParams.get("uid"), String(uid));
+      assert.equal(url.pathname, "/mcp/shared");
+      assert.equal(url.searchParams.get("tenant"), "shared+team");
       assert.equal(url.searchParams.get("literal"), "a/b");
-      assert(
-        request.url.includes("literal=a%2fb"),
-        "literal percent escapes must not be rewritten",
+      assert.deepEqual(url.searchParams.getAll("tag"), ["one", "two"]);
+      assert.equal(
+        request.url,
+        httpPath,
+        "literal query ordering, repeated parameters, and percent escapes must not be rewritten",
       );
       assert.equal(request.headers.authorization, "Bearer http-specific");
       if (request.method === "GET") {
@@ -193,7 +195,7 @@ export async function testManagedMcpCodemode({
         docs: {
           enabled: true,
           transport: "http",
-          url: `http://127.0.0.1:${port}/mcp/{{username}}?user={{username}}&uid={{uid}}&literal=a%2fb`,
+          url: `http://127.0.0.1:${port}${httpPath}`,
           exposure: "direct",
           headers_from_env: { Authorization: "DOCS_AUTHORIZATION" },
           default_policy: toolPolicy("disabled"),

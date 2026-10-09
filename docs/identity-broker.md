@@ -100,7 +100,7 @@ then rechecks its bounds. `{{username}}` and `{{uid}}` expand in these configure
 values using the same effective OS account; `$USER`, `$LOGNAME`, and `SUDO_USER`
 are ignored. Expansion is single-pass; `{{{{` and `}}}}` escape literal braces.
 Unknown macro syntax is an error. Other values remain literal. See
-[home-directory expansion](configuration.md#home-directory-expansion).
+[home-directory and account expansion](configuration.md#home-directory-and-account-expansion).
 
 ## User and group rules
 

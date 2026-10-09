@@ -3,7 +3,7 @@
 ## Unreleased
 
 - Add managed HTTP/stdio MCP and code mode with nested tool permissions; require config schema 10.
-- Support `{{username}}` and `{{uid}}` in configured paths, environment values, and MCP URLs.
+- Support `{{username}}` and `{{uid}}` in configured paths and environment values.
 
 - Skip missing hidden paths at startup. ([#12](https://github.com/kcosr/pi-sandbox/pull/12))
 - Expand `~` in exclusions and scoped environment values; require config schema 9. ([#11](https://github.com/kcosr/pi-sandbox/pull/11))

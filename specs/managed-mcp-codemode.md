@@ -158,25 +158,25 @@ references, not model-selected variable names.
 
 ### Field contracts
 
-| Field                   | Contract                                                                                                                                                                                                   |
-| ----------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `codemode.enabled`      | Required boolean; controls registration and activation authority.                                                                                                                                          |
-| `codemode.timeout_ms`   | Optional integer, default 300000, range 1000–3600000. Hard overall deadline, including nested approval waits.                                                                                              |
-| `mcp.servers`           | Required table, empty is valid; at most 32 entries.                                                                                                                                                        |
-| Server identifier       | Case-sensitive ASCII `[a-z][a-z0-9_]{0,31}`; stable administrative identity.                                                                                                                               |
-| `enabled`               | Required boolean. Disabled means no connection, process, credential resolution, or exposed tools.                                                                                                          |
-| `transport`             | Required `http` or `stdio`; validate the selected shape and reject fields of the other shape.                                                                                                              |
-| `exposure`              | Required `direct` or `codemode`; governs presentation, not permission.                                                                                                                                     |
-| `timeout_ms`            | Optional integer, default 60000, range 1000–3600000; absolute per-call deadline after approval, including reconnect/setup and result handling. Progress cannot extend it.                                  |
-| `default_policy`        | Required complete `{ mode, session_grant, audit }`, using the existing values and validation.                                                                                                              |
-| `tool_rules`            | Optional ordered array, default empty, at most 256 entries. Each entry has `match` and a complete policy; no partial-policy inheritance.                                                                   |
-| HTTP `url`              | Required absolute HTTPS URL template (account macros only in path/query values), or HTTP only for literal loopback hosts (`localhost`, `127.0.0.1`, `[::1]`). No userinfo or fragment. Maximum 4096 bytes. |
-| HTTP `headers`          | Optional map of literal header values, default empty.                                                                                                                                                      |
-| HTTP `headers_from_env` | Optional map from outgoing header name to one effective host environment variable name, default empty.                                                                                                     |
-| Stdio `command`         | Required normalized absolute executable path; no tilde expansion, PATH search, or shell evaluation.                                                                                                        |
-| Stdio `args`            | Optional literal string array, default empty; no interpolation or shell wrapper added by Pi Sandbox.                                                                                                       |
-| Stdio `env`             | Optional map of explicit environment values, default empty; bare `~`, leading `~/`, and account macros expand using the OS-account resolver.                                                               |
-| Stdio `env_from_env`    | Optional map from child variable name to one effective host variable name, default empty.                                                                                                                  |
+| Field                   | Contract                                                                                                                                                                                                                                                |
+| ----------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `codemode.enabled`      | Required boolean; controls registration and activation authority.                                                                                                                                                                                       |
+| `codemode.timeout_ms`   | Optional integer, default 300000, range 1000–3600000. Hard overall deadline, including nested approval waits.                                                                                                                                           |
+| `mcp.servers`           | Required table, empty is valid; at most 32 entries.                                                                                                                                                                                                     |
+| Server identifier       | Case-sensitive ASCII `[a-z][a-z0-9_]{0,31}`; stable administrative identity.                                                                                                                                                                            |
+| `enabled`               | Required boolean. Disabled means no connection, process, credential resolution, or exposed tools.                                                                                                                                                       |
+| `transport`             | Required `http` or `stdio`; validate the selected shape and reject fields of the other shape.                                                                                                                                                           |
+| `exposure`              | Required `direct` or `codemode`; governs presentation, not permission.                                                                                                                                                                                  |
+| `timeout_ms`            | Optional integer, default 60000, range 1000–3600000; absolute per-call deadline after approval, including reconnect/setup and result handling. Progress cannot extend it.                                                                               |
+| `default_policy`        | Required complete `{ mode, session_grant, audit }`, using the existing values and validation.                                                                                                                                                           |
+| `tool_rules`            | Optional ordered array, default empty, at most 256 entries. Each entry has `match` and a complete policy; no partial-policy inheritance.                                                                                                                |
+| HTTP `url`              | Required literal absolute HTTPS URL, or HTTP only for literal loopback hosts (`localhost`, `127.0.0.1`, `[::1]`). Ordinary query parameters are supported. No macro interpolation, raw braces, dot segments, userinfo, or fragment. Maximum 4096 bytes. |
+| HTTP `headers`          | Optional map of literal header values, default empty.                                                                                                                                                                                                   |
+| HTTP `headers_from_env` | Optional map from outgoing header name to one effective host environment variable name, default empty.                                                                                                                                                  |
+| Stdio `command`         | Required normalized absolute executable path; no tilde expansion, PATH search, or shell evaluation.                                                                                                                                                     |
+| Stdio `args`            | Optional literal string array, default empty; no interpolation or shell wrapper added by Pi Sandbox.                                                                                                                                                    |
+| Stdio `env`             | Optional map of explicit environment values, default empty; bare `~`, leading `~/`, and account macros expand using the OS-account resolver.                                                                                                            |
+| Stdio `env_from_env`    | Optional map from child variable name to one effective host variable name, default empty.                                                                                                                                                               |
 
 Reject unknown keys, duplicates, NUL/control characters where illegal, malformed
 headers/variable names, and size violations before connection. Require literal
@@ -265,21 +265,16 @@ Existing path/environment validation and size bounds apply after expansion.
 Installation validation checks syntax without resolving the installer's account.
 Inherited ambient values and values read through `*_from_env` are not templated.
 
-HTTP `url` accepts these two macros in path segments and query parameter values
-only. For example `https://mcp.example.com/mcp/{{username}}` or
-`https://mcp.example.com/mcp?user={{username}}&uid={{uid}}`. Scheme, authority,
-port, query keys and fragment remain literal; fragments/userinfo remain forbidden.
-Parse the template structure before substitution, percent-encode each replacement
-as component data (including slash and query delimiters), and validate the final
-URL and its 4096-byte bound. Reject dot-segment substitutions rather than allowing
-URL normalization to change the configured route. Do not decode/re-encode existing
-literal percent escapes. Username/UID select routing; they do not authenticate
-the account to a remote server. UID is a host account identifier.
+HTTP `url` is literal and does not support macro interpolation. Preserve ordinary
+query parameters and existing percent escapes without decoding/re-encoding them.
+Reject raw braces, dot segments, userinfo, and fragments before connection;
+percent-encoded braces remain literal URL data. Validate the 4096-byte bound
+without any account lookup. Account names and UIDs are identifiers, not credentials.
 
-Executable paths, stdio argv, installation/config/model paths, HTTP literal
+MCP URLs, executable paths, stdio argv, installation/config/model paths, HTTP literal
 headers, policy names and arbitrary configuration strings remain outside macro
 expansion. Missing account identity fails operational configuration resolution
-when identity expansion is needed. An invalid resolved MCP URL or stdio env value
+when identity expansion is needed. An invalid resolved stdio env value
 makes only that enabled server unavailable with a sanitized configuration-value
 failure category; malformed template syntax aborts startup. Disabled servers do
 not resolve account macros solely for their own settings.
@@ -706,7 +701,8 @@ Required offline verification:
   shell expansion; forged broker fields; code-mode/MCP override rejection.
 - Accept HTTPS and literal-loopback HTTP for `localhost`, `127.0.0.1`, and
   `[::1]`; reject non-loopback cleartext HTTP, other schemes, userinfo, fragments,
-  and deceptive host spellings. Verify URL parsing before any connection.
+  raw macro syntax, dot segments, and deceptive host spellings. Verify URL parsing
+  before any connection and preserve literal query values and percent escapes.
 - Test each size/count limit at the boundary and one unit over it: 32 servers,
   256 rules/server, 64 entries/map, 16 KiB/resolved value, 64 KiB/combined resolved
   server values, 128 argv entries and 64 KiB argv bytes, and 256 KiB total config.
@@ -953,3 +949,13 @@ servers, credential projection, and diagnostics. Structural configuration errors
 still abort startup. The follow-up review also covers the HTTP cancellation
 cleanup fix, environment-macro coverage after broker merging, and per-message
 code-mode reply/store-journal bounds added during the initial review.
+
+### 2026-10-09 — User scope update: literal MCP URLs
+
+Removed account-macro interpolation from MCP URLs at the user's request. HTTP
+endpoints remain literal, including ordinary query parameters and percent escapes;
+HTTP setup does not resolve account identity. Account macros remain supported in
+configured hidden paths, every configured environment scope after broker merging,
+and explicit stdio environment values. Updated the contract and offline fixtures
+to this scope; removed the URL-template API rather than retaining a compatibility
+path.
