@@ -171,19 +171,27 @@ describe("managed extension catalog", () => {
     ).toThrow("formatCall must be a function");
   });
 
-  it.each(["read", "grep", "find", "ls", "write", "edit", "bash", "user_shell"])(
-    "rejects reserved tool name %s",
-    (name) => {
-      const base = extension();
-      const tool = base.tools[0];
-      if (tool === undefined) throw new Error("missing fixture tool");
-      expect(() =>
-        createManagedExtensionCatalog([
-          record({ ...base, tools: [{ ...tool, name, diagnosticScope: `test.${name}` }] }),
-        ]),
-      ).toThrow("collides with reserved tool");
-    },
-  );
+  it.each([
+    "read",
+    "grep",
+    "find",
+    "ls",
+    "write",
+    "edit",
+    "bash",
+    "user_shell",
+    "codemode",
+    "mcp__docs",
+  ])("rejects reserved tool name %s", (name) => {
+    const base = extension();
+    const tool = base.tools[0];
+    if (tool === undefined) throw new Error("missing fixture tool");
+    expect(() =>
+      createManagedExtensionCatalog([
+        record({ ...base, tools: [{ ...tool, name, diagnosticScope: `test.${name}` }] }),
+      ]),
+    ).toThrow("collides with reserved tool");
+  });
 
   it("rejects manifest/module mismatches, duplicate names, and duplicate scopes", () => {
     const mismatched = record();

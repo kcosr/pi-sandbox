@@ -25,7 +25,7 @@ function completeConfig(
     (toolName) =>
       `[tools.${toolName}]\naudit = false\n${overrides[toolName] ?? 'mode = "allow"\nsession_grant = "never"'}`,
   );
-  return `config_version = 9\nmodels_file = "/etc/pi-sandbox/models.json"\n\n[sessions]\nretention_days = 0\n\n[audit]\nenabled = false\nfacility = "local0"\n\n[filesystem]\ncwd_writable = true\nhidden_paths = []\n\n[execution]\nbackend = "bubblewrap"\n\n[identity]\nmode = "disabled"\n\n[network]\nmode = "none"\n\n[environment.pi]\n\n[environment.sandbox]\n\n[environment.extensions]\n\n[extensions]\n\n${sections.join("\n\n")}\n`;
+  return `config_version = 10\nmodels_file = "/etc/pi-sandbox/models.json"\n\n[codemode]\nenabled = false\n\n[mcp.servers]\n\n[sessions]\nretention_days = 0\n\n[audit]\nenabled = false\nfacility = "local0"\n\n[filesystem]\ncwd_writable = true\nhidden_paths = []\n\n[execution]\nbackend = "bubblewrap"\n\n[identity]\nmode = "disabled"\n\n[network]\nmode = "none"\n\n[environment.pi]\n\n[environment.sandbox]\n\n[environment.extensions]\n\n[extensions]\n\n${sections.join("\n\n")}\n`;
 }
 
 function parseConfig(
@@ -48,7 +48,9 @@ describe("parseConfig", () => {
     );
 
     expect(config).toEqual({
-      configVersion: 9,
+      configVersion: 10,
+      codemode: { enabled: false, timeoutMs: 300000 },
+      mcp: { servers: {} },
       sessions: { retentionDays: 0 },
       filesystem: { cwdWritable: true, hiddenPaths: [] },
       audit: { enabled: false, facility: "local0" },
@@ -125,7 +127,9 @@ describe("parseConfig", () => {
 
   it("requires strict global and per-tool audit settings", () => {
     const source = completeConfig();
-    expect(parseConfig(source.replace("enabled = false", "enabled = true")).audit).toEqual({
+    expect(
+      parseConfig(source.replace("[audit]\nenabled = false", "[audit]\nenabled = true")).audit,
+    ).toEqual({
       enabled: true,
       facility: "local0",
     });
@@ -146,7 +150,11 @@ describe("parseConfig", () => {
     }
     for (const [before, after, issue] of [
       ['[audit]\nenabled = false\nfacility = "local0"\n\n', "", "config.audit is required"],
-      ["enabled = false", 'enabled = "false"', "config.audit.enabled must be a boolean"],
+      [
+        "[audit]\nenabled = false",
+        '[audit]\nenabled = "false"',
+        "config.audit.enabled must be a boolean",
+      ],
       ['facility = "local0"', 'facility = "user"', "config.audit.facility must be one of"],
       [
         'facility = "local0"',
@@ -192,8 +200,8 @@ describe("parseConfig", () => {
           .replace('mode = "none"', 'mode = "host"'),
       ),
     ).toThrow("config.filesystem.hidden_paths must be empty");
-    expect(() => parseConfig(source.replace("config_version = 9", "config_version = 8"))).toThrow(
-      "integer 9",
+    expect(() => parseConfig(source.replace("config_version = 10", "config_version = 8"))).toThrow(
+      "integer 10",
     );
   });
 
@@ -258,11 +266,11 @@ describe("parseConfig", () => {
 
   it("rejects unsupported config versions and types", () => {
     expect(() =>
-      parseConfig(completeConfig().replace("config_version = 9", 'config_version = "9"')),
-    ).toThrow("config.config_version must be the integer 9");
+      parseConfig(completeConfig().replace("config_version = 10", 'config_version = "9"')),
+    ).toThrow("config.config_version must be the integer 10");
     expect(() =>
-      parseConfig(completeConfig().replace("config_version = 9", "config_version = 4")),
-    ).toThrow("config.config_version must be the integer 9");
+      parseConfig(completeConfig().replace("config_version = 10", "config_version = 4")),
+    ).toThrow("config.config_version must be the integer 10");
   });
 
   it("requires models_file to be a normalized absolute file path", () => {
@@ -295,7 +303,7 @@ describe("parseConfig", () => {
   it("rejects unknown fields at every schema level", () => {
     expect(() =>
       parseConfig(
-        completeConfig().replace("config_version = 9", "config_version = 9\nunexpected = true"),
+        completeConfig().replace("config_version = 10", "config_version = 10\nunexpected = true"),
       ),
     ).toThrow("config.unexpected is not a recognized field");
     expect(() =>
@@ -433,12 +441,12 @@ describe("parseConfig", () => {
   });
 
   it("rejects missing root fields and tables with the wrong shape", () => {
-    expect(() => parseConfig(completeConfig().replace("config_version = 9\n", ""))).toThrow(
+    expect(() => parseConfig(completeConfig().replace("config_version = 10\n", ""))).toThrow(
       "config.config_version is required",
     );
     expect(() =>
       parseConfig(
-        'config_version = 9\nmodels_file = "/etc/pi-sandbox/models.json"\nexecution = "direct"\nidentity = "disabled"\nnetwork = "none"\nextensions = "none"\ntools = "all"\n',
+        'config_version = 10\nmodels_file = "/etc/pi-sandbox/models.json"\nexecution = "direct"\nidentity = "disabled"\nnetwork = "none"\nextensions = "none"\ntools = "all"\n',
       ),
     ).toThrow("config.tools must be a table");
     expect(() =>
@@ -550,7 +558,9 @@ describe("loadConfig", () => {
     await writeFile(path, completeConfig(), "utf8");
 
     await expect(loadConfig(path, EMPTY_EXTENSION_CATALOG)).resolves.toMatchObject({
-      configVersion: 9,
+      configVersion: 10,
+      codemode: { enabled: false, timeoutMs: 300000 },
+      mcp: { servers: {} },
       sessions: { retentionDays: 0 },
       filesystem: { cwdWritable: true, hiddenPaths: [] },
       audit: { enabled: false, facility: "local0" },

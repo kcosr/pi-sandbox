@@ -9,4 +9,6 @@ export type {
   EvaluateApprovalOptions,
   JsonObject,
   JsonValue,
+  SubjectPolicyResolver,
+  ResolvedSubjectPolicy,
 } from "./policy-engine.js";

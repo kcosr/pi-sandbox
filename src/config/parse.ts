@@ -21,8 +21,10 @@ import {
   isNormalizedHiddenPath,
   isReservedHiddenDirectoryPath,
   parseManagedEnvironment,
+  validateAccountTemplate,
 } from "../domain/index.js";
 import type { ManagedExtensionCatalog } from "../managed-extensions/catalog.js";
+import { parseCodeModeConfig, parseMcpConfig } from "./mcp.js";
 import { ConfigError } from "./errors.js";
 
 type UnknownRecord = Record<string, unknown>;
@@ -30,6 +32,8 @@ type UnknownRecord = Record<string, unknown>;
 const ROOT_KEYS = [
   "config_version",
   "models_file",
+  "codemode",
+  "mcp",
   "audit",
   "sessions",
   "execution",
@@ -317,6 +321,12 @@ function parseFilesystem(value: unknown, issues: string[]): FilesystemConfig | u
     );
     return undefined;
   }
+  try {
+    hiddenPaths.forEach(validateAccountTemplate);
+  } catch {
+    issues.push("config.filesystem.hidden_paths contains invalid account macro syntax");
+    return undefined;
+  }
   if (hiddenPaths.some(isReservedHiddenDirectoryPath)) {
     issues.push(
       "config.filesystem.hidden_paths must not overlap private system paths or hide /tmp",
@@ -362,8 +372,8 @@ export function parseConfig(
   inspectKeys(parsed, ROOT_KEYS, "config", issues);
 
   const configVersion = own(parsed, "config_version");
-  if (configVersion !== 9) {
-    issues.push("config.config_version must be the integer 9");
+  if (configVersion !== 10) {
+    issues.push("config.config_version must be the integer 10");
   }
 
   const modelsFileValue = own(parsed, "models_file");
@@ -372,6 +382,18 @@ export function parseConfig(
     issues.push("config.models_file must be a normalized absolute file path");
   }
 
+  let codemode;
+  let mcp;
+  try {
+    codemode = parseCodeModeConfig(own(parsed, "codemode"));
+  } catch (error) {
+    issues.push(error instanceof Error ? error.message : "config.codemode is invalid");
+  }
+  try {
+    mcp = parseMcpConfig(own(parsed, "mcp"), codemode);
+  } catch (error) {
+    issues.push(error instanceof Error ? error.message : "config.mcp is invalid");
+  }
   const audit = parseAudit(own(parsed, "audit"), issues);
   const sessions = parseSessions(own(parsed, "sessions"), issues);
   const identity = parseIdentity(own(parsed, "identity"), issues);
@@ -381,6 +403,13 @@ export function parseConfig(
   let environment;
   try {
     environment = parseManagedEnvironment(own(parsed, "environment"));
+    for (const scope of [
+      environment.pi,
+      environment.sandbox,
+      ...Object.values(environment.extensions),
+    ]) {
+      Object.values(scope).forEach(validateAccountTemplate);
+    }
   } catch {
     issues.push("config.environment must contain only valid pi, sandbox, and extensions tables");
   }
@@ -418,6 +447,8 @@ export function parseConfig(
   if (
     issues.length > 0 ||
     modelsFile === undefined ||
+    codemode === undefined ||
+    mcp === undefined ||
     audit === undefined ||
     sessions === undefined ||
     identity === undefined ||
@@ -432,7 +463,9 @@ export function parseConfig(
   }
 
   return Object.freeze({
-    configVersion: 9,
+    configVersion: 10,
+    codemode,
+    mcp,
     audit,
     sessions,
     modelsFile,

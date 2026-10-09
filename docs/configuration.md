@@ -78,35 +78,50 @@ Provider definitions and API-key resolution are documented separately in
 
 ### Home-directory expansion
 
-Schema 9 expands bare `~` and a leading `~/` in `filesystem.hidden_paths` and
+Schema 10 expands bare `~` and a leading `~/` in `filesystem.hidden_paths`,
 every configured value under `environment.pi`, `environment.sandbox`, and
-`environment.extensions.<id>`. Expansion happens once at operational startup,
-after broker rules are merged, using the operating system's account home for
-the invoking effective user. It does not use `$HOME` or the launch directory.
-For example, `~/.ssh` becomes `/home/alice/.ssh` for an account with that home.
-Missing or invalid account-home information fails startup when expansion is needed.
-The lookup uses `/usr/bin/getent` on Linux or `/usr/bin/dscacheutil` on macOS,
-with a cleared environment, bounded output, and a five-second deadline.
+`environment.extensions.<id>`, and MCP stdio `env` values. These fields also
+accept `{{username}}` and `{{uid}}` anywhere in a string. For example,
+`/srv/accounts/{{username}}` becomes `/srv/accounts/alice`, and `~/cache/{{uid}}`
+becomes `/home/alice/cache/1001` for that account.
 
-Environment values that do not match either prefix remain literal; Pi Sandbox
-does not expand embedded tildes, `~otheruser`, `$VARIABLE`, globs, or shell
-expressions. This convention also applies to configured environment values in
-user/group rules. Existing reserved-name, extension-admission, and size limits
-still apply after expansion. Ambient inherited variables and compiled fixed
-extension values are not expanded by this feature; downstream programs may
-interpret their own inputs independently.
+Expansion happens once at operational startup, after broker rules are merged,
+using the invoking effective user's canonical OS account name, numeric UID,
+and home. It ignores `$HOME`, `$USER`, `$LOGNAME`, `SUDO_USER`, and CWD. The lookup
+uses `/usr/bin/getent` on Linux or `/usr/bin/dscacheutil` on macOS, with a cleared
+environment, bounded output, and a five-second deadline. Missing account identity
+fails operational resolution when needed.
 
-`models_file`, configuration-file locations, build-time installation paths, and
-arbitrary extension settings do not support this expansion. Installation
-validation checks configured syntax without substituting the installer's home
-or requiring per-user hidden targets to exist. Operational startup validates
-the expanded paths before applying masks.
+Replacement text is not expanded recursively. Write `{{{{` and `}}}}` for literal
+double braces; unknown or malformed macro syntax is an error. Embedded tildes,
+`~otheruser`, `$VARIABLE`, globs, and shell expressions remain literal. Recheck
+reserved names, normalized paths, extension admission, uniqueness, and size limits
+after expansion. Ambient inherited values, compiled fixed extension values, and
+values obtained through MCP `*_from_env` mappings are not templated.
+
+HTTP MCP URLs accept account macros only in path segments and query parameter
+values, such as `https://mcp.example/mcp/{{username}}?uid={{uid}}`. Substitutions
+are percent-encoded as component data; literal percent escapes are preserved.
+Scheme, host, port, and query keys are literal. Dot segments, userinfo and fragments
+are rejected. These account values select routing; they do not authenticate the
+user to the MCP service.
+
+`models_file`, configuration-file locations, build-time installation paths, MCP
+executable paths and argv, literal HTTP headers, and arbitrary extension settings
+do not support expansion. Installation validation checks syntax without looking
+up the installer's identity, resolving per-user credentials, or requiring hidden
+targets to exist. Operational startup validates expanded paths before masking.
 
 ## Complete example
 
 ```toml
-config_version = 9
+config_version = 10
 models_file = "/etc/pi-sandbox/models.json"
+
+[codemode]
+enabled = false
+
+[mcp.servers]
 
 [audit]
 enabled = false
@@ -187,7 +202,8 @@ runs without an approval prompt through the selected backend. It is human-only
 and is never advertised to the model. Setting `[tools.bash]` to `disabled`
 therefore removes model Bash while preserving the user's `!` command.
 
-These TOML sections are the complete global tool policy. A broker user/group rule
+These TOML sections define built-in and compiled-extension tool policy. MCP tools
+use the separate per-server policy below. A broker user/group rule
 may replace the complete execution backend and network mode and may atomically
 replace individual complete policies, including setting
 `git_clone` or another selected extension tool to `deny` or `disabled`. User/group environment values
@@ -199,9 +215,85 @@ user/group rule may replace it; no user environment, CLI argument, Pi setting, o
 project file can do so. `--model` may select only a model present in the
 effective file.
 
+## Code mode and MCP servers
+
+The required `[codemode]` table has `enabled` and optional `timeout_ms` (default
+300000; range 1000–3600000). The packaged default disables it. Enabling code mode
+exposes a restricted JavaScript runtime whose nested tool calls use the same
+policies and approval prompts as ordinary calls. There is no `tools.codemode`
+policy or separate outer approval. The overall deadline includes nested approval
+waits. Code mode has no general host filesystem, process, network, or environment
+API; the configured tools define its external capabilities.
+
+The required `[mcp.servers]` table is empty by default. Only this main policy can
+configure servers; user/project MCP settings and server-management commands do
+not supply additional servers. Server IDs match `[a-z][a-z0-9_]{0,31}`. Each server
+requires `enabled`, `transport`, `exposure`, and complete `default_policy`. Optional
+`timeout_ms` defaults to 60000 (range 1000–3600000). Disabled servers still validate
+structurally but do not resolve credentials, connect, or start a process.
+
+```toml
+[mcp.servers.docs]
+enabled = true
+transport = "http"
+url = "https://mcp.example/mcp?user={{username}}"
+exposure = "direct"
+headers_from_env = { Authorization = "DOCS_AUTHORIZATION" }
+
+[mcp.servers.docs.default_policy]
+mode = "ask"
+session_grant = "never"
+audit = true
+
+[[mcp.servers.docs.tool_rules]]
+match = "search_*"
+mode = "allow"
+session_grant = "never"
+audit = false
+```
+
+`exposure = "direct"` exposes tools to ordinary calls and code mode;
+`exposure = "codemode"` exposes them only through code mode and requires that
+feature enabled. Exposure never grants permission. Ordered `tool_rules` match the
+server's original tool name, case-sensitively across the whole string. `*` is the
+only wildcard; other glob or expression syntax is rejected. The first match wins,
+otherwise `default_policy` applies. Each rule supplies all three policy fields.
+`disabled` omits a tool; `deny` exposes it but blocks dispatch. An offered session
+grant covers exactly one server/tool, never its wildcard rule or an entire server.
+
+HTTP URLs require HTTPS, except HTTP to literal `localhost`, `127.0.0.1`, or
+`[::1]`. `headers` supplies literal header values; `headers_from_env` maps each
+header name to one effective Pi environment variable. Supply the complete value,
+including `Bearer ` for bearer authentication. Transport-controlled headers and
+CR/LF are rejected, and literal/referenced destinations must be disjoint without
+regard to case. Redirects and browser OAuth are unsupported.
+
+A stdio server instead requires an absolute normalized `command`; optional `args`
+is literal argv. `env` supplies explicit values and `env_from_env` maps destination
+variable names to effective Pi environment variable names. It runs from the
+captured launch CWD with fixed account identity, PATH, locale, and `/tmp` values,
+plus these maps, rather than inheriting all Pi credentials. Admin maps may replace
+baseline variables, but runtime injection variables remain forbidden. Executable
+paths and arguments are literal; deployment must install dependencies.
+
+Both MCP transports are host capabilities. Stdio servers are trusted host programs
+with the invoking account's authority. Bubblewrap filesystem masks and network
+isolation do not restrict MCP servers or their connections. The existing
+`environment.pi` scope, including broker account/group overrides, can supply
+per-user mapped credentials. The environment snapshot is fixed at process startup;
+policy or credential changes require a restart. Missing or invalid resolved
+credentials disable only the affected server and produce a sanitized status.
+
+The initial MCP integration exposes tools only. Resources, prompts, server-driven
+sampling/elicitation, browser authorization, and user-added servers are unavailable.
+Configuration is bounded to 32 servers, 256 ordered rules per server, 64 entries
+per map, 16 KiB per resolved value, 64 KiB combined headers/environment per server,
+128 command/argv entries and 64 KiB combined, and 256 KiB administrative MCP
+configuration. Unknown fields and malformed dormant configurations are errors.
+
 ## Launch directory access
 
-Configuration schema 9 requires both keys in `[filesystem]`:
+Configuration schema 10 requires both keys in `[filesystem]`:
 
 ```toml
 [filesystem]
@@ -239,7 +331,7 @@ switching a read-only base to direct execution also requires overriding
 ### Hidden files and directories
 
 `hidden_paths` is an explicit array of unique, normalized absolute file or directory
-paths, or home-relative paths written as `~` or `~/...`. The default empty
+paths, or home-relative paths written as `~` or `~/...`; both accept account macros. The default empty
 array preserves the ordinary read-only host view. Missing targets are silently
 skipped at worker startup, so shared policies can include optional files such as
 `~/.gitconfig`. Existing targets must be canonical directories or regular files.

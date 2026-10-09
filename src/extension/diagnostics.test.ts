@@ -5,7 +5,9 @@ import { formatSandboxMounts, formatSandboxPolicy, formatSandboxSummary } from "
 
 function diagnosticConfig(): SandboxConfig {
   return {
-    configVersion: 9,
+    configVersion: 10,
+    codemode: { enabled: false, timeoutMs: 300000 },
+    mcp: { servers: {} },
     sessions: { retentionDays: 0 },
     audit: { enabled: false, facility: "local0" },
     modelsFile: "/etc/pi-sandbox/models.json",
@@ -49,6 +51,8 @@ Launch CWD:    /work/project
 Hidden paths:  none
 CWD access:    read/write
 Lifetime:      pi-sandbox process
+Code mode:     disabled
+MCP servers:   0
 Execution:     Bubblewrap sandbox
 Network:       disabled (private namespace)
 Config:        /etc/pi-sandbox/config.toml

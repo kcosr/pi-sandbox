@@ -4,6 +4,7 @@ import type { ExtensionContext, ToolDefinition } from "@earendil-works/pi-coding
 
 import { prepareApprovalRequest, type ApprovalDecision, type JsonObject } from "../policy/index.js";
 import { SandboxExecutionError } from "../sandbox/index.js";
+import { ManagedToolExecutionError } from "../runtime/tool-error.js";
 import { HostCommandExecutionError } from "../host/index.js";
 import { normalizeSandboxPath } from "../extension/executor-operations.js";
 import { auditCommand, validAuditText, type AuditClient, type AuditEvent } from "./client.js";
@@ -11,7 +12,15 @@ import { auditCommand, validAuditText, type AuditClient, type AuditEvent } from 
 interface Invocation {
   readonly fields: Pick<
     AuditEvent,
-    "pi_session_id" | "invocation_id" | "tool" | "boundary" | "extension"
+    | "pi_session_id"
+    | "invocation_id"
+    | "tool"
+    | "boundary"
+    | "extension"
+    | "mcp_server"
+    | "mcp_tool"
+    | "mcp_transport"
+    | "parent_invocation_id"
   >;
   denied: boolean;
   approval?: ApprovalDecision["source"];
@@ -22,6 +31,7 @@ function errorOutcome(error: unknown, signal?: AbortSignal): "error" | "cancelle
   const seen = new Set<Error>();
   while (error instanceof Error && !seen.has(error)) {
     seen.add(error);
+    if (error instanceof ManagedToolExecutionError) return error.code;
     if (error instanceof SandboxExecutionError || error instanceof HostCommandExecutionError) {
       if (error.code === "sandbox_aborted" || error.code === "host_command_aborted")
         return "cancelled";
@@ -106,9 +116,9 @@ export class ToolAuditor {
     await this.submit({ event: "session_ended", pi_session_id: id });
   }
 
-  public async decision(decision: ApprovalDecision): Promise<void> {
+  public async decision(decision: ApprovalDecision, tool?: string): Promise<void> {
     const invocation = this.invocation.getStore();
-    if (invocation === undefined) return;
+    if (invocation === undefined || (tool !== undefined && invocation.fields.tool !== tool)) return;
     invocation.approval = decision.source;
     if (!decision.allowed) {
       invocation.denied = true;
@@ -135,6 +145,8 @@ export class ToolAuditor {
       args: JsonObject,
       cwd: string,
     ) => { readonly path?: string; readonly repository?: string },
+    metadata?: Pick<AuditEvent, "mcp_server" | "mcp_tool" | "mcp_transport">,
+    feature = false,
   ): ToolDefinition {
     return {
       ...definition,
@@ -166,6 +178,12 @@ export class ToolAuditor {
           invocation_id: id,
           tool: definition.name,
           boundary,
+          ...metadata,
+          ...(this.invocation.getStore() === undefined
+            ? {}
+            : {
+                parent_invocation_id: this.invocation.getStore()!.fields.invocation_id!,
+              }),
           ...(extension === undefined ? {} : { extension }),
           ...toolAuditMetadata(definition.name, args, this.cwd, this.home),
           ...targetFields,
@@ -176,6 +194,11 @@ export class ToolAuditor {
         return this.invocation.run(invocation, async () => {
           let result;
           try {
+            if (feature)
+              await this.decision(
+                { allowed: true, source: "policy", reason: "policy_allowed" },
+                definition.name,
+              );
             result = await definition.execute(id, args, signal, onUpdate, ctx);
           } catch (error) {
             if (!invocation.denied && this.failure === undefined) {
@@ -193,7 +216,20 @@ export class ToolAuditor {
             throw error;
           }
           // Reporting failure after an effect never retries the operation or emits a false failure outcome.
-          const outcome = "isError" in result && result.isError === true ? "error" : "success";
+          let outcome: AuditEvent["outcome"] =
+            "isError" in result && result.isError === true ? "error" : "success";
+          // Only the trusted code-mode adapter provides typed VM failure metadata.
+          // MCP/ordinary tool results remain untrusted, even if they use the same keys.
+          if (
+            feature &&
+            outcome === "error" &&
+            typeof result.details === "object" &&
+            result.details !== null
+          ) {
+            const kind = (result.details as Record<string, unknown>).failureKind;
+            if (kind === "timeout") outcome = "timeout";
+            else if (kind === "aborted") outcome = "cancelled";
+          }
           await this.submit({
             ...fields,
             event: "tool_completed",

@@ -76,7 +76,9 @@ function config(
   overrides: Partial<Record<ToolName, "allow" | "ask" | "deny" | "disabled">> = {},
 ): SandboxConfig {
   return {
-    configVersion: 9,
+    configVersion: 10,
+    codemode: { enabled: false, timeoutMs: 300000 },
+    mcp: { servers: {} },
     sessions: { retentionDays: 0 },
     filesystem: { cwdWritable: true, hiddenPaths: [] },
     audit: { enabled: false, facility: "local0" },
@@ -294,7 +296,7 @@ async function start(
   cfg = config(),
   activeTools?: readonly ToolName[],
 ): Promise<void> {
-  createPiSandboxExtension({
+  await createPiSandboxExtension({
     cwd: "/work/project",
     configPath: "/etc/pi-sandbox/config.toml",
     userStateDir: "/home/test/.pi/agent",
@@ -367,7 +369,7 @@ describe("Pi Sandbox extension", () => {
         }),
       ),
     };
-    createPiSandboxExtension({
+    await createPiSandboxExtension({
       cwd: "/work/project",
       configPath: "/etc/pi-sandbox/config.toml",
       userStateDir: "/home/test/.pi/agent",
@@ -477,7 +479,7 @@ describe("Pi Sandbox extension", () => {
 
   it("registers standard Pi tool extensions through the same tool policy", async () => {
     const pi = fakePi();
-    createPiSandboxExtension({
+    await createPiSandboxExtension({
       cwd: "/work/project",
       configPath: "/etc/pi-sandbox/config.toml",
       userStateDir: "/home/test/.pi/agent",
@@ -492,7 +494,7 @@ describe("Pi Sandbox extension", () => {
     });
 
     const denied = fakePi();
-    createPiSandboxExtension({
+    await createPiSandboxExtension({
       cwd: "/work/project",
       configPath: "/etc/pi-sandbox/config.toml",
       userStateDir: "/home/test/.pi/agent",
@@ -506,7 +508,7 @@ describe("Pi Sandbox extension", () => {
     );
 
     const disabled = fakePi();
-    createPiSandboxExtension({
+    await createPiSandboxExtension({
       cwd: "/work/project",
       configPath: "/etc/pi-sandbox/config.toml",
       userStateDir: "/home/test/.pi/agent",
@@ -521,7 +523,7 @@ describe("Pi Sandbox extension", () => {
   it("rejects undeclared Pi tool registrations and non-tool extension APIs", async () => {
     const mismatch = { ...piToolFixture(), toolNames: ["different"] } satisfies PiToolExtension;
     const pi = fakePi();
-    createPiSandboxExtension({
+    await createPiSandboxExtension({
       cwd: "/work/project",
       configPath: "/etc/pi-sandbox/config.toml",
       userStateDir: "/home/test/.pi/agent",
@@ -540,7 +542,7 @@ describe("Pi Sandbox extension", () => {
       },
     } satisfies PiToolExtension;
     const second = fakePi();
-    createPiSandboxExtension({
+    await createPiSandboxExtension({
       cwd: "/work/project",
       configPath: "/etc/pi-sandbox/config.toml",
       userStateDir: "/home/test/.pi/agent",
@@ -575,7 +577,7 @@ describe("Pi Sandbox extension", () => {
     const prompt = new Promise<void>((resolve) => {
       release = resolve;
     });
-    createPiSandboxExtension({
+    await createPiSandboxExtension({
       cwd: "/work/project",
       configPath: "/etc/pi-sandbox/config.toml",
       userStateDir: "/home/test/.pi/agent",
@@ -642,7 +644,7 @@ describe("Pi Sandbox extension", () => {
   it("denies a managed tool before requiring a host executor", async () => {
     const pi = fakePi();
     const fixture = managedToolFixture();
-    createPiSandboxExtension({
+    await createPiSandboxExtension({
       cwd: "/work/project",
       configPath: "/etc/pi-sandbox/config.toml",
       userStateDir: "/home/test/.pi/agent",
@@ -693,7 +695,8 @@ describe("Pi Sandbox extension", () => {
 
     await command?.handler("mounts all", ctx as never);
     expect(notices.at(-1)).toEqual({
-      message: "Usage: /sandbox [mounts | policy [read|grep|find|ls|write|edit|bash|user_shell]]",
+      message:
+        "Usage: /sandbox [mounts | policy [read|grep|find|ls|write|edit|bash|user_shell] | mcp [server]]",
       type: "warning",
     });
   });
@@ -915,7 +918,7 @@ describe("Pi Sandbox extension", () => {
         return "Allow once";
       },
     });
-    createPiSandboxExtension({
+    await createPiSandboxExtension({
       cwd: "/work/project",
       configPath: "/etc/pi-sandbox/config.toml",
       userStateDir: "/home/test/.pi/agent",
@@ -935,7 +938,7 @@ describe("Pi Sandbox extension", () => {
     expect(write?.stdin).toBe("approved");
   });
 
-  it("uses the normal Pi tool rendering and keeps approval selectors minimal", async () => {
+  it("uses the normal Pi tool rendering and shows bounded identifying arguments in approvals", async () => {
     const pi = fakePi();
     const executor = fakeExecutor();
     await start(pi, executor, config({ bash: "ask", write: "ask" }));
@@ -950,20 +953,23 @@ describe("Pi Sandbox extension", () => {
     });
     const command = `printf '${"x".repeat(3_000)}'`;
     await pi.tools.get("bash")?.execute("bash", { command }, undefined, undefined, ctx);
-    expect(prompts[0]).toBe("Allow bash?");
+    expect(prompts[0]).toMatch(/^Allow bash: printf/);
+    expect(Buffer.byteLength(prompts[0]!)).toBeLessThan(1100);
 
     const content = `${"h".repeat(2_000)}middle${"t".repeat(2_000)}`;
     await pi.tools
       .get("write")
       ?.execute("write", { path: "target.txt", content }, undefined, undefined, ctx);
-    expect(prompts[1]).toBe("Allow write?");
+    expect(prompts[1]).toBe("Allow write: /work/project/target.txt?");
+    expect(prompts[1]).not.toContain(content);
 
     await expect(
       pi.tools
         .get("bash")
         ?.execute("large", { command: "x".repeat(8 * 1024 + 1) }, undefined, undefined, ctx),
     ).resolves.toBeDefined();
-    expect(prompts[2]).toBe("Allow bash?");
+    expect(prompts[2]).toMatch(/^Allow bash: x/);
+    expect(Buffer.byteLength(prompts[2]!)).toBeLessThan(1100);
   });
 
   it("approves and executes the same canonical lexical path", async () => {
@@ -986,7 +992,7 @@ describe("Pi Sandbox extension", () => {
     for (const [input, expected] of cases) {
       const before = executor.calls.length;
       await pi.tools.get("read")?.execute("read", { path: input }, undefined, undefined, ctx);
-      expect(prompts.at(-1)).toBe("Allow read?");
+      expect(prompts.at(-1)).toBe(`Allow read: ${expected}?`);
       expect(executor.calls.slice(before).some((call) => call.argv.includes(expected))).toBe(true);
     }
   });
@@ -1159,7 +1165,7 @@ describe("Pi Sandbox extension", () => {
 
   it("blocks user shell when managed initialization failed", async () => {
     const pi = fakePi();
-    createPiSandboxExtension({
+    await createPiSandboxExtension({
       cwd: "/work/project",
       configPath: "/etc/pi-sandbox/config.toml",
       userStateDir: "/home/test/.pi/agent",
@@ -1195,7 +1201,7 @@ describe("Pi Sandbox extension", () => {
       enter();
       await finished;
     });
-    createPiSandboxExtension({
+    await createPiSandboxExtension({
       cwd: "/work/project",
       configPath: "/etc/pi-sandbox/config.toml",
       userStateDir: "/home/test/.pi/agent",
@@ -1235,7 +1241,7 @@ describe("Pi Sandbox extension", () => {
     ];
     for (const file of files) {
       const pi = fakePi();
-      extension(pi.api);
+      await extension(pi.api);
       const ctx = context(file === undefined ? {} : { sessionFile: file });
       await pi.handlers.get("session_start")?.(undefined as never, ctx);
       await pi.handlers.get("session_shutdown")?.(undefined as never, ctx);
@@ -1249,7 +1255,7 @@ describe("Pi Sandbox extension", () => {
       throw new Error("Session file access was unnecessary");
     });
     const ctx = context();
-    createPiSandboxExtension({
+    await createPiSandboxExtension({
       cwd: "/work/project",
       configPath: "/etc/pi-sandbox/config.toml",
       userStateDir: "/home/test/.pi/agent",

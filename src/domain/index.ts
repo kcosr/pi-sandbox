@@ -49,7 +49,25 @@ export {
   MAXIMUM_ENVIRONMENT_VARIABLES,
   MAXIMUM_ENVIRONMENT_VARIABLES_PER_SCOPE,
   emptyManagedEnvironment,
+  isManagedEnvironmentName,
   overlayManagedEnvironment,
   parseManagedEnvironment,
 } from "./environment.js";
 export { expandManagedHomePaths } from "./home-expansion.js";
+
+export type {
+  CodeModeConfig,
+  McpExposure,
+  McpToolRule,
+  McpHttpServerConfig,
+  McpStdioServerConfig,
+  McpServerConfig,
+  McpConfig,
+} from "./mcp.js";
+export {
+  expandAccountValue,
+  expandMcpUrl,
+  validateAccountTemplate,
+  validateMcpUrlTemplate,
+  type AccountIdentity,
+} from "./account-macros.js";

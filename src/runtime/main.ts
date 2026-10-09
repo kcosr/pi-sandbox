@@ -14,9 +14,15 @@ import {
 import { buildLayout } from "../build-layout/index.js";
 import { connectAuditClient, type AuditClient } from "../audit/client.js";
 import { loadConfig } from "../config/index.js";
-import type { EnvironmentVariables, ManagedEnvironment, SandboxConfig } from "../domain/index.js";
+import type {
+  AccountIdentity,
+  EnvironmentVariables,
+  ManagedEnvironment,
+  SandboxConfig,
+} from "../domain/index.js";
 import { expandManagedHomePaths, overlayManagedEnvironment } from "../domain/index.js";
 import { createPiSandboxExtension } from "../extension/index.js";
+import { resolveMcpServers } from "../mcp/resolve.js";
 import { createHostCommandExecutor, type HostCommandExecutor } from "../host/index.js";
 import {
   applyIdentityOverrides,
@@ -40,7 +46,7 @@ import { createManagedPiArguments, selectManagedActiveTools } from "./arguments.
 import { applyManagedEnvironment } from "./environment.js";
 import { assertHostPrerequisites } from "./prerequisites.js";
 import { createWorkspaceBoundary } from "./workspace.js";
-import { readAccountHomeDirectory } from "./account-home.js";
+import { readAccountIdentity } from "./account-home.js";
 import type { SandboxArguments } from "./config-arguments.js";
 import {
   createSessionMaintenance,
@@ -161,7 +167,7 @@ export async function resolveEffectiveAdministrativeConfiguration(
   environment: NodeJS.ProcessEnv = process.env,
   resolveIdentity?: BrokerIdentityResolver,
   configPath = SYSTEM_CONFIG_PATH,
-  getHomeDirectory: () => string = readAccountHomeDirectory,
+  getAccountIdentity: () => AccountIdentity = readAccountIdentity,
 ): Promise<{
   readonly config: SandboxConfig;
   readonly modelsPath: string;
@@ -181,7 +187,7 @@ export async function resolveEffectiveAdministrativeConfiguration(
   const expanded = expandManagedHomePaths(
     overridden.filesystem,
     combinedEnvironment,
-    getHomeDirectory,
+    getAccountIdentity,
   );
   const effectiveEnvironment = expanded.environment;
   const config = Object.freeze({
@@ -406,8 +412,16 @@ export async function runPiSandbox({ piArgs: args, configPath }: SandboxArgument
   }
 
   const ambientHostEnvironment = { ...process.env };
+  let accountIdentity: AccountIdentity | undefined;
+  const getAccountIdentity = () => (accountIdentity ??= readAccountIdentity());
   const { config, modelsPath, identityEnvironment } =
-    await resolveEffectiveAdministrativeConfiguration("/", process.env, undefined, configPath);
+    await resolveEffectiveAdministrativeConfiguration(
+      "/",
+      process.env,
+      undefined,
+      configPath,
+      getAccountIdentity,
+    );
   const { cwd, validateSessionCwd } = createWorkspaceBoundary(process.cwd());
   const managedExtensions = instantiateConfiguredManagedExtensions(config);
   const piToolExtensions = selectConfiguredPiToolExtensions(config);
@@ -451,7 +465,14 @@ export async function runPiSandbox({ piArgs: args, configPath }: SandboxArgument
       const enabledTools = new Set(
         Object.keys(config.tools).filter((toolName) => config.tools[toolName]?.mode !== "disabled"),
       );
+      if (config.codemode.enabled) enabledTools.add("codemode");
+      const servers = await resolveMcpServers(config.mcp, process.env, getAccountIdentity);
       const extension = createPiSandboxExtension({
+        features: {
+          config,
+          servers,
+          selected: (name) => selectManagedActiveTools(args, new Set([name])).length > 0,
+        },
         cwd,
         configPath,
         userStateDir,

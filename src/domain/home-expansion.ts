@@ -1,3 +1,4 @@
+import { expandAccountValue, type AccountIdentity } from "./account-macros.js";
 import { parseManagedEnvironment } from "./environment.js";
 import { isNormalizedAbsoluteFilePath, isReservedHiddenDirectoryPath } from "./paths.js";
 import type { EnvironmentVariables, FilesystemConfig, ManagedEnvironment } from "./policy.js";
@@ -6,20 +7,11 @@ import type { EnvironmentVariables, FilesystemConfig, ManagedEnvironment } from 
 export function expandManagedHomePaths(
   filesystem: FilesystemConfig,
   environment: ManagedEnvironment,
-  getHomeDirectory: () => string,
+  getIdentity: () => AccountIdentity,
 ): Readonly<{ filesystem: FilesystemConfig; environment: ManagedEnvironment }> {
-  let home: string | undefined;
-  function expand(value: string): string {
-    if (value !== "~" && !value.startsWith("~/")) return value;
-    if (home === undefined) {
-      const accountHome = getHomeDirectory();
-      if (accountHome !== "/" && !isNormalizedAbsoluteFilePath(accountHome)) {
-        throw new Error("The invoking account home directory must be a normalized absolute path");
-      }
-      home = accountHome;
-    }
-    return value === "~" ? home : `${home === "/" ? "" : home}${value.slice(1)}`;
-  }
+  let identity: AccountIdentity | undefined;
+  const account = (): AccountIdentity => (identity ??= getIdentity());
+  const expand = (value: string): string => expandAccountValue(value, account);
 
   const hiddenPaths = filesystem.hiddenPaths.map(expand);
   if (

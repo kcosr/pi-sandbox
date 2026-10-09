@@ -97,6 +97,14 @@ export function overlayManagedEnvironment(
   });
 }
 
+export function isManagedEnvironmentName(name: string): boolean {
+  return (
+    ENVIRONMENT_NAME_PATTERN.test(name) &&
+    !RESERVED_ENVIRONMENT_NAMES.has(name) &&
+    !name.startsWith("PI_SANDBOX_")
+  );
+}
+
 function parseEnvironmentVariables(value: unknown, sandbox: boolean): EnvironmentVariables {
   if (!isRecord(value) || Object.keys(value).length > MAXIMUM_ENVIRONMENT_VARIABLES_PER_SCOPE) {
     throw new Error("managed_environment_invalid");

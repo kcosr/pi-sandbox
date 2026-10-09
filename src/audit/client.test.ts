@@ -10,10 +10,10 @@ vi.mock("node:fs/promises", async (original) => ({
   lstat: vi.fn(),
 }));
 import { lstat } from "node:fs/promises";
-import { connectAuditClient, type AuditClient } from "./client.js";
+import { connectAuditClient, type AuditClient, type AuditEvent } from "./client.js";
 
 const event = { event: "session_started", pi_session_id: "pi-1", cwd: "/workspace" } as const;
-const acknowledgment = `${JSON.stringify({ version: 1, ok: true, audit_session_id: "audit-1" })}\n`;
+const acknowledgment = `${JSON.stringify({ version: 2, ok: true, audit_session_id: "audit-1" })}\n`;
 let directory: string;
 let server: Server | undefined;
 let client: AuditClient | undefined;
@@ -79,8 +79,75 @@ describe("audit client", () => {
       }),
     ).rejects.toThrow("Invalid audit event");
     await client.submit(event);
-    expect(received).toEqual([{ version: 1, event }]);
+    expect(received).toEqual([{ version: 2, event }]);
   });
+
+  it.each(["http", "stdio"] as const)(
+    "sends typed %s MCP metadata and trusted parent correlation on wire version 2",
+    async (transport) => {
+      const requests: unknown[] = [];
+      const path = await listen((socket) =>
+        socket.on("data", (data) => {
+          requests.push(JSON.parse(data.toString()));
+          socket.write(acknowledgment);
+        }),
+      );
+      client = await connectAuditClient(path);
+      const call: AuditEvent = {
+        event: "tool_requested",
+        pi_session_id: "pi-1",
+        invocation_id: "nested-1",
+        tool: "mcp__docs__search",
+        boundary: "host",
+        mcp_server: "docs",
+        mcp_tool: "search/raw",
+        mcp_transport: transport,
+        parent_invocation_id: "script-1",
+      };
+      await client.submit(call);
+      expect(requests).toEqual([{ version: 2, event: call }]);
+    },
+  );
+
+  it.each([
+    { mcp_server: "docs" },
+    { mcp_server: "docs", mcp_tool: "search" },
+    { mcp_server: "Docs", mcp_tool: "search", mcp_transport: "http" },
+    { mcp_server: "docs", mcp_tool: "search\nraw", mcp_transport: "http" },
+    { mcp_server: "docs", mcp_tool: "é".repeat(65), mcp_transport: "http" },
+    { mcp_server: "docs", mcp_tool: "search", mcp_transport: "websocket" },
+    { mcp_server: "docs", mcp_tool: "search", mcp_transport: "stdio", boundary: "bubblewrap" },
+    { mcp_server: "docs", mcp_tool: "search", mcp_transport: "stdio", extension: "compiled" },
+    { parent_invocation_id: "call-1" },
+    { parent_invocation_id: "" },
+    { parent_invocation_id: "x".repeat(257) },
+    { arguments: { secret: "must-never-be-logged" } },
+    { source: "script-secret" },
+    { result: "result-secret" },
+  ])(
+    "rejects incomplete, conflicting, or payload-bearing new metadata %# without sending",
+    async (metadata) => {
+      const requests: unknown[] = [];
+      const path = await listen((socket) =>
+        socket.on("data", (data) => {
+          requests.push(JSON.parse(data.toString()));
+          socket.write(acknowledgment);
+        }),
+      );
+      client = await connectAuditClient(path);
+      const call = {
+        event: "tool_requested",
+        pi_session_id: "pi-1",
+        tool: "mcp__docs__search",
+        invocation_id: "call-1",
+        boundary: "host",
+        ...metadata,
+      } as AuditEvent;
+      await expect(client.submit(call)).rejects.toThrow("Invalid audit event");
+      await client.submit(event);
+      expect(requests).toEqual([{ version: 2, event }]);
+    },
+  );
 
   it("serializes submissions and waits for fragmented acknowledgments", async () => {
     const requests: unknown[] = [];
@@ -94,14 +161,15 @@ describe("audit client", () => {
     client = await connectAuditClient(path);
     await Promise.all([client.submit(event), client.submit(event)]);
     expect(requests).toEqual([
-      { version: 1, event },
-      { version: 1, event },
+      { version: 2, event },
+      { version: 2, event },
     ]);
   });
 
   it.each([
-    '{"version":1,"ok":false,"code":"syslog_unavailable"}\n',
-    '{"version":1,"ok":true,"audit_session_id":"a","extra":true}\n',
+    '{"version":1,"ok":true,"audit_session_id":"a"}\n',
+    '{"version":2,"ok":false,"code":"syslog_unavailable"}\n',
+    '{"version":2,"ok":true,"audit_session_id":"a","extra":true}\n',
     "not json\n",
     acknowledgment + acknowledgment,
     "x".repeat(4097),

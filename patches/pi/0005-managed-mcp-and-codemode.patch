@@ -1,0 +1,1622 @@
+diff --git a/packages/codemode/src/runtime/host.ts b/packages/codemode/src/runtime/host.ts
+index 940359b..3e52b24 100644
+--- a/packages/codemode/src/runtime/host.ts
++++ b/packages/codemode/src/runtime/host.ts
+@@ -67,6 +67,10 @@ interface PendingCall {
+ }
+ 
+ interface ExecutionOptions {
++	awaitToolCleanup?: boolean;
++	maxCalls?: number;
++	maxConcurrentCalls?: number;
++	maxOutputBytes?: number;
+ 	code: string;
+ 	tools: ReadonlyMap<string, CodemodeTool>;
+ 	globals: ReadonlyMap<string, CodemodeTool>;
+@@ -96,11 +100,22 @@ class Execution {
+ 	private readonly calls: CodemodeCall[] = [];
+ 	private readonly pending = new Map<number, PendingCall>();
+ 	private finished = false;
++	private readonly awaitToolCleanup: boolean;
++	private readonly inFlight = new Set<Promise<void>>();
++	private readonly maxCalls: number;
++	private readonly maxConcurrentCalls: number;
++	private readonly maxOutputBytes: number;
++	private callCount = 0;
++	private outputBytes = 0;
+ 
+ 	constructor(options: ExecutionOptions) {
+ 		this.promise = new Promise<CodemodeResult>((resolve) => {
+ 			this.resolveResult = resolve;
+ 		});
++		this.awaitToolCleanup = options.awaitToolCleanup === true;
++		this.maxCalls = options.maxCalls ?? Number.POSITIVE_INFINITY;
++		this.maxConcurrentCalls = options.maxConcurrentCalls ?? Number.POSITIVE_INFINITY;
++		this.maxOutputBytes = options.maxOutputBytes ?? Number.POSITIVE_INFINITY;
+ 		this.tools = options.tools;
+ 		this.globals = options.globals;
+ 		this.signal = options.signal;
+@@ -184,11 +199,23 @@ class Execution {
+ 		if (this.finished || !isWorkerToHostMessage(message)) return;
+ 		switch (message.type) {
+ 			case "output":
++				this.outputBytes += Buffer.byteLength(JSON.stringify(message.item));
++				if (this.outputBytes > this.maxOutputBytes) {
++					this.finish({ kind: "sandbox", message: "Script output exceeds configured byte limit" });
++					return;
++				}
+ 				this.output.push(message.item);
+ 				break;
+-			case "call":
+-				void this.handleCall(message);
++			case "call": {
++				if (++this.callCount > this.maxCalls || this.pending.size >= this.maxConcurrentCalls) {
++					this.finish({ kind: "sandbox", message: "Script bridge call limit exceeded" });
++					return;
++				}
++				const call = this.handleCall(message);
++				this.inFlight.add(call);
++				void call.finally(() => this.inFlight.delete(call));
+ 				break;
++			}
+ 			case "done":
+ 				this.handleDone(message);
+ 				break;
+@@ -204,6 +231,10 @@ class Execution {
+ 			this.finish({ kind: "script", ...parsed });
+ 			return;
+ 		}
++		if (Buffer.byteLength(message.value ?? "") + this.outputBytes > this.maxOutputBytes) {
++			this.finish({ kind: "sandbox", message: "Script output exceeds configured byte limit" });
++			return;
++		}
+ 		this.finish(undefined, message.value === undefined ? undefined : JSON.parse(message.value), message.writes);
+ 	}
+ 
+@@ -261,15 +292,12 @@ class Execution {
+ 					calls: this.calls,
+ 					storeWrites: writes === undefined ? { set: {}, delete: [] } : parseStoreWrites(writes),
+ 				};
+-		if (!this.worker) {
+-			this.resolveResult(result);
+-			return;
+-		}
+ 		Atomics.store(new Int32Array(this.interrupt), 0, 1);
+-		this.worker
+-			.terminate()
+-			.catch(() => undefined)
+-			.then(() => this.resolveResult(result));
++		// Tool cancellation includes executor/transport cleanup. The outer call must not settle
++		// while a nested host operation is still cleaning up, even for unawaited script promises.
++		void Promise.allSettled([...(this.awaitToolCleanup ? this.inFlight : []), this.worker?.terminate()]).then(() =>
++			this.resolveResult(result),
++		);
+ 	}
+ }
+ 
+@@ -285,6 +313,10 @@ class Execution {
+ export class CodemodeSandbox {
+ 	private readonly toolsByName = new Map<string, CodemodeTool>();
+ 	private readonly globalsByName = new Map<string, CodemodeTool>();
++	private readonly limits: Pick<
++		CodemodeSandboxOptions,
++		"maxCalls" | "maxConcurrentCalls" | "maxOutputBytes" | "awaitToolCleanup" | "rejectToolAliases"
++	>;
+ 	private readonly timeoutMs: number;
+ 	private readonly memoryLimitBytes: number | undefined;
+ 	private readonly wasm: CodemodeWasmModule | Promise<CodemodeWasmModule> | undefined;
+@@ -293,6 +325,7 @@ export class CodemodeSandbox {
+ 	private closed = false;
+ 
+ 	constructor(options: CodemodeSandboxOptions = {}) {
++		this.limits = options;
+ 		this.timeoutMs = options.timeoutMs ?? DEFAULT_TIMEOUT_MS;
+ 		this.memoryLimitBytes = options.memoryLimitBytes;
+ 		this.wasm = options.wasm;
+@@ -316,6 +349,12 @@ export class CodemodeSandbox {
+ 	/** Throws if a tool with the same name is already registered. */
+ 	registerTool(tool: CodemodeTool): void {
+ 		if (this.toolsByName.has(tool.name)) throw new Error(`Tool "${tool.name}" is already registered`);
++		if (
++			this.limits.rejectToolAliases &&
++			[...this.toolsByName.keys()].some((name) => toCodemodeIdentifier(name) === toCodemodeIdentifier(tool.name))
++		) {
++			throw new Error(`Tool "${tool.name}" has an ambiguous script identifier`);
++		}
+ 		this.toolsByName.set(tool.name, tool);
+ 	}
+ 
+@@ -339,6 +378,7 @@ export class CodemodeSandbox {
+ 	execute(code: string, options: CodemodeExecuteOptions = {}): Promise<CodemodeResult> {
+ 		if (this.closed) return Promise.reject(new Error("Sandbox is closed"));
+ 		const execution = new Execution({
++			...this.limits,
+ 			code,
+ 			tools: new Map(this.toolsByName),
+ 			globals: this.globalsByName,
+diff --git a/packages/codemode/src/types.ts b/packages/codemode/src/types.ts
+index 4bc4f32..4e97cde 100644
+--- a/packages/codemode/src/types.ts
++++ b/packages/codemode/src/types.ts
+@@ -90,6 +90,13 @@ export type CodemodeResult =
+ 	| { ok: false; error: CodemodeError; output: CodemodeOutputItem[]; calls: CodemodeCall[] };
+ 
+ export interface CodemodeSandboxOptions {
++	rejectToolAliases?: boolean;
++	/** Wait for aborted tool implementations to finish local cleanup. */
++	awaitToolCleanup?: boolean;
++	/** Optional host-side limits, covering tool and helper bridge calls together. */
++	maxCalls?: number;
++	maxConcurrentCalls?: number;
++	maxOutputBytes?: number;
+ 	tools?: CodemodeTool[];
+ 	/**
+ 	 * Functions exposed as top-level identifiers instead of on `tools`, for host helpers such as
+diff --git a/packages/codemode/test/managed-limits.test.ts b/packages/codemode/test/managed-limits.test.ts
+new file mode 100644
+index 0000000..9e9bdcf
+--- /dev/null
++++ b/packages/codemode/test/managed-limits.test.ts
+@@ -0,0 +1,109 @@
++import { afterEach, describe, expect, it } from "vitest";
++import { CodemodeSandbox } from "../src/index.ts";
++const sandboxes: CodemodeSandbox[] = [];
++afterEach(async () => {
++	await Promise.all(sandboxes.splice(0).map((sandbox) => sandbox.close()));
++});
++function create(options: ConstructorParameters<typeof CodemodeSandbox>[0]) {
++	const sandbox = new CodemodeSandbox({ timeoutMs: 3000, ...options });
++	sandboxes.push(sandbox);
++	return sandbox;
++}
++describe("managed VM limits", () => {
++	it("counts discovery helpers and tool calls against the same budget", async () => {
++		let calls = 0;
++		const sandbox = create({
++			maxCalls: 2,
++			globals: [
++				{
++					name: "discover",
++					execute: () => {
++						calls++;
++					},
++				},
++			],
++			tools: [
++				{
++					name: "echo",
++					execute: () => {
++						calls++;
++					},
++				},
++			],
++		});
++		const result = await sandbox.execute("await discover(); await tools.echo(); await discover();");
++		expect(result).toMatchObject({ ok: false, error: { message: "Script bridge call limit exceeded" } });
++		expect(calls).toBe(2);
++	});
++	it("rejects excess outstanding bridge calls without dispatching them", async () => {
++		let calls = 0;
++		const sandbox = create({
++			maxConcurrentCalls: 1,
++			tools: [
++				{
++					name: "wait",
++					execute: (_args, { signal }) => {
++						calls++;
++						return new Promise((resolve) =>
++							signal.addEventListener("abort", () => resolve(null), { once: true }),
++						);
++					},
++				},
++			],
++		});
++		expect(await sandbox.execute("await Promise.all([tools.wait(), tools.wait()]);")).toMatchObject({ ok: false });
++		expect(calls).toBe(1);
++	});
++	it("bounds returned values as well as emitted output by UTF-8 byte size", async () => {
++		const sandbox = create({ maxOutputBytes: 100 });
++		expect(await sandbox.execute("return 'é'.repeat(51);")).toMatchObject({
++			ok: false,
++			error: { message: "Script output exceeds configured byte limit" },
++		});
++		expect(await sandbox.execute("text('é'.repeat(51));")).toMatchObject({ ok: false });
++	});
++	it("waits for aborted nested cleanup before the outer result settles", async () => {
++		let cleaned = false;
++		const sandbox = create({
++			awaitToolCleanup: true,
++			tools: [
++				{
++					name: "wait",
++					execute: (_args, { signal }) =>
++						new Promise((resolve) =>
++							signal.addEventListener(
++								"abort",
++								() => {
++									setTimeout(() => {
++										cleaned = true;
++										resolve(null);
++									}, 30);
++								},
++								{ once: true },
++							),
++						),
++				},
++			],
++		});
++		await sandbox.execute("tools.wait(); return 1;");
++		expect(cleaned).toBe(true);
++	});
++	it("rejects names that collide after normalization", () => {
++		expect(() =>
++			create({
++				rejectToolAliases: true,
++				tools: [
++					{ name: "a-b", execute: () => {} },
++					{ name: "a_b", execute: () => {} },
++				],
++			}),
++		).toThrow("ambiguous");
++	});
++	it("has no host APIs or module imports", async () => {
++		const sandbox = create({});
++		expect(
++			await sandbox.execute("return [typeof process, typeof require, typeof fetch, typeof models];"),
++		).toMatchObject({ ok: true, value: ["undefined", "undefined", "undefined", "undefined"] });
++		expect(await sandbox.execute("await import('node:fs');")).toMatchObject({ ok: false });
++	});
++});
+diff --git a/packages/coding-agent/src/extensions/codemode/execute.ts b/packages/coding-agent/src/extensions/codemode/execute.ts
+index 3d7bdf6..ce4af65 100644
+--- a/packages/coding-agent/src/extensions/codemode/execute.ts
++++ b/packages/coding-agent/src/extensions/codemode/execute.ts
+@@ -277,6 +277,7 @@ async function spillOutput(text: string): Promise<{ path: string } | { error: st
+ async function truncateOutput(
+ 	items: (TextContent | ImageContent)[],
+ 	maxTokens: number,
++	inlineOnly = false,
+ ): Promise<{ items: (TextContent | ImageContent)[]; fullOutputPath?: string }> {
+ 	const texts = items.filter((item): item is TextContent => item.type === "text").map((item) => item.text);
+ 	const combined = texts.join("\n");
+@@ -288,7 +289,9 @@ async function truncateOutput(
+ 	const head = combined.slice(0, headChars);
+ 	const tail = tailChars > 0 ? combined.slice(-tailChars) : "";
+ 	let text = `Warning: truncated output (original token count: ${Math.ceil(combined.length / CHARS_PER_TOKEN)})\nTotal output lines: ${combined.split("\n").length}\n\n${head}…${Math.ceil(removed / CHARS_PER_TOKEN)} tokens truncated…${tail}`;
+-	const spilled = await spillOutput(combined);
++	const spilled = inlineOnly
++		? { error: "Output is inline-only; print a smaller result" }
++		: await spillOutput(combined);
+ 	text +=
+ 		"path" in spilled
+ 			? `\n\n[Full output: ${spilled.path} (read with offset/limit)]`
+@@ -326,6 +329,9 @@ export async function executeCodemode(
+ 	options: CodemodeToolOptions = {},
+ ): Promise<AgentToolResult<CodemodeToolDetails>> {
+ 	const startedAt = performance.now();
++	const limits = options.executionLimits;
++	if (limits && Buffer.byteLength(input.code) > limits.maxSourceBytes)
++		throw new Error("Code-mode source exceeds configured byte limit");
+ 	const { code, options: sourceOptions } = parseCodemodeSource(input.code);
+ 	const calls: CodemodeNestedCall[] = [];
+ 	// Usage of the script's `models.*` calls. Nested tool calls report theirs through the session.
+@@ -382,7 +388,15 @@ export async function executeCodemode(
+ 				? createModelGlobals(ctx.modelRegistry, toolCallId, calls, publish, addModelUsage, addGeneratedImages)
+ 				: []),
+ 		],
+-		timeoutMs: sourceOptions.timeoutMs ?? Number.POSITIVE_INFINITY,
++		timeoutMs: Math.min(
++			sourceOptions.timeoutMs ?? Number.POSITIVE_INFINITY,
++			limits?.timeoutMs ?? Number.POSITIVE_INFINITY,
++		),
++		awaitToolCleanup: limits !== undefined,
++		rejectToolAliases: limits !== undefined,
++		maxCalls: limits?.maxCalls,
++		maxConcurrentCalls: limits?.maxConcurrentCalls,
++		maxOutputBytes: limits?.maxOutputBytes,
+ 		memoryLimitBytes: CODEMODE_MEMORY_LIMIT_BYTES,
+ 		wasm: loadQuickJSWasm(getQuickJSWasmPath()),
+ 		workerUrl: getCodemodeWorkerSpecifier(),
+@@ -420,10 +434,18 @@ export async function executeCodemode(
+ 		});
+ 	}
+ 
+-	const truncated = await truncateOutput(items, sourceOptions.maxOutputTokens ?? DEFAULT_MAX_OUTPUT_TOKENS);
++	const truncated = await truncateOutput(
++		items,
++		Math.min(
++			sourceOptions.maxOutputTokens ?? DEFAULT_MAX_OUTPUT_TOKENS,
++			limits ? DEFAULT_MAX_OUTPUT_TOKENS : Number.POSITIVE_INFINITY,
++		),
++		limits?.inlineOnly,
++	);
+ 	const wallTime = ((performance.now() - startedAt) / 1000).toFixed(1);
+ 	const header = `${result.ok ? "Script completed" : "Script failed"}\nWall time ${wallTime} seconds\nOutput:\n`;
+ 	const details = snapshot();
++	if (!result.ok) details.failureKind = result.error.kind;
+ 	if (truncated.fullOutputPath) details.fullOutputPath = truncated.fullOutputPath;
+ 	return {
+ 		content: [{ type: "text", text: header }, ...truncated.items],
+diff --git a/packages/coding-agent/src/extensions/codemode/index.ts b/packages/coding-agent/src/extensions/codemode/index.ts
+index 4b58b1b..99743da 100644
+--- a/packages/coding-agent/src/extensions/codemode/index.ts
++++ b/packages/coding-agent/src/extensions/codemode/index.ts
+@@ -8,9 +8,10 @@
+ 
+ import type { ExtensionAPI, ExtensionFactory } from "../../core/extensions/types.ts";
+ import type { CodemodeMode } from "../../core/settings-manager.ts";
+-import { createCodemodeToolDefinition } from "./tool.ts";
++import { type CodemodeExecutionLimits, createCodemodeToolDefinition } from "./tool.ts";
+ 
+ export interface CodemodeExtensionOptions {
++	executionLimits?: CodemodeExecutionLimits;
+ 	/** Overrides the `codemode.mode` setting. */
+ 	mode?: CodemodeMode;
+ 	/** Overrides the `codemode.inlineBudget` setting. */
+@@ -30,8 +31,21 @@ function readInlineBudget(pi: ExtensionAPI): number | undefined {
+ 
+ export function createCodemodeExtension(options: CodemodeExtensionOptions = {}): ExtensionFactory {
+ 	return (pi) => {
+-		pi.registerTool({
++		let active: { controller: AbortController; done: Promise<unknown> } | undefined;
++		let closing = false;
++		if (options.executionLimits) {
++			pi.on("session_start", () => {
++				closing = false;
++			});
++			pi.on("session_shutdown", async () => {
++				closing = true;
++				active?.controller.abort();
++				await active?.done.catch(() => undefined);
++			});
++		}
++		const definition = {
+ 			...createCodemodeToolDefinition({
++				executionLimits: options.executionLimits,
+ 				appendEntry: (customType, data) => pi.appendEntry(customType, data),
+ 				models: options.models ?? true,
+ 				getToolNamespace: (name) => pi.getAllTools().find((tool) => tool.name === name)?.namespace,
+@@ -39,6 +53,23 @@ export function createCodemodeExtension(options: CodemodeExtensionOptions = {}):
+ 				getInlineBudget: () => options.inlineBudget ?? readInlineBudget(pi),
+ 			}),
+ 			defaultActive: false,
++		};
++		pi.registerTool({
++			...definition,
++			execute: async (...args) => {
++				if (closing) throw new Error("Code-mode session is shutting down");
++				if (options.executionLimits && active) throw new Error("Another code-mode script is already running");
++				const controller = new AbortController();
++				args[2] = args[2] ? AbortSignal.any([args[2], controller.signal]) : controller.signal;
++				const done = definition.execute(...args);
++				const execution = { controller, done };
++				active = execution;
++				try {
++					return await done;
++				} finally {
++					if (active === execution) active = undefined;
++				}
++			},
+ 		});
+ 	};
+ }
+diff --git a/packages/coding-agent/src/extensions/codemode/tool.ts b/packages/coding-agent/src/extensions/codemode/tool.ts
+index bf239ff..304c153 100644
+--- a/packages/coding-agent/src/extensions/codemode/tool.ts
++++ b/packages/coding-agent/src/extensions/codemode/tool.ts
+@@ -63,7 +63,17 @@ export type CodemodeModelRuntime = Pick<
+ 	"getModelsOfType" | "getAvailableOfType" | "getModelOfType" | "classify" | "generateImages"
+ >;
+ 
++export interface CodemodeExecutionLimits {
++	timeoutMs: number;
++	maxSourceBytes: number;
++	maxCalls: number;
++	maxConcurrentCalls: number;
++	maxOutputBytes: number;
++	inlineOnly: boolean;
++}
++
+ export interface CodemodeToolOptions {
++	executionLimits?: CodemodeExecutionLimits;
+ 	/** Namespace of a tool, for `searchTools()` ranking and its `namespace` filter. */
+ 	getToolNamespace?: (toolName: string) => ToolNamespace | undefined;
+ 	/**
+@@ -117,6 +127,8 @@ export interface CodemodeNestedCall {
+ }
+ 
+ export interface CodemodeToolDetails {
++	/** Trusted runtime outcome; never derived from script-returned data. */
++	failureKind?: "timeout" | "aborted" | "script" | "sandbox";
+ 	calls: CodemodeNestedCall[];
+ 	/** Temp file with the full text output, when the output was truncated. */
+ 	fullOutputPath?: string;
+diff --git a/packages/coding-agent/src/extensions/mcp/index.ts b/packages/coding-agent/src/extensions/mcp/index.ts
+index b2b8cb7..5dcd000 100644
+--- a/packages/coding-agent/src/extensions/mcp/index.ts
++++ b/packages/coding-agent/src/extensions/mcp/index.ts
+@@ -27,6 +27,7 @@
+  */
+ 
+ import { join, resolve } from "node:path";
++import type { Tool as McpTool } from "@earendil-works/pi-mcp";
+ import type { SelectItem } from "@earendil-works/pi-tui";
+ import type { TSchema } from "typebox";
+ import { getAgentDir } from "../../config.ts";
+@@ -61,12 +62,33 @@ import {
+ import { loadMcpRuntime } from "./runtime.lazy.ts";
+ import type * as McpRuntime from "./runtime.ts";
+ import type { McpServerConnection, McpServerLog, McpTransportFactory } from "./runtime.ts";
+-import { createMcpToolDefinition, createMcpToolName, createMcpToolRenderers, type McpToolDetails } from "./tools.ts";
++import { createMcpToolDefinition, createMcpToolName, createMcpToolRenderers } from "./tools.ts";
+ import { type McpMenu, type McpUi, showMcpManager } from "./ui.ts";
+ 
+ export type { McpTransportFactory } from "./runtime.ts";
+ 
+ export interface McpExtensionOptions {
++	/** Restrict this integration to tools, including its protocol capabilities. */
++	toolsOnly?: boolean;
++	/** Disable automatic OAuth and provider-token authentication. */
++	authentication?: boolean;
++	/** Disable registration of the /mcp management command. */
++	management?: boolean;
++	/** Disable raw server log persistence. */
++	serverLogging?: boolean;
++	/** Ignore servers registered by other extensions. */
++	allowRegisteredServers?: boolean;
++	/** Keep tool results inline without writing host temporary files. */
++	resultMode?: "inline";
++	/** Adapt an entire catalog before any definition becomes visible. Throws reject the catalog. */
++	adaptTools?: (
++		entry: McpServerEntry,
++		catalog: readonly { tool: McpTool; definition: ToolDefinition<TSchema, any> }[],
++		connection: McpServerConnection,
++	) => readonly ToolDefinition<TSchema, any>[];
++	/** Observes connection transitions, including catalog withdrawal before reconnect. */
++	onServerState?: (entry: McpServerEntry, connection: McpServerConnection) => void;
++
+ 	/** Defaults to reading `mcp.json` from the agent directory and the trusted project. */
+ 	loadConfig?: (ctx: ExtensionContext) => LoadedMcpConfig;
+ 	/** Defaults to stdio and streamable HTTP transports built from the server config. */
+@@ -324,6 +346,7 @@ export function createMcpExtension(options: McpExtensionOptions = {}): Extension
+ 
+ 		/** Servers extensions registered, except names `mcp.json` defines, which take precedence. */
+ 		const registeredServers = (): { servers: McpServer[]; overridden: string[] } => {
++			if (options.allowRegisteredServers === false) return { servers: [], overridden: [] };
+ 			const registered: McpServer[] = [];
+ 			const overriddenNames: string[] = [];
+ 			for (const { name, config, extensionPath } of pi.getMcpServers()) {
+@@ -357,7 +380,7 @@ export function createMcpExtension(options: McpExtensionOptions = {}): Extension
+ 		/** Tool names currently offered by each server. */
+ 		const serverTools = new Map<string, Set<string>>();
+ 		/** Last definition registered under each tool name, to re-register withdrawn tools as hidden. */
+-		const definitions = new Map<string, ToolDefinition<TSchema, McpToolDetails>>();
++		const definitions = new Map<string, ToolDefinition<TSchema, any>>();
+ 
+ 		// A resumed session renders calls to MCP tools before their server connected, if it ever does.
+ 		pi.registerToolRenderer((toolName, next) => {
+@@ -394,6 +417,7 @@ export function createMcpExtension(options: McpExtensionOptions = {}): Extension
+ 				current.add(name);
+ 				return name;
+ 			};
++			const catalog: { tool: McpTool; definition: ToolDefinition<TSchema, any> }[] = [];
+ 			for (const tool of connection.tools) {
+ 				const definition = createMcpToolDefinition({
+ 					server,
+@@ -404,7 +428,15 @@ export function createMcpExtension(options: McpExtensionOptions = {}): Extension
+ 					timeoutMs: connection.timeoutMs,
+ 					getClient: async () => connection,
+ 					readableResources: () => resourceServers().includes(connection),
++					inlineOnly: options.resultMode === "inline",
+ 				});
++				catalog.push({ tool, definition });
++			}
++			const adapted =
++				options.adaptTools?.(entry, catalog, connection) ?? catalog.map(({ definition }) => definition);
++			current.clear();
++			for (const definition of adapted) {
++				current.add(definition.name);
+ 				definitions.set(definition.name, definition);
+ 				pi.registerTool(definition);
+ 			}
+@@ -443,6 +475,7 @@ export function createMcpExtension(options: McpExtensionOptions = {}): Extension
+ 		 * one of them is direct, and so on. They are hidden when no server has resources.
+ 		 */
+ 		const syncResourceTools = () => {
++			if (options.toolsOnly) return;
+ 			const exposures = new Set(serversWithResources().map((server) => exposureOf(server.entry)));
+ 			const exposure = (["direct", "codemode", "deferred"] as const).find((candidate) => exposures.has(candidate));
+ 			const next = exposure ?? "hidden";
+@@ -508,6 +541,11 @@ export function createMcpExtension(options: McpExtensionOptions = {}): Extension
+ 			return url && credentials ? JSON.stringify(credentials.tokens(connection.name, url) ?? null) : "null";
+ 		};
+ 		const onConnectionChange = (connection: McpServerConnection) => {
++			options.onServerState?.(connection.entry, connection);
++			if (connection.state !== "connected" && options.adaptTools) {
++				options.adaptTools(connection.entry, [], connection);
++				hideTools(connection.entry.name);
++			}
+ 			if (connection.state !== "needs-auth") tokensAtSignIn.delete(connection);
+ 			else if (!tokensAtSignIn.has(connection)) tokensAtSignIn.set(connection, storedTokens(connection));
+ 			emitChange();
+@@ -528,9 +566,14 @@ export function createMcpExtension(options: McpExtensionOptions = {}): Extension
+ 				entry: server.entry,
+ 				cwd: sessionCwd,
+ 				createTransport: options.createTransport ?? runtime.createDefaultTransport,
+-				credentials: getCredentials(runtime),
+-				providerToken: async (provider) => modelRegistry?.getApiKeyForProvider(provider),
+-				log: getServerLog(runtime),
++				credentials: options.authentication === false ? undefined : getCredentials(runtime),
++				authentication: options.authentication,
++				toolsOnly: options.toolsOnly,
++				providerToken:
++					options.authentication === false
++						? undefined
++						: async (provider) => modelRegistry?.getApiKeyForProvider(provider),
++				log: options.serverLogging === false ? undefined : getServerLog(runtime),
+ 				onTools: registerTools,
+ 				onChange: onConnectionChange,
+ 			});
+@@ -584,11 +627,13 @@ export function createMcpExtension(options: McpExtensionOptions = {}): Extension
+ 			for (const server of only ?? servers) {
+ 				const state = server.connection?.state;
+ 				if (state === "needs-auth" || state === "failed")
+-					lines.push(`${server.entry.name}: ${describeState(server)}`);
++					lines.push(
++						`${server.entry.name}: ${options.management === false ? "unavailable" : describeState(server)}`,
++					);
+ 			}
+ 			if (lines.length === 0) return;
+ 			ctx.ui.notify(
+-				`MCP servers need attention:\n${lines.map((line) => `  ${line}`).join("\n")}\nRun /mcp to fix.`,
++				`MCP servers need attention:\n${lines.map((line) => `  ${line}`).join("\n")}${options.management === false ? "" : "\nRun /mcp to fix."}`,
+ 				"warning",
+ 			);
+ 		};
+@@ -1029,7 +1074,12 @@ export function createMcpExtension(options: McpExtensionOptions = {}): Extension
+ 				.catch((error: unknown) => {
+ 					// The session may have been disposed meanwhile, which makes ctx stale.
+ 					try {
+-						ctx.ui.notify(`MCP failed to load: ${errorMessage(error)}`, "error");
++						ctx.ui.notify(
++							options.management === false
++								? "MCP integration unavailable"
++								: `MCP failed to load: ${errorMessage(error)}`,
++							"error",
++						);
+ 					} catch {}
+ 				});
+ 		});
+@@ -1060,6 +1110,21 @@ export function createMcpExtension(options: McpExtensionOptions = {}): Extension
+ 		// Every prompt lists the servers in the `mcp_servers` section as they are when it starts. Pi
+ 		// appends the section to the conversation when it changed, for example after a server connected.
+ 		pi.on("before_agent_start", async (event, ctx) => {
++			if (options.toolsOnly) {
++				for (const server of servers) {
++					if (
++						isEnabled(server) &&
++						server.connection &&
++						["failed", "disconnected"].includes(server.connection.state)
++					) {
++						server.ready = server.connection.getClient().then(
++							() => undefined,
++							() => undefined,
++						);
++						waitedForStartup = false;
++					}
++				}
++			}
+ 			await waitForDirectServers(ctx);
+ 			const { sections } = event.systemPromptOptions;
+ 			const section = renderServersSection(servers);
+@@ -1095,7 +1160,7 @@ export function createMcpExtension(options: McpExtensionOptions = {}): Extension
+ 
+ 		// Servers registered or unregistered during the session connect or disconnect right away.
+ 		pi.on("mcp_servers_change", async (_event, ctx) => {
+-			if (!sessionActive) return;
++			if (!sessionActive || options.allowRegisteredServers === false) return;
+ 			const current = generation;
+ 			const registered = registeredServers();
+ 			overridden = registered.overridden;
+@@ -1122,7 +1187,12 @@ export function createMcpExtension(options: McpExtensionOptions = {}): Extension
+ 					return;
+ 				}
+ 			} catch (error) {
+-				ctx.ui.notify(`MCP failed to load: ${errorMessage(error)}`, "error");
++				ctx.ui.notify(
++					options.management === false
++						? "MCP integration unavailable"
++						: `MCP failed to load: ${errorMessage(error)}`,
++					"error",
++				);
+ 				return;
+ 			}
+ 			if (current !== generation) return;
+@@ -1138,6 +1208,7 @@ export function createMcpExtension(options: McpExtensionOptions = {}): Extension
+ 			await Promise.all(closing.map((connection) => connection.close()));
+ 		});
+ 
++		if (options.management === false) return;
+ 		pi.registerCommand("mcp", {
+ 			description: "Manage MCP servers: sign in, reconnect, enable or disable, and change exposure",
+ 			getArgumentCompletions: (prefix) => {
+diff --git a/packages/coding-agent/src/extensions/mcp/runtime.ts b/packages/coding-agent/src/extensions/mcp/runtime.ts
+index 6debc6f..73ede58 100644
+--- a/packages/coding-agent/src/extensions/mcp/runtime.ts
++++ b/packages/coding-agent/src/extensions/mcp/runtime.ts
+@@ -171,6 +171,11 @@ export class McpServerConnection implements McpToolCaller, McpResourceServer {
+ 	private client: McpClient | undefined;
+ 	private opening: Promise<McpClient> | undefined;
+ 	private closed = false;
++	private readonly toolsOnly: boolean;
++	private readonly authentication: boolean;
++	private connectingClient: McpClient | undefined;
++	private refreshing = false;
++	private pendingRefresh: McpClient | undefined;
+ 	/** Stderr of the last stdio server that failed to connect. */
+ 	private stderrTail: string | undefined;
+ 	private readonly cwd: string;
+@@ -184,7 +189,9 @@ export class McpServerConnection implements McpToolCaller, McpResourceServer {
+ 		entry: McpServerEntry;
+ 		cwd: string;
+ 		createTransport: McpTransportFactory;
+-		credentials: McpOAuthCredentialStore;
++		credentials?: McpOAuthCredentialStore;
++		toolsOnly?: boolean;
++		authentication?: boolean;
+ 		/** The current token of a pi provider, for servers with `auth.provider`. */
+ 		providerToken?: (provider: string) => Promise<string | undefined>;
+ 		onTools: (connection: McpServerConnection) => void;
+@@ -193,6 +200,8 @@ export class McpServerConnection implements McpToolCaller, McpResourceServer {
+ 		/** Receives the server's log messages (`notifications/message`). */
+ 		log?: McpServerLog;
+ 	}) {
++		this.toolsOnly = options.toolsOnly === true;
++		this.authentication = options.authentication !== false;
+ 		this.entry = options.entry;
+ 		this.cwd = options.cwd;
+ 		this.createTransport = options.createTransport;
+@@ -200,11 +209,11 @@ export class McpServerConnection implements McpToolCaller, McpResourceServer {
+ 		this.onChange = options.onChange;
+ 		this.log = options.log;
+ 		const url = this.oauthUrl;
+-		const provider = "url" in this.entry.config ? this.entry.config.auth?.provider : undefined;
++		const provider = this.authentication && "url" in this.entry.config ? this.entry.config.auth?.provider : undefined;
+ 		this.authProvider = url
+ 			? createMcpAuthProvider({
+ 					serverUrl: url,
+-					store: options.credentials.forServer(this.entry.name, url),
++					store: options.credentials!.forServer(this.entry.name, url),
+ 					settings: () => this.oauthSettings(),
+ 					onChallenge: (challenge) => {
+ 						this.challenge = challenge;
+@@ -226,7 +235,9 @@ export class McpServerConnection implements McpToolCaller, McpResourceServer {
+ 
+ 	/** Server URL when the server authenticates with OAuth. */
+ 	get oauthUrl(): string | undefined {
+-		return usesOAuth(this.entry) && "url" in this.entry.config ? this.entry.config.url : undefined;
++		return this.authentication && usesOAuth(this.entry) && "url" in this.entry.config
++			? this.entry.config.url
++			: undefined;
+ 	}
+ 
+ 	oauthSettings(): McpOAuthSettings {
+@@ -256,8 +267,20 @@ export class McpServerConnection implements McpToolCaller, McpResourceServer {
+ 		return this.opening;
+ 	}
+ 
+-	callTool(name: string, args: Record<string, unknown>, options: McpRequestOptions): Promise<CallToolResult> {
+-		return this.withClient((client) => client.callTool(name, args, options));
++	async callTool(name: string, args: Record<string, unknown>, options: McpRequestOptions): Promise<CallToolResult> {
++		if (!this.toolsOnly) return this.withClient((client) => client.callTool(name, args, options));
++		// Managed adapters prepare/reconnect before approval. Never silently replace that catalog
++		// or replay a possibly mutating request after the permission decision.
++		const client = this.client;
++		if (!client || client.connectionState !== "connected" || this.state !== "connected") {
++			throw new Error("MCP server is unavailable; retry after reconnection");
++		}
++		try {
++			return await client.callTool(name, args, options);
++		} catch (error) {
++			if (error instanceof McpSessionExpiredError) await this.dropClient(client);
++			throw error;
++		}
+ 	}
+ 
+ 	readResource(uri: string, options: McpRequestOptions): Promise<ReadResourceResult> {
+@@ -346,14 +369,20 @@ export class McpServerConnection implements McpToolCaller, McpResourceServer {
+ 	}
+ 
+ 	private async dropClient(client: McpClient): Promise<void> {
+-		if (this.client === client) this.client = undefined;
++		if (this.client === client) {
++			this.client = undefined;
++			if (!this.closed) {
++				this.state = "disconnected";
++				this.changed();
++			}
++		}
+ 		await client.close().catch(() => undefined);
+ 	}
+ 
+ 	private async open(): Promise<McpClient> {
+ 		this.state = "connecting";
+ 		this.changed();
+-		const retries = "url" in this.entry.config ? CONNECT_RETRY_DELAYS_MS : [];
++		const retries = !this.toolsOnly && "url" in this.entry.config ? CONNECT_RETRY_DELAYS_MS : [];
+ 		for (let attempt = 0; ; attempt++) {
+ 			this.stderrTail = undefined;
+ 			try {
+@@ -373,9 +402,17 @@ export class McpServerConnection implements McpToolCaller, McpResourceServer {
+ 		const client = new McpClient({
+ 			name: "pi",
+ 			version: VERSION,
+-			requestTimeoutMs: this.timeoutMs,
+-			roots: [{ uri: pathToFileURL(this.cwd).href, name: basename(this.cwd) }],
++			requestTimeoutMs: this.toolsOnly ? 30_000 : this.timeoutMs,
++			roots: this.toolsOnly ? undefined : [{ uri: pathToFileURL(this.cwd).href, name: basename(this.cwd) }],
++			listLimits: this.toolsOnly ? { pages: 64, items: 1024, bytes: 8 * 1024 * 1024 } : undefined,
++			resetTimeoutOnProgress: !this.toolsOnly,
+ 		});
++		this.connectingClient = client;
++		const setupTimer = this.toolsOnly
++			? setTimeout(() => {
++					void client.close();
++				}, 30_000)
++			: undefined;
+ 		const log = this.log;
+ 		if (log) client.onNotification("notifications/message", (params) => log.write(this.entry.name, params));
+ 		let transport: McpTransport | undefined;
+@@ -385,13 +422,14 @@ export class McpServerConnection implements McpToolCaller, McpResourceServer {
+ 			client.onNotification("notifications/tools/list_changed", () => {
+ 				void this.refreshTools(client);
+ 			});
+-			client.onNotification("notifications/resources/list_changed", () => {
+-				void this.refreshResources(client);
+-			});
++			if (!this.toolsOnly)
++				client.onNotification("notifications/resources/list_changed", () => {
++					void this.refreshResources(client);
++				});
+ 			const stdio = transport instanceof StdioTransport ? transport : undefined;
+ 			client.onClose(() => this.handleClientClose(client, stdio));
+ 			// Servers without the tools capability (prompts or resources only) do not answer tools/list.
+-			const hasResources = client.serverCapabilities?.resources !== undefined;
++			const hasResources = !this.toolsOnly && client.serverCapabilities?.resources !== undefined;
+ 			const [tools, resources] = await Promise.all([
+ 				client.serverCapabilities?.tools ? client.listTools() : [],
+ 				hasResources ? fetchResources(client) : { resources: [], resourceTemplates: [] },
+@@ -414,7 +452,11 @@ export class McpServerConnection implements McpToolCaller, McpResourceServer {
+ 			if (transport instanceof StdioTransport) {
+ 				this.stderrTail = transport.stderr.trim().slice(-STDERR_TAIL_CHARS) || undefined;
+ 			}
++			if (this.client === client) this.client = undefined;
+ 			throw error;
++		} finally {
++			clearTimeout(setupTimer);
++			if (this.connectingClient === client) this.connectingClient = undefined;
+ 		}
+ 	}
+ 
+@@ -440,13 +482,27 @@ export class McpServerConnection implements McpToolCaller, McpResourceServer {
+ 	}
+ 
+ 	private async refreshTools(client: McpClient): Promise<void> {
++		if (this.refreshing) {
++			this.pendingRefresh = client;
++			return;
++		}
++		this.refreshing = true;
++		const controller = new AbortController();
++		const timer = this.toolsOnly ? setTimeout(() => controller.abort(), 30_000) : undefined;
+ 		try {
+-			const tools = await client.listTools();
++			const tools = await client.listTools({ signal: controller.signal });
+ 			if (this.client !== client || this.closed) return;
+ 			this.tools = tools;
+ 			this.onTools(this);
+ 		} catch (error) {
+ 			this.error = `Failed to refresh tools: ${errorMessage(error)}`;
++			if (this.toolsOnly) await this.dropClient(client);
++		} finally {
++			clearTimeout(timer);
++			this.refreshing = false;
++			const pending = this.pendingRefresh;
++			this.pendingRefresh = undefined;
++			if (pending === this.client && pending && !this.closed) void this.refreshTools(pending);
+ 		}
+ 		this.changed();
+ 	}
+@@ -466,7 +522,8 @@ export class McpServerConnection implements McpToolCaller, McpResourceServer {
+ 		this.changed();
+ 		const client = this.client;
+ 		this.client = undefined;
+-		await client?.close().catch(() => undefined);
++		await Promise.all([client, this.connectingClient].map((pending) => pending?.close().catch(() => undefined)));
++		await this.opening?.catch(() => undefined);
+ 		// A refresh the server already answered may have rotated the refresh token; exiting before the
+ 		// new tokens are saved would lose the grant.
+ 		await this.authProvider?.settled();
+diff --git a/packages/coding-agent/src/extensions/mcp/tools.ts b/packages/coding-agent/src/extensions/mcp/tools.ts
+index 4f38d91..4b15f9b 100644
+--- a/packages/coding-agent/src/extensions/mcp/tools.ts
++++ b/packages/coding-agent/src/extensions/mcp/tools.ts
+@@ -127,7 +127,7 @@ export function createMcpResultSchema(structuredContentSchema: Record<string, un
+  */
+ export async function limitMcpContent(
+ 	content: (TextContent | ImageContent)[],
+-	saveOutput: McpOutputSaver = saveToTempFile,
++	saveOutput: McpOutputSaver | null = saveToTempFile,
+ ): Promise<{ content: (TextContent | ImageContent)[]; fullOutputPath?: string }> {
+ 	const combined = textOf(content);
+ 	const truncation = truncateMiddle(combined, MCP_OUTPUT_MAX_BYTES);
+@@ -135,6 +135,7 @@ export async function limitMcpContent(
+ 	let fullOutputPath: string | undefined;
+ 	let where: string;
+ 	try {
++		if (!saveOutput) throw new Error("Output is inline-only; narrow the request to retrieve omitted content");
+ 		fullOutputPath = await saveOutput(combined, ".txt");
+ 		where = `[Full output: ${fullOutputPath} (read it with offset/limit)]`;
+ 	} catch (error) {
+@@ -149,6 +150,7 @@ export async function limitMcpContent(
+ }
+ 
+ export interface ConvertMcpResultOptions {
++	inlineOnly?: boolean;
+ 	/** Saves truncated text and binary resources. Default: a temp file. */
+ 	saveOutput?: McpOutputSaver;
+ 	/** Whether the server's resources can be read with `read_mcp_resource`, which resource links then name. */
+@@ -190,6 +192,8 @@ async function blockToContent(
+ 		const data = Buffer.from(blob, "base64");
+ 		if (isTextMimeType(mimeType)) return [{ type: "text", text: data.toString("utf8") }];
+ 		const kind = `${mimeType ?? "unknown type"}, ${formatSize(data.length)}`;
++		if (options.inlineOnly)
++			return [{ type: "text", text: `[Binary resource ${uri} (${kind}); available in structured tool result]` }];
+ 		try {
+ 			const path = await (options.saveOutput ?? saveToTempFile)(data, extensionOf(uri));
+ 			return [{ type: "text", text: `[Binary resource ${uri} (${kind}) saved to ${path}]` }];
+@@ -223,7 +227,7 @@ export async function convertMcpResult(
+ 	if (result.isError && textOf(converted) === "") {
+ 		converted.push({ type: "text", text: `MCP tool ${server}/${tool} returned an error` });
+ 	}
+-	const { content, fullOutputPath } = await limitMcpContent(converted, options.saveOutput);
++	const { content, fullOutputPath } = await limitMcpContent(converted, options.inlineOnly ? null : options.saveOutput);
+ 	const { _meta: _ignored, ...scriptResult } = result;
+ 	return {
+ 		content,
+@@ -264,6 +268,7 @@ export function createMcpToolDefinition(options: {
+ 	exposure: McpExposure;
+ 	namespace: ToolNamespace;
+ 	timeoutMs: number;
++	inlineOnly?: boolean;
+ 	getClient: () => Promise<McpToolCaller>;
+ 	/** Whether `read_mcp_resource` can read the server's resources. */
+ 	readableResources?: () => boolean;
+@@ -293,7 +298,10 @@ export function createMcpToolDefinition(options: {
+ 					onUpdate?.({ content: [{ type: "text", text }], details: { server, tool: tool.name } });
+ 				},
+ 			});
+-			return convertMcpResult(server, tool.name, result, { readableResources: options.readableResources?.() });
++			return convertMcpResult(server, tool.name, result, {
++				readableResources: options.readableResources?.(),
++				inlineOnly: options.inlineOnly,
++			});
+ 		},
+ 	};
+ }
+diff --git a/packages/coding-agent/test/managed-mcp-codemode.test.ts b/packages/coding-agent/test/managed-mcp-codemode.test.ts
+new file mode 100644
+index 0000000..221d162
+--- /dev/null
++++ b/packages/coding-agent/test/managed-mcp-codemode.test.ts
+@@ -0,0 +1,361 @@
++import { afterEach, describe, expect, it, vi } from "vitest";
++import { LATEST_PROTOCOL_VERSION, McpSessionExpiredError, type Tool } from "@earendil-works/pi-mcp";
++import { createInMemoryTransportPair } from "@earendil-works/pi-mcp/testing";
++import { McpServerConnection } from "../src/extensions/mcp/runtime.ts";
++import { createMcpExtension } from "../src/extensions/mcp/index.ts";
++import { convertMcpResult } from "../src/extensions/mcp/tools.ts";
++import type { ExtensionAPI, ExtensionContext, ToolDefinition } from "../src/core/extensions/types.ts";
++
++const cleanup: (() => Promise<unknown>)[] = [];
++afterEach(async () => {
++	await Promise.all(cleanup.splice(0).map((close) => close()));
++});
++const entry = {
++	name: "docs",
++	config: { url: "https://unused.invalid/mcp?user=alice", exposure: "direct" as const },
++	source: "admin",
++};
++
++function server(tools: Tool[] = [{ name: "echo", inputSchema: { type: "object" } }]) {
++	const pair = createInMemoryTransportPair();
++	const methods: string[] = [];
++	let initialize: unknown;
++	pair.server.onMessage((message) => {
++		if (!("method" in message) || !("id" in message)) return;
++		methods.push(message.method);
++		if (message.method === "initialize") initialize = message.params;
++		const result =
++			message.method === "initialize"
++				? {
++						protocolVersion: LATEST_PROTOCOL_VERSION,
++						serverInfo: { name: "fixture", version: "1" },
++						capabilities: { tools: {}, resources: {}, prompts: {} },
++					}
++				: message.method === "tools/list"
++					? { tools }
++					: { content: [{ type: "text", text: "ok" }] };
++		queueMicrotask(() => void pair.server.send({ jsonrpc: "2.0", id: message.id, result }));
++	});
++	void pair.server.start();
++	return { ...pair, methods, initialize: () => initialize };
++}
++
++describe("managed MCP integration seams", () => {
++	it("advertises no roots or unrelated capabilities and performs tools-only setup without OAuth", async () => {
++		const fixture = server();
++		const transport = vi.fn((_entry, _cwd, auth) => {
++			expect(auth).toBeUndefined();
++			return fixture.client;
++		});
++		const connection = new McpServerConnection({
++			entry,
++			cwd: process.cwd(),
++			createTransport: transport,
++			authentication: false,
++			toolsOnly: true,
++			onTools: () => {},
++		});
++		cleanup.push(() => connection.close());
++		await connection.getClient();
++		expect(connection.oauthUrl).toBeUndefined();
++		expect(fixture.methods).toEqual(["initialize", "tools/list"]);
++		expect(fixture.initialize()).toMatchObject({ capabilities: {} });
++		expect(connection.hasResources).toBe(false);
++	});
++
++	it("coalesces refresh notifications without losing a change received during an in-flight listing", async () => {
++		const pair = createInMemoryTransportPair();
++		let lists = 0;
++		let delayed: (() => Promise<void>) | undefined;
++		pair.server.onMessage((message) => {
++			if (!("method" in message) || !("id" in message)) return;
++			if (message.method === "initialize") {
++				void pair.server.send({
++					jsonrpc: "2.0",
++					id: message.id,
++					result: {
++						protocolVersion: LATEST_PROTOCOL_VERSION,
++						serverInfo: { name: "fixture", version: "1" },
++						capabilities: { tools: {} },
++					},
++				});
++			} else {
++				const number = ++lists;
++				const send = () =>
++					pair.server.send({
++						jsonrpc: "2.0",
++						id: message.id,
++						result: { tools: [{ name: `tool${number}`, inputSchema: { type: "object" } }] },
++					});
++				if (number === 2) delayed = send;
++				else void send();
++			}
++		});
++		await pair.server.start();
++		const catalogs: string[][] = [];
++		const connection = new McpServerConnection({
++			entry,
++			cwd: process.cwd(),
++			createTransport: () => pair.client,
++			authentication: false,
++			toolsOnly: true,
++			onTools: (connection) => catalogs.push(connection.tools.map((tool) => tool.name)),
++		});
++		cleanup.push(() => connection.close());
++		await connection.getClient();
++		await pair.server.send({ jsonrpc: "2.0", method: "notifications/tools/list_changed" });
++		await vi.waitFor(() => expect(delayed).toBeDefined());
++		await pair.server.send({ jsonrpc: "2.0", method: "notifications/tools/list_changed" });
++		await delayed!();
++		await vi.waitFor(() => expect(catalogs.at(-1)).toEqual(["tool3"]));
++		expect(lists).toBe(3);
++	});
++
++	it("never replays an expired tools/call or reconnects after approval", async () => {
++		const fixture = server();
++		let dispatched = 0;
++		const send = fixture.client.send.bind(fixture.client);
++		fixture.client.send = async (message) => {
++			if ("method" in message && message.method === "tools/call") {
++				dispatched++;
++				throw new McpSessionExpiredError("gone");
++			}
++			return send(message);
++		};
++		const transport = vi.fn(() => fixture.client);
++		const connection = new McpServerConnection({
++			entry,
++			cwd: process.cwd(),
++			createTransport: transport,
++			authentication: false,
++			toolsOnly: true,
++			onTools: () => {},
++		});
++		cleanup.push(() => connection.close());
++		await connection.getClient();
++		await expect(connection.callTool("echo", {}, {})).rejects.toThrow();
++		await expect(connection.callTool("echo", {}, {})).rejects.toThrow("unavailable");
++		expect(dispatched).toBe(1);
++		expect(transport).toHaveBeenCalledTimes(1);
++	});
++
++	it("rejects a catalog before any tools are published and ignores extension servers and management", async () => {
++		const fixture = server([
++			{ name: "good", inputSchema: { type: "object" } },
++			{ name: "bad", inputSchema: { type: "object" } },
++		]);
++		const handlers = new Map<string, (event: unknown, ctx: ExtensionContext) => unknown>();
++		const registerTool = vi.fn();
++		const getMcpServers = vi.fn();
++		const registerCommand = vi.fn();
++		const nonemptyCatalogs: string[][] = [];
++		const pi = {
++			on: (name: string, handler: (event: unknown, ctx: ExtensionContext) => unknown) => handlers.set(name, handler),
++			registerTool,
++			registerCommand,
++			getMcpServers,
++			registerToolRenderer: () => {},
++			getAllTools: () => [],
++			getActiveTools: () => [],
++			setActiveTools: () => {},
++		} as unknown as ExtensionAPI;
++		await createMcpExtension({
++			toolsOnly: true,
++			authentication: false,
++			management: false,
++			serverLogging: false,
++			allowRegisteredServers: false,
++			loadConfig: () => ({ servers: [entry], errors: [] }),
++			createTransport: () => fixture.client,
++			adaptTools: (_entry, catalog) => {
++				if (catalog.length) {
++					nonemptyCatalogs.push(catalog.map(({ tool }) => tool.name));
++					throw new Error("reject second tool");
++				}
++				return [];
++			},
++		})(pi);
++		const notify = vi.fn();
++		const ctx = { cwd: process.cwd(), ui: { notify } } as unknown as ExtensionContext;
++		await handlers.get("session_start")?.({}, ctx);
++		await vi.waitFor(() => expect(nonemptyCatalogs).toEqual([["good", "bad"]]));
++		expect(registerTool).not.toHaveBeenCalled();
++		expect(registerCommand).not.toHaveBeenCalled();
++		expect(getMcpServers).not.toHaveBeenCalled();
++		await handlers.get("session_shutdown")?.({}, ctx);
++	});
++
++	it("publishes only adapted definitions with raw provenance", async () => {
++		const fixture = server();
++		const handlers = new Map<string, (event: unknown, ctx: ExtensionContext) => unknown>();
++		const definitions: ToolDefinition[] = [];
++		const pi = {
++			on: (name: string, handler: (event: unknown, ctx: ExtensionContext) => unknown) => handlers.set(name, handler),
++			registerTool: (tool: ToolDefinition) => definitions.push(tool),
++			registerToolRenderer: () => {},
++			getAllTools: () => [],
++			getActiveTools: () => [],
++			setActiveTools: () => {},
++		} as unknown as ExtensionAPI;
++		await createMcpExtension({
++			toolsOnly: true,
++			authentication: false,
++			management: false,
++			serverLogging: false,
++			allowRegisteredServers: false,
++			loadConfig: () => ({ servers: [entry], errors: [] }),
++			createTransport: () => fixture.client,
++			adaptTools: (rawEntry, catalog) =>
++				catalog.map(({ tool, definition }) => {
++					expect(rawEntry.name).toBe("docs");
++					expect(tool.name).toBe("echo");
++					return {
++						...definition,
++						execute: async () => {
++							throw new Error("permission denied");
++						},
++					};
++				}),
++		})(pi);
++		const ctx = { cwd: process.cwd(), ui: { notify: () => {} } } as unknown as ExtensionContext;
++		await handlers.get("session_start")?.({}, ctx);
++		await vi.waitFor(() => expect(definitions).toHaveLength(1));
++		await expect(definitions[0].execute("id", {}, undefined, undefined, ctx as never)).rejects.toThrow(
++			"permission denied",
++		);
++		expect(fixture.methods).not.toContain("tools/call");
++		await handlers.get("session_shutdown")?.({}, ctx);
++	});
++
++	it("keeps large text and binary result handling inline without invoking a saver", async () => {
++		const saveOutput = vi.fn();
++		const result = await convertMcpResult(
++			"docs",
++			"result",
++			{
++				content: [
++					{ type: "text", text: "x".repeat(30000) },
++					{
++						type: "resource",
++						resource: { uri: "binary://x", mimeType: "application/octet-stream", blob: "AA==" },
++					},
++				],
++			},
++			{ inlineOnly: true, saveOutput },
++		);
++		expect(saveOutput).not.toHaveBeenCalled();
++		expect(result.details.fullOutputPath).toBeUndefined();
++		expect(JSON.stringify(result.content)).not.toContain("/tmp/");
++	});
++});
++
++describe("managed code-mode factory", () => {
++	it("bounds source and deadline and rejects execution after shutdown", async () => {
++		const { createCodemodeExtension } = await import("../src/extensions/codemode/index.ts");
++		let definition: ToolDefinition<any, any> | undefined;
++		const handlers = new Map<string, () => Promise<void>>();
++		const pi = {
++			registerTool: (tool: ToolDefinition<any, any>) => {
++				definition = tool;
++			},
++			on: (name: string, handler: () => Promise<void>) => handlers.set(name, handler),
++			getAllTools: () => [],
++			appendEntry: () => {},
++		} as unknown as ExtensionAPI;
++		await createCodemodeExtension({
++			mode: "on",
++			models: false,
++			inlineBudget: 3000,
++			executionLimits: {
++				timeoutMs: 100,
++				maxSourceBytes: 1024,
++				maxCalls: 256,
++				maxConcurrentCalls: 16,
++				maxOutputBytes: 16777216,
++				inlineOnly: true,
++			},
++		})(pi);
++		expect(definition).toBeDefined();
++		await expect(
++			definition!.execute("long", { code: " ".repeat(1025) }, undefined, undefined, undefined as never),
++		).rejects.toThrow("source exceeds");
++		const result = await definition!.execute(
++			"timeout",
++			{ code: '// @options: {"timeout_ms": 10000}\nwhile (true) {}' },
++			undefined,
++			undefined,
++			undefined as never,
++		);
++		expect(result).toMatchObject({ isError: true });
++		expect(JSON.stringify(result)).toContain("timed out");
++		await handlers.get("session_shutdown")?.();
++		await expect(
++			definition!.execute("closed", { code: "return 1" }, undefined, undefined, undefined as never),
++		).rejects.toThrow("shutting down");
++	});
++	it("allows one script and waits for nested policy-pipeline cancellation on session shutdown", async () => {
++		const { createCodemodeExtension } = await import("../src/extensions/codemode/index.ts");
++		let definition: ToolDefinition<any, any> | undefined;
++		const handlers = new Map<string, () => Promise<void>>();
++		const pi = {
++			registerTool: (tool: ToolDefinition<any, any>) => {
++				definition = tool;
++			},
++			on: (name: string, handler: () => Promise<void>) => handlers.set(name, handler),
++			getAllTools: () => [],
++			appendEntry: () => {},
++		} as unknown as ExtensionAPI;
++		await createCodemodeExtension({
++			mode: "on",
++			models: false,
++			inlineBudget: 3000,
++			executionLimits: {
++				timeoutMs: 5000,
++				maxSourceBytes: 1024,
++				maxCalls: 256,
++				maxConcurrentCalls: 16,
++				maxOutputBytes: 16777216,
++				inlineOnly: true,
++			},
++		})(pi);
++		let cleaned = false;
++		const executeTool = vi.fn(
++			(_name, _args, { signal }) =>
++				new Promise((resolve) => {
++					signal.addEventListener(
++						"abort",
++						() => {
++							setTimeout(() => {
++								cleaned = true;
++								resolve({
++									toolCall: { id: "nested" },
++									isError: true,
++									result: { content: [{ type: "text", text: "cancelled" }] },
++								});
++							}, 20);
++						},
++						{ once: true },
++					);
++				}),
++		);
++		const ctx = {
++			tools: [{ name: "echo", description: "Fixture", parameters: { type: "object" } }],
++			sessionManager: { getBranch: () => [] },
++			executeTool,
++		};
++		const pending = definition!.execute(
++			"first",
++			{ code: "await tools.echo({});" },
++			undefined,
++			undefined,
++			ctx as never,
++		);
++		await vi.waitFor(() => expect(executeTool).toHaveBeenCalledOnce());
++		await expect(
++			definition!.execute("second", { code: "return 1" }, undefined, undefined, ctx as never),
++		).rejects.toThrow("already running");
++		await handlers.get("session_shutdown")?.();
++		expect(cleaned).toBe(true);
++		expect(await pending).toMatchObject({ isError: true, details: { failureKind: "aborted" } });
++	});
++});
+diff --git a/packages/mcp/src/client.ts b/packages/mcp/src/client.ts
+index 6199ed6..1a33d32 100644
+--- a/packages/mcp/src/client.ts
++++ b/packages/mcp/src/client.ts
+@@ -45,6 +45,8 @@ type CloseListener = () => void;
+ type RequestHandler = (params: unknown, context: { signal: AbortSignal }) => unknown | Promise<unknown>;
+ 
+ export interface McpClientOptions extends Implementation {
++	listLimits?: { pages: number; items: number; bytes: number };
++	resetTimeoutOnProgress?: boolean;
+ 	capabilities?: ClientCapabilities;
+ 	protocolVersion?: SupportedProtocolVersion;
+ 	requestTimeoutMs?: number;
+@@ -361,8 +363,17 @@ export class McpClient {
+ 		const items: Record<string, unknown>[] = [];
+ 		const cursors = new Set<string>();
+ 		let cursor: string | undefined;
+-		for (let pageNumber = 0; pageNumber < MAX_LIST_PAGES; pageNumber++) {
++		const maxPages = this.options.listLimits?.pages ?? MAX_LIST_PAGES;
++		let bytes = 0;
++		for (let pageNumber = 0; pageNumber < maxPages; pageNumber++) {
+ 			const page = await this.listPage(method, key, isItem, cursor, options);
++			bytes += new TextEncoder().encode(JSON.stringify(page.items)).byteLength;
++			if (
++				this.options.listLimits &&
++				(items.length + page.items.length > this.options.listLimits.items || bytes > this.options.listLimits.bytes)
++			) {
++				throw new Error(`MCP ${method} exceeds configured catalog limits`);
++			}
+ 			items.push(...page.items);
+ 			if (page.nextCursor === undefined) return items;
+ 			if (cursors.has(page.nextCursor))
+@@ -370,7 +381,7 @@ export class McpClient {
+ 			cursors.add(page.nextCursor);
+ 			cursor = page.nextCursor;
+ 		}
+-		throw new Error(`MCP ${method} exceeded ${MAX_LIST_PAGES} pages`);
++		throw new Error(`MCP ${method} exceeded ${maxPages} pages`);
+ 	}
+ 
+ 	async callTool(
+@@ -533,7 +544,7 @@ export class McpClient {
+ 		const requestId = this.progressRequests.get(params.progressToken);
+ 		const entry = requestId === undefined ? undefined : this.pending.get(requestId);
+ 		if (requestId === undefined || !entry) return;
+-		this.armTimeout(requestId, entry);
++		if (this.options.resetTimeoutOnProgress !== false) this.armTimeout(requestId, entry);
+ 		try {
+ 			entry.onProgress?.(params as unknown as ProgressNotification);
+ 		} catch (error) {
+diff --git a/packages/mcp/src/transports/stdio.ts b/packages/mcp/src/transports/stdio.ts
+index 26479ac..cd62fb4 100644
+--- a/packages/mcp/src/transports/stdio.ts
++++ b/packages/mcp/src/transports/stdio.ts
+@@ -46,7 +46,7 @@ function installExitHook(): void {
+ 	process.once("exit", () => {
+ 		for (const pid of liveProcessGroups) {
+ 			try {
+-				process.kill(-pid, "SIGTERM");
++				process.kill(-pid, "SIGKILL");
+ 			} catch {}
+ 		}
+ 	});
+@@ -73,6 +73,7 @@ export class StdioTransport extends TransportEvents implements McpTransport {
+ 	private stderrBuffer = Buffer.alloc(0);
+ 	private started = false;
+ 	private closed = false;
++	private closing: Promise<void> | undefined;
+ 
+ 	constructor(options: StdioTransportOptions) {
+ 		super();
+@@ -105,7 +106,12 @@ export class StdioTransport extends TransportEvents implements McpTransport {
+ 		if (USE_PROCESS_GROUPS && pid !== undefined) {
+ 			installExitHook();
+ 			liveProcessGroups.add(pid);
+-			child.once("exit", () => liveProcessGroups.delete(pid));
++			child.once("exit", () => {
++				// A leader exiting does not mean its process group is gone. Reap descendants even
++				// when they closed their pipes or ignored SIGTERM, before releasing ownership.
++				killProcessTree(child, "SIGKILL");
++				liveProcessGroups.delete(pid);
++			});
+ 		}
+ 		child.stdout?.on("data", (chunk: Buffer | string) => this.handleStdout(chunk));
+ 		child.stdout?.on("error", (error) => this.emitError(error));
+@@ -149,7 +155,12 @@ export class StdioTransport extends TransportEvents implements McpTransport {
+ 		});
+ 	}
+ 
+-	async close(): Promise<void> {
++	close(): Promise<void> {
++		this.closing ??= this.closeOnce();
++		return this.closing;
++	}
++
++	private async closeOnce(): Promise<void> {
+ 		if (this.closed) return;
+ 		this.closed = true;
+ 		const child = this.child;
+@@ -158,6 +169,7 @@ export class StdioTransport extends TransportEvents implements McpTransport {
+ 			return;
+ 		}
+ 		if (child.exitCode !== null || child.signalCode !== null) {
++			killProcessTree(child, "SIGKILL");
+ 			child.stdin?.end();
+ 			return;
+ 		}
+diff --git a/packages/mcp/src/transports/streamable-http.ts b/packages/mcp/src/transports/streamable-http.ts
+index 8fa8f3a..f5b3d3a 100644
+--- a/packages/mcp/src/transports/streamable-http.ts
++++ b/packages/mcp/src/transports/streamable-http.ts
+@@ -241,7 +241,9 @@ export class StreamableHttpTransport extends TransportEvents implements McpTrans
+ 		}
+ 		const type = contentType(response);
+ 		if (type === "application/json") {
+-			const body: unknown = await response.json();
++			const body: unknown = JSON.parse(
++				await readBoundedBody(response, this.options.maxMessageBytes ?? DEFAULT_MAX_MESSAGE_BYTES),
++			);
+ 			for (const item of Array.isArray(body) ? body : [body]) this.emitMessage(parseJsonRpcMessage(item));
+ 			return;
+ 		}
+@@ -317,7 +319,7 @@ export class StreamableHttpTransport extends TransportEvents implements McpTrans
+ 
+ 	private async checkResponse(response: Response): Promise<void> {
+ 		if (response.ok) return;
+-		const body = (await response.text().catch(() => "")).slice(0, MAX_ERROR_BODY_BYTES);
++		const body = await readBoundedBody(response, MAX_ERROR_BODY_BYTES, true).catch(() => "");
+ 		if (response.status === 401) throw new McpAuthRequiredError(response, body);
+ 		if (response.status === 404 && this.sessionIdValue) throw new McpSessionExpiredError(body);
+ 		throw new McpHttpError(response.status, describeHttpFailure(response.status, body), body);
+@@ -498,3 +500,35 @@ export class StreamableHttpTransport extends TransportEvents implements McpTrans
+ 		});
+ 	}
+ }
++
++/** Bound allocation while reading JSON and error bodies, not only SSE events. */
++async function readBoundedBody(response: Response, limit: number, truncate = false): Promise<string> {
++	if (!response.body) return "";
++	const reader = response.body.getReader();
++	const chunks: Uint8Array[] = [];
++	let size = 0;
++	try {
++		for (;;) {
++			const { done, value } = await reader.read();
++			if (done) break;
++			if (size + value.byteLength > limit) {
++				await reader.cancel().catch(() => undefined);
++				if (!truncate) throw new Error(`MCP HTTP message exceeds ${limit} bytes`);
++				chunks.push(value.subarray(0, limit - size));
++				size = limit;
++				break;
++			}
++			chunks.push(value);
++			size += value.byteLength;
++		}
++	} finally {
++		reader.releaseLock();
++	}
++	const bytes = new Uint8Array(size);
++	let offset = 0;
++	for (const chunk of chunks) {
++		bytes.set(chunk, offset);
++		offset += chunk.byteLength;
++	}
++	return new TextDecoder().decode(bytes);
++}
+diff --git a/packages/mcp/test/managed-transport.test.ts b/packages/mcp/test/managed-transport.test.ts
+new file mode 100644
+index 0000000..4671499
+--- /dev/null
++++ b/packages/mcp/test/managed-transport.test.ts
+@@ -0,0 +1,176 @@
++import { afterEach, describe, expect, it, vi } from "vitest";
++import { mkdtemp, readFile, rm } from "node:fs/promises";
++import { tmpdir } from "node:os";
++import { join } from "node:path";
++import { StdioTransport } from "../src/transports/stdio.ts";
++import { McpClient } from "../src/client.ts";
++import { createInMemoryTransportPair } from "../src/testing/index.ts";
++import { StreamableHttpTransport } from "../src/transports/streamable-http.ts";
++import { closeServers, listen, readBody } from "./helpers.ts";
++afterEach(closeServers);
++
++describe("managed HTTP transport bounds and URL routing", () => {
++	it("preserves path and query parameters for POST, GET, and DELETE", async () => {
++		const seen: { method: string; url: string; rpc?: string }[] = [];
++		const origin = await listen(async (request, response) => {
++			const body = await readBody(request);
++			const message = body ? JSON.parse(body) : undefined;
++			seen.push({ method: request.method!, url: request.url!, ...(message ? { rpc: message.method } : {}) });
++			if (request.method === "GET") {
++				response.writeHead(405).end();
++				return;
++			}
++			if (request.method === "DELETE") {
++				response.writeHead(204).end();
++				return;
++			}
++			if (message.id === undefined) {
++				response.writeHead(202).end();
++				return;
++			}
++			response.writeHead(200, { "content-type": "application/json", "mcp-session-id": "fixture" });
++			response.end(JSON.stringify({ jsonrpc: "2.0", id: message.id, result: {} }));
++		});
++		const path = "/mcp/alice?user=alice%2Bteam&uid=1001";
++		const transport = new StreamableHttpTransport({ url: `${origin}${path}` });
++		try {
++			await transport.start();
++			await transport.send({ jsonrpc: "2.0", id: 1, method: "initialize", params: {} });
++			await transport.send({ jsonrpc: "2.0", method: "notifications/initialized" });
++			await transport.send({ jsonrpc: "2.0", id: 2, method: "tools/call", params: { name: "echo", arguments: {} } });
++			await vi.waitFor(() => expect(seen.some((item) => item.method === "GET")).toBe(true));
++		} finally {
++			await transport.close();
++		}
++		expect(new Set(seen.map((item) => item.url))).toEqual(new Set([path]));
++		expect(new Set(seen.map((item) => item.method))).toEqual(new Set(["POST", "GET", "DELETE"]));
++		expect(seen.some((item) => item.rpc === "tools/call")).toBe(true);
++	});
++
++	it("cancels an oversized streamed JSON body before allocating it all", async () => {
++		const cancel = vi.fn();
++		const transport = new StreamableHttpTransport({
++			url: "http://localhost/mcp",
++			maxMessageBytes: 64,
++			fetch: async () =>
++				new Response(
++					new ReadableStream({
++						start(controller) {
++							controller.enqueue(new Uint8Array(65));
++						},
++						cancel,
++					}),
++					{ headers: { "content-type": "application/json" } },
++				),
++		});
++		await transport.start();
++		await expect(transport.send({ jsonrpc: "2.0", id: 1, method: "initialize" })).rejects.toThrow("exceeds 64 bytes");
++		expect(cancel).toHaveBeenCalled();
++		await transport.close();
++	});
++
++	it("bounds and cancels error bodies without waiting for the stream to end", async () => {
++		const cancel = vi.fn();
++		const transport = new StreamableHttpTransport({
++			url: "http://localhost/mcp",
++			fetch: async () =>
++				new Response(
++					new ReadableStream({
++						start(controller) {
++							controller.enqueue(new Uint8Array(128 * 1024).fill(65));
++						},
++						cancel,
++					}),
++					{ status: 500 },
++				),
++		});
++		await transport.start();
++		await expect(transport.send({ jsonrpc: "2.0", id: 1, method: "initialize" })).rejects.toThrow();
++		expect(cancel).toHaveBeenCalled();
++		await transport.close();
++	});
++});
++
++describe("managed protocol lifecycle limits", () => {
++	it("limits catalog accumulation across pagination", async () => {
++		const pair = createInMemoryTransportPair();
++		let pages = 0;
++		pair.server.onMessage((message) => {
++			if (!("id" in message) || !("method" in message)) return;
++			const result =
++				message.method === "initialize"
++					? {
++							protocolVersion: "2025-11-25",
++							serverInfo: { name: "fixture", version: "1" },
++							capabilities: { tools: {} },
++						}
++					: { tools: [{ name: `tool${++pages}`, inputSchema: { type: "object" } }], nextCursor: String(pages) };
++			void pair.server.send({ jsonrpc: "2.0", id: message.id, result });
++		});
++		await pair.server.start();
++		const client = new McpClient({ name: "test", version: "1", listLimits: { pages: 64, items: 2, bytes: 8192 } });
++		try {
++			await client.connect(pair.client);
++			await expect(client.listTools()).rejects.toThrow("catalog limits");
++			expect(pages).toBe(3);
++		} finally {
++			await client.close();
++		}
++	});
++
++	it("does not let repeated progress notifications extend an absolute timeout", async () => {
++		const pair = createInMemoryTransportPair();
++		let progress: ReturnType<typeof setInterval> | undefined;
++		pair.server.onMessage((message) => {
++			if (!("id" in message) || !("method" in message)) return;
++			if (message.method === "initialize") {
++				void pair.server.send({
++					jsonrpc: "2.0",
++					id: message.id,
++					result: {
++						protocolVersion: "2025-11-25",
++						serverInfo: { name: "fixture", version: "1" },
++						capabilities: { tools: {} },
++					},
++				});
++			} else {
++				const token = (message.params as { _meta: { progressToken: number } })._meta.progressToken;
++				progress = setInterval(() => {
++					void pair.server.send({
++						jsonrpc: "2.0",
++						method: "notifications/progress",
++						params: { progressToken: token, progress: 1 },
++					});
++				}, 5);
++			}
++		});
++		await pair.server.start();
++		const client = new McpClient({ name: "test", version: "1", resetTimeoutOnProgress: false });
++		try {
++			await client.connect(pair.client);
++			await expect(client.callTool("wait", {}, { timeoutMs: 30, onProgress: () => {} })).rejects.toThrow();
++		} finally {
++			clearInterval(progress);
++			await client.close();
++		}
++	});
++
++	it.skipIf(process.platform === "win32")("kills surviving descendants when the stdio leader exits", async () => {
++		const directory = await mkdtemp(join(tmpdir(), "pi-mcp-descendant-"));
++		const heartbeat = join(directory, "heartbeat");
++		const childCode = `const fs=require('node:fs'); process.on('SIGTERM',()=>{}); fs.writeFileSync(process.argv[1],'ready'); console.log('ready'); setInterval(()=>fs.writeFileSync(process.argv[1],String(Date.now())),10);`;
++		const parentCode = `const {spawn}=require('node:child_process'); const child=spawn(process.execPath,['-e',${JSON.stringify(childCode)},${JSON.stringify(heartbeat)}],{stdio:['ignore','pipe','ignore']}); child.stdout.once('data',()=>process.exit(0));`;
++		const transport = new StdioTransport({ command: process.execPath, args: ["-e", parentCode] });
++		const closed = new Promise<void>((resolve) => transport.onClose(resolve));
++		try {
++			await transport.start();
++			await closed;
++			const before = await readFile(heartbeat, "utf8");
++			await new Promise((resolve) => setTimeout(resolve, 80));
++			expect(await readFile(heartbeat, "utf8")).toBe(before);
++		} finally {
++			await transport.close();
++			await rm(directory, { recursive: true, force: true });
++		}
++	});
++});

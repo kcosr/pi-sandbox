@@ -75,7 +75,9 @@ describe("administrative configuration", () => {
 
   it("enforces the execution backend's platform contract", () => {
     const config = {
-      configVersion: 9,
+      configVersion: 10,
+      codemode: { enabled: false, timeoutMs: 300000 },
+      mcp: { servers: {} },
       sessions: { retentionDays: 0 },
       filesystem: { cwdWritable: true, hiddenPaths: [] },
       audit: { enabled: false, facility: "local0" },
@@ -265,7 +267,9 @@ describe("administrative configuration", () => {
     ]);
     const allow = { audit: false, mode: "allow", sessionGrant: "never" } as const;
     const config = {
-      configVersion: 9,
+      configVersion: 10,
+      codemode: { enabled: false, timeoutMs: 300000 },
+      mcp: { servers: {} },
       sessions: { retentionDays: 0 },
       filesystem: { cwdWritable: true, hiddenPaths: [] },
       audit: { enabled: false, facility: "local0" },
@@ -381,7 +385,7 @@ describe("administrative configuration", () => {
     const callerEnvironment = { HOME: "/caller-home" };
     const getHome = vi.fn(() => {
       expect(callerEnvironment.HOME).toBe("/caller-home");
-      return "/accounts/alice";
+      return { username: "alice", uid: 1001, homeDirectory: "/accounts/alice" };
     });
     const effective = await resolveEffectiveAdministrativeConfiguration(
       root,
@@ -427,7 +431,7 @@ describe("administrative configuration", () => {
         .replace("[environment.pi]", '[environment.pi]\nCACHE = "~/unused"'),
     );
     await writeFile(rooted(root, "/etc/pi-sandbox/models.json"), '{"providers":{}}');
-    const getHome = vi.fn((): string => {
+    const getHome = vi.fn((): never => {
       throw new Error("account unavailable");
     });
     const effective = await resolveEffectiveAdministrativeConfiguration(
@@ -473,7 +477,7 @@ describe("administrative configuration", () => {
         callerEnvironment,
         undefined,
         SYSTEM_CONFIG_PATH,
-        () => "/run/account-home",
+        () => ({ username: "alice", uid: 1001, homeDirectory: "/run/account-home" }),
       ),
     ).rejects.toThrow("private system paths");
     expect(callerEnvironment).toEqual({ KEEP: "original" });

@@ -86,6 +86,7 @@ const bundleResult = await build({
   entryPoints: [join(repositoryRoot, "src/private-cli.ts")],
   outfile: privateBundle,
   external: [
+    "@earendil-works/pi-mcp",
     "@earendil-works/pi-ai",
     "@earendil-works/pi-ai/*",
     "@earendil-works/pi-coding-agent",

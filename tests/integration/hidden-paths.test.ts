@@ -99,7 +99,7 @@ describe.skipIf(!available)("hidden paths through real Bubblewrap", () => {
       const expanded = expandManagedHomePaths(
         { cwdWritable: true, hiddenPaths: ["~", "~/a/private"] },
         { pi: {}, sandbox: { ACCOUNT_CACHE: "~/cache" }, extensions: {} },
-        () => runs,
+        () => ({ username: "alice", uid: 1001, homeDirectory: runs }),
       );
       const executor = await createBubblewrapExecutor({
         cwd: launch,

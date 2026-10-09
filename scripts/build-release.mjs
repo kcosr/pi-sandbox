@@ -603,6 +603,9 @@ async function main() {
         "packages/coding-agent/test/managed-session-sharing.test.ts",
         "packages/coding-agent/test/managed-session-cwd.test.ts",
         "packages/coding-agent/test/managed-session-maintenance.test.ts",
+        "packages/coding-agent/test/managed-mcp-codemode.test.ts",
+        "packages/mcp/test/managed-transport.test.ts",
+        "packages/codemode/test/managed-limits.test.ts",
       ],
       { cwd: sourceRoot, env: cleanEnvironment },
     );
@@ -617,6 +620,11 @@ async function main() {
 
     const codingAgentRoot = join(sourceRoot, "packages/coding-agent");
     const bunMetafile = join(temporaryDirectory, "bun-metafile.json");
+    // Upstream's root tsconfig aliases package imports to source. Mixing those
+    // imports with dist/bun/runtime-setup.js creates two independent config
+    // modules, so code mode cannot see the embedded QuickJS WASM path.
+    const bunTsconfig = join(temporaryDirectory, "bun-release-tsconfig.json");
+    await writeFile(bunTsconfig, `${JSON.stringify({ compilerOptions: {} })}\n`);
     process.stdout.write("Compiling the private Bun executable\n");
     await run(
       "bun",
@@ -624,6 +632,7 @@ async function main() {
         "build",
         "--compile",
         `--metafile=${bunMetafile}`,
+        `--tsconfig-override=${bunTsconfig}`,
         "--no-compile-autoload-bunfig",
         `--target=${bunTarget}`,
         "./dist/pi-sandbox/private-entrypoint.mjs",
@@ -635,6 +644,18 @@ async function main() {
       { cwd: codingAgentRoot, env: cleanEnvironment },
     );
     await chmod(join(payload, "pi-sandbox"), 0o755);
+    const compiledInputs = new Set(
+      Object.keys(JSON.parse(await readFile(bunMetafile, "utf8")).inputs).map((input) =>
+        resolve(codingAgentRoot, input),
+      ),
+    );
+    if (
+      !compiledInputs.has(join(codingAgentRoot, "dist/config.js")) ||
+      compiledInputs.has(join(codingAgentRoot, "src/config.ts")) ||
+      ![...compiledInputs].some((input) => input.endsWith("/quickjs-wasi/quickjs.wasm"))
+    ) {
+      throw new Error("private Bun bundle must use one compiled Pi runtime and embed QuickJS WASM");
+    }
 
     if (os === "linux") {
       process.stdout.write("Compiling the static identity broker\n");

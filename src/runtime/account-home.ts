@@ -1,10 +1,10 @@
 import { execFileSync } from "node:child_process";
 
-import { isNormalizedAbsoluteFilePath } from "../domain/index.js";
+import { isNormalizedAbsoluteFilePath, type AccountIdentity } from "../domain/index.js";
 
 const MAXIMUM_LOOKUP_BYTES = 65_536;
 const ACCOUNT_HOME_ERROR =
-  "Unable to resolve the invoking account's home directory from the operating system";
+  "Unable to resolve the invoking account's identity from the operating system";
 
 function invalid(): never {
   throw new Error(ACCOUNT_HOME_ERROR);
@@ -27,7 +27,7 @@ function validAccountName(value: string | undefined): boolean {
   );
 }
 
-function passwdHome(output: string, uid: number): string {
+function passwdIdentity(output: string, uid: number): AccountIdentity {
   const lines = output.replace(/\n$/, "").split("\n");
   if (lines.length !== 1) invalid();
   const fields = lines[0]!.split(":");
@@ -35,10 +35,10 @@ function passwdHome(output: string, uid: number): string {
     invalid();
   }
   accountId(fields[3]);
-  return fields[5]!;
+  return { username: fields[0]!, uid, homeDirectory: fields[5]! };
 }
 
-function directoryServiceHome(output: string, uid: number): string {
+function directoryServiceIdentity(output: string, uid: number): AccountIdentity {
   const fields = new Map<string, string>();
   const allowed = new Set(["name", "password", "uid", "gid", "dir", "shell", "gecos"]);
   for (const line of output.replace(/\n+$/, "").split("\n")) {
@@ -48,11 +48,11 @@ function directoryServiceHome(output: string, uid: number): string {
   }
   if (!validAccountName(fields.get("name")) || accountId(fields.get("uid")) !== uid) invalid();
   accountId(fields.get("gid"));
-  return fields.get("dir") ?? invalid();
+  return { username: fields.get("name")!, uid, homeDirectory: fields.get("dir") ?? invalid() };
 }
 
 /** Query the OS account database; Bun's userInfo().homedir can depend on startup HOME. */
-export function readAccountHomeDirectory(): string {
+export function readAccountIdentity(): AccountIdentity {
   try {
     const uid = process.geteuid?.();
     if (uid === undefined || !Number.isInteger(uid) || uid < 0 || uid > 0xffff_ffff) invalid();
@@ -76,9 +76,11 @@ export function readAccountHomeDirectory(): string {
     if ([...output].some((character) => character !== "\n" && /\p{Cc}/u.test(character))) {
       invalid();
     }
-    const home = platform === "linux" ? passwdHome(output, uid) : directoryServiceHome(output, uid);
-    if (home !== "/" && !isNormalizedAbsoluteFilePath(home)) invalid();
-    return home;
+    const identity =
+      platform === "linux" ? passwdIdentity(output, uid) : directoryServiceIdentity(output, uid);
+    if (identity.homeDirectory !== "/" && !isNormalizedAbsoluteFilePath(identity.homeDirectory))
+      invalid();
+    return Object.freeze(identity);
   } catch {
     // Never expose command output (which includes account metadata) through errors or causes.
     throw new Error(ACCOUNT_HOME_ERROR);

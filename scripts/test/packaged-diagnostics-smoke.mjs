@@ -22,6 +22,7 @@ import { setTimeout as delay } from "node:timers/promises";
 
 import { parse as parseToml, stringify as stringifyToml } from "@iarna/toml";
 
+import { testManagedMcpCodemode } from "./mcp-codemode-smoke.mjs";
 import { testRpcSessionLifecycle } from "./rpc-lifecycle-smoke.mjs";
 
 const SANDBOX_TOOL_NAMES = Object.freeze(["read", "grep", "find", "ls", "write", "edit", "bash"]);
@@ -130,48 +131,48 @@ try {
   };
   delete environment.NODE_ENV;
   delete environment.PI_CODING_AGENT_SESSION_DIR;
-  child = spawn(
-    bubblewrapExecutable,
-    [
-      "--die-with-parent",
-      "--new-session",
-      "--ro-bind",
-      "/",
-      "/",
-      "--proc",
-      "/proc",
-      "--dev-bind",
-      "/dev",
-      "/dev",
-      "--dir",
-      compiledConfigDirectory,
-      "--ro-bind",
-      defaultsDirectory,
-      compiledConfigDirectory,
-      "--ro-bind",
-      runtimeDirectory,
-      compiledLibexecDirectory,
-      "--ro-bind",
-      passwdFile,
-      "/etc/passwd",
-      "--bind",
-      accountHome,
-      accountHome,
-      "--bind",
-      workspace,
-      workspace,
-      "--chdir",
-      workspace,
-      "--",
-      sandboxExecutable,
-      ...configArguments,
-      "--mode",
-      "rpc",
-      "--session",
-      sessionFixtures.selected,
-    ],
-    { env: environment, stdio: ["pipe", "pipe", "pipe"] },
-  );
+  const launcherArguments = [
+    "--die-with-parent",
+    "--new-session",
+    "--ro-bind",
+    "/",
+    "/",
+    "--proc",
+    "/proc",
+    "--dev-bind",
+    "/dev",
+    "/dev",
+    "--dir",
+    compiledConfigDirectory,
+    "--ro-bind",
+    defaultsDirectory,
+    compiledConfigDirectory,
+    "--ro-bind",
+    runtimeDirectory,
+    compiledLibexecDirectory,
+    "--ro-bind",
+    passwdFile,
+    "/etc/passwd",
+    "--bind",
+    accountHome,
+    accountHome,
+    "--bind",
+    workspace,
+    workspace,
+    "--chdir",
+    workspace,
+    "--",
+    sandboxExecutable,
+    ...configArguments,
+    "--mode",
+    "rpc",
+  ];
+  const launch = (extra = []) =>
+    spawn(bubblewrapExecutable, [...launcherArguments, ...extra], {
+      env: environment,
+      stdio: ["pipe", "pipe", "pipe"],
+    });
+  child = launch(["--session", sessionFixtures.selected]);
   exitPromise = waitForExit(child);
   void exitPromise.catch((error) => {
     childFailure = error;
@@ -327,7 +328,24 @@ try {
   );
   assert(!stderr.includes(".gitconfig"), "missing exclusions must not emit startup warnings");
 
-  console.log("packaged /sandbox diagnostics and RPC lifecycle smoke tests passed");
+  const accountRecord = (await readFile(passwdFile, "utf8"))
+    .split("\n")
+    .map((line) => line.split(":"))
+    .find((fields) => fields.length === 7 && Number(fields[2]) === process.geteuid());
+  await testManagedMcpCodemode({
+    launch,
+    configPath: releaseManifest.layout.allowConfigOverride
+      ? overridePath
+      : join(defaultsDirectory, "config.toml"),
+    modelsPath: releaseManifest.layout.allowConfigOverride
+      ? overrideModelsPath
+      : join(defaultsDirectory, "models.json"),
+    workspace,
+    userState,
+    username: accountRecord[0],
+    uid: process.geteuid(),
+  });
+  console.log("packaged diagnostics, RPC lifecycle, MCP and code-mode smoke tests passed");
 } finally {
   if (child !== undefined && child.exitCode === null && child.signalCode === null) {
     child.kill("SIGTERM");

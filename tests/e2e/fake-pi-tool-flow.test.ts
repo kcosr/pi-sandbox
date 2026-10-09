@@ -136,7 +136,7 @@ describe.skipIf(!REAL_BWRAP_AVAILABLE)(
       await executor.probe();
 
       fakePi = new FakePi();
-      createPiSandboxExtension({
+      await createPiSandboxExtension({
         cwd: workspace,
         configPath: "/etc/pi-sandbox/config.toml",
         userStateDir: "/home/test/.pi/agent",
@@ -264,7 +264,7 @@ describe.skipIf(!REAL_BWRAP_AVAILABLE).each(["/var/tmp", "/tmp"])(
       );
       await executor.probe();
       fakePi = new FakePi();
-      createPiSandboxExtension({
+      await createPiSandboxExtension({
         cwd: workspace,
         configPath: "/etc/pi-sandbox/config.toml",
         userStateDir: "/home/test/.pi/agent",
@@ -376,7 +376,9 @@ function nonInteractiveContext(): ExtensionContext {
 function allowAllConfig(): SandboxConfig {
   const allow = { audit: false, mode: "allow", sessionGrant: "never" } as const;
   return {
-    configVersion: 9,
+    configVersion: 10,
+    codemode: { enabled: false, timeoutMs: 300000 },
+    mcp: { servers: {} },
     sessions: { retentionDays: 0 },
     filesystem: { cwdWritable: true, hiddenPaths: [] },
     audit: { enabled: false, facility: "local0" },

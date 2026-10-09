@@ -13,6 +13,8 @@ import { describeBubblewrapMounts, safeSandboxEnvironment } from "../sandbox/bub
 export type SandboxDiagnosticSubject = string;
 
 interface SandboxSummaryInput {
+  readonly codemodeEnabled?: boolean;
+  readonly mcpServerCount?: number;
   readonly initialized: boolean;
   readonly cwd: string;
   readonly configPath: string;
@@ -78,6 +80,11 @@ export function formatSandboxSummary(input: SandboxSummaryInput): string {
           : "read-only",
     ],
     ["Lifetime", "pi-sandbox process"],
+    [
+      "Code mode",
+      input.codemodeEnabled === true ? "enabled (nested tool policy applies)" : "disabled",
+    ],
+    ["MCP servers", String(input.mcpServerCount ?? 0)],
     ["Execution", executionDisplay(input.execution)],
     ["Network", networkDisplay(input.network)],
     ["Config", input.configPath],

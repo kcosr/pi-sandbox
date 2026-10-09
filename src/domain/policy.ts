@@ -1,3 +1,5 @@
+import type { CodeModeConfig, McpConfig } from "./mcp.js";
+
 export const TOOL_NAMES = Object.freeze([
   "read",
   "grep",
@@ -112,7 +114,9 @@ export interface ManagedEnvironment {
 }
 
 export interface SandboxConfig {
-  readonly configVersion: 9;
+  readonly configVersion: 10;
+  readonly codemode: CodeModeConfig;
+  readonly mcp: McpConfig;
   readonly audit: AuditConfig;
   readonly sessions: SessionsConfig;
   readonly modelsFile: string;

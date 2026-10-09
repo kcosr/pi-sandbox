@@ -1,3 +1,4 @@
+import type { ResolvedMcpServer } from "../mcp/resolve.js";
 import type { SandboxConfig, ToolName } from "../domain/index.js";
 import type { HostCommandExecutor } from "../host/index.js";
 import type { ManagedExtensionInstance, PiToolExtension } from "../managed-extensions/sdk.js";
@@ -5,6 +6,11 @@ import type { SandboxExecutor } from "../sandbox/index.js";
 import type { AuditClient } from "../audit/client.js";
 
 export interface ExtensionDependencies {
+  readonly features?: {
+    readonly config: SandboxConfig;
+    readonly servers: readonly ResolvedMcpServer[];
+    readonly selected: (name: string) => boolean;
+  };
   readonly cwd: string;
   readonly configPath: string;
   readonly userStateDir: string;
