@@ -367,7 +367,7 @@ describe("administrative configuration", () => {
     expect(callerEnvironment).toEqual({ HOME: "/caller-home", INHERITED: "~/literal" });
   });
 
-  it("expands the merged broker environment once before applying it", async () => {
+  it("expands home and account macros after merging every broker environment scope", async () => {
     const root = await createRoot();
     const configPath = rooted(root, SYSTEM_CONFIG_PATH);
     const source = await readFile(configPath, "utf8");
@@ -378,11 +378,11 @@ describe("administrative configuration", () => {
         .replace("hidden_paths = []", 'hidden_paths = ["~/private"]')
         .replace(
           "[environment.pi]",
-          '[environment.pi]\nHOME = "/policy-home"\nFROM_BASE = "~/base"\nREPLACED = "~/unused"',
+          '[environment.pi]\nHOME = "/policy-home"\nFROM_BASE = "~/base/{{username}}/{{uid}}"\nREPLACED = "{{username}}"',
         ),
     );
     await writeFile(rooted(root, "/etc/pi-sandbox/models.json"), '{"providers":{}}');
-    const callerEnvironment = { HOME: "/caller-home" };
+    const callerEnvironment = { HOME: "/caller-home", INHERITED: "{{username}}/{{uid}}" };
     const getHome = vi.fn(() => {
       expect(callerEnvironment.HOME).toBe("/caller-home");
       return { username: "alice", uid: 1001, homeDirectory: "/accounts/alice" };
@@ -393,9 +393,9 @@ describe("administrative configuration", () => {
       () =>
         Promise.resolve({
           environment: {
-            pi: { REPLACED: "broker-literal", FROM_BROKER: "~/broker" },
-            sandbox: { CACHE: "~/cache" },
-            extensions: { service: { CACHE: "~/service" } },
+            pi: { REPLACED: "{{{{username}}}}", FROM_BROKER: "{{username}}/{{uid}}" },
+            sandbox: { CACHE: "~/cache/{{uid}}" },
+            extensions: { service: { CACHE: "~/service/{{username}}" } },
           },
           overrides: { filesystem: { cwdWritable: false }, tools: {} },
         }),
@@ -410,14 +410,14 @@ describe("administrative configuration", () => {
     expect(effective.identityEnvironment).toEqual({
       pi: {
         HOME: "/policy-home",
-        FROM_BASE: "/accounts/alice/base",
-        REPLACED: "broker-literal",
-        FROM_BROKER: "/accounts/alice/broker",
+        FROM_BASE: "/accounts/alice/base/alice/1001",
+        REPLACED: "{{username}}",
+        FROM_BROKER: "alice/1001",
       },
-      sandbox: { CACHE: "/accounts/alice/cache" },
-      extensions: { service: { CACHE: "/accounts/alice/service" } },
+      sandbox: { CACHE: "/accounts/alice/cache/1001" },
+      extensions: { service: { CACHE: "/accounts/alice/service/alice" } },
     });
-    expect(callerEnvironment).toEqual({ HOME: "/caller-home" });
+    expect(callerEnvironment).toEqual({ HOME: "/caller-home", INHERITED: "{{username}}/{{uid}}" });
   });
 
   it("does not resolve account home when broker overrides remove the last expansion", async () => {
