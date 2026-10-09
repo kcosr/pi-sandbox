@@ -1,7 +1,7 @@
 # Managed MCP and code mode
 
-Status: implementation contract; implemented on the feature branch, with final
-code review and packaged verification in progress.
+Status: implemented and verified on the feature branch. Iterative Keel code
+review with `claude-default` completed cleanly, including the final URL scope change.
 Keel spec review with `claude-default` completed cleanly after two review rounds.
 
 Prepared 2026-10-09 against Pi Sandbox `d5e7233` and pinned Pi 1.0.2,
@@ -959,3 +959,25 @@ configured hidden paths, every configured environment scope after broker merging
 and explicit stdio environment values. Updated the contract and offline fixtures
 to this scope; removed the URL-template API rather than retaining a compatibility
 path.
+
+### 2026-10-09 — Implementation verification and finalization
+
+The main iterative review, `run_dd2f9443-71a1-4920-b8c9-3e69f24b3ca5`, finished
+cleanly at `a112667` after confirming the executable-availability fix, cancellation
+cleanup, bridge bounds, merged environment macros, and literal-URL scope. Its
+intermediate URL contract finding was resolved by completing the user's scope
+change across code and documentation.
+
+A focused review, `run_8ee3a23d-371f-46a4-aadc-af50631386d2`, identified one
+low-severity URL issue: decoding arbitrary percent-encoded path bytes as UTF-8
+rejected valid literal endpoints. Replaced that decoding with an exact check for
+literal/encoded dot segments. The reviewer confirmed the fix and completed cleanly
+at `2a08834`; the packaged fixture also proves opaque `%FF` bytes survive transport.
+
+The full offline release verifier passed at `a112667`: formatting, lint, types,
+572 unit tests, 41 integration tests, 20 real Bubblewrap tests, Rust service checks,
+Linux and staged macOS installation checks, 72 patched Pi tests, and compiled
+application smoke tests. The final URL fix passed 91 focused tests, lint/format
+checks, and a fresh release build with all 72 Pi tests and packaged
+diagnostic/RPC/HTTP-MCP/stdio-MCP/code-mode smoke tests. Native macOS runtime
+execution was not tested on this Linux host.
