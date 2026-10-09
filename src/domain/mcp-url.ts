@@ -19,7 +19,9 @@ export function validateMcpUrl(value: string): void {
   )
     throw new Error("MCP HTTP requires a literal loopback host");
   for (const component of path!.split("/")) {
-    const decoded = decodeURIComponent(component);
-    if (decoded === "." || decoded === "..") throw new Error("MCP URL dot segments are forbidden");
+    // Dot segments use literal or percent-encoded ASCII periods. Other escaped
+    // bytes are opaque URL data and need not form a decodable UTF-8 string.
+    if (/^(?:\.|%2e){1,2}$/iu.test(component))
+      throw new Error("MCP URL dot segments are forbidden");
   }
 }

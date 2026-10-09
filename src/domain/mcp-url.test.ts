@@ -11,6 +11,7 @@ describe("literal MCP URLs", () => {
     "http://[::1]:8080/mcp",
     "https://mcp.example/%7B%7Busername%7D%7D?value=%7b%7buid%7d%7d",
     "https://mcp.example/mcp?same=one&same=two&empty=&flag&encoded=%26%3D%23",
+    "https://mcp.example/%FF/%C3/.%FF/%2e%C3?literal=%ff",
   ])("accepts a literal endpoint with ordinary URL data: %s", (value) =>
     expect(() => validateMcpUrl(value)).not.toThrow(),
   );
@@ -39,6 +40,8 @@ describe("literal MCP URLs", () => {
     "https://mcp.example/../mcp",
     "https://mcp.example/%2e%2e/mcp",
     "https://mcp.example/.%2E/mcp",
+    "https://mcp.example/%2E./mcp",
+    "https://mcp.example/%2e/mcp",
     "https://mcp.example/mcp%xx",
     "https://mcp.example/mcp?invalid=%",
     "https://mcp.example/a\\b",

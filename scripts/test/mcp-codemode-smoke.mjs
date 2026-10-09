@@ -44,7 +44,7 @@ export async function testManagedMcpCodemode({
   username,
   uid,
 }) {
-  const httpPath = "/mcp/shared?tenant=shared%2Bteam&literal=a%2fb&tag=one&tag=two";
+  const httpPath = "/mcp/shared%FF?tenant=shared%2Bteam&literal=a%2fb&tag=one&tag=two";
   const receivedHttp = [];
   const providerRequests = [];
   const prompts = [];
@@ -124,7 +124,7 @@ export async function testManagedMcpCodemode({
         url: request.url,
         authorization: request.headers.authorization,
       });
-      assert.equal(url.pathname, "/mcp/shared");
+      assert.equal(url.pathname, "/mcp/shared%FF");
       assert.equal(url.searchParams.get("tenant"), "shared+team");
       assert.equal(url.searchParams.get("literal"), "a/b");
       assert.deepEqual(url.searchParams.getAll("tag"), ["one", "two"]);
