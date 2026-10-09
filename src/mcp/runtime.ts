@@ -422,22 +422,28 @@ export class ManagedMcpRuntime {
             headers: { ...resolved.headers },
             maxMessageBytes: MESSAGE_LIMIT,
             fetch: async (url, init) => {
-              const invocation = this.guard.getStore();
-              if (invocation !== undefined && (!invocation.current() || invocation.signal.aborted))
-                throw new Error("MCP dispatch invalidated");
-              const response = await fetch(url, {
+              const method: unknown =
+                init?.method === "POST" && typeof init.body === "string"
+                  ? (JSON.parse(init.body) as { method?: unknown }).method
+                  : undefined;
+              let signal = init?.signal;
+              if (method === "tools/call") {
+                const invocation = this.guard.getStore();
+                if (invocation === undefined || !invocation.current() || invocation.signal.aborted)
+                  throw new Error("MCP dispatch invalidated");
+                signal =
+                  signal == null ? invocation.signal : AbortSignal.any([signal, invocation.signal]);
+              } else if (method === "notifications/cancelled") {
+                // Cancellation is protocol cleanup, not another tool dispatch. It may
+                // run after the originating invocation's signal has already aborted.
+                const deadline = AbortSignal.timeout(1000);
+                signal = signal == null ? deadline : AbortSignal.any([signal, deadline]);
+              }
+              return fetch(url, {
                 ...init,
                 redirect: "error",
-                ...(invocation === undefined
-                  ? {}
-                  : {
-                      signal:
-                        init?.signal == null
-                          ? invocation.signal
-                          : AbortSignal.any([init.signal, invocation.signal]),
-                    }),
+                ...(signal === undefined ? {} : { signal }),
               });
-              return response;
             },
           })
         : new StdioTransport({

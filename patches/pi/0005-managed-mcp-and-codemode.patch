@@ -906,10 +906,10 @@ index 4f38d91..4b15f9b 100644
  }
 diff --git a/packages/coding-agent/test/managed-mcp-codemode.test.ts b/packages/coding-agent/test/managed-mcp-codemode.test.ts
 new file mode 100644
-index 0000000..221d162
+index 0000000..1e5c8c0
 --- /dev/null
 +++ b/packages/coding-agent/test/managed-mcp-codemode.test.ts
-@@ -0,0 +1,361 @@
+@@ -0,0 +1,400 @@
 +import { afterEach, describe, expect, it, vi } from "vitest";
 +import { LATEST_PROTOCOL_VERSION, McpSessionExpiredError, type Tool } from "@earendil-works/pi-mcp";
 +import { createInMemoryTransportPair } from "@earendil-works/pi-mcp/testing";
@@ -1094,6 +1094,45 @@ index 0000000..221d162
 +		expect(registerTool).not.toHaveBeenCalled();
 +		expect(registerCommand).not.toHaveBeenCalled();
 +		expect(getMcpServers).not.toHaveBeenCalled();
++		await handlers.get("session_shutdown")?.({}, ctx);
++	});
++
++	it("withdraws published tools when catalog refresh validation fails", async () => {
++		const tools: Tool[] = [{ name: "good", inputSchema: { type: "object" } }];
++		const fixture = server(tools);
++		const handlers = new Map<string, (event: unknown, ctx: ExtensionContext) => unknown>();
++		const definitions = new Map<string, ToolDefinition>();
++		const states: string[] = [];
++		const pi = {
++			on: (name: string, handler: (event: unknown, ctx: ExtensionContext) => unknown) => handlers.set(name, handler),
++			registerTool: (tool: ToolDefinition) => definitions.set(tool.name, tool),
++			registerToolRenderer: () => {},
++			getAllTools: () => [],
++			getActiveTools: () => [],
++			setActiveTools: () => {},
++		} as unknown as ExtensionAPI;
++		await createMcpExtension({
++			toolsOnly: true,
++			authentication: false,
++			management: false,
++			serverLogging: false,
++			allowRegisteredServers: false,
++			loadConfig: () => ({ servers: [entry], errors: [] }),
++			createTransport: () => fixture.client,
++			adaptTools: (_entry, catalog) => {
++				if (catalog.some(({ tool }) => tool.name === "bad")) throw new Error("invalid catalog");
++				return catalog.map(({ definition }) => definition);
++			},
++			onServerState: (_entry, connection) => states.push(connection.state),
++		})(pi);
++		const ctx = { cwd: process.cwd(), ui: { notify: () => {} } } as unknown as ExtensionContext;
++		await handlers.get("session_start")?.({}, ctx);
++		await vi.waitFor(() => expect(definitions.get("mcp__docs__good")?.exposure).toBe("direct"));
++		tools.push({ name: "bad", inputSchema: { type: "object" } });
++		await fixture.server.send({ jsonrpc: "2.0", method: "notifications/tools/list_changed" });
++		await vi.waitFor(() => expect(definitions.get("mcp__docs__good")?.exposure).toBe("hidden"));
++		expect(states.at(-1)).toBe("disconnected");
++		expect(definitions.has("mcp__docs__bad")).toBe(false);
 +		await handlers.get("session_shutdown")?.({}, ctx);
 +	});
 +

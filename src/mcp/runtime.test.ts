@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
+import type { StreamableHttpTransport } from "@earendil-works/pi-mcp";
 import type { ToolDefinition } from "@earendil-works/pi-coding-agent";
 import type { McpServerConfig } from "../domain/index.js";
 import { PolicyEngine } from "../policy/index.js";
@@ -328,5 +329,50 @@ describe("MCP dispatch lifecycle", () => {
     await vi.waitFor(() => expect(prompt).toHaveBeenCalledTimes(2));
     finish("allow_once");
     await second;
+  });
+});
+
+describe("HTTP dispatch and protocol cleanup", () => {
+  it("permits bounded cancellation and DELETE after invocation abort but rejects another tool call", async () => {
+    const { runtime, connection } = setup();
+    let options!: ManagedMcpOptions;
+    runtime.extension((value) => {
+      options = value;
+      return () => {};
+    });
+    const transport = options.createTransport({ name: "docs" }) as StreamableHttpTransport;
+    const request = transport.options.fetch!;
+    const fetch = vi.fn<typeof globalThis.fetch>(() =>
+      Promise.resolve(new Response(null, { status: 202 })),
+    );
+    vi.stubGlobal("fetch", fetch);
+    const controller = new AbortController();
+    try {
+      const execute = vi.fn<ToolDefinition["execute"]>(async () => {
+        controller.abort();
+        await request("https://example.com/mcp", {
+          method: "POST",
+          body: JSON.stringify({ method: "notifications/cancelled" }),
+        });
+        await expect(
+          request("https://example.com/mcp", {
+            method: "POST",
+            body: JSON.stringify({ method: "tools/call" }),
+          }),
+        ).rejects.toThrow("invalidated");
+        await request("https://example.com/mcp", { method: "DELETE" });
+        return result;
+      });
+      const [tool] = runtime.adaptTools("docs", [item("search", execute)], connection);
+      await expect(invoke(tool!, "hello", undefined, controller.signal)).rejects.toMatchObject({
+        code: "cancelled",
+      });
+      expect(fetch).toHaveBeenCalledTimes(2);
+      expect(fetch.mock.calls[0]![1]).toMatchObject({ method: "POST", redirect: "error" });
+      expect(fetch.mock.calls[0]![1]!.signal!.aborted).toBe(false);
+      expect(fetch.mock.calls[1]![1]).toMatchObject({ method: "DELETE", redirect: "error" });
+    } finally {
+      vi.unstubAllGlobals();
+    }
   });
 });

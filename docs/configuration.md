@@ -562,12 +562,14 @@ Pi Sandbox registers one read-only diagnostic command:
 /sandbox mounts
 /sandbox policy
 /sandbox policy write
+/sandbox mcp
+/sandbox mcp docs
 ```
 
 `/sandbox` reports whether the selected backend is initialized, its process
 lifetime, execution backend, launch directory, selected configuration path,
-effective selected model file, identity mode, effective network mode, CWD access, and
-user-state directory. `/sandbox mounts` reports the semantic Bubblewrap mount
+effective selected model file, identity mode, effective network mode, CWD access,
+user-state directory, code-mode enablement, and MCP server count. `/sandbox mounts` reports the semantic Bubblewrap mount
 policy or explicitly reports that direct mode has no mount boundary.
 `/sandbox policy` lists every configured model-tool
 mode, the fixed user-shell behavior, session-grant options, and current
@@ -591,9 +593,11 @@ Pi Sandbox replaces it for every edit call, including while `edit` is disabled.
 Managed API version 3 tools may provide a short, single-line call summary that
 Pi Sandbox bounds and renders in the same tool card. `git_clone` shows its
 repository locator. A standard Pi extension keeps its own tool renderer, if
-supplied. The approval selector therefore contains only `Allow <subject>?` and
-the configured choices. The internal immutable snapshot and integrity
-fingerprint are not repeated in the UI.
+supplied. The approval selector includes a bounded path, command, or argument
+preview alongside the subject and configured choices. Nested code-mode tools do
+not have an independent call card, so the selector identifies their operation.
+MCP prompts show the original server/tool name. The internal integrity
+fingerprint is not displayed.
 
 An approval-required operation is denied when:
 
