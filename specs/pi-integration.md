@@ -265,7 +265,10 @@ To upgrade Pi:
 3. Apply the existing patch series. If it does not apply cleanly, inspect the
    new upstream implementation and reimplement this specification rather than
    preserving obsolete code structure.
-4. Run the focused Pi patch tests and relevant upstream tests offline.
+4. Build Pi and check the production adapter types against its patched declarations,
+   including option-key coverage, nested options, and callback compatibility.
+   Negative controls must reject removed options and incompatible signatures.
+   Run the focused Pi patch tests and relevant upstream tests offline.
 5. Build the private Bun entry point together with Pi and the Pi Sandbox
    extension.
 6. Run Pi Sandbox unit, integration, direct-executor, real-Bubblewrap, package,

@@ -588,6 +588,13 @@ async function main() {
       { cwd: sourceRoot, env: cleanEnvironment },
     );
 
+    process.stdout.write("Checking managed Pi API contracts against patched declarations\n");
+    await run(
+      process.execPath,
+      [join(repositoryRoot, "scripts/test/pi-contract.mjs"), sourceRoot],
+      { env: cleanEnvironment },
+    );
+
     process.stdout.write("Testing the managed Pi integration seams\n");
     await run(
       "npm",

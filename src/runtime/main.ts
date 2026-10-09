@@ -57,20 +57,22 @@ import {
 
 export const SYSTEM_CONFIG_PATH = buildLayout.configPath;
 
-interface ManagedModelRuntimeOptions extends CreateModelRuntimeOptions {
+export interface ManagedModelRuntimeOptions extends CreateModelRuntimeOptions {
   readonly includeBuiltinCatalog: false;
 }
 
-type ManagedModelRuntimeFactory = (options?: CreateModelRuntimeOptions) => Promise<ModelRuntime>;
+export type ManagedModelRuntimeFactory = (
+  options?: CreateModelRuntimeOptions,
+) => Promise<ModelRuntime>;
 
-interface ManagedMainOptions {
+export interface ManagedMainOptions {
   readonly extensionFactories: Array<{ readonly name: string; readonly factory: ExtensionFactory }>;
   readonly createModelRuntime: ManagedModelRuntimeFactory;
   readonly validateSessionCwd: (cwd: string) => void;
   readonly beforeRun: (context: SessionMaintenanceContext) => Promise<void>;
 }
 
-type ManagedMain = (args: string[], options: ManagedMainOptions) => Promise<void>;
+export type ManagedMain = (args: string[], options: ManagedMainOptions) => Promise<void>;
 
 function pathUnderRoot(root: string, absolutePath: string): string {
   if (!isAbsolute(root)) throw new Error("validation root must be absolute");

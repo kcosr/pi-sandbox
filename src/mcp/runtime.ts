@@ -3,11 +3,17 @@ import { createHash } from "node:crypto";
 import {
   createMcpExtension,
   type ExtensionFactory,
+  type McpServerConfig,
   type ToolDefinition,
 } from "@earendil-works/pi-coding-agent";
 import type { TSchema } from "@earendil-works/pi-ai";
 import { Compile } from "typebox/compile";
-import { StdioTransport, StreamableHttpTransport, type McpTransport } from "@earendil-works/pi-mcp";
+import {
+  StdioTransport,
+  StreamableHttpTransport,
+  type McpTransport,
+  type Tool as McpTool,
+} from "@earendil-works/pi-mcp";
 import type { ToolPolicy } from "../domain/index.js";
 import {
   prepareApprovalRequest,
@@ -25,7 +31,7 @@ import type { ManagedMcpPreferences, McpPreferencePatch, McpPresentation } from 
 const MESSAGE_LIMIT = 16 * 1024 * 1024;
 interface ServerEntry {
   name: string;
-  config: Record<string, unknown>;
+  config: McpServerConfig;
   source: string;
   scope: "global";
 }
@@ -35,11 +41,7 @@ export interface McpConnection {
   close(): Promise<void>;
 }
 export interface McpCatalogItem {
-  readonly tool: {
-    readonly name: string;
-    readonly inputSchema: Record<string, unknown>;
-    readonly [key: string]: unknown;
-  };
+  readonly tool: McpTool;
   readonly definition: ToolDefinition;
 }
 export interface ManagedMcpOptions {
@@ -54,7 +56,10 @@ export interface ManagedMcpOptions {
   readonly management: {
     readonly exposures: readonly McpPresentation[];
     readonly persistenceLabel: string;
-    readonly updateConfig: (entry: { name: string }, patch: McpPreferencePatch) => Promise<void>;
+    readonly updateConfig: (
+      entry: { name: string },
+      patch: Pick<McpServerConfig, "enabled" | "exposure">,
+    ) => Promise<void>;
   };
   readonly serverLogging: false;
   readonly allowRegisteredServers: false;
@@ -169,9 +174,7 @@ export class ManagedMcpRuntime {
       : undefined;
   };
 
-  public extension(
-    factory: ManagedMcpFactory = createMcpExtension as unknown as ManagedMcpFactory,
-  ): ExtensionFactory {
+  public extension(factory: ManagedMcpFactory = createMcpExtension): ExtensionFactory {
     return factory({
       toolsOnly: true,
       authentication: false,
@@ -200,8 +203,12 @@ export class ManagedMcpRuntime {
                 exposure,
                 timeout: policy.timeoutMs / 1000,
                 ...(policy.transport === "http"
-                  ? { url: resolved.url, headers: resolved.headers }
-                  : { command: policy.command, args: [...policy.args], env: resolved.environment }),
+                  ? { url: resolved.url!, headers: resolved.headers! }
+                  : {
+                      command: policy.command,
+                      args: [...policy.args],
+                      env: resolved.environment!,
+                    }),
               },
             };
           }),
@@ -216,24 +223,32 @@ export class ManagedMcpRuntime {
     });
   }
 
-  private async updatePresentation(id: string, patch: McpPreferencePatch): Promise<void> {
+  private async updatePresentation(
+    id: string,
+    patch: Pick<McpServerConfig, "enabled" | "exposure">,
+  ): Promise<void> {
     const state = this.servers.get(id);
+    const exposure = patch.exposure;
     if (
       this.stopped ||
       state?.resolved.status !== "ready" ||
       Object.keys(patch).some((key) => key !== "enabled" && key !== "exposure") ||
       (patch.enabled !== undefined && typeof patch.enabled !== "boolean") ||
-      (patch.exposure !== undefined &&
-        !["direct", "hidden", ...(this.options.autoEnableCodemode ? ["codemode"] : [])].includes(
-          patch.exposure,
-        ))
+      (exposure !== undefined &&
+        exposure !== "direct" &&
+        exposure !== "hidden" &&
+        (exposure !== "codemode" || !this.options.autoEnableCodemode))
     )
       throw new Error("MCP presentation change unavailable");
-    await this.options.preferences?.update(id, patch);
+    const preference: McpPreferencePatch = {
+      ...(patch.enabled !== undefined ? { enabled: patch.enabled } : {}),
+      ...(exposure !== undefined ? { exposure } : {}),
+    };
+    await this.options.preferences?.update(id, preference);
     if (this.stopped) throw new Error("MCP session ended");
     this.invalidate(id);
     if (patch.enabled !== undefined) state.enabled = patch.enabled;
-    if (patch.exposure !== undefined) state.exposure = patch.exposure;
+    if (exposure !== undefined) state.exposure = exposure;
   }
 
   private invalidate(server: string): void {

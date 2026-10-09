@@ -200,8 +200,13 @@ the absence of runtime extension loading, bundled Bubblewrap input digest,
 architecture, version, required options, license packaging, installer mode, and
 release-manifest consistency.
 They verify the `pi-source.lock.json` source-archive checksum, apply
-the patch series to a clean temporary Pi 1.0.2 tree, run relevant upstream Pi
-tests, prove the configured-only catalog across model types and refreshes, build and inspect the static
+the patch series to a clean temporary Pi 1.0.2 tree, check production adapter types
+against the resulting declarations, and run relevant upstream Pi tests. The contract
+check verifies option keys and callback compatibility, including nested settings;
+negative controls remove or alter declarations in disposable copies to prove it
+fails on API drift. Behavioral guarantees remain covered by the Pi integration
+tests. Release checks also prove the configured-only catalog across model types
+and refreshes, build and inspect the static
 Rust broker, and inspect the final Bun application and release archive. The
 packaged executable diagnostic also proves that only the administrative model
 catalog is exposed. Its offline RPC lifecycle checks create new sessions, resume
