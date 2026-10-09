@@ -362,7 +362,9 @@ script per managed instance, and aborts/awaits that script on session shutdown.
 Pi Sandbox pins presentation to `on` with a 3000-token declaration budget and
 omits the `models` bridge. The runtime caps source bytes, deadline, total and
 concurrent bridge calls (including discovery helpers), and accumulated UTF-8
-output bytes. A source pragma may only shorten the administrator deadline.
+output bytes. Each serialized nested reply (including errors) and store-write
+journal has the same byte ceiling, independently of aggregate visible output.
+A source pragma may only shorten the administrator deadline.
 Normalized tool-name collisions are rejected. Nested calls still use
 `ctx.executeTool`, including the normal permission pipeline; the VM provides no
 host JavaScript APIs. Script completion waits for canceled nested operations to

@@ -447,6 +447,12 @@ Use these managed limits for the first implementation:
 | Final model output | At most 10000 estimated tokens of text; script pragma may lower it. Enforce byte/image limits before materializing/rendering.                                                                  |
 | Stored values      | Preserve upstream 256 KiB characters per value and 1 MiB characters total; no new host-file API.                                                                                               |
 
+The 16 MiB ceiling also applies separately to each serialized nested-tool/helper
+reply (including errors) and the store-write journal. Nested replies do not count
+against aggregate emitted/final output, so scripts may process multiple bounded
+responses. An oversized reply fails that call; an oversized store-write journal
+fails the script without persisting its writes.
+
 The overall deadline deliberately continues while the user considers approval.
 An expired prompt is cancelled; accepting a stale prompt cannot execute a tool.
 CPU-bound loops terminate through the VM interrupt flag and worker termination.

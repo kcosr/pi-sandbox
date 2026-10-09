@@ -1,5 +1,5 @@
 diff --git a/packages/codemode/src/runtime/host.ts b/packages/codemode/src/runtime/host.ts
-index 940359b..3e52b24 100644
+index 940359b..f16de1c 100644
 --- a/packages/codemode/src/runtime/host.ts
 +++ b/packages/codemode/src/runtime/host.ts
 @@ -67,6 +67,10 @@ interface PendingCall {
@@ -62,10 +62,16 @@ index 940359b..3e52b24 100644
  			case "done":
  				this.handleDone(message);
  				break;
-@@ -204,6 +231,10 @@ class Execution {
+@@ -204,6 +231,16 @@ class Execution {
  			this.finish({ kind: "script", ...parsed });
  			return;
  		}
++		// Store's live-state limits do not bound its deletion journal. Check the serialized
++		// journal before parsing or persisting it, separately from visible script output.
++		if (Buffer.byteLength(message.writes) > this.maxOutputBytes) {
++			this.finish({ kind: "sandbox", message: "Script store journal exceeds configured byte limit" });
++			return;
++		}
 +		if (Buffer.byteLength(message.value ?? "") + this.outputBytes > this.maxOutputBytes) {
 +			this.finish({ kind: "sandbox", message: "Script output exceeds configured byte limit" });
 +			return;
@@ -73,7 +79,28 @@ index 940359b..3e52b24 100644
  		this.finish(undefined, message.value === undefined ? undefined : JSON.parse(message.value), message.writes);
  	}
  
-@@ -261,15 +292,12 @@ class Execution {
+@@ -229,6 +266,20 @@ class Execution {
+ 			status = "error";
+ 		}
+ 
++		// Bound each serialized bridge reply, including errors, without charging nested
++		// data processing against the aggregate emitted/final output budget. Deliver a
++		// bounded call error the script may handle; termination and awaited cleanup
++		// remain in the normal VM completion path.
++		if (Buffer.byteLength(reply.payload ?? "") > this.maxOutputBytes) {
++			reply = {
++				type: "result",
++				id,
++				ok: false,
++				payload: "Bridge reply exceeds configured byte limit".slice(0, this.maxOutputBytes),
++			};
++			status = "error";
++		}
++
+ 		// Already cancelled by finish(): the record keeps "cancelled" and the
+ 		// worker is gone or going.
+ 		if (!this.pending.delete(id)) return;
+@@ -261,15 +312,12 @@ class Execution {
  					calls: this.calls,
  					storeWrites: writes === undefined ? { set: {}, delete: [] } : parseStoreWrites(writes),
  				};
@@ -94,7 +121,7 @@ index 940359b..3e52b24 100644
  	}
  }
  
-@@ -285,6 +313,10 @@ class Execution {
+@@ -285,6 +333,10 @@ class Execution {
  export class CodemodeSandbox {
  	private readonly toolsByName = new Map<string, CodemodeTool>();
  	private readonly globalsByName = new Map<string, CodemodeTool>();
@@ -105,7 +132,7 @@ index 940359b..3e52b24 100644
  	private readonly timeoutMs: number;
  	private readonly memoryLimitBytes: number | undefined;
  	private readonly wasm: CodemodeWasmModule | Promise<CodemodeWasmModule> | undefined;
-@@ -293,6 +325,7 @@ export class CodemodeSandbox {
+@@ -293,6 +345,7 @@ export class CodemodeSandbox {
  	private closed = false;
  
  	constructor(options: CodemodeSandboxOptions = {}) {
@@ -113,7 +140,7 @@ index 940359b..3e52b24 100644
  		this.timeoutMs = options.timeoutMs ?? DEFAULT_TIMEOUT_MS;
  		this.memoryLimitBytes = options.memoryLimitBytes;
  		this.wasm = options.wasm;
-@@ -316,6 +349,12 @@ export class CodemodeSandbox {
+@@ -316,6 +369,12 @@ export class CodemodeSandbox {
  	/** Throws if a tool with the same name is already registered. */
  	registerTool(tool: CodemodeTool): void {
  		if (this.toolsByName.has(tool.name)) throw new Error(`Tool "${tool.name}" is already registered`);
@@ -126,7 +153,7 @@ index 940359b..3e52b24 100644
  		this.toolsByName.set(tool.name, tool);
  	}
  
-@@ -339,6 +378,7 @@ export class CodemodeSandbox {
+@@ -339,6 +398,7 @@ export class CodemodeSandbox {
  	execute(code: string, options: CodemodeExecuteOptions = {}): Promise<CodemodeResult> {
  		if (this.closed) return Promise.reject(new Error("Sandbox is closed"));
  		const execution = new Execution({
@@ -135,10 +162,10 @@ index 940359b..3e52b24 100644
  			tools: new Map(this.toolsByName),
  			globals: this.globalsByName,
 diff --git a/packages/codemode/src/types.ts b/packages/codemode/src/types.ts
-index 4bc4f32..4e97cde 100644
+index 4bc4f32..bd1b4a2 100644
 --- a/packages/codemode/src/types.ts
 +++ b/packages/codemode/src/types.ts
-@@ -90,6 +90,13 @@ export type CodemodeResult =
+@@ -90,6 +90,14 @@ export type CodemodeResult =
  	| { ok: false; error: CodemodeError; output: CodemodeOutputItem[]; calls: CodemodeCall[] };
  
  export interface CodemodeSandboxOptions {
@@ -148,16 +175,17 @@ index 4bc4f32..4e97cde 100644
 +	/** Optional host-side limits, covering tool and helper bridge calls together. */
 +	maxCalls?: number;
 +	maxConcurrentCalls?: number;
++	/** Aggregate emitted/final output and each serialized bridge reply or store journal. */
 +	maxOutputBytes?: number;
  	tools?: CodemodeTool[];
  	/**
  	 * Functions exposed as top-level identifiers instead of on `tools`, for host helpers such as
 diff --git a/packages/codemode/test/managed-limits.test.ts b/packages/codemode/test/managed-limits.test.ts
 new file mode 100644
-index 0000000..9e9bdcf
+index 0000000..cec3511
 --- /dev/null
 +++ b/packages/codemode/test/managed-limits.test.ts
-@@ -0,0 +1,109 @@
+@@ -0,0 +1,174 @@
 +import { afterEach, describe, expect, it } from "vitest";
 +import { CodemodeSandbox } from "../src/index.ts";
 +const sandboxes: CodemodeSandbox[] = [];
@@ -222,6 +250,71 @@ index 0000000..9e9bdcf
 +		});
 +		expect(await sandbox.execute("text('é'.repeat(51));")).toMatchObject({ ok: false });
 +	});
++	it.each(["result", "error"])("rejects an oversized UTF-8 bridge %s before forwarding it to the VM", async (kind) => {
++		const sandbox = create({
++			maxOutputBytes: 1024,
++			awaitToolCleanup: true,
++			tools: [
++				{
++					name: "large",
++					execute: () => {
++						if (kind === "error") throw new Error("é".repeat(600));
++						return "é".repeat(600);
++					},
++				},
++			],
++		});
++		const result = await sandbox.execute("await tools.large();");
++		expect(result).toMatchObject({
++			ok: false,
++			error: { message: "Bridge reply exceeds configured byte limit" },
++			calls: [{ name: "large", status: "error" }],
++		});
++	});
++	it("allows many individually bounded replies without consuming the script-output budget", async () => {
++		const sandbox = create({ maxOutputBytes: 1024, tools: [{ name: "chunk", execute: () => "x".repeat(500) }] });
++		const result = await sandbox.execute(
++			"let total = 0; for (let i = 0; i < 10; i++) total += (await tools.chunk()).length; return total;",
++		);
++		expect(result).toMatchObject({ ok: true, value: 5000 });
++	});
++	it("bounds store deletion journals independently of live stored values", async () => {
++		const sandbox = create({ maxOutputBytes: 1024 * 1024 });
++		const result = await sandbox.execute('store("x".repeat(1024 * 1024 + 1), undefined);');
++		expect(result).toMatchObject({
++			ok: false,
++			error: { kind: "sandbox", message: "Script store journal exceeds configured byte limit" },
++		});
++		expect(result).not.toHaveProperty("storeWrites");
++	});
++	it("cleans up other nested calls after an oversized reply without waiting on itself", async () => {
++		let cleaned = false;
++		const sandbox = create({
++			maxOutputBytes: 1024,
++			awaitToolCleanup: true,
++			tools: [
++				{
++					name: "wait",
++					execute: (_args, { signal }) =>
++						new Promise((resolve) => {
++							signal.addEventListener(
++								"abort",
++								() => {
++									cleaned = true;
++									resolve(null);
++								},
++								{ once: true },
++							);
++						}),
++				},
++				{ name: "large", execute: () => "x".repeat(2048) },
++			],
++		});
++		const result = await sandbox.execute("await Promise.all([tools.wait(), tools.large()]);");
++		expect(result).toMatchObject({ ok: false, error: { message: "Bridge reply exceeds configured byte limit" } });
++		expect(cleaned).toBe(true);
++	});
++
 +	it("waits for aborted nested cleanup before the outer result settles", async () => {
 +		let cleaned = false;
 +		const sandbox = create({

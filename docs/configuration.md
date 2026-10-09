@@ -223,7 +223,10 @@ exposes a restricted JavaScript runtime whose nested tool calls use the same
 policies and approval prompts as ordinary calls. There is no `tools.codemode`
 policy or separate outer approval. The overall deadline includes nested approval
 waits. Code mode has no general host filesystem, process, network, or environment
-API; the configured tools define its external capabilities.
+API; the configured tools define its external capabilities. Script output and
+return values share a 16 MiB byte budget. Each nested reply and store-write journal
+has its own 16 MiB limit; processing several bounded replies does not consume the
+script-output budget.
 
 The required `[mcp.servers]` table is empty by default. Only this main policy can
 configure servers; user/project MCP settings and server-management commands do
