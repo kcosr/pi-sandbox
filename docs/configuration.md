@@ -277,7 +277,12 @@ variable names to effective Pi environment variable names. It runs from the
 captured launch CWD with fixed account identity, PATH, locale, and `/tmp` values,
 plus these maps, rather than inheriting all Pi credentials. Admin maps may replace
 baseline variables, but runtime injection variables remain forbidden. Executable
-paths and arguments are literal; deployment must install dependencies.
+paths and arguments are literal; deployment must install dependencies. A missing or
+nonexecutable stdio command marks only that server `executable-unavailable` for
+the process lifetime, without credential projection or a launch attempt. Other
+servers and built-in tools remain usable. Restart after fixing the executable.
+Structural configuration errors, including invalid command syntax, still abort
+startup.
 
 Both MCP transports are host capabilities. Stdio servers are trusted host programs
 with the invoking account's authority. Bubblewrap filesystem masks and network

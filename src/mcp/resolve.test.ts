@@ -155,13 +155,33 @@ describe("MCP per-account resolution", () => {
     expect(server!.status).toBe("configuration-value-unavailable");
   });
 
-  it("fails startup for a missing administrator-selected executable", async () => {
-    await expect(
-      resolveMcpServers({ servers: { local: stdio } }, { TOKEN: "secret" }, account, () =>
-        Promise.reject(new Error("host error secret")),
-      ),
-    ).rejects.toThrow("configured executable is unavailable");
-  });
+  it.each(["ENOENT", "EACCES"])(
+    "isolates a stdio executable check failure (%s) without projecting credentials",
+    async (code) => {
+      const identity = vi.fn(() => {
+        throw new Error("unavailable server must not look up its account");
+      });
+      const check = vi.fn(() =>
+        Promise.reject(Object.assign(new Error("private host error details"), { code })),
+      );
+      const servers = await resolveMcpServers(
+        { servers: { local: stdio, docs: { ...http, url: "https://example.com/mcp" } } },
+        { TOKEN: "private credential value" },
+        identity,
+        check,
+      );
+      expect(servers[0]).toEqual({ policy: stdio, status: "executable-unavailable" });
+      expect(Object.isFrozen(servers[0])).toBe(true);
+      expect(servers[0]).not.toHaveProperty("environment");
+      expect(JSON.stringify(servers[0])).not.toContain("private");
+      expect(servers[1]).toMatchObject({
+        status: "ready",
+        headers: { Authorization: "private credential value" },
+      });
+      expect(check).toHaveBeenCalledExactlyOnceWith(stdio.command);
+      expect(identity).not.toHaveBeenCalled();
+    },
+  );
   it("degrades a per-account URL failure without returning account data", async () => {
     const [server] = await resolveMcpServers(
       { servers: { docs: http } },

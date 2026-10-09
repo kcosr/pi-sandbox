@@ -233,8 +233,14 @@ separation, not containment against trusted host server code.
 
 The stdio CWD is always the captured canonical launch CWD. There is no separate
 MCP CWD setting. Installation checks command syntax; operational startup checks
-that enabled commands are executable before starting any server. Dependencies
-must already be installed by deployment. Pi Sandbox does not download packages.
+that enabled commands are executable before starting any server. A missing or
+nonexecutable command marks only that server `executable-unavailable` for the
+process lifetime; skip its credential projection and launch, and continue with
+other servers and built-ins. Report only the sanitized category, without host
+error details. Disabled servers skip this check. Restart after deployment repairs
+the executable. Invalid command syntax remains a structural configuration error
+that aborts startup. Dependencies must already be installed by deployment.
+Pi Sandbox does not download packages.
 Arguments may name administrator-installed launchers, but no `npx`/`uvx` setup is
 performed by this product.
 
@@ -471,9 +477,9 @@ cancellation; wait for local client cleanup within its bounded shutdown deadline
 
 Administrative configuration validation and per-server credential resolution
 complete before any server connects. Structural configuration errors abort the
-application; a per-account credential-resolution failure marks only its server
-unavailable and permits other servers to connect. It never causes an
-application-wide abort.
+application; a per-account credential-resolution failure or unavailable stdio
+executable marks only its server unavailable and permits other servers to connect.
+Neither condition causes an application-wide abort.
 Install managed policy/audit guards before MCP session-start callbacks can
 publish tools. Initialize enabled servers asynchronously per logical session;
 the first prompt waits at most 10 seconds for direct servers. Connections and
@@ -934,3 +940,16 @@ review and no remaining findings. Applied its optional wording clarification
 explicitly routing per-account resolved-value size/CR-LF errors to the server-only
 unavailable state. The design is finalized for implementation; no runtime
 behavior or deployment has changed.
+
+### 2026-10-09 — Implementation review, round 1
+
+Keel `iterative-review` run `run_dd2f9443-71a1-4920-b8c9-3e69f24b3ca5`, using
+`claude-default`, reviewed the implementation against `origin/main`. It reported
+one low-severity consistency issue: an unavailable stdio executable stopped the
+whole application while other operational server failures affected only that
+server. Accepted and changed this to the sanitized `executable-unavailable`
+state, with regression coverage for missing/nonexecutable commands, unrelated
+servers, credential projection, and diagnostics. Structural configuration errors
+still abort startup. The follow-up review also covers the HTTP cancellation
+cleanup fix, environment-macro coverage after broker merging, and per-message
+code-mode reply/store-journal bounds added during the initial review.

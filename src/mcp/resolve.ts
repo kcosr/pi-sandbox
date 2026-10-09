@@ -11,7 +11,11 @@ import { isMcpHeaderValue } from "../config/mcp.js";
 export interface ResolvedMcpServer {
   readonly policy: McpServerConfig;
   readonly status:
-    "ready" | "disabled" | "credentials-unavailable" | "configuration-value-unavailable";
+    | "ready"
+    | "disabled"
+    | "executable-unavailable"
+    | "credentials-unavailable"
+    | "configuration-value-unavailable";
   readonly url?: string;
   readonly headers?: Readonly<Record<string, string>>;
   readonly environment?: Readonly<Record<string, string>>;
@@ -76,11 +80,16 @@ export async function resolveMcpServers(
       resolved.push(Object.freeze({ policy, status: "disabled" }));
       continue;
     }
-    // The executable is administrator configuration, not a per-account credential failure.
-    if (policy.transport === "stdio")
-      await checkExecutable(policy.command).catch(() => {
-        throw new Error(`MCP server ${policy.id}: configured executable is unavailable`);
-      });
+    if (policy.transport === "stdio") {
+      try {
+        await checkExecutable(policy.command);
+      } catch {
+        // Runtime availability affects this server only. Do not resolve or project
+        // credentials for a process that cannot start, or expose host error details.
+        resolved.push(Object.freeze({ policy, status: "executable-unavailable" }));
+        continue;
+      }
+    }
     let values: Record<string, string>;
     try {
       values = references(

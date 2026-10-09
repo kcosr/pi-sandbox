@@ -234,6 +234,49 @@ describe("managed MCP admission", () => {
     finish(result);
     await Promise.all(calls);
   });
+  it("reports unavailable stdio executables without admitting them to the upstream factory", () => {
+    const transport = vi.fn(() => {
+      throw new Error("unavailable executable must not start");
+    });
+    const runtime = new ManagedMcpRuntime({
+      cwd: "/work",
+      servers: [
+        { policy: config, status: "ready", url: config.url },
+        {
+          policy: {
+            id: "local",
+            enabled: true,
+            transport: "stdio",
+            command: "/missing/server",
+            args: [],
+            env: {},
+            envFromEnv: { TOKEN: "PRIVATE_TOKEN" },
+            exposure: "direct",
+            timeoutMs: 60000,
+            defaultPolicy: allow,
+            toolRules: [],
+          },
+          status: "executable-unavailable",
+        },
+      ],
+      selected: () => true,
+      getPolicy: () => undefined,
+      getAuditor: () => undefined,
+      transportFactory: transport,
+    });
+    let options!: ManagedMcpOptions;
+    runtime.extension((value) => {
+      options = value;
+      return () => {};
+    });
+    expect(options.loadConfig()).toMatchObject({ servers: [{ name: "docs" }] });
+    expect(options.loadConfig().servers).toHaveLength(1);
+    expect(() => options.createTransport({ name: "local" })).toThrow("unavailable");
+    expect(transport).not.toHaveBeenCalled();
+    expect(runtime.diagnostics("local")).toBe(
+      "MCP servers (host execution)\nlocal: stdio, direct, executable-unavailable",
+    );
+  });
   it("passes only managed hooks/configuration to the upstream factory", () => {
     const { runtime } = setup();
     let options!: ManagedMcpOptions;
