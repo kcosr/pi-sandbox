@@ -53,6 +53,7 @@ export async function testManagedMcpCodemode({
   await writeFile(serverScript, stdioFixture());
   await writeFile(join(workspace, "input.txt"), "nested-read-marker");
   const counts = new Map();
+  let providerScenario = { marker: "MCP_ENABLED_SMOKE", codemode: true, directMcp: true, script };
   let serverFailure;
   const server = createServer(async (request, response) => {
     try {
@@ -61,13 +62,24 @@ export async function testManagedMcpCodemode({
         const body = await jsonBody(request);
         providerRequests.push(body);
         const lastUser = [...body.messages].reverse().find((message) => message.role === "user");
-        const marker = JSON.stringify(lastUser).includes("MCP_DISABLED_SMOKE")
-          ? "disabled"
-          : "enabled";
+        const { marker } = providerScenario;
+        assert(JSON.stringify(lastUser).includes(marker), `unexpected prompt for ${marker}`);
         const count = counts.get(marker) ?? 0;
         counts.set(marker, count + 1);
         const tools = body.tools ?? [];
         const names = tools.map((tool) => tool.function?.name ?? tool.custom?.name);
+        assert.equal(
+          names.includes("codemode"),
+          providerScenario.codemode,
+          `${marker}: code-mode activation`,
+        );
+        assert.deepEqual(
+          names.filter((name) => name?.startsWith("mcp__")).sort(),
+          providerScenario.directMcp
+            ? ["mcp__docs__delete_record", "mcp__docs__mutate_record", "mcp__docs__search_allowed"]
+            : [],
+          `${marker}: only admitted MCP tools with direct exposure reach the provider`,
+        );
         response.writeHead(200, { "content-type": "text/event-stream" });
         const chunk = (delta, finishReason = null) =>
           response.write(
@@ -79,15 +91,7 @@ export async function testManagedMcpCodemode({
               choices: [{ index: 0, delta, finish_reason: finishReason }],
             })}\n\n`,
           );
-        if (marker === "enabled" && count === 0) {
-          assert(
-            names.includes("codemode"),
-            "enabled code mode must be exposed in the actual provider request",
-          );
-          assert(
-            !names.includes("mcp__docs__hidden_secret"),
-            "disabled MCP tool must not reach provider",
-          );
+        if (providerScenario.script !== undefined && count === 0) {
           const code = tools.find(
             (tool) => (tool.function?.name ?? tool.custom?.name) === "codemode",
           );
@@ -99,20 +103,18 @@ export async function testManagedMcpCodemode({
                 id: "smoke-code-1",
                 type: code.type,
                 ...(code.type === "custom"
-                  ? { custom: { name: "codemode", input: script } }
+                  ? { custom: { name: "codemode", input: providerScenario.script } }
                   : {
-                      function: { name: "codemode", arguments: JSON.stringify({ code: script }) },
+                      function: {
+                        name: "codemode",
+                        arguments: JSON.stringify({ code: providerScenario.script }),
+                      },
                     }),
               },
             ],
           });
           chunk({}, "tool_calls");
         } else {
-          if (marker === "disabled")
-            assert(
-              names.every((name) => name !== "codemode" && !name?.startsWith("mcp__")),
-              "user settings must not enable managed features",
-            );
           chunk({ role: "assistant", content: `SMOKE_${marker.toUpperCase()}_DONE` });
           chunk({}, "stop");
         }
@@ -250,6 +252,7 @@ export async function testManagedMcpCodemode({
     });
     await writeFile(join(userState, "mcp.json"), rogue);
     await writeFile(join(workspace, ".pi", "mcp.json"), rogue);
+    await writeFile(join(userState, "settings.json"), "{}");
     running = rpc(launch(["--provider", "fixture", "--model", "fixture"]), () => serverFailure);
     running.onSelect = async (message) => {
       prompts.push(message.title);
@@ -319,6 +322,134 @@ export async function testManagedMcpCodemode({
       "session DELETE must preserve query",
     );
 
+    const preferenceCases = [
+      { marker: "ADMIN_FLAG_ALONE", codemode: false, directMcp: false, mcp: false },
+      {
+        marker: "SETTINGS_CODEMODE",
+        codemode: true,
+        directMcp: false,
+        mcp: false,
+        settings: { defaultTools: ["+codemode"] },
+      },
+      {
+        marker: "CLI_EXCLUDES_CODEMODE",
+        codemode: false,
+        directMcp: false,
+        mcp: true,
+        adminExposure: "codemode",
+        preference: { enabled: true, exposure: "codemode" },
+        settings: { defaultTools: ["+codemode"] },
+        args: ["--exclude-tools", "codemode"],
+      },
+      {
+        marker: "PREFERENCES_DISABLED",
+        codemode: false,
+        directMcp: false,
+        mcp: true,
+        preference: { enabled: false, exposure: "direct" },
+      },
+      {
+        marker: "PREFERENCES_CODEMODE",
+        codemode: true,
+        directMcp: false,
+        mcp: true,
+        preference: { enabled: true, exposure: "codemode" },
+        script: 'text(await tools.mcp__docs__search_allowed({query:"preferences"}));',
+      },
+      {
+        marker: "PREFERENCES_DIRECT",
+        codemode: false,
+        directMcp: true,
+        mcp: true,
+        preference: { enabled: true, exposure: "direct" },
+      },
+      {
+        marker: "PREFERENCES_NO_AUTO",
+        codemode: false,
+        directMcp: false,
+        mcp: true,
+        preference: { enabled: true, exposure: "codemode" },
+        autoEnableCodemode: false,
+      },
+    ];
+    for (const scenario of preferenceCases) {
+      for (const server of Object.values(config.mcp.servers)) server.enabled = scenario.mcp;
+      config.mcp.servers.docs.exposure = scenario.adminExposure ?? "direct";
+      await writeFile(configPath, stringifyToml(config));
+      await writeFile(join(userState, "settings.json"), JSON.stringify(scenario.settings ?? {}));
+      await writeFile(
+        join(userState, "mcp.json"),
+        JSON.stringify({
+          autoEnableCodemode: scenario.autoEnableCodemode ?? true,
+          mcpServers: {
+            ...JSON.parse(rogue).mcpServers,
+            docs: { ...scenario.preference, url: `http://127.0.0.1:${port}/rogue-override` },
+            local: { enabled: false },
+          },
+        }),
+      );
+      await writeFile(
+        join(workspace, ".pi", "mcp.json"),
+        JSON.stringify({
+          mcpServers: {
+            ...JSON.parse(rogue).mcpServers,
+            docs: {
+              enabled: scenario.preference?.enabled !== true,
+              exposure: scenario.preference?.exposure === "direct" ? "hidden" : "direct",
+            },
+            local: { enabled: true, exposure: "direct" },
+          },
+        }),
+      );
+      providerScenario = scenario;
+      const httpBefore = receivedHttp.length;
+      const pidsBefore = await readPids(pidLog);
+      running = rpc(
+        launch(["--provider", "fixture", "--model", "fixture", ...(scenario.args ?? [])]),
+        () => serverFailure,
+      );
+      await running.request("get_state");
+      await running.request("prompt", { message: scenario.marker });
+      await running.wait(
+        () => running.messages.find((message) => message.type === "agent_end"),
+        `${scenario.marker} agent_end`,
+      );
+      assert(counts.has(scenario.marker), `${scenario.marker} must reach the local provider`);
+      if (scenario.script !== undefined) {
+        const result = running.messages.find(
+          (message) => message.type === "tool_execution_end" && message.toolName === "codemode",
+        );
+        assert(
+          result,
+          `missing preference replay result: ${JSON.stringify(running.messages).slice(-8000)}`,
+        );
+        assert.equal(result.isError, false, JSON.stringify(result));
+        assert(
+          JSON.stringify(result.result).includes("HTTP_search_allowed_OK"),
+          "code-only preference must still route calls through the administrative connection",
+        );
+      }
+      await running.stop();
+      running = undefined;
+      assert.deepEqual(
+        await readPids(pidLog),
+        pidsBefore,
+        "user-disabled stdio must not start despite project preferences",
+      );
+      if (!scenario.mcp || scenario.preference?.enabled === false)
+        assert.equal(
+          receivedHttp.length,
+          httpBefore,
+          "disabled servers and project overrides must not connect",
+        );
+      else
+        assert(
+          receivedHttp.slice(httpBefore).some((request) => request.rpc === "tools/list"),
+          "approved HTTP server must reconnect with remembered presentation",
+        );
+      if (serverFailure) throw serverFailure;
+    }
+
     config.codemode.enabled = false;
     for (const server of Object.values(config.mcp.servers)) server.enabled = false;
     config.mcp.servers.local.command = "/missing/disabled-mcp-server";
@@ -327,6 +458,7 @@ export async function testManagedMcpCodemode({
       join(userState, "settings.json"),
       JSON.stringify({ defaultTools: ["codemode"], codemode: { mode: "only" } }),
     );
+    providerScenario = { marker: "MCP_DISABLED_SMOKE", codemode: false, directMcp: false };
     const before = receivedHttp.length;
     const pidsBefore = await readPids(pidLog);
     running = rpc(launch(["--provider", "fixture", "--model", "fixture"]), () => serverFailure);

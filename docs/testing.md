@@ -260,7 +260,10 @@ shipped with the matching application.
 Offline fixtures verify administrator-only configuration, credential projection,
 path/environment account macros and literal URL query preservation, original-name wildcard policies, bounded
 approvals, exact grants, stale-catalog revocation, tool narrowing and session
-cleanup. HTTP and stdio transports share policy tests. Patched-source tests cover
+cleanup. Activation tests cover merged Pi settings, CLI ceilings, admin disablement,
+MCP autoactivation, and stock `on`/`only` presentation. Preference/menu fixtures
+verify persistence, immutable managed connections, unavailable servers, save failures,
+and revocation on disable/exposure changes. HTTP and stdio transports share policy tests. Patched-source tests cover
 bounded HTTP JSON/error/SSE reads, stdio process-group cleanup, inline results,
 code VM source/call/output limits, deadlines and awaited nested cancellation.
 The packaged fixture exercises the compiled application with a local scripted

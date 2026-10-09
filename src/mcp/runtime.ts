@@ -20,6 +20,7 @@ import { approvalPreview, approvalUi } from "../extension/approval.js";
 import { ManagedToolExecutionError } from "../runtime/tool-error.js";
 import type { ResolvedMcpServer } from "./resolve.js";
 import { mcpSubject, resolveMcpPolicy } from "./policy.js";
+import type { ManagedMcpPreferences, McpPreferencePatch, McpPresentation } from "./preferences.js";
 
 const MESSAGE_LIMIT = 16 * 1024 * 1024;
 interface ServerEntry {
@@ -44,13 +45,17 @@ export interface McpCatalogItem {
 export interface ManagedMcpOptions {
   readonly loadConfig: () => {
     servers: ServerEntry[];
-    autoEnableCodemode: false;
+    autoEnableCodemode: boolean;
     errors: string[];
   };
   readonly createTransport: (entry: { name: string }) => McpTransport;
   readonly toolsOnly: true;
   readonly authentication: false;
-  readonly management: false;
+  readonly management: {
+    readonly exposures: readonly McpPresentation[];
+    readonly persistenceLabel: string;
+    readonly updateConfig: (entry: { name: string }, patch: McpPreferencePatch) => Promise<void>;
+  };
   readonly serverLogging: false;
   readonly allowRegisteredServers: false;
   readonly resultMode: "inline";
@@ -82,6 +87,8 @@ interface InvocationGuard {
 interface ServerState {
   readonly resolved: ResolvedMcpServer;
   status: string;
+  enabled: boolean;
+  exposure: McpPresentation;
   generation: number;
   active: number;
   connection?: McpConnection;
@@ -132,23 +139,32 @@ export class ManagedMcpRuntime {
       readonly cwd: string;
       readonly servers: readonly ResolvedMcpServer[];
       readonly selected: (name: string) => boolean;
+      readonly autoEnableCodemode?: boolean;
+      readonly preferences?: ManagedMcpPreferences;
       readonly getPolicy: () => PolicyEngine | undefined;
       readonly getAuditor: () => ToolAuditor | undefined;
       readonly transportFactory?: (server: ResolvedMcpServer) => McpTransport;
     },
   ) {
-    for (const resolved of options.servers)
+    for (const resolved of options.servers) {
+      const preference = options.preferences?.server(resolved.policy.id);
       this.servers.set(resolved.policy.id, {
         resolved,
         status: resolved.status,
+        enabled: preference?.enabled !== false,
+        exposure:
+          preference?.exposure === "codemode" && !options.autoEnableCodemode
+            ? resolved.policy.exposure
+            : (preference?.exposure ?? resolved.policy.exposure),
         generation: 0,
         active: 0,
       });
+    }
   }
 
   public resolveSubject = (subject: string): ResolvedSubjectPolicy | undefined => {
     const admission = this.admissions.get(subject);
-    return admission?.live && !this.stopped && this.options.selected(admission.definition.name)
+    return admission !== undefined && this.current(admission)
       ? { policy: admission.policy, revision: admission.revision }
       : undefined;
   };
@@ -159,7 +175,13 @@ export class ManagedMcpRuntime {
     return factory({
       toolsOnly: true,
       authentication: false,
-      management: false,
+      management: {
+        exposures: this.options.autoEnableCodemode
+          ? ["direct", "codemode", "hidden"]
+          : ["direct", "hidden"],
+        persistenceLabel: "saved for this user",
+        updateConfig: (entry, patch) => this.updatePresentation(entry.name, patch),
+      },
       serverLogging: false,
       allowRegisteredServers: false,
       resultMode: "inline",
@@ -167,15 +189,15 @@ export class ManagedMcpRuntime {
       loadConfig: () => ({
         servers: [...this.servers.values()]
           .filter((server) => server.resolved.status === "ready")
-          .map(({ resolved }) => {
+          .map(({ resolved, enabled, exposure }) => {
             const policy = resolved.policy;
             return {
               name: policy.id,
               source: "managed-policy",
               scope: "global" as const,
               config: {
-                enabled: true,
-                exposure: policy.exposure,
+                enabled,
+                exposure,
                 timeout: policy.timeoutMs / 1000,
                 ...(policy.transport === "http"
                   ? { url: resolved.url, headers: resolved.headers }
@@ -183,13 +205,35 @@ export class ManagedMcpRuntime {
               },
             };
           }),
-        autoEnableCodemode: false,
+        autoEnableCodemode:
+          this.options.autoEnableCodemode === true &&
+          this.options.preferences?.autoEnableCodemode !== false,
         errors: [],
       }),
       createTransport: (entry) => this.createTransport(entry.name),
       adaptTools: (entry, catalog, connection) => this.adaptTools(entry.name, catalog, connection),
       onServerState: (entry, connection) => this.serverChanged(entry.name, connection),
     });
+  }
+
+  private async updatePresentation(id: string, patch: McpPreferencePatch): Promise<void> {
+    const state = this.servers.get(id);
+    if (
+      this.stopped ||
+      state?.resolved.status !== "ready" ||
+      Object.keys(patch).some((key) => key !== "enabled" && key !== "exposure") ||
+      (patch.enabled !== undefined && typeof patch.enabled !== "boolean") ||
+      (patch.exposure !== undefined &&
+        !["direct", "hidden", ...(this.options.autoEnableCodemode ? ["codemode"] : [])].includes(
+          patch.exposure,
+        ))
+    )
+      throw new Error("MCP presentation change unavailable");
+    await this.options.preferences?.update(id, patch);
+    if (this.stopped) throw new Error("MCP session ended");
+    this.invalidate(id);
+    if (patch.enabled !== undefined) state.enabled = patch.enabled;
+    if (patch.exposure !== undefined) state.exposure = patch.exposure;
   }
 
   private invalidate(server: string): void {
@@ -279,9 +323,12 @@ export class ManagedMcpRuntime {
         const wrapped: ToolDefinition = {
           ...base,
           exposure:
-            policy.mode === "disabled" || !this.options.selected(name)
+            policy.mode === "disabled" ||
+            !state.enabled ||
+            state.exposure === "hidden" ||
+            !this.options.selected(name)
               ? "hidden"
-              : state.resolved.policy.exposure === "codemode"
+              : state.exposure === "codemode"
                 ? "deferred"
                 : "direct",
           execute: (id, params, signal, update, ctx) => {
@@ -342,6 +389,8 @@ export class ManagedMcpRuntime {
     const latest = this.admissions.get(admission.subject);
     return (
       !this.stopped &&
+      this.servers.get(admission.server)?.enabled === true &&
+      this.servers.get(admission.server)?.exposure !== "hidden" &&
       latest?.live === true &&
       latest.revision === admission.revision &&
       admission.connection.state === "connected" &&
@@ -410,7 +459,7 @@ export class ManagedMcpRuntime {
 
   private createTransport(id: string): McpTransport {
     const state = this.servers.get(id);
-    if (state === undefined || this.stopped || state.resolved.status !== "ready")
+    if (state === undefined || this.stopped || !state.enabled || state.resolved.status !== "ready")
       throw new Error("MCP server unavailable");
     const { resolved } = state;
     const policy = resolved.policy;
@@ -484,7 +533,7 @@ export class ManagedMcpRuntime {
     for (const [id, state] of this.servers) {
       if (serverId !== undefined && id !== serverId) continue;
       lines.push(
-        `${id}: ${state.resolved.policy.transport}, ${state.resolved.policy.exposure}, ${state.status}`,
+        `${id}: ${state.resolved.policy.transport}, ${state.exposure}, ${state.enabled ? state.status : "disabled by user"}`,
       );
       if (serverId !== undefined)
         for (const tool of this.admissions.values())

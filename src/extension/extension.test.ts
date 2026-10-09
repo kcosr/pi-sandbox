@@ -8,6 +8,8 @@ import type {
   UserBashEventResult,
 } from "@earendil-works/pi-coding-agent";
 import { describe, expect, it, vi } from "vitest";
+import { SettingsManager } from "@earendil-works/pi-coding-agent";
+import { isManagedToolSelected } from "../runtime/arguments.js";
 
 import { TOOL_NAMES, type SandboxConfig, type ToolName } from "../domain/index.js";
 import type { HostCommandExecutor, HostCommandRequest } from "../host/index.js";
@@ -40,7 +42,7 @@ interface HostEchoArguments extends JsonObject {
   readonly value: string;
 }
 
-function fakePi(): FakePi {
+function fakePi(settings: ReturnType<ExtensionAPI["getSettings"]> = {}): FakePi {
   const handlers = new Map<string, Handler>();
   const tools = new Map<string, ToolDefinition>();
   const commands = new Map<string, CommandOptions>();
@@ -62,6 +64,7 @@ function fakePi(): FakePi {
     setActiveTools(names: string[]) {
       activeTools.push([...names]);
     },
+    getSettings: () => settings,
     getActiveTools() {
       return [...(activeTools.at(-1) ?? [])];
     },
@@ -302,7 +305,7 @@ async function start(
     userStateDir: "/home/test/.pi/agent",
     loadConfig: () => Promise.resolve(cfg),
     executor,
-    ...(activeTools === undefined ? {} : { activeTools }),
+    ...(activeTools === undefined ? {} : { toolArguments: ["--tools", activeTools.join(",")] }),
   })(fake.api);
   await fake.handlers.get("session_start")?.(undefined as never, context());
 }
@@ -317,6 +320,81 @@ async function executeTool(
   if (tool === undefined) throw new Error(`missing ${name}`);
   return tool.execute("call-1", input, signal, undefined, context());
 }
+
+describe("managed initial tool activation", () => {
+  async function activate(
+    settings: ReturnType<ExtensionAPI["getSettings"]> = {},
+    args: readonly string[] = [],
+    enabled = true,
+  ): Promise<FakePi> {
+    const pi = fakePi(settings);
+    const cfg = { ...config(), codemode: { enabled, timeoutMs: 1000 } };
+    await createPiSandboxExtension({
+      cwd: "/work/project",
+      configPath: "/etc/pi-sandbox/config.toml",
+      userStateDir: "/home/test/.pi/agent",
+      loadConfig: () => Promise.resolve(cfg),
+      executor: fakeExecutor(),
+      toolArguments: args,
+      features: { config: cfg, servers: [], selected: (name) => isManagedToolSelected(args, name) },
+    })(pi.api);
+    await pi.handlers.get("session_start")?.(undefined as never, context());
+    return pi;
+  }
+
+  it("registers an administrator-enabled codemode without activating it by default", async () => {
+    const pi = await activate();
+    expect(pi.activeTools.at(-1)).toEqual(TOOL_NAMES);
+    expect(pi.tools.get("codemode")).toMatchObject({
+      defaultActive: false,
+      exposure: "model-only",
+    });
+    expect(pi.commands.has("codemode")).toBe(false);
+  });
+
+  it.each([
+    { defaults: ["+codemode"], active: [...TOOL_NAMES, "codemode"] },
+    { defaults: ["+codemode", "-codemode"], active: TOOL_NAMES },
+    { defaults: ["codemode", "read"], active: ["read", "codemode"] },
+    { defaults: [], active: [] },
+  ])("applies the initial defaultTools setting $defaults", async ({ defaults, active }) => {
+    const pi = await activate({ defaultTools: defaults });
+    expect(pi.activeTools.at(-1)).toEqual(active);
+  });
+
+  it("uses Pi's global/project defaultTools merge instead of reading an independent settings file", async () => {
+    const settings = SettingsManager.fromStorage({
+      withLock(scope, read) {
+        read(
+          JSON.stringify({
+            defaultTools: scope === "global" ? ["read", "write"] : ["-write", "+codemode"],
+          }),
+        );
+      },
+    });
+    const pi = await activate(settings.getSettings());
+    expect(pi.activeTools.at(-1)).toEqual(["read", "codemode"]);
+  });
+
+  it("allows an explicit CLI selection and treats CLI exclusions as an availability ceiling", async () => {
+    const included = await activate({ defaultTools: ["read"] }, ["--tools", "read,codemode"]);
+    expect(included.activeTools.at(-1)).toEqual(["read", "codemode"]);
+    for (const args of [["--tools", "read"], ["--exclude-tools", "codemode"], ["--no-tools"]]) {
+      const pi = await activate({ defaultTools: ["+codemode"] }, args);
+      expect(pi.activeTools.at(-1)).not.toContain("codemode");
+      expect(pi.tools.get("codemode")?.exposure).toBe("hidden");
+      await expect(executeTool(pi, "codemode", { code: "text(1)" })).rejects.toThrow(
+        "Code mode unavailable",
+      );
+    }
+  });
+
+  it("cannot activate administrator-disabled codemode through settings or CLI", async () => {
+    const pi = await activate({ defaultTools: ["+codemode"] }, ["--tools", "read,codemode"], false);
+    expect(pi.tools.has("codemode")).toBe(false);
+    expect(pi.activeTools.at(-1)).toEqual(["read"]);
+  });
+});
 
 describe("Pi Sandbox extension", () => {
   async function loggedExtension(

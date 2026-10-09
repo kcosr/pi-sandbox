@@ -39,12 +39,15 @@ administrator policy. Code mode executes bounded JavaScript in Pi's QuickJS WASM
 worker with tool bridges and session store; it has no Node, filesystem, process,
 network or provider-model API. Every nested tool uses the same wrapped execution
 and approval path as a direct invocation. Code mode has a feature switch, not an
-additional approval subject.
+additional approval subject. It controls availability; normal Pi settings and CLI
+selection control activation, including automatic activation from MCP exposure.
 
 MCP servers use Pi's existing Streamable HTTP and stdio transports on the host.
-The main TOML owns endpoints, commands, credential mappings, exposure, and ordered
-per-server wildcard policies. User/project MCP configuration, extension-registered
-servers, OAuth, mutable management, resources and prompts are disabled. HTTP
+The main TOML owns endpoints, commands, credential mappings, default exposure, and ordered
+per-server wildcard policies. The stock MCP menu can change enabled/exposure
+preferences for admitted servers, persisted in the user's `mcp.json`; arbitrary
+user/project server definitions, extension-registered servers, OAuth, resources
+and prompts are disabled. HTTP
 headers and stdio environment values are explicit projections of a startup
 snapshot; stdio does not inherit the complete host environment. Account macros
 can personalize configured paths and environment values. MCP URLs remain literal.

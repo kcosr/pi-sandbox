@@ -525,7 +525,7 @@ index bf239ff..304c153 100644
  	/** Temp file with the full text output, when the output was truncated. */
  	fullOutputPath?: string;
 diff --git a/packages/coding-agent/src/extensions/mcp/index.ts b/packages/coding-agent/src/extensions/mcp/index.ts
-index b2b8cb7..5dcd000 100644
+index b2b8cb7..2b4f742 100644
 --- a/packages/coding-agent/src/extensions/mcp/index.ts
 +++ b/packages/coding-agent/src/extensions/mcp/index.ts
 @@ -27,6 +27,7 @@
@@ -536,7 +536,7 @@ index b2b8cb7..5dcd000 100644
  import type { SelectItem } from "@earendil-works/pi-tui";
  import type { TSchema } from "typebox";
  import { getAgentDir } from "../../config.ts";
-@@ -61,12 +62,33 @@ import {
+@@ -61,12 +62,45 @@ import {
  import { loadMcpRuntime } from "./runtime.lazy.ts";
  import type * as McpRuntime from "./runtime.ts";
  import type { McpServerConnection, McpServerLog, McpTransportFactory } from "./runtime.ts";
@@ -546,13 +546,25 @@ index b2b8cb7..5dcd000 100644
  
  export type { McpTransportFactory } from "./runtime.ts";
  
++/** A manager for externally owned configuration, without credential or project controls. */
++export interface McpManagementOptions {
++	exposures: readonly McpExposure[];
++	/** Validate and save before the manager changes its local state. Never writes mcp.json. */
++	updateConfig: (
++		entry: McpServerEntry,
++		patch: Pick<McpServerConfigPatch, "enabled" | "exposure">,
++	) => void | Promise<void>;
++	/** Description shown beside preference changes. Defaults to "for this session". */
++	persistenceLabel?: string;
++}
++
  export interface McpExtensionOptions {
 +	/** Restrict this integration to tools, including its protocol capabilities. */
 +	toolsOnly?: boolean;
 +	/** Disable automatic OAuth and provider-token authentication. */
 +	authentication?: boolean;
-+	/** Disable registration of the /mcp management command. */
-+	management?: boolean;
++	/** Disable /mcp, or restrict it to preferences for externally owned configuration. */
++	management?: boolean | McpManagementOptions;
 +	/** Disable raw server log persistence. */
 +	serverLogging?: boolean;
 +	/** Ignore servers registered by other extensions. */
@@ -571,7 +583,24 @@ index b2b8cb7..5dcd000 100644
  	/** Defaults to reading `mcp.json` from the agent directory and the trusted project. */
  	loadConfig?: (ctx: ExtensionContext) => LoadedMcpConfig;
  	/** Defaults to stdio and streamable HTTP transports built from the server config. */
-@@ -324,6 +346,7 @@ export function createMcpExtension(options: McpExtensionOptions = {}): Extension
+@@ -275,6 +309,16 @@ const MCP_USAGE = "Usage: /mcp, /mcp login [server], /mcp logout [server], /mcp
+ 
+ export function createMcpExtension(options: McpExtensionOptions = {}): ExtensionFactory {
+ 	return (pi: ExtensionAPI) => {
++		const management = typeof options.management === "object" ? options.management : undefined;
++		const sanitized = management !== undefined || options.management === false;
++		const stateDescription = (server: McpServer, withError = true) =>
++			sanitized && isEnabled(server) && server.connection?.state === "needs-auth"
++				? "unavailable"
++				: describeState(server, withError && !sanitized);
++		const emptyServers = management
++			? "No MCP servers are available."
++			: `No MCP servers configured. Add them to ${resolve(getAgentDir(), "mcp.json")} or .pi/mcp.json.`;
++		const usage = management ? "Usage: /mcp, /mcp reconnect [server]" : MCP_USAGE;
+ 		let servers: McpServer[] = [];
+ 		/** Servers from `mcp.json`, which take precedence over registered servers of the same name. */
+ 		let configuredEntries: McpServerEntry[] = [];
+@@ -324,6 +368,7 @@ export function createMcpExtension(options: McpExtensionOptions = {}): Extension
  
  		/** Servers extensions registered, except names `mcp.json` defines, which take precedence. */
  		const registeredServers = (): { servers: McpServer[]; overridden: string[] } => {
@@ -579,7 +608,7 @@ index b2b8cb7..5dcd000 100644
  			const registered: McpServer[] = [];
  			const overriddenNames: string[] = [];
  			for (const { name, config, extensionPath } of pi.getMcpServers()) {
-@@ -357,7 +380,7 @@ export function createMcpExtension(options: McpExtensionOptions = {}): Extension
+@@ -357,7 +402,7 @@ export function createMcpExtension(options: McpExtensionOptions = {}): Extension
  		/** Tool names currently offered by each server. */
  		const serverTools = new Map<string, Set<string>>();
  		/** Last definition registered under each tool name, to re-register withdrawn tools as hidden. */
@@ -588,7 +617,7 @@ index b2b8cb7..5dcd000 100644
  
  		// A resumed session renders calls to MCP tools before their server connected, if it ever does.
  		pi.registerToolRenderer((toolName, next) => {
-@@ -394,6 +417,7 @@ export function createMcpExtension(options: McpExtensionOptions = {}): Extension
+@@ -394,6 +439,7 @@ export function createMcpExtension(options: McpExtensionOptions = {}): Extension
  				current.add(name);
  				return name;
  			};
@@ -596,7 +625,7 @@ index b2b8cb7..5dcd000 100644
  			for (const tool of connection.tools) {
  				const definition = createMcpToolDefinition({
  					server,
-@@ -404,7 +428,15 @@ export function createMcpExtension(options: McpExtensionOptions = {}): Extension
+@@ -404,7 +450,15 @@ export function createMcpExtension(options: McpExtensionOptions = {}): Extension
  					timeoutMs: connection.timeoutMs,
  					getClient: async () => connection,
  					readableResources: () => resourceServers().includes(connection),
@@ -612,7 +641,7 @@ index b2b8cb7..5dcd000 100644
  				definitions.set(definition.name, definition);
  				pi.registerTool(definition);
  			}
-@@ -443,6 +475,7 @@ export function createMcpExtension(options: McpExtensionOptions = {}): Extension
+@@ -443,6 +497,7 @@ export function createMcpExtension(options: McpExtensionOptions = {}): Extension
  		 * one of them is direct, and so on. They are hidden when no server has resources.
  		 */
  		const syncResourceTools = () => {
@@ -620,7 +649,7 @@ index b2b8cb7..5dcd000 100644
  			const exposures = new Set(serversWithResources().map((server) => exposureOf(server.entry)));
  			const exposure = (["direct", "codemode", "deferred"] as const).find((candidate) => exposures.has(candidate));
  			const next = exposure ?? "hidden";
-@@ -508,6 +541,11 @@ export function createMcpExtension(options: McpExtensionOptions = {}): Extension
+@@ -508,6 +563,11 @@ export function createMcpExtension(options: McpExtensionOptions = {}): Extension
  			return url && credentials ? JSON.stringify(credentials.tokens(connection.name, url) ?? null) : "null";
  		};
  		const onConnectionChange = (connection: McpServerConnection) => {
@@ -632,7 +661,7 @@ index b2b8cb7..5dcd000 100644
  			if (connection.state !== "needs-auth") tokensAtSignIn.delete(connection);
  			else if (!tokensAtSignIn.has(connection)) tokensAtSignIn.set(connection, storedTokens(connection));
  			emitChange();
-@@ -528,9 +566,14 @@ export function createMcpExtension(options: McpExtensionOptions = {}): Extension
+@@ -528,9 +588,14 @@ export function createMcpExtension(options: McpExtensionOptions = {}): Extension
  				entry: server.entry,
  				cwd: sessionCwd,
  				createTransport: options.createTransport ?? runtime.createDefaultTransport,
@@ -650,14 +679,19 @@ index b2b8cb7..5dcd000 100644
  				onTools: registerTools,
  				onChange: onConnectionChange,
  			});
-@@ -584,11 +627,13 @@ export function createMcpExtension(options: McpExtensionOptions = {}): Extension
+@@ -580,15 +645,17 @@ export function createMcpExtension(options: McpExtensionOptions = {}): Extension
+ 		 * that connected later.
+ 		 */
+ 		const reportProblems = (ctx: ExtensionContext, only?: readonly McpServer[]) => {
+-			const lines = only ? [] : configErrors.map((error) => `config: ${error}`);
++			const lines = only
++				? []
++				: configErrors.map((error) => (sanitized ? "Configuration unavailable" : `config: ${error}`));
  			for (const server of only ?? servers) {
  				const state = server.connection?.state;
  				if (state === "needs-auth" || state === "failed")
 -					lines.push(`${server.entry.name}: ${describeState(server)}`);
-+					lines.push(
-+						`${server.entry.name}: ${options.management === false ? "unavailable" : describeState(server)}`,
-+					);
++					lines.push(`${server.entry.name}: ${sanitized ? "unavailable" : describeState(server)}`);
  			}
  			if (lines.length === 0) return;
  			ctx.ui.notify(
@@ -666,21 +700,263 @@ index b2b8cb7..5dcd000 100644
  				"warning",
  			);
  		};
-@@ -1029,7 +1074,12 @@ export function createMcpExtension(options: McpExtensionOptions = {}): Extension
+@@ -597,16 +664,31 @@ export function createMcpExtension(options: McpExtensionOptions = {}): Extension
+ 		 * Save a config change; returns an error message when the file could not be updated. Changes to
+ 		 * registered servers only apply to the current session. `inProject` adds a project override.
+ 		 */
+-		const saveConfig = (server: McpServer, patch: McpServerConfigPatch, inProject = false): string | undefined => {
++		const saveConfig = async (
++			server: McpServer,
++			patch: McpServerConfigPatch,
++			inProject = false,
++		): Promise<string | undefined> => {
++			const current = generation;
++			if (
++				management &&
++				(inProject || (patch.exposure !== undefined && !management.exposures.includes(patch.exposure)))
++			) {
++				return "This MCP preference is unavailable.";
++			}
+ 			const override = inProject ? projectConfig : server.entry.override;
+ 			const entry = override ? { ...server.entry, override } : server.entry;
+-			if (entry.scope !== "extension") {
++			if (management || entry.scope !== "extension") {
+ 				try {
+-					updateConfig(entry, patch);
++					if (management) await management.updateConfig(entry, patch);
++					else updateConfig(entry, patch);
+ 				} catch (error) {
+-					return `Could not update ${entry.override ?? entry.source}: ${errorMessage(error)}`;
++					return management
++						? "Could not save MCP preferences."
++						: `Could not update ${entry.override ?? entry.source}: ${errorMessage(error)}`;
+ 				}
+ 			}
++			if (current !== generation || findServer(entry.name) !== server) return "MCP session changed.";
+ 			server.entry = { ...entry, config: { ...entry.config, ...patch } };
+ 			return undefined;
+ 		};
+@@ -654,7 +736,7 @@ export function createMcpExtension(options: McpExtensionOptions = {}): Extension
+ 				await connection.reconnect();
+ 				return undefined;
+ 			} catch (error) {
+-				return errorMessage(error);
++				return sanitized ? "MCP server unavailable." : errorMessage(error);
+ 			}
+ 		};
+ 
+@@ -664,7 +746,7 @@ export function createMcpExtension(options: McpExtensionOptions = {}): Extension
+ 			enabled: boolean,
+ 			inProject = false,
+ 		): Promise<string | undefined> => {
+-			const failed = saveConfig(server, { enabled }, inProject);
++			const failed = await saveConfig(server, { enabled }, inProject);
+ 			if (failed) return failed;
+ 			if (!enabled) {
+ 				const connection = server.connection;
+@@ -674,12 +756,13 @@ export function createMcpExtension(options: McpExtensionOptions = {}): Extension
+ 				await connection?.close();
+ 				return undefined;
+ 			}
+-			await startConnection(server, () => true);
++			const current = generation;
++			await startConnection(server, () => current === generation && findServer(server.entry.name) === server);
+ 			return undefined;
+ 		};
+ 
+-		const setExposure = (server: McpServer, exposure: McpExposure): string | undefined => {
+-			const failed = saveConfig(server, { exposure });
++		const setExposure = async (server: McpServer, exposure: McpExposure): Promise<string | undefined> => {
++			const failed = await saveConfig(server, { exposure });
+ 			if (failed) return failed;
+ 			if (server.connection?.state === "connected") registerTools(server.connection);
+ 			syncResourceTools();
+@@ -701,8 +784,8 @@ export function createMcpExtension(options: McpExtensionOptions = {}): Extension
+ 		// ---------------------------------------------------------------------------------------
+ 
+ 		const notices = () => [
+-			...configErrors.map((error) => `config: ${error}`),
+-			...overridden.map((line) => `overridden: ${line}`),
++			...configErrors.map((error) => (management ? "Configuration unavailable" : `config: ${error}`)),
++			...(management ? [] : overridden.map((line) => `overridden: ${line}`)),
+ 		];
+ 
+ 		const serversMenu = (): McpMenu => ({
+@@ -713,9 +796,11 @@ export function createMcpExtension(options: McpExtensionOptions = {}): Extension
+ 				.map((server) => ({
+ 					value: server.entry.name,
+ 					label: server.entry.name,
+-					description: `${describeState(server)} · ${exposureOf(server.entry)} · ${server.entry.override ? "global, project override" : (server.entry.scope ?? server.entry.source)}`,
++					description: management
++						? `${stateDescription(server)} · ${exposureOf(server.entry)}`
++						: `${describeState(server)} · ${exposureOf(server.entry)} · ${server.entry.override ? "global, project override" : (server.entry.scope ?? server.entry.source)}`,
+ 				})),
+-			empty: `No MCP servers configured. Add them to ${resolve(getAgentDir(), "mcp.json")} or .pi/mcp.json.`,
++			empty: emptyServers,
+ 			confirmLabel: "manage",
+ 			cancelLabel: "close",
+ 		});
+@@ -732,8 +817,9 @@ export function createMcpExtension(options: McpExtensionOptions = {}): Extension
+ 				};
+ 			}
+ 			const { entry, connection } = server;
+-			const saved =
+-				entry.scope === "extension"
++			const saved = management
++				? (management.persistenceLabel ?? "for this session")
++				: entry.scope === "extension"
+ 					? "for this session"
+ 					: entry.override
+ 						? "saved to the project mcp.json"
+@@ -741,7 +827,7 @@ export function createMcpExtension(options: McpExtensionOptions = {}): Extension
+ 							? `saved to the ${entry.scope} mcp.json`
+ 							: "saved to mcp.json";
+ 			// Global servers without an override can be turned on or off for the trusted project alone.
+-			const inProject = entry.scope === "global" && !entry.override && projectConfig !== undefined;
++			const inProject = !management && entry.scope === "global" && !entry.override && projectConfig !== undefined;
+ 			const inProjectSaved = "saved to the project mcp.json";
+ 			const items: SelectItem[] = [];
+ 			if (!isEnabled(server)) {
+@@ -751,7 +837,7 @@ export function createMcpExtension(options: McpExtensionOptions = {}): Extension
+ 				}
+ 			} else {
+ 				const state = connection?.state;
+-				if (state === "needs-auth")
++				if (!management && state === "needs-auth")
+ 					items.push({ value: "signin", label: "Sign in", description: "opens the browser" });
+ 				if (state === "connected" && connection) {
+ 					items.push({ value: "tools", label: "Tools", description: `${connection.tools.length} offered` });
+@@ -759,22 +845,36 @@ export function createMcpExtension(options: McpExtensionOptions = {}): Extension
+ 				if (state === "failed" || state === "disconnected" || state === "connected" || state === "needs-auth") {
+ 					items.push({ value: "reconnect", label: "Reconnect" });
+ 				}
+-				if (state === "connected" && connection?.oauthUrl) {
++				if (!management && state === "connected" && connection?.oauthUrl) {
+ 					items.push({ value: "signout", label: "Sign out", description: "deletes the stored credentials" });
+ 				}
+-				items.push({ value: "exposure", label: "Exposure", description: exposureOf(entry) });
++				if (!management || management.exposures.length > 0)
++					items.push({ value: "exposure", label: "Exposure", description: exposureOf(entry) });
+ 				items.push({ value: "disable", label: "Disable", description: saved });
+ 				if (inProject) {
+ 					items.push({ value: "disable-project", label: "Disable in this project", description: inProjectSaved });
+ 				}
+ 			}
+ 			const details = [
+-				describeTransport(entry),
+-				`${entry.scope ?? "config"}: ${entry.source}`,
+-				...(entry.override ? [`project override: ${entry.override}`] : []),
+-				`State: ${describeState(server, false)}`,
++				...(management
++					? []
++					: [
++							describeTransport(entry),
++							`${entry.scope ?? "config"}: ${entry.source}`,
++							...(entry.override ? [`project override: ${entry.override}`] : []),
++						]),
++				`State: ${stateDescription(server, false)}`,
+ 			];
+-			const error = [server.message, connection?.state === "connected" ? undefined : connection?.error]
++			const error = [
++				server.message,
++				connection?.state === "connected"
++					? undefined
++					: connection?.error
++						? management
++							? "MCP server unavailable."
++							: connection.error
++						: undefined,
++			]
+ 				.filter((line): line is string => line !== undefined)
+ 				.join("\n");
+ 			return {
+@@ -797,10 +897,12 @@ export function createMcpExtension(options: McpExtensionOptions = {}): Extension
+ 				items: (server.connection?.tools ?? []).map((tool) => {
+ 					const toolExposure = getMcpToolExposure(server.entry.config, tool.name);
+ 					const description = firstLine(tool.description ?? "");
++					const display = (value: string) =>
++						management ? value.replace(/[\u0000-\u001f\u007f-\u009f]/g, " ") : value;
+ 					return {
+ 						value: tool.name,
+-						label: tool.name,
+-						description: toolExposure === exposure ? description : `[${toolExposure}] ${description}`,
++						label: display(tool.name),
++						description: display(toolExposure === exposure ? description : `[${toolExposure}] ${description}`),
+ 					};
+ 				}),
+ 				empty: "The server offers no tools.",
+@@ -811,16 +913,19 @@ export function createMcpExtension(options: McpExtensionOptions = {}): Extension
+ 
+ 		const chooseExposure = async (ui: McpUi, server: McpServer): Promise<string | undefined> => {
+ 			const current = exposureOf(server.entry);
++			const exposures =
++				management?.exposures ?? (Object.keys(EXPOSURE_DESCRIPTIONS) as (keyof typeof EXPOSURE_DESCRIPTIONS)[]);
+ 			const choice = await ui.menu(() => ({
+ 				title: `Exposure of ${server.entry.name}`,
+-				details:
+-					server.entry.scope === "extension"
++				details: management
++					? (management.persistenceLabel ?? "for this session")
++					: server.entry.scope === "extension"
+ 						? `Applies to this session; the server is registered by ${server.entry.source}.`
+ 						: `Saved to ${server.entry.override ?? server.entry.source}.`,
+-				items: (Object.keys(EXPOSURE_DESCRIPTIONS) as (keyof typeof EXPOSURE_DESCRIPTIONS)[]).map((exposure) => ({
++				items: exposures.map((exposure) => ({
+ 					value: exposure,
+ 					label: `${exposure === current ? "✓ " : "  "}${exposure}`,
+-					description: EXPOSURE_DESCRIPTIONS[exposure],
++					description: exposure === "hidden" ? "unreachable" : EXPOSURE_DESCRIPTIONS[exposure],
+ 				})),
+ 				selected: current,
+ 				confirmLabel: "save",
+@@ -850,6 +955,7 @@ export function createMcpExtension(options: McpExtensionOptions = {}): Extension
+ 
+ 		const runAction = async (ui: McpUi, ctx: ExtensionContext, server: McpServer, action: string) => {
+ 			const { name } = server.entry;
++			if (management && ["signin", "signout", "enable-project", "disable-project"].includes(action)) return;
+ 			let message: string | undefined;
+ 			switch (action) {
+ 				case "signin":
+@@ -902,12 +1008,13 @@ export function createMcpExtension(options: McpExtensionOptions = {}): Extension
+ 
+ 		const formatStatus = (): string => {
+ 			if (servers.length === 0 && configErrors.length === 0 && overridden.length === 0) {
+-				return `No MCP servers configured. Add them to ${resolve(getAgentDir(), "mcp.json")} or .pi/mcp.json.`;
++				return emptyServers;
+ 			}
+ 			const lines = servers.map((server) => {
+ 				const { name } = server.entry;
+ 				const exposure = exposureOf(server.entry);
+ 				const connection = server.connection;
++				if (management) return `${name}: ${stateDescription(server)} (${exposure})`;
+ 				if (connection?.state === "needs-auth")
+ 					return `${name}: needs sign-in, run /mcp login ${name} (${exposure})`;
+ 				const tools = connection?.state === "connected" ? `, ${connection.tools.length} tools` : "";
+@@ -922,8 +1029,9 @@ export function createMcpExtension(options: McpExtensionOptions = {}): Extension
+ 						: "";
+ 				return `${name}: ${state}${tools} (${exposure})${error}`;
+ 			});
+-			for (const error of configErrors) lines.push(`config error: ${error}`);
+-			for (const line of overridden) lines.push(`overridden: ${line}`);
++			for (const error of configErrors)
++				lines.push(management ? "Configuration unavailable" : `config error: ${error}`);
++			if (!management) for (const line of overridden) lines.push(`overridden: ${line}`);
+ 			return lines.join("\n");
+ 		};
+ 
+@@ -1029,7 +1137,10 @@ export function createMcpExtension(options: McpExtensionOptions = {}): Extension
  				.catch((error: unknown) => {
  					// The session may have been disposed meanwhile, which makes ctx stale.
  					try {
 -						ctx.ui.notify(`MCP failed to load: ${errorMessage(error)}`, "error");
 +						ctx.ui.notify(
-+							options.management === false
-+								? "MCP integration unavailable"
-+								: `MCP failed to load: ${errorMessage(error)}`,
++							sanitized ? "MCP integration unavailable" : `MCP failed to load: ${errorMessage(error)}`,
 +							"error",
 +						);
  					} catch {}
  				});
  		});
-@@ -1060,6 +1110,21 @@ export function createMcpExtension(options: McpExtensionOptions = {}): Extension
+@@ -1060,6 +1171,21 @@ export function createMcpExtension(options: McpExtensionOptions = {}): Extension
  		// Every prompt lists the servers in the `mcp_servers` section as they are when it starts. Pi
  		// appends the section to the conversation when it changed, for example after a server connected.
  		pi.on("before_agent_start", async (event, ctx) => {
@@ -702,7 +978,7 @@ index b2b8cb7..5dcd000 100644
  			await waitForDirectServers(ctx);
  			const { sections } = event.systemPromptOptions;
  			const section = renderServersSection(servers);
-@@ -1095,7 +1160,7 @@ export function createMcpExtension(options: McpExtensionOptions = {}): Extension
+@@ -1095,7 +1221,7 @@ export function createMcpExtension(options: McpExtensionOptions = {}): Extension
  
  		// Servers registered or unregistered during the session connect or disconnect right away.
  		pi.on("mcp_servers_change", async (_event, ctx) => {
@@ -711,28 +987,79 @@ index b2b8cb7..5dcd000 100644
  			const current = generation;
  			const registered = registeredServers();
  			overridden = registered.overridden;
-@@ -1122,7 +1187,12 @@ export function createMcpExtension(options: McpExtensionOptions = {}): Extension
+@@ -1122,7 +1248,10 @@ export function createMcpExtension(options: McpExtensionOptions = {}): Extension
  					return;
  				}
  			} catch (error) {
 -				ctx.ui.notify(`MCP failed to load: ${errorMessage(error)}`, "error");
 +				ctx.ui.notify(
-+					options.management === false
-+						? "MCP integration unavailable"
-+						: `MCP failed to load: ${errorMessage(error)}`,
++					sanitized ? "MCP integration unavailable" : `MCP failed to load: ${errorMessage(error)}`,
 +					"error",
 +				);
  				return;
  			}
  			if (current !== generation) return;
-@@ -1138,6 +1208,7 @@ export function createMcpExtension(options: McpExtensionOptions = {}): Extension
+@@ -1138,17 +1267,21 @@ export function createMcpExtension(options: McpExtensionOptions = {}): Extension
  			await Promise.all(closing.map((connection) => connection.close()));
  		});
  
 +		if (options.management === false) return;
  		pi.registerCommand("mcp", {
- 			description: "Manage MCP servers: sign in, reconnect, enable or disable, and change exposure",
+-			description: "Manage MCP servers: sign in, reconnect, enable or disable, and change exposure",
++			description: management
++				? "Manage MCP servers: inspect tools, reconnect, enable or disable, and change exposure"
++				: "Manage MCP servers: sign in, reconnect, enable or disable, and change exposure",
  			getArgumentCompletions: (prefix) => {
+ 				const [action, server, ...rest] = prefix.trimStart().split(/\s+/);
+ 				if (rest.length > 0) return null;
+ 				if (server === undefined) {
+-					return ["login", "logout", "reconnect"]
++					return (management ? ["reconnect"] : ["login", "logout", "reconnect"])
+ 						.filter((item) => item.startsWith(action ?? ""))
+ 						.map((item) => ({ value: `${item} `, label: item }));
+ 				}
+ 				if (action !== "login" && action !== "logout" && action !== "reconnect") return null;
++				if (management && action !== "reconnect") return null;
+ 				const items = servers
+ 					.filter((candidate) =>
+ 						action === "reconnect" ? candidate.connection !== undefined : usesOAuth(candidate),
+@@ -1157,7 +1290,7 @@ export function createMcpExtension(options: McpExtensionOptions = {}): Extension
+ 					.map((candidate) => ({
+ 						value: `${action} ${candidate.entry.name}`,
+ 						label: candidate.entry.name,
+-						description: describeState(candidate),
++						description: stateDescription(candidate),
+ 					}));
+ 				return items.length > 0 ? items : null;
+ 			},
+@@ -1169,8 +1302,8 @@ export function createMcpExtension(options: McpExtensionOptions = {}): Extension
+ 					else ctx.ui.notify(formatStatus(), "info");
+ 					return;
+ 				}
+-				if (extra.length > 0) {
+-					ctx.ui.notify(MCP_USAGE, "warning");
++				if (extra.length > 0 || (management && action !== "reconnect")) {
++					ctx.ui.notify(usage, "warning");
+ 					return;
+ 				}
+ 				switch (action) {
+@@ -1204,14 +1337,14 @@ export function createMcpExtension(options: McpExtensionOptions = {}): Extension
+ 						else {
+ 							ensureDiscoveryActive(ctx);
+ 							ctx.ui.notify(
+-								`Reconnected to MCP server "${server.entry.name}" (${describeState(server)}).`,
++								`Reconnected to MCP server "${server.entry.name}" (${stateDescription(server)}).`,
+ 								"info",
+ 							);
+ 						}
+ 						return;
+ 					}
+ 					default:
+-						ctx.ui.notify(MCP_USAGE, "warning");
++						ctx.ui.notify(usage, "warning");
+ 				}
+ 			},
+ 		});
 diff --git a/packages/coding-agent/src/extensions/mcp/runtime.ts b/packages/coding-agent/src/extensions/mcp/runtime.ts
 index 6debc6f..73ede58 100644
 --- a/packages/coding-agent/src/extensions/mcp/runtime.ts
@@ -999,17 +1326,30 @@ index 4f38d91..4b15f9b 100644
  }
 diff --git a/packages/coding-agent/test/managed-mcp-codemode.test.ts b/packages/coding-agent/test/managed-mcp-codemode.test.ts
 new file mode 100644
-index 0000000..1e5c8c0
+index 0000000..2269db0
 --- /dev/null
 +++ b/packages/coding-agent/test/managed-mcp-codemode.test.ts
-@@ -0,0 +1,400 @@
+@@ -0,0 +1,627 @@
 +import { afterEach, describe, expect, it, vi } from "vitest";
 +import { LATEST_PROTOCOL_VERSION, McpSessionExpiredError, type Tool } from "@earendil-works/pi-mcp";
 +import { createInMemoryTransportPair } from "@earendil-works/pi-mcp/testing";
 +import { McpServerConnection } from "../src/extensions/mcp/runtime.ts";
-+import { createMcpExtension } from "../src/extensions/mcp/index.ts";
++import { createMcpExtension, type McpManagementOptions } from "../src/extensions/mcp/index.ts";
 +import { convertMcpResult } from "../src/extensions/mcp/tools.ts";
-+import type { ExtensionAPI, ExtensionContext, ToolDefinition } from "../src/core/extensions/types.ts";
++import type {
++	ExtensionAPI,
++	ExtensionCommandContext,
++	ExtensionContext,
++	ToolDefinition,
++} from "../src/core/extensions/types.ts";
++import type { McpMenu, McpUi } from "../src/extensions/mcp/ui.ts";
++import { codemodeSchema } from "../src/extensions/codemode/tool.ts";
++
++const manager = vi.hoisted(() => ({ ui: undefined as McpUi | undefined }));
++vi.mock("../src/extensions/mcp/ui.ts", async (original) => ({
++	...(await original<typeof import("../src/extensions/mcp/ui.ts")>()),
++	showMcpManager: async (_ctx: unknown, run: (ui: McpUi) => Promise<void>) => run(manager.ui!),
++}));
 +
 +const cleanup: (() => Promise<unknown>)[] = [];
 +afterEach(async () => {
@@ -1401,6 +1741,220 @@ index 0000000..1e5c8c0
 +		await handlers.get("session_shutdown")?.();
 +		expect(cleaned).toBe(true);
 +		expect(await pending).toMatchObject({ isError: true, details: { failureKind: "aborted" } });
++	});
++});
++
++describe("restricted MCP manager", () => {
++	async function setup(management: McpManagementOptions, failConnect = false) {
++		const handlers = new Map<string, (event: unknown, ctx: ExtensionContext) => unknown>();
++		const definitions = new Map<string, ToolDefinition>();
++		const published: { exposure: string | undefined; names: string[] }[] = [];
++		const fixtures: ReturnType<typeof server>[] = [];
++		const writeDefaultConfig = vi.fn();
++		let active: string[] = [];
++		let command!: Parameters<ExtensionAPI["registerCommand"]>[1];
++		const pi = {
++			on: (name: string, handler: (event: unknown, ctx: ExtensionContext) => unknown) => handlers.set(name, handler),
++			registerCommand: (_name: string, value: typeof command) => {
++				command = value;
++			},
++			registerTool: (tool: ToolDefinition) => definitions.set(tool.name, tool),
++			registerToolRenderer: () => {},
++			getAllTools: () => [...definitions.values(), { name: "codemode", parameters: codemodeSchema }],
++			getActiveTools: () => active,
++			setActiveTools: (names: string[]) => {
++				active = names;
++			},
++		} as unknown as ExtensionAPI;
++		await createMcpExtension({
++			toolsOnly: true,
++			authentication: false,
++			management,
++			serverLogging: false,
++			allowRegisteredServers: false,
++			updateConfig: writeDefaultConfig,
++			loadConfig: () => ({
++				servers: [{ ...entry, source: "/secret/admin.toml", scope: "global" }],
++				errors: [],
++				projectConfig: "/secret/project/mcp.json",
++			}),
++			createTransport: () => {
++				if (failConnect) throw new Error("SECRET endpoint authorization=credential");
++				const fixture = server([
++					{ name: "echo", description: "Text\u001b[31m\u0007", inputSchema: { type: "object" } },
++				]);
++				fixtures.push(fixture);
++				return fixture.client;
++			},
++			adaptTools: (current, catalog) => {
++				published.push({ exposure: current.config.exposure, names: catalog.map(({ tool }) => tool.name) });
++				return catalog.map(({ definition }) => definition);
++			},
++		})(pi);
++		const notify = vi.fn();
++		const ctx = {
++			cwd: process.cwd(),
++			mode: "tui",
++			hasUI: true,
++			ui: { notify },
++		} as unknown as ExtensionCommandContext;
++		await handlers.get("session_start")?.({}, ctx);
++		await handlers.get("before_agent_start")?.({ systemPromptOptions: { sections: {} } }, ctx);
++		cleanup.push(async () => {
++			await handlers.get("session_shutdown")?.({}, ctx);
++		});
++		return {
++			handlers,
++			definitions,
++			published,
++			fixtures,
++			writeDefaultConfig,
++			command,
++			ctx,
++			notify,
++			active: () => active,
++		};
++	}
++
++	function menus(
++		choices: (string | undefined | ((menu: McpMenu) => string | undefined | Promise<string | undefined>))[],
++	) {
++		const seen: McpMenu[] = [];
++		manager.ui = {
++			menu: async (build) => {
++				const menu = build();
++				seen.push(menu);
++				const next = choices.shift();
++				return typeof next === "function" ? next(menu) : next;
++			},
++			status: () => {},
++			redirectUrl: async () => {
++				throw new Error("OAuth must not run");
++			},
++		};
++		return seen;
++	}
++
++	it("uses only configured actions and exposure choices, saves first, and withdraws tools on disable", async () => {
++		const saved: object[] = [];
++		const state = await setup({
++			exposures: ["direct", "hidden"],
++			persistenceLabel: "saved for this user",
++			updateConfig: async (_entry, patch) => {
++				await Promise.resolve();
++				if (patch.exposure === "hidden") expect(state.definitions.get("mcp__docs__echo")?.exposure).toBe("direct");
++				saved.push(patch);
++			},
++		});
++		const seen = menus([
++			"docs",
++			"tools",
++			undefined,
++			"exposure",
++			"hidden",
++			() => {
++				expect(saved).toEqual([{ exposure: "hidden" }]);
++				expect(state.definitions.get("mcp__docs__echo")?.exposure).toBe("hidden");
++				return "disable";
++			},
++			(menu) => {
++				expect(menu.items.map((item) => item.value)).toEqual(["enable"]);
++				expect(state.published.at(-1)?.names).toEqual([]);
++				return "enable";
++			},
++			"reconnect",
++			undefined,
++			undefined,
++		]);
++		await state.command.handler("", state.ctx);
++		expect(saved).toEqual([{ exposure: "hidden" }, { enabled: false }, { enabled: true }]);
++		expect(state.fixtures).toHaveLength(3);
++		expect(state.writeDefaultConfig).not.toHaveBeenCalled();
++		expect(seen.find((menu) => menu.title === "Exposure of docs")?.items.map((item) => item.value)).toEqual([
++			"direct",
++			"hidden",
++		]);
++		expect(
++			seen
++				.flatMap((menu) => menu.items.map((item) => item.value))
++				.some((value) =>
++					["signin", "signout", "enable-project", "disable-project", "deferred", "codemode"].includes(value),
++				),
++		).toBe(false);
++		expect(JSON.stringify(seen)).not.toContain("secret");
++		expect(seen.find((menu) => menu.title === "Tools of docs")?.items[0].description).not.toMatch(
++			/[\u0000-\u001f\u007f-\u009f]/,
++		);
++		expect((await state.command.getArgumentCompletions?.(""))?.map((item) => item.label)).toEqual(["reconnect"]);
++		await state.command.handler("login docs", state.ctx);
++		expect(state.notify).toHaveBeenLastCalledWith("Usage: /mcp, /mcp reconnect [server]", "warning");
++	});
++
++	it("leaves failed saves unchanged and rejects exposure choices outside the ceiling", async () => {
++		const save = vi.fn(async () => {
++			throw new Error("SECRET file path");
++		});
++		const state = await setup({ exposures: ["direct", "hidden"], updateConfig: save });
++		const seen = menus(["docs", "exposure", "codemode", "exposure", "hidden", "disable", undefined, undefined]);
++		await state.command.handler("", state.ctx);
++		expect(save.mock.calls).toHaveLength(2);
++		expect(state.definitions.get("mcp__docs__echo")?.exposure).toBe("direct");
++		expect(state.fixtures).toHaveLength(1);
++		expect(state.published.filter((catalog) => catalog.names.length)).toHaveLength(1);
++		expect(JSON.stringify(seen)).not.toContain("SECRET");
++		expect(seen.some((menu) => menu.error === "Could not save MCP preferences.")).toBe(true);
++	});
++
++	it("can select codemode only when supplied and activates the stock discovery tool", async () => {
++		const save = vi.fn();
++		const state = await setup({ exposures: ["direct", "codemode", "hidden"], updateConfig: save });
++		const seen = menus(["docs", "exposure", "codemode", undefined, undefined]);
++		await state.command.handler("", state.ctx);
++		expect(seen.find((menu) => menu.title === "Exposure of docs")?.items.map((item) => item.value)).toEqual([
++			"direct",
++			"codemode",
++			"hidden",
++		]);
++		expect(save).toHaveBeenCalledWith(expect.objectContaining({ name: "docs" }), { exposure: "codemode" });
++		expect(state.published.at(-1)?.exposure).toBe("codemode");
++		// Stock MCP codemode exposure uses deferred tool metadata for script discovery.
++		expect(state.definitions.get("mcp__docs__echo")?.exposure).toBe("deferred");
++		expect(state.active()).toContain("codemode");
++	});
++
++	it("does not publish an asynchronously saved preference after session shutdown", async () => {
++		let release!: () => void;
++		const save = vi.fn(
++			() =>
++				new Promise<void>((resolve) => {
++					release = resolve;
++				}),
++		);
++		const state = await setup({ exposures: ["direct", "hidden"], updateConfig: save });
++		menus(["docs", "exposure", "hidden", undefined, undefined]);
++		const managing = state.command.handler("", state.ctx);
++		await vi.waitFor(() => expect(save).toHaveBeenCalledOnce());
++		await state.handlers.get("session_shutdown")?.({}, state.ctx);
++		const published = state.published.length;
++		release();
++		await managing;
++		expect(state.published).toHaveLength(published);
++		expect(state.published.at(-1)?.names).toEqual([]);
++	});
++
++	it("sanitizes failed connection menus, plain status, reconnect errors and completions", async () => {
++		const state = await setup({ exposures: ["direct", "hidden"], updateConfig: () => {} }, true);
++		const seen = menus(["docs", "reconnect", undefined, undefined]);
++		await state.command.handler("", state.ctx);
++		await state.command.handler("", { ...state.ctx, mode: "rpc" });
++		await state.command.handler("reconnect docs", state.ctx);
++		const shown = JSON.stringify([
++			seen,
++			state.notify.mock.calls,
++			await state.command.getArgumentCompletions?.("reconnect "),
++		]);
++		expect(shown).not.toMatch(/SECRET|credential|unused\.invalid|secret|sign-in|\/mcp login/);
++		expect(shown).toContain("MCP server unavailable");
 +	});
 +});
 diff --git a/packages/mcp/src/client.ts b/packages/mcp/src/client.ts

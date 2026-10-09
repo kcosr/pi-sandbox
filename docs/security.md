@@ -76,7 +76,10 @@ isolation, not operating-system containment. A runtime or bridge defect remains
 a host-side risk. Concurrent nested approvals are serialized, and a later denial
 or cancellation does not undo effects already completed.
 
-MCP configuration and permissions come only from administrative policy. Catalog
+MCP connections and permissions come only from administrative policy. User MCP
+preferences can disable or change presentation for admitted servers, never add
+connections or alter permissions. Menu changes revoke affected approvals/grants.
+Code-mode availability is an administrator ceiling, not forced activation. Catalog
 metadata never grants authority. Original server/tool identities bind permission
 and grants; refreshed definitions invalidate stale approvals. HTTP redirects are
 rejected, credentials are explicitly projected, and tool requests are never

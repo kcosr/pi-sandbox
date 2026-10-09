@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
+import type { ExtensionAPI, ToolDefinition } from "@earendil-works/pi-coding-agent";
 import { createManagedCodemodeExtension } from "./index.js";
 
 describe("managed code-mode composition", () => {
@@ -10,11 +11,10 @@ describe("managed code-mode composition", () => {
     expect(factory).not.toHaveBeenCalled();
   });
 
-  it("pins presentation and disables provider access independently of user settings", () => {
+  it("bounds execution and disables provider access while leaving presentation to user settings", () => {
     const factory = vi.fn(() => () => undefined);
     createManagedCodemodeExtension({ enabled: true, timeoutMs: 1000 }, factory);
     expect(factory).toHaveBeenCalledWith({
-      mode: "on",
       inlineBudget: 3000,
       models: false,
       executionLimits: {
@@ -26,5 +26,39 @@ describe("managed code-mode composition", () => {
         inlineOnly: true,
       },
     });
+  });
+
+  it("honors the user's stock on/only mode while keeping nested tools callable", async () => {
+    let mode: "on" | "only" = "only";
+    let definition: ToolDefinition | undefined;
+    const api = {
+      getSettings: () => ({ codemode: { mode } }),
+      registerTool: (tool: ToolDefinition) => {
+        definition = tool;
+      },
+    } as unknown as ExtensionAPI;
+    await createManagedCodemodeExtension({ enabled: true, timeoutMs: 1000 })!(api);
+    expect(definition).toMatchObject({
+      name: "codemode",
+      defaultActive: false,
+      exposure: "model-only",
+    });
+    const read = {
+      name: "read",
+      label: "read",
+      description: "Read a file",
+      parameters: { type: "object" },
+      execute: () => Promise.resolve({ content: [], details: {} }),
+    };
+    const loadout = {
+      declared: [read],
+      callable: [read],
+      registered: [read],
+      getExposure: () => "direct" as const,
+      getNamespace: () => undefined,
+    };
+    expect(definition!.prepareLoadout!(loadout)?.hiddenDeclarations).toEqual(["read"]);
+    mode = "on";
+    expect(definition!.prepareLoadout!(loadout)?.hiddenDeclarations).toEqual([]);
   });
 });

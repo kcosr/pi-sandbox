@@ -3,7 +3,6 @@ import type { CodeModeConfig } from "../domain/mcp.js";
 
 /** Generic limits supported by the pinned, patched Pi code-mode factory. */
 export interface ManagedCodemodeOptions {
-  readonly mode: "on";
   readonly inlineBudget: 3000;
   readonly models: false;
   readonly executionLimits: {
@@ -18,7 +17,6 @@ export interface ManagedCodemodeOptions {
 
 export function managedCodemodeOptions(config: CodeModeConfig): ManagedCodemodeOptions {
   return {
-    mode: "on",
     inlineBudget: 3000,
     models: false,
     executionLimits: {

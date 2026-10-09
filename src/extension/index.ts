@@ -54,6 +54,7 @@ import type { ExtensionDependencies, SandboxExecutor } from "./types.js";
 import { approvalUi, approvalPreview } from "./approval.js";
 import { ManagedMcpRuntime } from "../mcp/runtime.js";
 import { createManagedCodemodeExtension } from "../codemode/index.js";
+import { selectManagedActiveTools } from "../runtime/arguments.js";
 
 interface ExtensionState {
   executor: SandboxExecutor | undefined;
@@ -664,6 +665,10 @@ export function createPiSandboxExtension(dependencies: ExtensionDependencies): E
             cwd: dependencies.cwd,
             servers: features.servers,
             selected: features.selected,
+            autoEnableCodemode: features.config.codemode.enabled && features.selected("codemode"),
+            ...(features.mcpPreferences === undefined
+              ? {}
+              : { preferences: features.mcpPreferences }),
             getPolicy: () => state.policy,
             getAuditor: () => state.auditor,
           });
@@ -683,7 +688,7 @@ export function createPiSandboxExtension(dependencies: ExtensionDependencies): E
             }
             target.registerTool({
               ...definition,
-              exposure: features?.selected("codemode") === true ? "direct" : "hidden",
+              exposure: features?.selected("codemode") === true ? "model-only" : "hidden",
               async execute(...args) {
                 if (!state.started || state.stopped || features?.selected("codemode") !== true)
                   throw new Error("Code mode unavailable");
@@ -841,7 +846,13 @@ export function createPiSandboxExtension(dependencies: ExtensionDependencies): E
         await registerPiToolExtensions(registrationApi, state, enabled);
         if (config.codemode.enabled && features?.selected("codemode") === true)
           enabled.add("codemode");
-        pi.setActiveTools([...(dependencies.activeTools ?? enabled)]);
+        pi.setActiveTools(
+          selectManagedActiveTools(
+            dependencies.toolArguments ?? [],
+            enabled,
+            pi.getSettings().defaultTools,
+          ),
+        );
         for (const start of starts) await start(_event, ctx);
       } catch (error) {
         state.executor = undefined;

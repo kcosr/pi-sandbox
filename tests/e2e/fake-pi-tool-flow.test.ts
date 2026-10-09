@@ -58,6 +58,7 @@ class FakePi {
       handlers.push(handler);
       this.handlers.set(event, handlers);
     },
+    getSettings: () => ({}),
     setActiveTools: (names: readonly string[]): void => {
       this.activeTools = [...names];
     },

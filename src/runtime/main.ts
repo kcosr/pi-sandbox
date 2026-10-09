@@ -23,6 +23,7 @@ import type {
 import { expandManagedHomePaths, overlayManagedEnvironment } from "../domain/index.js";
 import { createPiSandboxExtension } from "../extension/index.js";
 import { resolveMcpServers } from "../mcp/resolve.js";
+import { loadMcpPreferences } from "../mcp/preferences.js";
 import { createHostCommandExecutor, type HostCommandExecutor } from "../host/index.js";
 import {
   applyIdentityOverrides,
@@ -42,7 +43,7 @@ import {
   createDirectExecutor,
   type SandboxExecutor,
 } from "../sandbox/index.js";
-import { createManagedPiArguments, selectManagedActiveTools } from "./arguments.js";
+import { createManagedPiArguments, isManagedToolSelected } from "./arguments.js";
 import { applyManagedEnvironment } from "./environment.js";
 import { assertHostPrerequisites } from "./prerequisites.js";
 import { createWorkspaceBoundary } from "./workspace.js";
@@ -462,22 +463,22 @@ export async function runPiSandbox({ piArgs: args, configPath }: SandboxArgument
     const lease = applyManagedEnvironment(identityEnvironment.pi);
     try {
       const userStateDir = getAgentDir();
-      const enabledTools = new Set(
-        Object.keys(config.tools).filter((toolName) => config.tools[toolName]?.mode !== "disabled"),
-      );
-      if (config.codemode.enabled) enabledTools.add("codemode");
       const servers = await resolveMcpServers(config.mcp, process.env, getAccountIdentity);
+      const mcpPreferences = servers.some((server) => server.status === "ready")
+        ? await loadMcpPreferences(userStateDir)
+        : undefined;
       const extension = createPiSandboxExtension({
         features: {
           config,
           servers,
-          selected: (name) => selectManagedActiveTools(args, new Set([name])).length > 0,
+          ...(mcpPreferences === undefined ? {} : { mcpPreferences }),
+          selected: (name) => isManagedToolSelected(args, name),
         },
         cwd,
         configPath,
         userStateDir,
         ...(config.sessions.retentionDays === 0 ? {} : { onSessionStart: touchSessionFile }),
-        activeTools: selectManagedActiveTools(args, enabledTools),
+        toolArguments: args,
         loadConfig: () => Promise.resolve(config),
         executor,
         ...(auditClient === undefined ? {} : { auditClient }),

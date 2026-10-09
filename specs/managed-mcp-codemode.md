@@ -19,9 +19,11 @@ and implementation plan. The maintained subject documents and
    Pi Sandbox extension. Support Streamable HTTP and host stdio in the same
    implementation. Do not add a separate MCP protocol implementation.
 3. Only administrative configuration can define servers, endpoints, commands,
-   credentials, and permissions. Ignore user/project `mcp.json`; keep the MCP
-   management CLI and executable-extension discovery disabled.
-4. Enable code mode with an administrative boolean. There is no
+   credentials, and permissions. Read only user `mcp.json` presentation preferences
+   for admitted servers; ignore project MCP files. Keep the MCP management CLI
+   and executable-extension discovery disabled.
+4. Make code mode available with an administrative boolean; let Pi settings, CLI
+   selection, and permitted MCP exposure control activation. There is no
    `[tools.codemode]`, outer approval prompt, or grant that bypasses nested tool
    policy. Code mode orchestrates the currently callable, policy-wrapped tools.
 5. Every nested built-in, managed-extension, and MCP invocation uses its ordinary
@@ -160,13 +162,13 @@ references, not model-selected variable names.
 
 | Field                   | Contract                                                                                                                                                                                                                                                |
 | ----------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `codemode.enabled`      | Required boolean; controls registration and activation authority.                                                                                                                                                                                       |
+| `codemode.enabled`      | Required boolean; controls availability, not forced activation.                                                                                                                                                                                         |
 | `codemode.timeout_ms`   | Optional integer, default 300000, range 1000–3600000. Hard overall deadline, including nested approval waits.                                                                                                                                           |
 | `mcp.servers`           | Required table, empty is valid; at most 32 entries.                                                                                                                                                                                                     |
 | Server identifier       | Case-sensitive ASCII `[a-z][a-z0-9_]{0,31}`; stable administrative identity.                                                                                                                                                                            |
 | `enabled`               | Required boolean. Disabled means no connection, process, credential resolution, or exposed tools.                                                                                                                                                       |
 | `transport`             | Required `http` or `stdio`; validate the selected shape and reject fields of the other shape.                                                                                                                                                           |
-| `exposure`              | Required `direct` or `codemode`; governs presentation, not permission.                                                                                                                                                                                  |
+| `exposure`              | Required `direct` or `codemode`; default presentation, not permission.                                                                                                                                                                                  |
 | `timeout_ms`            | Optional integer, default 60000, range 1000–3600000; absolute per-call deadline after approval, including reconnect/setup and result handling. Progress cannot extend it.                                                                               |
 | `default_policy`        | Required complete `{ mode, session_grant, audit }`, using the existing values and validation.                                                                                                                                                           |
 | `tool_rules`            | Optional ordered array, default empty, at most 256 entries. Each entry has `match` and a complete policy; no partial-policy inheritance.                                                                                                                |
@@ -400,9 +402,12 @@ queued work starts and immediately before a transport send.
 `direct` tools are declared to the model and callable from enabled code mode.
 `codemode` tools are callable only through code mode and discoverable through its
 `ALL_TOOLS`, `searchTools`, and description helpers. Do not register `tool_search`.
-Set upstream `autoEnableCodemode = false`; the main boolean alone controls it.
-When code mode is enabled, use its `on` presentation and retain ordinary direct
-tools. Ignore user `codemode.mode`/inline-budget settings for managed behavior.
+Code mode is inactive by default. Honor merged global/project `defaultTools`, CLI
+selection, and stock `codemode.mode` (`on`/`only`), retaining the fixed managed
+inline budget. MCP code-mode exposure can autoactivate it only when administrator
+policy and CLI selection permit it, unless user `mcp.json` sets
+`autoEnableCodemode = false`. Keep stock `model-only` exposure to prohibit nested
+code-mode calls. No new standalone TUI toggle is introduced.
 
 Pi's CLI/session tool selection may narrow availability, never widen it.
 Carry the original inclusion/exclusion filters into dynamic registration, so a
@@ -415,7 +420,7 @@ as an availability state without changing administrative policy.
 
 ## 6. Code-mode execution
 
-Reuse `createCodemodeExtension` with `models: false`, mode `on`, and a fixed
+Reuse `createCodemodeExtension` with `models: false`, user-selected presentation, and a fixed
 3000-token inline declaration budget. Compose it through the trusted managed
 adapter, not the restricted third-party `pi-tool` API. The existing embedded
 QuickJS WASM and code-mode worker remain release assets.
@@ -483,10 +488,20 @@ A temporarily unavailable service does not prevent unrelated built-ins from
 working. It contributes no callable tools until a valid connection/catalog is
 published. Invalid administrative configuration still aborts application startup.
 
-Do not inherit user/project MCP settings, extension-registered servers, automatic
-provider authentication, command-based secret resolution, or OAuth state files.
-Disable Pi's mutable `/mcp` manager and use `/sandbox mcp` for read-only status.
-Do not expose add/edit/enable/exposure/login actions through another UI path.
+Do not inherit user/project MCP connection definitions, extension-registered
+servers, automatic provider authentication, command-based secret resolution, or
+OAuth state files. Reuse Pi's `/mcp` manager only for administrator-enabled,
+resolved servers, permitting inspection, reconnect, enable/disable, and
+`direct`/`hidden`/available `codemode` exposure. Do not expose add/edit/login or
+project overrides. Keep `/sandbox mcp` for managed permission diagnostics.
+Persist enabled/exposure preferences in the existing user agent-directory
+`mcp.json`, preserving unrelated fields but never honoring connection definitions,
+unknown server IDs, per-tool overrides, or project files. Retain its stock
+`autoEnableCodemode` preference. Bound preference reads/writes and sanitize errors;
+failed saves leave live state unchanged. If saved code-mode exposure is unavailable,
+use the administrative default. Successful changes invalidate pending approvals,
+stale wrappers, and session grants for that server. Async callbacks must not
+mutate a replacement logical session.
 Server startup and metadata discovery are authorized by `enabled`, not by an
 individual tool prompt; an enabled server with all tools disabled can still
 initialize. This must be stated in the administrative docs.
@@ -643,17 +658,17 @@ patch series. Add generic hooks only; no Pi Sandbox TOML parsing, wildcard
 matching, administrator decisions, or Bubblewrap logic belongs in upstream Pi.
 Candidate API names below are descriptive; each listed behavior is required.
 
-| Area                         | Existing seam and necessary extension                                                                                                                                                             |
-| ---------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Factory composition          | Keep one forced factory. Compose exported `createMcpExtension` and `createCodemodeExtension` internally with managed options.                                                                     |
-| MCP configuration/transports | Existing `loadConfig` and `createTransport` receive the immutable managed snapshot and constructed transport.                                                                                     |
-| Tool provenance/adaptation   | Add a pre-publication tool/catalog adaptation hook with typed raw server/tool identity; cover every update and hidden withdrawal atomically.                                                      |
-| MCP capabilities             | Generic options disable extension-registered servers, resources, manager commands, automatic authentication, roots publication, and raw logging. Do not rely solely on hiding model declarations. |
-| Request lifecycle            | Generic hard-deadline/cancellation and no-tool-replay behavior, catalog bounds, and connection-generation checks; enforce below the UI wrapper.                                                   |
-| HTTP transport               | Bound JSON/error-body parsing; use existing injected fetch to reject redirects.                                                                                                                   |
-| Code mode                    | Existing `models: false`/mode options plus generic maximum deadline, bridge admission limits, output sink, and awaited nested cancellation cleanup.                                               |
-| Output conversion            | Generic configurable inline-only sink for both MCP and code-mode result paths.                                                                                                                    |
-| Invocation context           | Preserve trusted parent call identity for nested audit; expose it generically if the current tool context does not carry it.                                                                      |
+| Area                         | Existing seam and necessary extension                                                                                                                                                                                               |
+| ---------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Factory composition          | Keep one forced factory. Compose exported `createMcpExtension` and `createCodemodeExtension` internally with managed options.                                                                                                       |
+| MCP configuration/transports | Existing `loadConfig` and `createTransport` receive the immutable managed snapshot and constructed transport.                                                                                                                       |
+| Tool provenance/adaptation   | Add a pre-publication tool/catalog adaptation hook with typed raw server/tool identity; cover every update and hidden withdrawal atomically.                                                                                        |
+| MCP capabilities             | Generic options restrict management to presentation preferences and disable extension-registered servers, resources, automatic authentication, roots publication, and raw logging. Do not rely solely on hiding model declarations. |
+| Request lifecycle            | Generic hard-deadline/cancellation and no-tool-replay behavior, catalog bounds, and connection-generation checks; enforce below the UI wrapper.                                                                                     |
+| HTTP transport               | Bound JSON/error-body parsing; use existing injected fetch to reject redirects.                                                                                                                                                     |
+| Code mode                    | Existing `models: false`/mode options plus generic maximum deadline, bridge admission limits, output sink, and awaited nested cancellation cleanup.                                                                                 |
+| Output conversion            | Generic configurable inline-only sink for both MCP and code-mode result paths.                                                                                                                                                      |
+| Invocation context           | Preserve trusted parent call identity for nested audit; expose it generically if the current tool context does not carry it.                                                                                                        |
 
 MCP setup must suppress resource enumeration as well as resource tool
 registration, OAuth/provider callbacks as well as the login UI, and registered
@@ -722,7 +737,7 @@ Required offline verification:
 - Refresh/reconnect during approval, stale captured closures, tool schema changes,
   late old-session registrations/results, session restore, user tool filters,
   normalized identifier collisions, and session-grant invalidation.
-- User/project MCP JSON, extension-registered servers, `/mcp`/CLI mutation,
+- User/project MCP connection definitions, extension-registered servers, CLI mutation,
   resources, sampling/elicitation, provider auth, OAuth files, roots disclosure,
   raw logs, `models.*`, and recursive code mode cannot create alternate routes.
 - HTTP 401/403/404, dropped connections, redirect attempts, malformed/oversized
@@ -981,3 +996,11 @@ application smoke tests. The final URL fix passed 91 focused tests, lint/format
 checks, and a fresh release build with all 72 Pi tests and packaged
 diagnostic/RPC/HTTP-MCP/stdio-MCP/code-mode smoke tests. Native macOS runtime
 execution was not tested on this Linux host.
+
+### 2026-10-09 — User scope update: activation and MCP presentation
+
+The administrator code-mode flag now controls availability rather than activation.
+Preserve normal Pi settings/CLI activation and the stock restricted MCP menu, with
+user enabled/exposure preferences in `mcp.json`. Connections and invocation policy
+remain administrator-only. This supersedes the earlier review's forced `on` and
+`autoEnableCodemode = false` recommendation.

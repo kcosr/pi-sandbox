@@ -215,8 +215,17 @@ effective file.
 ## Code mode and MCP servers
 
 The required `[codemode]` table has `enabled` and optional `timeout_ms` (default
-300000; range 1000–3600000). The packaged default disables it. Enabling code mode
-exposes a restricted JavaScript runtime whose nested tool calls use the same
+300000; range 1000–3600000). The packaged default disables it. `enabled = true`
+makes the stock `codemode` tool available without activating it by default. Users
+can select it with Pi's global/project `defaultTools` settings (for example
+`["+codemode"]`) or CLI `--tools`; `--no-tools` and `--exclude-tools` remain hard
+limits. Pi's `codemode.mode` setting retains its normal `on`/`only` presentation.
+There is no separate code-mode TUI toggle. Selecting code-mode exposure for an MCP
+can activate code mode, unless excluded by CLI or the user's `autoEnableCodemode`
+preference is false. Administrator disablement prevents registration regardless
+of these settings.
+
+Code mode exposes a restricted JavaScript runtime whose nested tool calls use the same
 policies and approval prompts as ordinary calls. There is no `tools.codemode`
 policy or separate outer approval. The overall deadline includes nested approval
 waits. Code mode has no general host filesystem, process, network, or environment
@@ -226,8 +235,8 @@ has its own 16 MiB limit; processing several bounded replies does not consume th
 script-output budget.
 
 The required `[mcp.servers]` table is empty by default. Only this main policy can
-configure servers; user/project MCP settings and server-management commands do
-not supply additional servers. Server IDs match `[a-z][a-z0-9_]{0,31}`. Each server
+configure servers; user/project MCP files cannot supply connections or permissions,
+and the MCP management CLI is disabled. Server IDs match `[a-z][a-z0-9_]{0,31}`. Each server
 requires `enabled`, `transport`, `exposure`, and complete `default_policy`. Optional
 `timeout_ms` defaults to 60000 (range 1000–3600000). Disabled servers still validate
 structurally but do not resolve credentials, connect, or start a process.
@@ -254,7 +263,17 @@ audit = false
 
 `exposure = "direct"` exposes tools to ordinary calls and code mode;
 `exposure = "codemode"` exposes them only through code mode and requires that
-feature enabled. Exposure never grants permission. Ordered `tool_rules` match the
+feature available. These are administrative presentation defaults. The stock
+`/mcp` TUI lists only administrator-enabled, available servers and allows reconnect,
+enable/disable, and `direct`, `hidden`, or available `codemode` exposure. It cannot
+add servers, edit connections, or sign in. Enabled/exposure choices are remembered
+across launches in the user agent directory's `mcp.json`, along with the stock
+`autoEnableCodemode` preference. Only these presentation fields are honored;
+connection fields, unknown servers, and project MCP files remain inert. Invalid or
+oversized user preference files report a sanitized startup error. A saved
+code-mode exposure falls back to the administrative default when code mode is
+unavailable. Disabling or changing exposure revokes that server's pending approvals
+and session grants. Exposure never grants permission. Ordered `tool_rules` match the
 server's original tool name, case-sensitively across the whole string. `*` is the
 only wildcard; other glob or expression syntax is rejected. The first match wins,
 otherwise `default_policy` applies. Each rule supplies all three policy fields.

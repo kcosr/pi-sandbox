@@ -1,5 +1,6 @@
 import type { ResolvedMcpServer } from "../mcp/resolve.js";
-import type { SandboxConfig, ToolName } from "../domain/index.js";
+import type { ManagedMcpPreferences } from "../mcp/preferences.js";
+import type { SandboxConfig } from "../domain/index.js";
 import type { HostCommandExecutor } from "../host/index.js";
 import type { ManagedExtensionInstance, PiToolExtension } from "../managed-extensions/sdk.js";
 import type { SandboxExecutor } from "../sandbox/index.js";
@@ -9,12 +10,13 @@ export interface ExtensionDependencies {
   readonly features?: {
     readonly config: SandboxConfig;
     readonly servers: readonly ResolvedMcpServer[];
+    readonly mcpPreferences?: ManagedMcpPreferences;
     readonly selected: (name: string) => boolean;
   };
   readonly cwd: string;
   readonly configPath: string;
   readonly userStateDir: string;
-  readonly activeTools?: readonly ToolName[];
+  readonly toolArguments?: readonly string[];
   readonly loadConfig: () => Promise<SandboxConfig>;
   readonly onSessionStart?: (file: string | undefined) => Promise<void>;
   readonly executor: SandboxExecutor;

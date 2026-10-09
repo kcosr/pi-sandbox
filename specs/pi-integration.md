@@ -44,7 +44,7 @@ Sandbox factory through the inline extension-factory option. It must:
 - disable and reject user/project extension discovery and explicit extension
   arguments;
 - disable automatic built-in MCP, codemode, tool-search, and llama factories and
-  reject the MCP management command; only the forced factory may compose the
+  reject the MCP management CLI; only the forced factory may compose the
   exported MCP/code-mode factories under administrator policy;
 - disable Pi's built-in tools and reject any option that restores them;
 - reject Pi package install, remove, update, and configuration commands that
@@ -337,7 +337,7 @@ policy-neutral composition options. The main configuration, account macros,
 credentials, tool policy, grants, audit records, and invocation concurrency stay
 in Pi Sandbox.
 
-The MCP factory accepts an injected immutable configuration and transport factory,
+The MCP factory accepts an injected connection configuration and transport factory,
 a synchronous whole-catalog adapter with original server/tool provenance, and
 connection-state callbacks. It adapts every complete catalog before publishing
 any definitions, and withdraws definitions before reconnect or shutdown. Pi
@@ -347,7 +347,14 @@ reconnect or replay `tools/call` after approval, including HTTP session-expired
 responses. Disconnected servers may reconnect on a subsequent prompt. A catalog
 refresh failure withdraws the server instead of preserving an unverified catalog.
 
-Explicit options disable extension-registered servers, management commands,
+A restricted management option reuses the stock MCP menu for admitted servers.
+An awaited callback validates and saves enabled/exposure preferences before runtime
+changes; failures and late callbacks cannot mutate a replacement session. It offers
+only approved exposure choices and omits connection details, raw errors, project
+overrides, and authentication actions. The managed adapter persists only presentation
+preferences from user `mcp.json`; unknown servers and connection fields are inert.
+
+Explicit options disable extension-registered servers,
 automatic OAuth and provider authentication, raw server logs, resources and
 resource templates, roots, and other non-tool protocol capabilities. HTTP query
 parameters survive every POST, GET, and DELETE. JSON/error bodies are bounded as
@@ -359,8 +366,12 @@ when the leader exits or the transport closes.
 
 The code-mode factory accepts generic execution limits, registers one active
 script per managed instance, and aborts/awaits that script on session shutdown.
-Pi Sandbox pins presentation to `on` with a 3000-token declaration budget and
-omits the `models` bridge. The runtime caps source bytes, deadline, total and
+Pi Sandbox keeps code mode inactive by default, honors Pi's merged `defaultTools`
+and `codemode.mode` settings, and applies CLI inclusion/exclusion ceilings to
+initial activation and later MCP autoactivation. The administrator flag controls
+registration. Preserve stock `model-only` exposure to prevent recursive code-mode
+calls. A fixed 3000-token declaration budget and omitted `models` bridge remain
+managed constraints. The runtime caps source bytes, deadline, total and
 concurrent bridge calls (including discovery helpers), and accumulated UTF-8
 output bytes. Each serialized nested reply (including errors) and store-write
 journal has the same byte ceiling, independently of aggregate visible output.

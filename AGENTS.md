@@ -51,7 +51,7 @@ reimplemented rather than mechanically reapplied.
   backend.
 - Never fall back to direct execution after a Bubblewrap, approval,
   cancellation, or lifecycle failure.
-- Permit administrator-configured host HTTP/stdio MCP through the managed adapter, with original-tool wildcard policies, typed catalog revisions and the shared approval engine. Code mode is an administrator-enabled QuickJS feature; all nested tools retain ordinary policy and execution boundaries. Never enable user/project MCP configuration or general extension factories.
+- Permit administrator-configured host HTTP/stdio MCP through the managed adapter, with original-tool wildcard policies, typed catalog revisions and the shared approval engine. Code mode is an administrator-permitted QuickJS feature with ordinary Pi activation settings; all nested tools retain ordinary policy and execution boundaries. The MCP menu may persist enabled/exposure preferences for admitted servers only. Never accept user/project MCP connection definitions or general extension factories.
 - Keep tool availability separate from invocation approval. Support strict `allow`, `ask`, `deny`, and `disabled` modes.
 - Configure whether `Allow for session` is offered independently for every
   model-tool approval subject. Session grants are memory-only, narrowly

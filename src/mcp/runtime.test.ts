@@ -4,6 +4,7 @@ import type { ToolDefinition } from "@earendil-works/pi-coding-agent";
 import type { McpServerConfig } from "../domain/index.js";
 import { PolicyEngine } from "../policy/index.js";
 import { ManagedMcpRuntime, type McpCatalogItem, type ManagedMcpOptions } from "./runtime.js";
+import type { ManagedMcpPreferences } from "./preferences.js";
 import { mcpSubject, matchesMcpPattern } from "./policy.js";
 
 const allow = { mode: "allow", sessionGrant: "never", audit: false } as const;
@@ -47,6 +48,8 @@ function item(
 function setup(
   overrides: Partial<McpServerConfig> = {},
   selected: (name: string) => boolean = () => true,
+  preferences?: ManagedMcpPreferences,
+  autoEnableCodemode = false,
 ) {
   const connection = {
     state: "connected",
@@ -63,6 +66,8 @@ function setup(
       },
     ],
     selected,
+    autoEnableCodemode,
+    ...(preferences === undefined ? {} : { preferences }),
     getPolicy: () => policy,
     getAuditor: () => undefined,
   });
@@ -287,7 +292,7 @@ describe("managed MCP admission", () => {
     expect(options).toMatchObject({
       toolsOnly: true,
       authentication: false,
-      management: false,
+      management: { exposures: ["direct", "hidden"], persistenceLabel: "saved for this user" },
       serverLogging: false,
       allowRegisteredServers: false,
       resultMode: "inline",
@@ -297,6 +302,95 @@ describe("managed MCP admission", () => {
       errors: [],
       servers: [{ name: "docs", source: "managed-policy" }],
     });
+  });
+});
+
+function factoryOptions(runtime: ManagedMcpRuntime): ManagedMcpOptions {
+  let options!: ManagedMcpOptions;
+  runtime.extension((value) => {
+    options = value;
+    return () => {};
+  });
+  return options;
+}
+describe("MCP presentation preferences", () => {
+  it("honors only enabled/exposure preferences while retaining managed connections", () => {
+    const preferences: ManagedMcpPreferences = {
+      autoEnableCodemode: false,
+      server: () => ({ enabled: false, exposure: "hidden" }),
+      update: vi.fn(async () => {}),
+    };
+    const { runtime } = setup({}, () => true, preferences, true);
+    const options = factoryOptions(runtime);
+    expect(options.loadConfig()).toMatchObject({
+      autoEnableCodemode: false,
+      servers: [
+        {
+          name: "docs",
+          config: { enabled: false, exposure: "hidden", url: "https://example.com/mcp" },
+        },
+      ],
+    });
+    expect(() => options.createTransport({ name: "docs" })).toThrow("unavailable");
+    expect(options.management.exposures).toEqual(["direct", "codemode", "hidden"]);
+  });
+  it.each([{ enabled: false }, { exposure: "hidden" as const }, { exposure: "codemode" as const }])(
+    "revokes pending approvals and stale wrappers after a menu change: %j",
+    async (patch) => {
+      const { runtime, connection, policy } = setup(
+        { defaultPolicy: { ...allow, mode: "ask", sessionGrant: "offer" } },
+        () => true,
+        undefined,
+        true,
+      );
+      const source = item();
+      const [tool] = runtime.adaptTools("docs", [source], connection);
+      let approve!: (value: string) => void;
+      const select = vi.fn(
+        () =>
+          new Promise<string>((resolve) => {
+            approve = resolve;
+          }),
+      );
+      const work = invoke(tool!, "hello", select);
+      await vi.waitFor(() => expect(select).toHaveBeenCalled());
+      await factoryOptions(runtime).management.updateConfig({ name: "docs" }, patch);
+      approve("Allow for session");
+      await expect(work).rejects.toThrow("denied");
+      expect(policy.hasSessionGrant(mcpSubject("docs", "search"))).toBe(false);
+      expect(source.execute).not.toHaveBeenCalled();
+      const [replacement] = runtime.adaptTools("docs", [source], connection);
+      expect(replacement!.exposure).toBe(
+        "exposure" in patch && patch.exposure === "codemode" ? "deferred" : "hidden",
+      );
+      await expect(invoke(tool!)).rejects.toThrow("changed or unavailable");
+    },
+  );
+  it("keeps current state when saving fails and refuses changes after shutdown", async () => {
+    const preferences: ManagedMcpPreferences = {
+      autoEnableCodemode: true,
+      server: () => ({}),
+      update: vi.fn(() => Promise.reject(new Error("save failed"))),
+    };
+    const { runtime, connection } = setup({}, () => true, preferences);
+    const source = item();
+    const [tool] = runtime.adaptTools("docs", [source], connection);
+    const options = factoryOptions(runtime);
+    await expect(
+      options.management.updateConfig({ name: "docs" }, { enabled: false }),
+    ).rejects.toThrow("save failed");
+    await invoke(tool!);
+    await expect(
+      options.management.updateConfig({ name: "docs" }, { exposure: "codemode" }),
+    ).rejects.toThrow("unavailable");
+    await expect(
+      options.management.updateConfig({ name: "rogue" }, { enabled: true }),
+    ).rejects.toThrow("unavailable");
+    await runtime.close();
+    await expect(
+      options.management.updateConfig({ name: "docs" }, { enabled: true }),
+    ).rejects.toThrow("unavailable");
+    expect(preferences.update).toHaveBeenCalledTimes(1);
   });
 });
 
