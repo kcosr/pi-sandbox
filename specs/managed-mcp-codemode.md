@@ -1004,3 +1004,11 @@ Preserve normal Pi settings/CLI activation and the stock restricted MCP menu, wi
 user enabled/exposure preferences in `mcp.json`. Connections and invocation policy
 remain administrator-only. This supersedes the earlier review's forced `on` and
 `autoEnableCodemode = false` recommendation.
+
+### 2026-10-09 — Activation and presentation review completed
+
+Keel `iterative-review` with `claude-default`, run
+`run_8ae5b3eb-fc26-467b-926c-fa03412aad99`, completed cleanly at `57e0726`
+with no findings. The full offline release verifier passed, including the compiled
+activation and saved-preference scenarios, patched Pi tests, real Bubblewrap tests,
+and package/install checks. Native macOS runtime execution remains untested here.
