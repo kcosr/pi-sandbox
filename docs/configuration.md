@@ -225,6 +225,12 @@ can activate code mode, unless excluded by CLI or the user's `autoEnableCodemode
 preference is false. Administrator disablement prevents registration regardless
 of these settings.
 
+While code mode is active, Pi Sandbox adds prompt guidance to prefer dedicated
+file tools and use code mode to coordinate calls or process results. If Bash is
+also active, the guidance reserves it for programs, builds, tests, and operations
+without a suitable dedicated tool. This is refreshed before each agent run and
+preserves user system-prompt replacements and additions.
+
 Code mode exposes a restricted JavaScript runtime whose nested tool calls use the same
 policies and approval prompts as ordinary calls. There is no `tools.codemode`
 policy or separate outer approval. The overall deadline includes nested approval

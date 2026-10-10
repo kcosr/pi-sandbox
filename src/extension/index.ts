@@ -948,6 +948,19 @@ export function createPiSandboxExtension(dependencies: ExtensionDependencies): E
               : []),
           ].filter((factory): factory is ExtensionFactory => factory !== undefined);
     for (const factory of factories) await factory(childApi);
+
+    // Run after MCP's startup hook so autoactivation is reflected in the prompt.
+    pi.on("before_agent_start", (event) => {
+      const active = new Set(pi.getActiveTools());
+      const sections = event.systemPromptOptions.sections;
+      delete sections.pi_sandbox_tool_guidance;
+      if (!active.has("codemode")) return;
+      sections.pi_sandbox_tool_guidance =
+        "Prefer dedicated tools for file operations and code mode for coordinating tool calls or processing results." +
+        (active.has("bash")
+          ? " Use Bash for running programs, builds, tests, and operations without a suitable dedicated tool."
+          : "");
+    });
   };
 }
 

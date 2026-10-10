@@ -394,6 +394,38 @@ describe("managed initial tool activation", () => {
     expect(pi.tools.has("codemode")).toBe(false);
     expect(pi.activeTools.at(-1)).toEqual(["read"]);
   });
+
+  it("updates prompt guidance from actual activation without replacing user prompt content", async () => {
+    const pi = await activate();
+    const sections: Record<string, string> = { custom_section: "Keep this section" };
+    const options = {
+      sections,
+      customPrompt: "User replacement prompt",
+      appendSystemPrompt: "User appended prompt",
+    };
+    const runHook = () =>
+      pi.handlers.get("before_agent_start")?.({ systemPromptOptions: options } as never, context());
+    await runHook();
+    expect(sections.pi_sandbox_tool_guidance).toBeUndefined();
+    pi.api.setActiveTools(["read", "bash", "codemode"]);
+    await runHook();
+    const guidance = sections.pi_sandbox_tool_guidance;
+    expect(guidance).toContain("Prefer dedicated tools");
+    expect(guidance).toContain("Use Bash");
+    await runHook();
+    expect(sections.pi_sandbox_tool_guidance).toBe(guidance);
+    pi.api.setActiveTools(["read", "codemode"]);
+    await runHook();
+    expect(sections.pi_sandbox_tool_guidance).toContain("Prefer dedicated tools");
+    expect(sections.pi_sandbox_tool_guidance).not.toContain("Bash");
+    pi.api.setActiveTools(["read", "bash"]);
+    await runHook();
+    expect(options).toEqual({
+      sections: { custom_section: "Keep this section" },
+      customPrompt: "User replacement prompt",
+      appendSystemPrompt: "User appended prompt",
+    });
+  });
 });
 
 describe("Pi Sandbox extension", () => {

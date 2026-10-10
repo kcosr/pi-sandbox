@@ -73,6 +73,25 @@ export async function testManagedMcpCodemode({
           providerScenario.codemode,
           `${marker}: code-mode activation`,
         );
+        const systemPrompt = JSON.stringify(
+          body.messages.filter(
+            (message) => message.role === "system" || message.role === "developer",
+          ),
+        );
+        assert.equal(
+          systemPrompt.includes("Prefer dedicated tools for file operations and code mode"),
+          providerScenario.codemode,
+          `${marker}: guidance follows actual code-mode activation`,
+        );
+        assert.equal(
+          systemPrompt.includes("Use Bash for running programs, builds, tests"),
+          providerScenario.codemode && providerScenario.bash !== false,
+          `${marker}: Bash guidance follows availability, including code-mode-only presentation`,
+        );
+        if (providerScenario.customPrompt) {
+          assert(systemPrompt.includes("CUSTOM_SYSTEM_MARKER"));
+          assert(systemPrompt.includes("CUSTOM_APPEND_MARKER"));
+        }
         assert.deepEqual(
           names.filter((name) => name?.startsWith("mcp__")).sort(),
           providerScenario.directMcp
@@ -330,6 +349,29 @@ export async function testManagedMcpCodemode({
         directMcp: false,
         mcp: false,
         settings: { defaultTools: ["+codemode"] },
+      },
+      {
+        marker: "CODEMODE_WITHOUT_BASH",
+        codemode: true,
+        bash: false,
+        directMcp: false,
+        mcp: false,
+        customPrompt: true,
+        args: [
+          "--tools",
+          "read,codemode",
+          "--system-prompt",
+          "CUSTOM_SYSTEM_MARKER",
+          "--append-system-prompt",
+          "CUSTOM_APPEND_MARKER",
+        ],
+      },
+      {
+        marker: "CODEMODE_ONLY_PRESENTATION",
+        codemode: true,
+        directMcp: false,
+        mcp: false,
+        settings: { defaultTools: ["+codemode"], codemode: { mode: "only" } },
       },
       {
         marker: "CLI_EXCLUDES_CODEMODE",
