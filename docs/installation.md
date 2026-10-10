@@ -572,3 +572,12 @@ Bubblewrap when selected. Cargo inventories include build-only dependencies.
 System libraries and Bun's internal third-party dependencies are outside the
 inventory's stated coverage. Supply the SBOM alongside the matching release
 when using dependency scanners.
+
+## Ordinary Pi extension package
+
+The release build also creates `kcosr-pi-sandbox-extension-0.1.0.tgz` and its
+SHA256 sidecar. This is a standard extension for ordinary Pi 1.1.0. It contains
+its runtime and Bubblewrap worker; no private repository or separate source
+checkout is required. See [package configuration and usage](../packages/sandbox-extension/README.md).
+The managed executable continues to embed the same implementation and enforce
+its administrator-selected configuration.

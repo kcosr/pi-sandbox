@@ -28,10 +28,12 @@
     "test:install:macos": "node scripts/test/macos-install-smoke.mjs",
     "test:integration": "vitest run tests/integration",
     "test:systemd": "node scripts/test-systemd-units.mjs",
-    "test:unit": "vitest run src",
+    "test:unit": "vitest run src packages/sandbox-extension/src",
     "test:watch": "vitest",
     "typecheck": "tsc --noEmit",
-    "verify:release": "node scripts/verify-release.mjs"
+    "verify:release": "node scripts/verify-release.mjs",
+    "build:extension": "node scripts/build-sandbox-extension.mjs",
+    "test:extension": "node scripts/test/sandbox-extension-package.mjs"
   },
   "dependencies": {
     "@iarna/toml": "2.2.5"

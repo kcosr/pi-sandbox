@@ -2,7 +2,7 @@ import { constants as fsConstants } from "node:fs";
 import { access } from "node:fs/promises";
 import { delimiter, join } from "node:path";
 
-import { REQUIRED_SANDBOX_EXECUTABLES } from "../sandbox/index.js";
+import { REQUIRED_SANDBOX_EXECUTABLES } from "../../packages/sandbox-extension/src/runtime/index.js";
 
 const DEFAULT_FIXED_EXECUTABLES = REQUIRED_SANDBOX_EXECUTABLES;
 

@@ -1,7 +1,13 @@
-import type { HostCommandRequest, HostCommandResult } from "../host/contracts.js";
+import type {
+  HostCommandRequest,
+  HostCommandResult,
+} from "../../packages/sandbox-extension/src/runtime/host-command/contracts.js";
 import type { ExtensionFactory } from "@earendil-works/pi-coding-agent";
 
-export type { HostCommandRequest, HostCommandResult } from "../host/contracts.js";
+export type {
+  HostCommandRequest,
+  HostCommandResult,
+} from "../../packages/sandbox-extension/src/runtime/host-command/contracts.js";
 
 export const MANAGED_EXTENSION_API_VERSION = 3 as const;
 

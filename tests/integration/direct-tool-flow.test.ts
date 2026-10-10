@@ -11,8 +11,11 @@ import {
   executeLs,
   executeRead,
   executeWrite,
-} from "../../src/extension/executor-operations.js";
-import { createDirectExecutor, type SandboxExecutor } from "../../src/sandbox/index.js";
+} from "../../packages/sandbox-extension/src/tools/executor-operations.js";
+import {
+  createDirectExecutor,
+  type SandboxExecutor,
+} from "../../packages/sandbox-extension/src/runtime/index.js";
 
 describe("typed tools through direct execution", () => {
   let cwd: string;

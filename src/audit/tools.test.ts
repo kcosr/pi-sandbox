@@ -1,7 +1,7 @@
 import type { ExtensionToolContext, ToolDefinition } from "@earendil-works/pi-coding-agent";
 import { describe, expect, it, vi } from "vitest";
 import { ManagedToolExecutionError } from "../runtime/tool-error.js";
-import { SandboxExecutionError } from "../sandbox/index.js";
+import { SandboxExecutionError } from "../../packages/sandbox-extension/src/runtime/index.js";
 import type { AuditClient, AuditEvent } from "./client.js";
 import { ToolAuditor, toolAuditMetadata } from "./tools.js";
 

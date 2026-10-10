@@ -5,9 +5,9 @@
     "declarationMap": true,
     "sourceMap": true,
     "outDir": "dist",
-    "rootDir": "src",
+    "rootDir": ".",
     "types": ["node"]
   },
-  "include": ["src/**/*.ts"],
-  "exclude": ["src/**/*.test.ts"]
+  "include": ["src/**/*.ts", "packages/sandbox-extension/src/**/*.ts"],
+  "exclude": ["src/**/*.test.ts", "packages/**/*.test.ts"]
 }

@@ -19,5 +19,11 @@
     "forceConsistentCasingInFileNames": true,
     "types": ["node", "vitest/globals"]
   },
-  "include": ["src/**/*.ts", "tests/**/*.ts", "vitest.config.ts", "eslint.config.js"]
+  "include": [
+    "src/**/*.ts",
+    "tests/**/*.ts",
+    "vitest.config.ts",
+    "eslint.config.js",
+    "packages/sandbox-extension/src/**/*.ts"
+  ]
 }

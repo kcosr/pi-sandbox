@@ -1,5 +1,15 @@
 # Testing
 
+## Reusable extension acceptance
+
+Shared package unit tests run with `npm run test:unit`. `npm run test:extension`
+builds and inspects an npm-format tarball, imports its public entries and starts
+ordinary Pi 1.1.0 against the extracted artifact. On Linux this requires genuine
+Bubblewrap, Node 24 and Bun 1.3.14+; it exercises both worker runtimes and verifies
+that conversation replacement retains a single namespace and background job in
+sandbox-lifetime mode. No model service is contacted. Managed release checks
+continue to cover forced composition, permissions, MCP, Code Mode and packaging.
+
 Pi Sandbox tests are offline. They never invoke a live model provider and never
 depend on provider credentials.
 

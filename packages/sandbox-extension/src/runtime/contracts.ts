@@ -1,4 +1,8 @@
-import type { NetworkMode, ProcessLifetime } from "../domain/index.js";
+export const NETWORK_MODES = Object.freeze(["none", "local", "host"] as const);
+export type NetworkMode = (typeof NETWORK_MODES)[number];
+
+export const PROCESS_LIFETIMES = Object.freeze(["command", "sandbox"] as const);
+export type ProcessLifetime = (typeof PROCESS_LIFETIMES)[number];
 
 export const TOOL_COMMAND_NAMES = Object.freeze([
   "bash",
@@ -51,7 +55,10 @@ export interface CreateBubblewrapExecutorOptions {
   /** Absolute build-selected Bubblewrap executable. No runtime default or fallback exists. */
   readonly bubblewrapPath: string;
   readonly limits?: SandboxResourceLimits;
-  /** Alternate worker entry point used by source-level integration tests. */
+  /**
+   * Trusted worker command for ordinary Pi/package embeddings and integration tests.
+   * Managed self-contained builds may omit it to reenter their internal worker mode.
+   */
   readonly workerCommand?: readonly [string, ...string[]];
 }
 

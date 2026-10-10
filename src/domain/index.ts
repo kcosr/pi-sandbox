@@ -42,7 +42,7 @@ export {
   isNormalizedAbsoluteFilePath,
   isNormalizedHiddenPath,
   isReservedHiddenDirectoryPath,
-} from "./paths.js";
+} from "../../packages/sandbox-extension/src/runtime/paths.js";
 export {
   MAXIMUM_ENVIRONMENT_BYTES,
   MAXIMUM_ENVIRONMENT_EXTENSIONS,

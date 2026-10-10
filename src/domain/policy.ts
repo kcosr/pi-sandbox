@@ -1,37 +1,36 @@
+import {
+  TOOL_NAMES,
+  type SubjectPolicy,
+} from "../../packages/sandbox-extension/src/policy/contracts.js";
+export {
+  TOOL_NAMES,
+  POLICY_MODES,
+  SESSION_GRANT_POLICIES,
+} from "../../packages/sandbox-extension/src/policy/contracts.js";
+export type {
+  BuiltInToolName,
+  ToolName,
+  ApprovalSubject,
+  PolicyMode,
+  SessionGrantPolicy,
+  SubjectPolicy,
+} from "../../packages/sandbox-extension/src/policy/contracts.js";
 import type { CodeModeConfig, McpConfig } from "./mcp.js";
-
-export const TOOL_NAMES = Object.freeze([
-  "read",
-  "grep",
-  "find",
-  "ls",
-  "write",
-  "edit",
-  "bash",
-] as const);
 
 import { buildLayout } from "../build-layout/index.js";
 
 export const IDENTITY_BROKER_SOCKET_PATH = buildLayout.identitySocketPath;
 
-export type BuiltInToolName = (typeof TOOL_NAMES)[number];
-
-/** Model-visible registered tool name, including build-selected extension tools. */
-export type ToolName = string;
-
-export type ApprovalSubject = string;
-
-export const POLICY_MODES = Object.freeze(["allow", "ask", "deny", "disabled"] as const);
-
-export type PolicyMode = (typeof POLICY_MODES)[number];
-
-export const SESSION_GRANT_POLICIES = Object.freeze(["never", "offer"] as const);
-
-export type SessionGrantPolicy = (typeof SESSION_GRANT_POLICIES)[number];
-
-export const NETWORK_MODES = Object.freeze(["none", "local", "host"] as const);
-
-export type NetworkMode = (typeof NETWORK_MODES)[number];
+import type {
+  NetworkMode,
+  ProcessLifetime,
+} from "../../packages/sandbox-extension/src/runtime/contracts.js";
+export {
+  NETWORK_MODES,
+  PROCESS_LIFETIMES,
+  type NetworkMode,
+  type ProcessLifetime,
+} from "../../packages/sandbox-extension/src/runtime/contracts.js";
 
 export interface NetworkConfig {
   readonly mode: NetworkMode;
@@ -41,10 +40,6 @@ export const EXECUTION_BACKENDS = Object.freeze(["bubblewrap", "direct"] as cons
 
 export type ExecutionBackend = (typeof EXECUTION_BACKENDS)[number];
 
-export const PROCESS_LIFETIMES = Object.freeze(["command", "sandbox"] as const);
-
-export type ProcessLifetime = (typeof PROCESS_LIFETIMES)[number];
-
 export interface FilesystemConfig {
   readonly cwdWritable: boolean;
   readonly hiddenPaths: readonly string[];
@@ -53,11 +48,6 @@ export interface FilesystemConfig {
 export interface ExecutionConfig {
   readonly backend: ExecutionBackend;
   readonly processLifetime: ProcessLifetime;
-}
-
-export interface SubjectPolicy {
-  readonly mode: PolicyMode;
-  readonly sessionGrant: SessionGrantPolicy;
 }
 
 export interface ToolPolicy extends SubjectPolicy {

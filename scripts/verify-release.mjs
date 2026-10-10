@@ -32,6 +32,7 @@ const commonChecks = [
 const platformChecks =
   process.platform === "linux"
     ? [
+        ["npm", ["run", "test:extension"]],
         ["npm", ["run", "test:broker"]],
         ["npm", ["run", "test:audit-collector"]],
         ["npm", ["run", "test:systemd"]],

@@ -26,7 +26,7 @@ import type {
   SandboxExecutor,
   SandboxExecutionOptions,
   ToolCommandName,
-} from "../sandbox/index.js";
+} from "../runtime/index.js";
 
 const FILE_TRANSFER_LIMIT = 8 * 1024 * 1024;
 const SEARCH_TRANSFER_LIMIT = 64 * 1024 * 1024;

@@ -1,8 +1,7 @@
-import type { ApprovalSubject, SandboxConfig, SubjectPolicy } from "../domain/index.js";
+import type { ApprovalSubject, SubjectPolicy } from "./contracts.js";
 import { describe, expect, it, vi } from "vitest";
 import {
   PolicyEngine,
-  createApprovalPolicies,
   prepareApprovalRequest,
   type ApprovalPrompt,
   type ApprovalPromptDecision,
@@ -270,54 +269,5 @@ describe("PolicyEngine", () => {
     await vi.waitFor(() => expect(ui.prompts).toHaveLength(2));
     resolutions[1]?.("allow_once");
     await expect(next).resolves.toMatchObject({ allowed: true, source: "prompt" });
-  });
-
-  it("creates policies from the configured model tools", () => {
-    const config: SandboxConfig = {
-      configVersion: 10,
-      codemode: { enabled: false, timeoutMs: 300000 },
-      mcp: { servers: {} },
-      sessions: { retentionDays: 0 },
-      filesystem: { cwdWritable: true, hiddenPaths: [] },
-      audit: { enabled: false, facility: "local0" },
-      modelsFile: "/etc/pi-sandbox/models.json",
-      execution: { backend: "bubblewrap", processLifetime: "command" },
-      identity: { mode: "disabled" },
-      network: { mode: "none" },
-      environment: { pi: {}, sandbox: {}, extensions: {} },
-      extensions: {
-        git: {
-          id: "git",
-          settings: {
-            allowed_hosts: ["github.com"],
-            allowed_schemes: ["https", "ssh"],
-          },
-          toolNames: ["git_clone"],
-        },
-      },
-      tools: {
-        read: { ...allow, audit: false },
-        grep: { ...allow, audit: false },
-        find: { ...allow, audit: false },
-        ls: { ...allow, audit: false },
-        write: { ...allow, audit: false },
-        edit: { ...allow, audit: false },
-        bash: { mode: "deny", sessionGrant: "never", audit: false },
-        git_clone: { mode: "ask", sessionGrant: "offer", audit: false },
-      },
-    };
-    const created = createApprovalPolicies(config);
-    expect(created.bash).toEqual({ mode: "deny", sessionGrant: "never", audit: false });
-    expect(created.git_clone).toEqual({ mode: "ask", sessionGrant: "offer", audit: false });
-    expect(Object.keys(created)).toEqual([
-      "read",
-      "grep",
-      "find",
-      "ls",
-      "write",
-      "edit",
-      "bash",
-      "git_clone",
-    ]);
   });
 });

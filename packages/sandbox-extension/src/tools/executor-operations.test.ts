@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 
-import { LINUX_TOOL_COMMANDS, type SandboxExecutor } from "../sandbox/index.js";
+import { LINUX_TOOL_COMMANDS, type SandboxExecutor } from "../runtime/index.js";
 import {
   executeEdit,
   executeFind,

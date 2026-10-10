@@ -1,6 +1,6 @@
 import { createHash } from "node:crypto";
 
-import type { ApprovalSubject, SandboxConfig, SubjectPolicy } from "../domain/index.js";
+import type { ApprovalSubject, SubjectPolicy } from "./contracts.js";
 
 export type JsonValue = null | boolean | number | string | readonly JsonValue[] | JsonObject;
 
@@ -130,10 +130,6 @@ class AsyncMutex {
     }
     next.resolve(this.createRelease());
   }
-}
-
-export function createApprovalPolicies(config: SandboxConfig): ApprovalPolicies {
-  return config.tools;
 }
 
 export function prepareApprovalRequest(input: {

@@ -1,6 +1,6 @@
 #!/usr/bin/env bun
 
-import { INTERNAL_SANDBOX_WORKER_ARGUMENT } from "./sandbox/worker-protocol.js";
+import { INTERNAL_SANDBOX_WORKER_ARGUMENT } from "../packages/sandbox-extension/src/runtime/worker-protocol.js";
 import { assertRuntimeUser } from "./runtime/user.js";
 import { parseSandboxArguments, type SandboxArguments } from "./runtime/config-arguments.js";
 
@@ -18,7 +18,8 @@ try {
 
 if (launch !== undefined && args.length === 1 && args[0] === INTERNAL_SANDBOX_WORKER_ARGUMENT) {
   try {
-    const { runSandboxWorker } = await import("./sandbox/worker.js");
+    const { runSandboxWorker } =
+      await import("../packages/sandbox-extension/src/runtime/worker.js");
     await runSandboxWorker();
   } catch (error) {
     console.error(`pi-sandbox-worker: ${error instanceof Error ? error.message : String(error)}`);
