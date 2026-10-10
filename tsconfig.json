@@ -17,7 +17,8 @@
     "isolatedModules": true,
     "esModuleInterop": true,
     "forceConsistentCasingInFileNames": true,
-    "types": ["node", "vitest/globals"]
+    "types": ["node", "vitest/globals"],
+    "resolveJsonModule": true
   },
   "include": [
     "src/**/*.ts",

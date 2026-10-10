@@ -24,6 +24,7 @@ const commonChecks = [
   ["npm", ["run", "typecheck"]],
   ["npm", ["run", "test:build-composition"]],
   ["npm", ["run", "test:distribution"]],
+  ["npm", ["run", "test:version"]],
   [process.execPath, ["--test", "scripts/test/sbom.mjs"]],
   ["npm", ["run", "test:unit"]],
   ["npm", ["run", "test:integration"]],

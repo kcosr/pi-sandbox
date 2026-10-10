@@ -6,12 +6,12 @@ import {
   getAgentDir,
   main as piMain,
   ModelRuntime,
-  VERSION,
   type CreateModelRuntimeOptions,
   type ExtensionFactory,
 } from "@earendil-works/pi-coding-agent";
 
 import { buildLayout, type CompiledLayout } from "../build-layout/index.js";
+import { DISPLAY_VERSION } from "../version.js";
 import { connectAuditClient, type AuditClient } from "../audit/client.js";
 import { loadConfig } from "../config/index.js";
 import type {
@@ -75,6 +75,7 @@ export type ManagedModelRuntimeFactory = (
 ) => Promise<ModelRuntime>;
 
 export interface ManagedMainOptions {
+  readonly displayVersion: string;
   readonly extensionFactories: Array<{ readonly name: string; readonly factory: ExtensionFactory }>;
   readonly createModelRuntime: ManagedModelRuntimeFactory;
   readonly validateSessionCwd: (cwd: string) => void;
@@ -462,7 +463,7 @@ function parseBackendQueryRoot(args: readonly string[]): string | undefined {
 export async function runPiSandbox({ piArgs: args, configPath }: SandboxArguments): Promise<void> {
   // Supervisors probe the worker before selecting its workspace. Metadata needs no authority.
   if (args.length === 1 && args[0] === "--version") {
-    process.stdout.write(`${VERSION}\n`);
+    process.stdout.write(`${DISPLAY_VERSION}\n`);
     return;
   }
   const validationRoot = parseValidationRoot(args);
@@ -558,6 +559,7 @@ export async function runPiSandbox({ piArgs: args, configPath }: SandboxArgument
         );
       }
       await managedMain(createManagedPiArguments(args), {
+        displayVersion: DISPLAY_VERSION,
         extensionFactories: [{ name: "pi-sandbox", factory: extension }],
         createModelRuntime: createManagedModelRuntimeFactory(modelsPath),
         validateSessionCwd,

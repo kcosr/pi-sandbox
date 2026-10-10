@@ -13,6 +13,7 @@ import {
   sha256File,
 } from "./build/extension-composition.mjs";
 import { createCompiledLayoutModule, loadDistribution } from "./build/distribution.mjs";
+import { readBuildVersion } from "./build/version.mjs";
 
 const repositoryRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const defaultDistribution = join(repositoryRoot, "config/default/distribution.toml");
@@ -66,6 +67,7 @@ const extensions = await loadExtensionManifests(distribution.extensionManifests)
 const compiledExtensionsModule = createCompiledExtensionsModule(extensions);
 const compiledLayoutModule = createCompiledLayoutModule(distribution.layout);
 const privateBundle = join(repositoryRoot, "dist/private/private-cli.js");
+const buildVersion = await readBuildVersion(repositoryRoot);
 
 const common = {
   bundle: true,
@@ -81,6 +83,7 @@ const common = {
 
 const bundleResult = await build({
   ...common,
+  define: { PI_SANDBOX_DISPLAY_VERSION: JSON.stringify(buildVersion.displayVersion) },
   metafile: true,
   absWorkingDir: repositoryRoot,
   entryPoints: [join(repositoryRoot, "src/private-cli.ts")],
@@ -130,6 +133,10 @@ const bundleResult = await build({
 });
 
 const inventory = createExtensionBuildInventory(extensions, await sha256File(privateBundle));
+await writeFile(
+  join(repositoryRoot, "dist/private/build-version.json"),
+  `${JSON.stringify(buildVersion, null, 2)}\n`,
+);
 await writeFile(
   join(repositoryRoot, "dist/private/extension-build-inventory.json"),
   `${JSON.stringify(inventory, null, 2)}\n`,

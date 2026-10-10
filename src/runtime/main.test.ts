@@ -99,7 +99,7 @@ describe("execution startup diagnostics", () => {
 });
 
 describe("administrative configuration", () => {
-  it("reports the pinned Pi version without reading policy or inspecting the probe workspace", async () => {
+  it("reports the application version without reading policy or inspecting the probe workspace", async () => {
     const write = vi.spyOn(process.stdout, "write").mockReturnValue(true);
     const cwd = vi.spyOn(process, "cwd").mockImplementation(() => {
       throw new Error("probe has no workspace");
@@ -111,7 +111,7 @@ describe("administrative configuration", () => {
           allowConfigOverride: false,
         }),
       );
-      expect(write).toHaveBeenCalledWith("1.1.0\n");
+      expect(write).toHaveBeenCalledWith("1.1.0+ps.0.6.0.dev.source\n");
       expect(cwd).not.toHaveBeenCalled();
     } finally {
       cwd.mockRestore();

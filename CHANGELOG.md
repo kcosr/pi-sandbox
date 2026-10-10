@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+## 0.6.0 - 2026-10-10
+
+- Add independent product release versioning, a combined Pi/Pi Sandbox CLI and TUI version display, and a documented source-only release process.
 - Add Linux smolvm 1.25.4 execution to managed and ordinary Pi, with reusable OCI branching/attachments and documented manual crash recovery; require managed config schema 11. ([#17](https://github.com/kcosr/pi-sandbox/pull/17))
 - Extract reusable sandbox tools, permissions and execution into a standard Pi extension package, shared with the managed build. ([#16](https://github.com/kcosr/pi-sandbox/pull/16))
 - Add Bubblewrap-local networking and configurable background-process lifetime; close a Unix datagram socket-pair bypass. ([#15](https://github.com/kcosr/pi-sandbox/pull/15))
