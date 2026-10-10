@@ -1,11 +1,13 @@
 diff --git a/packages/coding-agent/src/main.ts b/packages/coding-agent/src/main.ts
-index 8640361..b953c68 100644
+index 8640361..89f9250 100644
 --- a/packages/coding-agent/src/main.ts
 +++ b/packages/coding-agent/src/main.ts
-@@ -575,6 +575,12 @@ export interface MainOptions {
+@@ -575,6 +575,14 @@ export interface MainOptions {
  	createModelRuntime?: ModelRuntimeFactory;
  	/** Reject a target workspace before reading its settings or resources. */
  	validateSessionCwd?: (cwd: string) => void;
++	/** Complete trusted initialization after CLI errors and before starting any interface. */
++	beforeInterface?: () => Promise<void>;
 +	/** Complete startup maintenance before reading input or starting the selected interface. */
 +	beforeRun?: (context: {
 +		mode: AppMode;
@@ -15,7 +17,7 @@ index 8640361..b953c68 100644
  }
  
  export async function main(args: string[], options?: MainOptions) {
-@@ -908,6 +914,12 @@ export async function main(args: string[], options?: MainOptions) {
+@@ -908,6 +916,12 @@ export async function main(args: string[], options?: MainOptions) {
  		process.exit(0);
  	}
  
@@ -28,12 +30,20 @@ index 8640361..b953c68 100644
  	// Read piped stdin content (if any) - skip for RPC mode which uses stdin for JSON-RPC
  	let stdinContent: string | undefined;
  	if (appMode !== "rpc") {
+@@ -955,6 +969,8 @@ export async function main(args: string[], options?: MainOptions) {
+ 		process.exit(1);
+ 	}
+ 
++	await options?.beforeInterface?.();
++
+ 	// RPC refreshes catalogs here in the background; interactive mode starts its refresh after TUI initialization.
+ 	if (!offlineMode && appMode === "rpc") {
+ 		const controller = new AbortController();
 diff --git a/packages/coding-agent/test/managed-session-maintenance.test.ts b/packages/coding-agent/test/managed-session-maintenance.test.ts
 new file mode 100644
-index 0000000..8f7cc57
 --- /dev/null
 +++ b/packages/coding-agent/test/managed-session-maintenance.test.ts
-@@ -0,0 +1,180 @@
+@@ -0,0 +1,248 @@
 +import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 +import { tmpdir } from "node:os";
 +import { join } from "node:path";
@@ -207,9 +217,77 @@ index 0000000..8f7cc57
 +		expect(beforeRun).not.toHaveBeenCalled();
 +	});
 +
++	test.each([
++		{ args: [], runner: modes.interactive },
++		{ args: ["--print"], runner: modes.print },
++		{ args: ["--mode", "rpc"], runner: modes.rpc },
++	])("awaits final initialization before dispatching $args", async ({ args, runner }) => {
++		const entered = Promise.withResolvers<void>();
++		const finish = Promise.withResolvers<void>();
++		const beforeInterface = vi.fn(async () => {
++			entered.resolve();
++			await finish.promise;
++		});
++		const running = main([...args, ...safeArgs, "--no-session"], { createModelRuntime, beforeInterface });
++		await entered.promise;
++		expect(beforeInterface).toHaveBeenCalledOnce();
++		expect(runner).not.toHaveBeenCalled();
++		finish.resolve();
++		await running;
++		expect(runner).toHaveBeenCalledOnce();
++	});
++
++	test.each([[], ["--print"], ["--mode", "rpc"]])(
++		"propagates final initialization failure for $0",
++		async (...args) => {
++			const failure = new Error("Backend startup failed");
++			const beforeInterface = vi.fn(async () => {
++				throw failure;
++			});
++			await expect(
++				main([...args, ...safeArgs, "--no-session"], { createModelRuntime, beforeInterface }),
++			).rejects.toBe(failure);
++			expect(modes.interactive).not.toHaveBeenCalled();
++			expect(modes.print).not.toHaveBeenCalled();
++			expect(modes.rpc).not.toHaveBeenCalled();
++		},
++	);
++
++	test.each([
++		["--help"],
++		["--list-models"],
++		["--version"],
++		["--mode", "invalid"],
++		["--mode", "rpc", "--model", "missing-model"],
++	])("skips final initialization for metadata or invalid arguments $0", async (...args) => {
++		const exit = new Error("Early exit");
++		vi.spyOn(process, "exit").mockImplementation(() => {
++			throw exit;
++		});
++		const beforeInterface = vi.fn<NonNullable<MainOptions["beforeInterface"]>>();
++		await expect(main([...args, ...safeArgs], { createModelRuntime, beforeInterface })).rejects.toBe(exit);
++		expect(beforeInterface).not.toHaveBeenCalled();
++		expect(modes.interactive).not.toHaveBeenCalled();
++		expect(modes.print).not.toHaveBeenCalled();
++		expect(modes.rpc).not.toHaveBeenCalled();
++	});
++
++	test("skips final initialization for an unsupported startup benchmark mode", async () => {
++		vi.stubEnv("PI_STARTUP_BENCHMARK", "1");
++		const exit = new Error("Invalid benchmark exit");
++		vi.spyOn(process, "exit").mockImplementation(() => {
++			throw exit;
++		});
++		const beforeInterface = vi.fn<NonNullable<MainOptions["beforeInterface"]>>();
++		await expect(main([...safeArgs, "--mode", "rpc"], { createModelRuntime, beforeInterface })).rejects.toBe(exit);
++		expect(beforeInterface).not.toHaveBeenCalled();
++	});
++
 +	test("skips maintenance for authentication commands", async () => {
 +		const beforeRun = vi.fn<NonNullable<MainOptions["beforeRun"]>>();
-+		await main(["auth", "print-api-key", "--provider", "openai"], { createModelRuntime, beforeRun });
++		const beforeInterface = vi.fn<NonNullable<MainOptions["beforeInterface"]>>();
++		await main(["auth", "print-api-key", "--provider", "openai"], { createModelRuntime, beforeRun, beforeInterface });
++		expect(beforeInterface).not.toHaveBeenCalled();
 +		expect(beforeRun).not.toHaveBeenCalled();
 +		expect(process.exitCode ?? 0).toBe(0);
 +	});

@@ -327,7 +327,7 @@ There is no implicit configuration replacement. This supports both complete
 archive deployments and systems where Salt or another configuration manager
 owns `/etc/pi-sandbox`.
 
-The installed configuration uses `config_version = 10` and must include the
+The installed configuration uses `config_version = 11` and must include the
 `[audit]`, `[sessions]`, `[codemode]`, `[mcp.servers]`, `[execution]`, `[filesystem]`, and `[extensions]` tables, an `audit` boolean on every
 base tool policy, explicit `filesystem.hidden_paths` (empty by default), and explicit `[environment.pi]`,
 `[environment.sandbox]`, and `[environment.extensions]` tables, even when the
@@ -569,15 +569,51 @@ source commit and working-tree status, pinned Pi source and patch provenance,
 actual JavaScript bundle inputs, selected compiled extensions, Bun version,
 packaged native assets and executable hashes, Linux Rust dependency inventories, and bundled
 Bubblewrap when selected. Cargo inventories include build-only dependencies.
+When smolvm is selected, both the SBOM and release manifest record its external
+runtime path, version, upstream source commit and pinned release archive digest.
+These identify the runtime verified at launch; they do not mark it as bundled.
 System libraries and Bun's internal third-party dependencies are outside the
 inventory's stated coverage. Supply the SBOM alongside the matching release
 when using dependency scanners.
 
 ## Ordinary Pi extension package
 
-The release build also creates `kcosr-pi-sandbox-extension-0.1.0.tgz` and its
+The release build also creates `kcosr-pi-sandbox-extension-0.2.0.tgz` and its
 SHA256 sidecar. This is a standard extension for ordinary Pi 1.1.0. It contains
 its runtime and Bubblewrap worker; no private repository or separate source
 checkout is required. See [package configuration and usage](../packages/sandbox-extension/README.md).
 The managed executable continues to embed the same implementation and enforce
 its administrator-selected configuration.
+
+## Optional external smolvm runtime
+
+Linux x86-64 distributions may opt into smolvm by setting
+`platforms.linux.smolvm.path` and `version = "1.25.4"` in the build manifest.
+Keep the official wrapper, binary, libraries and guest rootfs together at that
+fixed path. A wrapper copied by itself is insufficient. Pi verifies the pinned
+complete runtime inventory at VM startup. The generated release manifest records
+the external path/version and lists smolvm among supported execution backends;
+the Pi archive does not bundle those external files.
+
+Provide a trusted tools image and its SHA-256 in the administrator's `[smolvm]`
+policy table. Follow the [image preparation guide](smolvm-images.md) for the
+public recipe, upstream CLI steps, and offline verification. The default packaged configuration remains Bubblewrap on Linux
+and direct execution on macOS. Config validation and staged installation do not
+start VMs or require the external runtime/image paths to exist. VM startup
+requires Linux x86-64, usable `/dev/kvm`, the pinned external distribution,
+the configured image and a private state directory outside the launch project.
+Provision each account's expanded `smolvm.state_directory` with that account as
+owner and mode `0700`; `/var/tmp/pi-vm-{{uid}}` keeps paths short and accounts
+separate. Its canonical expanded path must occupy at most 48 bytes. Startup does
+not create this directory or repair its ownership or permissions.
+Host e2fsprogs is needed during image preparation and when the separate OCI
+controller creates disks smaller than smolvm's bundled templates. Make
+`resize2fs` available in a system directory searched by the fixed launcher
+environment (`/usr/bin`, `/bin`, `/usr/sbin` or `/sbin`). The prepared plain-pack
+backend does not shrink disks at startup: it rejects configured capacities below
+the image's logical sizes, copies its prepared templates and lets the guest grow
+their filesystems if needed. It therefore does not unconditionally require host
+e2fsprogs just to launch a valid prepared pack.
+No host packages or services are automatically installed. See
+[configuration](configuration.md#smolvm-image-and-runtime-selection) for the
+exact policy fields and resource limits.

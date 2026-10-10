@@ -46,6 +46,7 @@ export async function createSbom({
   sourceCommit,
   sourceDirty,
   bubblewrap,
+  smolvm,
   payload,
 }) {
   const components = new Map();
@@ -245,6 +246,14 @@ export async function createSbom({
           property("platform", platform),
           property("source-commit", sourceCommit),
           property("source-dirty", sourceDirty),
+          ...(smolvm === undefined || smolvm === null
+            ? []
+            : [
+                property("external-smolvm-version", smolvm.version),
+                property("external-smolvm-path", smolvm.path),
+                property("external-smolvm-source-commit", smolvm.sourceCommit),
+                property("external-smolvm-release-archive-sha256", smolvm.releaseArchiveSha256),
+              ]),
           property(
             "coverage",
             "Actual JavaScript bundle inputs, selected extensions, Bun runtime, native Cargo lock inventories and bundled Bubblewrap. System libraries and Bun internal third-party components are not enumerated.",

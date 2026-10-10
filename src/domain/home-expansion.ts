@@ -4,14 +4,24 @@ import {
   isNormalizedAbsoluteFilePath,
   isReservedHiddenDirectoryPath,
 } from "../../packages/sandbox-extension/src/runtime/paths.js";
-import type { EnvironmentVariables, FilesystemConfig, ManagedEnvironment } from "./policy.js";
+import type {
+  EnvironmentVariables,
+  FilesystemConfig,
+  ManagedEnvironment,
+  SmolvmConfig,
+} from "./policy.js";
 
 /** Resolve the effective policy once, after broker overlays and before applying its environment. */
 export function expandManagedHomePaths(
   filesystem: FilesystemConfig,
   environment: ManagedEnvironment,
   getIdentity: () => AccountIdentity,
-): Readonly<{ filesystem: FilesystemConfig; environment: ManagedEnvironment }> {
+  smolvm?: SmolvmConfig,
+): Readonly<{
+  filesystem: FilesystemConfig;
+  environment: ManagedEnvironment;
+  smolvm?: SmolvmConfig;
+}> {
   let identity: AccountIdentity | undefined;
   const account = (): AccountIdentity => (identity ??= getIdentity());
   const expand = (value: string): string => expandAccountValue(value, account);
@@ -47,11 +57,25 @@ export function expandManagedHomePaths(
       ]),
     ),
   });
+  const stateDirectory = smolvm === undefined ? undefined : expand(smolvm.stateDirectory);
+  if (
+    stateDirectory !== undefined &&
+    (!isNormalizedAbsoluteFilePath(stateDirectory) ||
+      stateDirectory.includes(":") ||
+      Buffer.byteLength(stateDirectory) > 48)
+  ) {
+    throw new Error(
+      "Expanded smolvm.state_directory must be a normalized absolute path below / of at most 48 bytes without colons",
+    );
+  }
   return Object.freeze({
     filesystem: Object.freeze({
       cwdWritable: filesystem.cwdWritable,
       hiddenPaths: Object.freeze(hiddenPaths.sort()),
     }),
     environment: expandedEnvironment,
+    ...(smolvm !== undefined && stateDirectory !== undefined
+      ? { smolvm: Object.freeze({ ...smolvm, stateDirectory }) }
+      : {}),
   });
 }

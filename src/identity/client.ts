@@ -167,13 +167,14 @@ export function applyIdentityOverrides(
     ]),
   ) as Record<string, ToolPolicy>;
   return Object.freeze({
-    configVersion: 10,
+    configVersion: 11,
     codemode: base.codemode,
     mcp: base.mcp,
     audit: base.audit,
     sessions: base.sessions,
     modelsFile: overrides.modelsFile ?? base.modelsFile,
-    execution: Object.freeze({ ...base.execution, ...overrides.execution }),
+    execution: applyExecutionOverride(base.execution, overrides.execution),
+    ...(base.smolvm === undefined ? {} : { smolvm: base.smolvm }),
     identity: base.identity,
     network: overrides.network ?? base.network,
     filesystem: Object.freeze({ ...base.filesystem, ...overrides.filesystem }),
@@ -181,6 +182,23 @@ export function applyIdentityOverrides(
     extensions: base.extensions,
     tools: Object.freeze(tools),
   });
+}
+
+function applyExecutionOverride(
+  base: ExecutionConfig,
+  override?: Partial<ExecutionConfig>,
+): ExecutionConfig {
+  const backend = override?.backend ?? base.backend;
+  if (backend === "smolvm") {
+    if (override?.processLifetime !== undefined)
+      throw new Error("smolvm does not support execution.process_lifetime overrides");
+    return Object.freeze({ backend, processLifetime: "sandbox" });
+  }
+  // A VM's fixed lifetime is not a Bubblewrap preference. Explicitly switching
+  // away from it selects the destination's ordinary command default.
+  const processLifetime =
+    override?.processLifetime ?? (base.backend === "smolvm" ? "command" : base.processLifetime);
+  return Object.freeze({ backend, processLifetime });
 }
 
 function parseIdentityOverrides(value: unknown): IdentityOverrides {
@@ -205,6 +223,8 @@ function parseIdentityOverrides(value: unknown): IdentityOverrides {
       Object.hasOwn(fields, "backend") &&
       !EXECUTION_BACKENDS.includes(fields.backend as ExecutionConfig["backend"])
     )
+      throw invalidResponse();
+    if (fields.backend === "smolvm" && Object.hasOwn(fields, "process_lifetime"))
       throw invalidResponse();
     if (
       Object.hasOwn(fields, "process_lifetime") &&

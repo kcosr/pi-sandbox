@@ -36,7 +36,7 @@ export interface NetworkConfig {
   readonly mode: NetworkMode;
 }
 
-export const EXECUTION_BACKENDS = Object.freeze(["bubblewrap", "direct"] as const);
+export const EXECUTION_BACKENDS = Object.freeze(["bubblewrap", "direct", "smolvm"] as const);
 
 export type ExecutionBackend = (typeof EXECUTION_BACKENDS)[number];
 
@@ -48,6 +48,16 @@ export interface FilesystemConfig {
 export interface ExecutionConfig {
   readonly backend: ExecutionBackend;
   readonly processLifetime: ProcessLifetime;
+}
+
+export interface SmolvmConfig {
+  readonly image: string;
+  readonly imageSha256: string;
+  readonly stateDirectory: string;
+  readonly cpus: number;
+  readonly memoryMiB: number;
+  readonly storageGiB: number;
+  readonly overlayGiB: number;
 }
 
 export interface ToolPolicy extends SubjectPolicy {
@@ -109,13 +119,14 @@ export interface ManagedEnvironment {
 }
 
 export interface SandboxConfig {
-  readonly configVersion: 10;
+  readonly configVersion: 11;
   readonly codemode: CodeModeConfig;
   readonly mcp: McpConfig;
   readonly audit: AuditConfig;
   readonly sessions: SessionsConfig;
   readonly modelsFile: string;
   readonly execution: ExecutionConfig;
+  readonly smolvm?: SmolvmConfig;
   readonly identity: IdentityConfig;
   readonly network: NetworkConfig;
   readonly filesystem: FilesystemConfig;

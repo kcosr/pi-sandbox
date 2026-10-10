@@ -82,6 +82,26 @@ describe("audit client", () => {
     expect(received).toEqual([{ version: 2, event }]);
   });
 
+  it("preserves smolvm as the tool execution boundary", async () => {
+    const received: unknown[] = [];
+    const path = await listen((socket) =>
+      socket.on("data", (data) => {
+        received.push(JSON.parse(data.toString()));
+        socket.write(acknowledgment);
+      }),
+    );
+    client = await connectAuditClient(path);
+    const call: AuditEvent = {
+      event: "tool_requested",
+      pi_session_id: "pi-1",
+      invocation_id: "call-1",
+      tool: "bash",
+      boundary: "smolvm",
+    };
+    await client.submit(call);
+    expect(received).toEqual([{ version: 2, event: call }]);
+  });
+
   it.each(["http", "stdio"] as const)(
     "sends typed %s MCP metadata and trusted parent correlation on wire version 2",
     async (transport) => {

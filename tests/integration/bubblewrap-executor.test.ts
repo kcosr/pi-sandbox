@@ -63,6 +63,15 @@ describe.skipIf(!realBubblewrapAvailable)("real Bubblewrap executor", () => {
     expect(result.stdout.toString().trim()).toBe(cwd);
   });
 
+  it("rejects per-command context overrides", async () => {
+    for (const context of [{ cwd: "/" }, { environment: { VALUE: "override" } }]) {
+      await expect(executor.execute({ argv: ["/bin/true"], ...context })).rejects.toMatchObject({
+        code: "sandbox_invalid_request",
+      });
+    }
+    expect((await executor.execute({ argv: ["/bin/true"] })).exitCode).toBe(0);
+  });
+
   it.skipIf(!systemGitAvailable)(
     "exposes the ordinary Git executable for repository work inside the sandbox",
     async () => {

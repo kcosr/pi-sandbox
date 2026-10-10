@@ -65,6 +65,9 @@ export interface CreateBubblewrapExecutorOptions {
 export interface SandboxCommandRequest {
   /** Direct executable and arguments. A host shell is never implied. */
   readonly argv: readonly [string, ...string[]];
+  /** Optional guest context for backends supporting per-operation contexts. */
+  readonly cwd?: string;
+  readonly environment?: Readonly<Record<string, string>>;
   readonly stdin?: string | Uint8Array;
   readonly timeoutMs?: number;
   /** Combined stdout and stderr byte limit. */
@@ -91,6 +94,8 @@ export type SandboxExecutionErrorCode =
   | "sandbox_invalid_request"
   | "sandbox_output_limit_exceeded"
   | "sandbox_process_failed"
+  | "sandbox_queue_full"
+  | "sandbox_admission_timeout"
   | "sandbox_start_failed"
   | "sandbox_timeout";
 
@@ -107,7 +112,7 @@ export class SandboxExecutionError extends Error {
 export interface SandboxExecutor {
   readonly cwd: string;
   readonly home: string;
-  readonly backend: "bubblewrap" | "direct";
+  readonly backend: "bubblewrap" | "direct" | "smolvm";
   readonly commands: ToolCommandPaths;
   probe(signal?: AbortSignal): Promise<void>;
   execute(

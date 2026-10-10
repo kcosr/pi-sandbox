@@ -45,6 +45,14 @@ interface HostEchoArguments extends JsonObject {
   readonly value: string;
 }
 
+function deferred<T>() {
+  let resolve!: (value: T | PromiseLike<T>) => void;
+  const promise = new Promise<T>((complete) => {
+    resolve = complete;
+  });
+  return { promise, resolve };
+}
+
 function fakePi(settings: ReturnType<ExtensionAPI["getSettings"]> = {}): FakePi {
   const handlers = new Map<string, Handler>();
   const tools = new Map<string, ToolDefinition>();
@@ -82,7 +90,7 @@ function config(
   overrides: Partial<Record<ToolName, "allow" | "ask" | "deny" | "disabled">> = {},
 ): SandboxConfig {
   return {
-    configVersion: 10,
+    configVersion: 11,
     codemode: { enabled: false, timeoutMs: 300000 },
     mcp: { servers: {} },
     sessions: { retentionDays: 0 },
@@ -963,7 +971,7 @@ describe("Pi Sandbox extension", () => {
       true,
     );
     // eslint-disable-next-line @typescript-eslint/unbound-method -- Vitest inspects the mock without invoking it.
-    expect(executor.probe).not.toHaveBeenCalled();
+    expect(executor.probe).toHaveBeenCalledTimes(1);
   });
 
   it("describes model tools with the selected execution boundary", async () => {
@@ -1452,6 +1460,82 @@ describe("Pi Sandbox extension", () => {
       context(),
     )) as UserBashEventResult;
     expect(result.result?.exitCode).toBe(1);
+  });
+
+  it("waits for backend startup before publishing managed tools", async () => {
+    const pi = fakePi();
+    const probe = deferred<void>();
+    const executor = { ...fakeExecutor(), probe: () => probe.promise };
+    await createPiSandboxExtension({
+      cwd: "/work/project",
+      configPath: "/etc/pi-sandbox/config.toml",
+      userStateDir: "/home/test/.pi/agent",
+      loadConfig: () => Promise.resolve(config()),
+      executor,
+    })(pi.api);
+    const starting = pi.handlers.get("session_start")?.(undefined as never, context());
+    await Promise.resolve();
+    expect(pi.tools.size).toBe(0);
+    expect(pi.activeTools).toEqual([]);
+    probe.resolve();
+    await starting;
+    expect(pi.tools.size).toBe(7);
+  });
+
+  it.each(["new", "resume", "fork", "reload"])(
+    "does not close process resources on %s session replacement",
+    async (reason) => {
+      const pi = fakePi();
+      const onProcessShutdown = vi.fn(() => Promise.resolve());
+      await createPiSandboxExtension({
+        cwd: "/work/project",
+        configPath: "/etc/pi-sandbox/config.toml",
+        userStateDir: "/home/test/.pi/agent",
+        loadConfig: () => Promise.resolve(config()),
+        executor: fakeExecutor(),
+        onProcessShutdown,
+      })(pi.api);
+      await pi.handlers.get("session_start")?.(undefined as never, context());
+      await pi.handlers.get("session_shutdown")?.(
+        { type: "session_shutdown", reason } as never,
+        context(),
+      );
+      expect(onProcessShutdown).not.toHaveBeenCalled();
+    },
+  );
+
+  it("awaits process resource cleanup on normal quit", async () => {
+    const pi = fakePi();
+    const closing = deferred<void>();
+    const entered = deferred<void>();
+    const onProcessShutdown = vi.fn(() => {
+      entered.resolve();
+      return closing.promise;
+    });
+    await createPiSandboxExtension({
+      cwd: "/work/project",
+      configPath: "/etc/pi-sandbox/config.toml",
+      userStateDir: "/home/test/.pi/agent",
+      loadConfig: () => Promise.resolve(config()),
+      executor: fakeExecutor(),
+      onProcessShutdown,
+    })(pi.api);
+    await pi.handlers.get("session_start")?.(undefined as never, context());
+    let completed = false;
+    const shutdown = Promise.resolve(
+      pi.handlers.get("session_shutdown")?.(
+        { type: "session_shutdown", reason: "quit" } as never,
+        context(),
+      ),
+    ).then(() => {
+      completed = true;
+    });
+    await entered.promise;
+    expect(completed).toBe(false);
+    closing.resolve();
+    await shutdown;
+    expect(completed).toBe(true);
+    expect(onProcessShutdown).toHaveBeenCalledTimes(1);
   });
 
   it("revokes tool and shell access when the same extension runtime is started twice", async () => {

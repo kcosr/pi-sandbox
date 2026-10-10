@@ -3,6 +3,8 @@ import { access } from "node:fs/promises";
 import { delimiter, join } from "node:path";
 
 import { REQUIRED_SANDBOX_EXECUTABLES } from "../../packages/sandbox-extension/src/runtime/index.js";
+import type { CompiledLayout } from "../build-layout/index.js";
+import type { ExecutionBackend } from "../domain/index.js";
 
 const DEFAULT_FIXED_EXECUTABLES = REQUIRED_SANDBOX_EXECUTABLES;
 
@@ -10,6 +12,24 @@ const DEFAULT_PATH_COMMANDS = Object.freeze([
   { label: "fd or fdfind", names: ["fd", "fdfind"] },
   { label: "ripgrep (rg)", names: ["rg"] },
 ]);
+
+/** Only executables that run on the host belong in this check. */
+export function assertExecutionPrerequisites(
+  backend: ExecutionBackend,
+  layout: Pick<CompiledLayout, "bubblewrap" | "smolvm">,
+  managedExecutables: readonly string[],
+): Promise<void> {
+  const provider =
+    backend === "bubblewrap" ? layout.bubblewrap : backend === "smolvm" ? layout.smolvm : undefined;
+  return assertHostPrerequisites({
+    ...(backend !== "bubblewrap" ? { fixedExecutables: [] } : {}),
+    ...(backend === "smolvm" ? { pathCommands: [] } : {}),
+    additionalFixedExecutables: [
+      ...managedExecutables,
+      ...(provider === undefined ? [] : [provider.path]),
+    ],
+  });
+}
 
 interface HostPrerequisiteOptions {
   readonly fixedExecutables?: readonly string[];

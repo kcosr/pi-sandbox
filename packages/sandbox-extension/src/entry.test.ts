@@ -1,11 +1,15 @@
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { describe, expect, it, vi } from "vitest";
-import { createOwnedSandboxExtension } from "./owned.js";
+import { createConfiguredSandboxExtension, type EntryDependencies } from "./entry.js";
 import { parseSandboxConfig } from "./config.js";
 import { LINUX_TOOL_COMMANDS, type SandboxExecutor } from "./runtime/index.js";
 
 type Handler = (event: { reason?: string }, ctx: ExtensionContext) => unknown;
-async function fixture(slot: object, create: () => Promise<SandboxExecutor>) {
+async function fixture(
+  slot: object,
+  create: () => Promise<SandboxExecutor>,
+  dependencies: EntryDependencies = {},
+) {
   const handlers = new Map<string, Handler[]>();
   const notify = vi.fn(),
     setStatus = vi.fn(),
@@ -27,20 +31,21 @@ async function fixture(slot: object, create: () => Promise<SandboxExecutor>) {
     getActiveTools: () => ["read", "bash"],
     setActiveTools,
   } as unknown as ExtensionAPI;
-  await createOwnedSandboxExtension(
+  await createConfiguredSandboxExtension(
     {
       create,
       canonical: (path) => Promise.resolve(path),
       readConfig: () =>
         Promise.resolve(
           parseSandboxConfig({
-            version: 1,
+            version: 2,
             mode: "owned",
             backend: { kind: "direct", environment: {} },
             tools: { read: { mode: "allow", sessionGrant: "never" } },
             userBash: false,
           }),
         ),
+      ...dependencies,
     },
     slot,
   )(pi);
@@ -57,6 +62,37 @@ async function fixture(slot: object, create: () => Promise<SandboxExecutor>) {
   };
 }
 describe("owned backend lifecycle", () => {
+  it("rejects a smolvm config reached through an ancestor alias into the project", async () => {
+    const create = vi.fn();
+    const current = await fixture({}, create, {
+      canonical: (value) =>
+        Promise.resolve(
+          value === "/private/config.json" ? "/workspace/control/config.json" : value,
+        ),
+      readConfig: () =>
+        Promise.resolve(
+          parseSandboxConfig({
+            version: 2,
+            mode: "owned",
+            backend: {
+              kind: "smolvm",
+              executable: "/opt/smolvm/smolvm",
+              image: "/opt/images/tools.smolmachine",
+              imageSha256: "a".repeat(64),
+              stateDirectory: "/var/tmp/private-state",
+              resources: { cpus: 1, memoryMiB: 512, storageGiB: 1, overlayGiB: 1 },
+              cwdWritable: true,
+              environment: {},
+            },
+            tools: { read: { mode: "allow", sessionGrant: "never" } },
+            userBash: false,
+          }),
+        ),
+    });
+    await current.emit("session_start");
+    expect(current.shutdown).toHaveBeenCalledOnce();
+    expect(create).not.toHaveBeenCalled();
+  });
   it("retains exactly one backend through new/resume and closes on quit", async () => {
     const close = vi.fn();
     const executor: SandboxExecutor = {

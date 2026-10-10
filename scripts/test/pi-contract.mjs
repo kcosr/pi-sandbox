@@ -104,6 +104,7 @@ try {
 
   const cases = [
     ["missing main hook", "main.d.ts", removeMember("MainOptions", "beforeRun")],
+    ["missing mandatory startup hook", "main.d.ts", removeMember("MainOptions", "beforeInterface")],
     [
       "missing model catalog switch",
       "core/model-runtime.d.ts",

@@ -11,7 +11,7 @@ import {
   type ExtensionFactory,
 } from "@earendil-works/pi-coding-agent";
 
-import { buildLayout } from "../build-layout/index.js";
+import { buildLayout, type CompiledLayout } from "../build-layout/index.js";
 import { connectAuditClient, type AuditClient } from "../audit/client.js";
 import { loadConfig } from "../config/index.js";
 import type {
@@ -44,6 +44,7 @@ import {
 import {
   createBubblewrapExecutor,
   createDirectExecutor,
+  createSmolvmExecutor,
   type SandboxExecutor,
 } from "../../packages/sandbox-extension/src/runtime/index.js";
 import {
@@ -52,8 +53,9 @@ import {
   isManagedToolSelected,
 } from "./arguments.js";
 import { applyManagedEnvironment } from "./environment.js";
-import { assertHostPrerequisites } from "./prerequisites.js";
+import { assertExecutionPrerequisites } from "./prerequisites.js";
 import { createWorkspaceBoundary } from "./workspace.js";
+import { createManagedCleanup, createManagedExecutor } from "./managed-executor.js";
 import { readAccountIdentity } from "./account-home.js";
 import type { SandboxArguments } from "./config-arguments.js";
 import {
@@ -77,6 +79,7 @@ export interface ManagedMainOptions {
   readonly createModelRuntime: ManagedModelRuntimeFactory;
   readonly validateSessionCwd: (cwd: string) => void;
   readonly beforeRun: (context: SessionMaintenanceContext) => Promise<void>;
+  readonly beforeInterface: () => Promise<void>;
 }
 
 export type ManagedMain = (args: string[], options: ManagedMainOptions) => Promise<void>;
@@ -198,12 +201,14 @@ export async function resolveEffectiveAdministrativeConfiguration(
     overridden.filesystem,
     combinedEnvironment,
     getAccountIdentity,
+    overridden.smolvm,
   );
   const effectiveEnvironment = expanded.environment;
   const config = Object.freeze({
     ...overridden,
     filesystem: expanded.filesystem,
     environment: effectiveEnvironment,
+    ...(expanded.smolvm === undefined ? {} : { smolvm: expanded.smolvm }),
   });
   const lease = applyManagedEnvironment(effectiveEnvironment.pi, environment);
   try {
@@ -237,6 +242,25 @@ async function createProbedExecutor(
         hiddenPaths: config.filesystem.hiddenPaths,
         environment,
       });
+    } else if (config.execution.backend === "smolvm") {
+      if (buildLayout.smolvm === undefined || config.smolvm === undefined) {
+        throw new Error("This distribution and policy must configure a smolvm provider and image");
+      }
+      executor = await createSmolvmExecutor({
+        cwd,
+        cwdWritable: config.filesystem.cwdWritable,
+        environment,
+        smolvmPath: buildLayout.smolvm.path,
+        imagePath: config.smolvm.image,
+        imageSha256: config.smolvm.imageSha256,
+        stateDirectory: config.smolvm.stateDirectory,
+        resources: {
+          cpus: config.smolvm.cpus,
+          memoryMiB: config.smolvm.memoryMiB,
+          storageGiB: config.smolvm.storageGiB,
+          overlayGiB: config.smolvm.overlayGiB,
+        },
+      });
     } else {
       executor = await createDirectExecutor({ cwd, environment, ambientEnvironment });
     }
@@ -244,9 +268,7 @@ async function createProbedExecutor(
     const detail = actionableErrorMessage(error);
     throw new Error(
       detail === "sandbox_start_failed"
-        ? config.execution.backend === "bubblewrap"
-          ? "Bubblewrap could not establish the required sandbox; verify unprivileged user namespaces and Bubblewrap compatibility"
-          : "Direct execution could not establish its bounded command runner; verify the documented host prerequisites"
+        ? executionStartupMessage(config)
         : `Execution startup failed: ${detail}`,
       { cause: error },
     );
@@ -256,9 +278,7 @@ async function createProbedExecutor(
       const detail = actionableErrorMessage(error);
       throw new Error(
         detail === "sandbox_start_failed"
-          ? config.execution.backend === "bubblewrap"
-            ? "Bubblewrap could not establish the required sandbox; verify unprivileged user namespaces and Bubblewrap compatibility"
-            : "Direct execution could not establish its bounded command runner; verify the documented host prerequisites"
+          ? executionStartupMessage(config)
           : `Execution preflight failed: ${detail}`,
         { cause: error },
       );
@@ -270,15 +290,37 @@ async function createProbedExecutor(
   }
 }
 
+function executionStartupMessage(config: SandboxConfig): string {
+  if (config.execution.backend === "bubblewrap")
+    return "Bubblewrap could not establish the required sandbox; verify unprivileged user namespaces and Bubblewrap compatibility";
+  if (config.execution.backend === "smolvm")
+    return "smolvm could not start the VM; verify KVM access, the pinned complete runtime distribution, the image digest, and private state directory";
+  return "Direct execution could not establish its bounded command runner; verify the documented host prerequisites";
+}
+
 export function assertExecutionPlatform(
   config: SandboxConfig,
   platform: NodeJS.Platform = process.platform,
+  layout: Pick<CompiledLayout, "smolvm"> = buildLayout,
 ): void {
   if (platform !== "linux" && platform !== "darwin") {
     throw new Error(`Unsupported operating system: ${platform}`);
   }
   if (config.execution.backend === "bubblewrap" && platform !== "linux") {
     throw new Error("Bubblewrap execution is supported only on Linux");
+  }
+  if (config.execution.backend === "smolvm") {
+    if (platform !== "linux") throw new Error("smolvm execution is supported only on Linux");
+    if (layout.smolvm === undefined)
+      throw new Error("This distribution does not include a smolvm execution provider");
+    if (config.smolvm === undefined)
+      throw new Error("smolvm execution requires a configured image and private state directory");
+    if (config.network.mode !== "none")
+      throw new Error("smolvm execution requires network.mode = none");
+    if (config.execution.processLifetime !== "sandbox")
+      throw new Error("smolvm execution has a fixed sandbox process lifetime");
+    if (config.filesystem.hiddenPaths.length > 0)
+      throw new Error("smolvm execution requires filesystem.hidden_paths = []");
   }
   if (config.execution.backend === "direct" && config.network.mode !== "host") {
     throw new Error("Direct execution requires network.mode = host");
@@ -304,17 +346,27 @@ export function assertExecutionPlatform(
   }
 }
 
-function actionableErrorMessage(error: unknown): string {
-  let current = error;
+export function actionableErrorMessage(error: unknown): string {
+  const pending = [error];
   const seen = new Set<unknown>();
-  while (current instanceof Error && !seen.has(current)) {
+  const messages = new Set<string>();
+  // Preserve recovery context and nested failures without unbounded or cyclic
+  // error graphs turning a startup diagnostic into an uncontrolled log dump.
+  while (pending.length && seen.size < 32) {
+    const current = pending.pop();
+    if (seen.has(current)) continue;
     seen.add(current);
-    if (current.message.length > 0 && current.message !== "sandbox_start_failed") {
-      return current.message;
+    const message =
+      current instanceof Error ? current.message : typeof current === "string" ? current : "";
+    if (message.trim() && message !== "sandbox_start_failed") messages.add(message.slice(0, 1024));
+    if (current instanceof Error) {
+      const children: unknown[] =
+        current instanceof AggregateError ? current.errors.slice(0, 32) : [];
+      if (current.cause !== undefined) children.unshift(current.cause);
+      for (let index = children.length - 1; index >= 0; index--) pending.push(children[index]);
     }
-    current = current.cause;
   }
-  return "sandbox_start_failed";
+  return [...messages].join("; ").slice(0, 4096) || "sandbox_start_failed";
 }
 
 function validateExtensionEnvironment(
@@ -447,23 +499,20 @@ export async function runPiSandbox({ piArgs: args, configPath }: SandboxArgument
   const managedExecutables = managedExtensions.flatMap(
     (instance) => instance.requiredHostExecutables,
   );
-  await assertHostPrerequisites({
-    ...(config.execution.backend === "direct" ? { fixedExecutables: [] } : {}),
-    additionalFixedExecutables: [
-      ...managedExecutables,
-      ...(config.execution.backend === "bubblewrap" && buildLayout.bubblewrap !== undefined
-        ? [buildLayout.bubblewrap.path]
-        : []),
-    ],
-  });
-  const executor = await createProbedExecutor(
+  await assertExecutionPrerequisites(config.execution.backend, buildLayout, managedExecutables);
+  const executor = createManagedExecutor({
     cwd,
-    config,
-    identityEnvironment.sandbox,
-    ambientHostEnvironment,
-  );
+    backend: config.execution.backend,
+    create: () =>
+      createProbedExecutor(cwd, config, identityEnvironment.sandbox, ambientHostEnvironment),
+  });
   const hostExecutors: Record<string, HostCommandExecutor> = {};
   let auditClient: AuditClient | undefined;
+  const closeRuntime = createManagedCleanup(() => [
+    executor,
+    ...Object.values(hostExecutors),
+    ...(auditClient === undefined ? [] : [auditClient]),
+  ]);
   try {
     if (config.audit.enabled) auditClient = await connectAuditClient(buildLayout.auditSocketPath);
     for (const instance of managedExtensions) {
@@ -493,6 +542,7 @@ export async function runPiSandbox({ piArgs: args, configPath }: SandboxArgument
         configPath,
         userStateDir,
         ...(config.sessions.retentionDays === 0 ? {} : { onSessionStart: touchSessionFile }),
+        onProcessShutdown: closeRuntime,
         toolArguments: args,
         loadConfig: () => Promise.resolve(config),
         executor,
@@ -518,15 +568,12 @@ export async function runPiSandbox({ piArgs: args, configPath }: SandboxArgument
             process.stderr.write("Checking for old sessions…\n");
           },
         }),
+        beforeInterface: () => executor.probe(),
       });
     } finally {
       lease.restore();
     }
   } finally {
-    await Promise.all([
-      executor.close(),
-      ...Object.values(hostExecutors).map((host) => host.close()),
-      ...(auditClient === undefined ? [] : [auditClient.close()]),
-    ]);
+    await closeRuntime();
   }
 }

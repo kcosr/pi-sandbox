@@ -351,6 +351,11 @@ case "$execution_backend" in
     fi
     ;;
   direct) ;;
+  smolvm)
+    # Administrative validation already checked the build-selected provider and
+    # policy shape. Runtime startup verifies the complete external distribution
+    # and image before launch; staged installation must not require host KVM.
+    ;;
   *) echo "candidate reported an invalid execution backend" >&2; exit 1 ;;
 esac
 

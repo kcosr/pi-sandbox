@@ -156,7 +156,7 @@ host account service.
 
 `environment` and `overrides` are optional patches. Environment scopes follow
 the main configuration's structure. `overrides.models_file` selects a model
-file; `overrides.execution.backend` accepts `bubblewrap` or `direct`;
+file; `overrides.execution.backend` accepts `bubblewrap`, `direct`, or `smolvm`;
 `overrides.execution.process_lifetime` accepts `command` or `sandbox`;
 `overrides.network.mode` accepts `none`, `local`, or `host`; and
 `overrides.filesystem.cwd_writable` is boolean. Each named entry in
@@ -292,3 +292,19 @@ cross-user data minimization, not authentication against a hostile local user.
 An authorized local user can also consume broker connections or repeatedly
 activate the bounded service, so host-level denial of service is outside this
 feature's guarantees.
+
+### smolvm backend selection
+
+An identity rule may select `backend = "smolvm"` only when the distribution has
+that provider and the main policy has a valid `[smolvm]` image/resource table.
+The broker cannot set or replace that table. Network and filesystem overrides
+are still validated after merging: smolvm requires `network.mode = "none"` and
+an empty main-policy `hidden_paths` list.
+
+Do not combine a smolvm selection with `process_lifetime`. A separate matching
+rule that contributes this field also makes the combination invalid. An omitted
+field selects smolvm's fixed VM lifetime. On an explicit switch away from smolvm,
+Bubblewrap/direct begin with the command lifetime unless a rule explicitly
+selects a valid lifetime for the destination. Same-backend Bubblewrap merging
+continues to preserve the base policy's selection. Broker wire format 6 and
+identity record format 7 are unchanged; main configuration is format 11.

@@ -1,7 +1,7 @@
 # Repository agent guide
 
 This project provides a policy-gated execution boundary in a managed Pi
-distribution. Linux supports Bubblewrap and explicit direct execution; macOS
+distribution. Linux supports Bubblewrap, optional smolvm on x86-64, and explicit direct execution; macOS
 supports direct execution only.
 
 The current product contract is split by subject across `docs/`:
@@ -34,6 +34,11 @@ reimplemented rather than mechanically reapplied.
   backend for another. The build-selected Linux distribution must choose either
   an absolute system Bubblewrap executable or a verified bundled executable;
   runtime configuration cannot change that provider.
+- Optional smolvm supports Linux x86-64 using a build-selected external complete
+  1.25.4 distribution and administrator-selected image/resource policy. Mount only
+  the launch directory at its host path, require offline networking and no hidden
+  paths, and keep its fixed VM process lifetime. Normal shutdown cleans up; abrupt
+  owner death can require manual smolvm cleanup. Add no guardian or watcher.
 - Preserve host absolute paths inside the sandbox.
 - Present the ordinary host filesystem read-only except main-policy `filesystem.hidden_paths`, which masks canonical existing directories with private read-only filesystems and regular files with private empty read-only data. Silently skip missing targets at worker startup while rejecting symlink components and other invalid targets; skipped paths created later on the host may remain visible until restart. Restore only the launch CWD through hidden ancestors at its identical path, read/write or read-only according to `filesystem.cwd_writable`, then honor explicit hidden descendants. User/group overrides cannot erase masks. Preserve private writable runtime/temp locations; reject hidden paths in direct mode and read-only CWD access with direct execution or CWD exactly `/tmp`.
 - Default Bubblewrap networking to `none`, denying connectable sockets. Permit
@@ -50,7 +55,7 @@ reimplemented rather than mechanically reapplied.
   the managed authorization boundary.
 - Read base policy and global scoped environment through the build-selected `config_dir/config.toml` entry point, or an explicit leading `--config FILE` only when the distribution was built with `allow_config_override = true`. Managed distributions must compile that switch as false and reject the flag. Require its administrator-selected `models_file`, disable Pi's internal model catalog, and fail closed when any effective input is invalid. Optional broker mode resolves kernel-authenticated accounts and primary/supplementary membership through the host account service. Root-managed `config_dir/users.d/*.toml` and `config_dir/groups.d/*.toml` rules select names or numeric IDs. Combine matching explicit permissions using least restrictive wins before overlaying defaults; reject conflicting backend, model, or scoped environment values. Return one environment and model, execution, network, filesystem, and complete named-tool invocation-policy patch. Logging remains parent-only. No matching rules means the main configuration is inherited unchanged. Scoped environment never selects or enables tools.
 - Preserve `PI_CODING_AGENT_DIR` for user state such as credentials, sessions, settings, skills, themes, and logs. It must not redirect administrative configuration or the model catalog.
-- Expand bare `~`, leading `~/`, and `{{username}}`/`{{uid}}` in configured hidden paths, scoped environment values, and explicit MCP stdio environment values. Resolve the invoking effective OS account once after broker merging; ignore ambient identity variables and CWD. MCP URLs remain literal, including query parameters. Revalidate expanded inputs, reject unknown macro syntax, preserve literal installation/config/model/executable paths, and never expand against the installer account during validation.
+- Expand bare `~`, leading `~/`, and `{{username}}`/`{{uid}}` in configured hidden paths, scoped environment values, and explicit MCP stdio environment values. Also expand account macros in the absolute `smolvm.state_directory` template; image and runtime paths stay literal. Resolve the invoking effective OS account once after broker merging; ignore ambient identity variables and CWD. MCP URLs remain literal, including query parameters. Revalidate expanded inputs, reject unknown macro syntax, preserve literal installation/config/model/executable paths, and never expand against the installer account during validation.
 - Require main-policy `[sessions].retention_days` (0 disables; packaged default 365). Use session-file modification time and refresh it on startup/resume when enabled. Await best-effort shallow cleanup before interface startup, normally once per 24 hours; only slow interactive sweeps display progress. Keep scheduling state under the agent directory, tolerate concurrent sweeps and cleanup errors, and leave audit-log retention to the host.
 - Replace all seven Pi built-ins (`read`, `grep`, `find`, `ls`, `write`, `edit`,
   and `bash`) and route user `!` shell commands through the selected execution

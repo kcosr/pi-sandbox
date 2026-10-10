@@ -1,3 +1,3 @@
-import { createOwnedSandboxExtension } from "./owned.js";
+import { createConfiguredSandboxExtension } from "./entry.js";
 
-export default createOwnedSandboxExtension();
+export default createConfiguredSandboxExtension();

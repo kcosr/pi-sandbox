@@ -145,6 +145,21 @@ license_file = "./COPYING"
     sha256: "a".repeat(64),
   });
 
+  const smolvmManifest = `${validManifest}\n[platforms.linux.smolvm]\npath = "/opt/pinned-smolvm/smolvm"\nversion = "1.25.4"\n`;
+  await writeFile(path, smolvmManifest);
+  const smolvm = await loadDistribution(path, "linux");
+  assert.deepEqual(smolvm.layout.smolvm, { path: "/opt/pinned-smolvm/smolvm", version: "1.25.4" });
+  assert.deepEqual(smolvm.smolvm, smolvm.layout.smolvm);
+  assert.match(createCompiledLayoutModule(smolvm.layout), /1\.25\.4/);
+  for (const [from, to, error] of [
+    ['version = "1.25.4"', 'version = "1.23.1"', /version must be 1.25.4/],
+    ['path = "/opt/pinned-smolvm/smolvm"', 'path = "./smolvm"', /normalized absolute path/],
+    ['version = "1.25.4"', 'version = "1.25.4"\nsha256 = "unused"', /sha256 is not recognized/],
+  ]) {
+    await writeFile(path, smolvmManifest.replace(from, to));
+    await assert.rejects(loadDistribution(path, "linux"), error);
+  }
+
   const nestedLayout = {
     ...distribution.layout,
     configDir: "/usr/libexec/pi-sandbox/config",

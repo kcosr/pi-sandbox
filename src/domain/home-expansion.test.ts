@@ -7,10 +7,62 @@ import {
 } from "./environment.js";
 import { expandManagedHomePaths } from "./home-expansion.js";
 import { MAXIMUM_ADMINISTRATIVE_PATH_BYTES } from "../../packages/sandbox-extension/src/runtime/paths.js";
+import type { SmolvmConfig } from "./policy.js";
 
 const account = (homeDirectory: string) => ({ username: "alice", uid: 1001, homeDirectory });
+const smolvm: SmolvmConfig = Object.freeze({
+  image: "/opt/{{uid}}/tools.smolmachine",
+  imageSha256: "a".repeat(64),
+  stateDirectory: "/var/tmp/pi-vm-{{uid}}",
+  cpus: 2,
+  memoryMiB: 1024,
+  storageGiB: 1,
+  overlayGiB: 1,
+});
 
 describe("expandManagedHomePaths", () => {
+  it("shares one trusted account lookup across smolvm state and other configured values", () => {
+    const getIdentity = vi.fn(() => account("/accounts/alice"));
+    const result = expandManagedHomePaths(
+      { cwdWritable: true, hiddenPaths: [] },
+      parseManagedEnvironment({
+        pi: { HOME: "/untrusted/home", OWNER: "{{uid}}" },
+        sandbox: {},
+        extensions: {},
+      }),
+      getIdentity,
+      smolvm,
+    );
+    expect(result.smolvm).toEqual({ ...smolvm, stateDirectory: "/var/tmp/pi-vm-1001" });
+    expect(result.environment.pi.OWNER).toBe("1001");
+    expect(getIdentity).toHaveBeenCalledTimes(1);
+    expect(Object.isFrozen(result.smolvm)).toBe(true);
+    expect(smolvm.stateDirectory).toBe("/var/tmp/pi-vm-{{uid}}");
+
+    const second = expandManagedHomePaths(
+      { cwdWritable: true, hiddenPaths: [] },
+      emptyManagedEnvironment(),
+      () => ({ username: "bob", uid: 1002, homeDirectory: "/accounts/bob" }),
+      smolvm,
+    );
+    expect(second.smolvm?.stateDirectory).toBe("/var/tmp/pi-vm-1002");
+    expect(second.smolvm?.image).toBe("/opt/{{uid}}/tools.smolmachine");
+  });
+
+  it.each(["..", "alice:other", "a".repeat(49), "alice\nother"])(
+    "revalidates expanded smolvm state directory for account name %j",
+    (username) => {
+      expect(() =>
+        expandManagedHomePaths(
+          { cwdWritable: true, hiddenPaths: [] },
+          emptyManagedEnvironment(),
+          () => ({ username, uid: 1001, homeDirectory: "/accounts/alice" }),
+          { ...smolvm, stateDirectory: "/var/tmp/{{username}}" },
+        ),
+      ).toThrow("Expanded smolvm.state_directory");
+    },
+  );
+
   it("expands exclusions and every configured environment scope using one account lookup", () => {
     const filesystem = Object.freeze({
       cwdWritable: false,

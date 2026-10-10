@@ -3,7 +3,7 @@
 ## Reusable package and managed composition
 
 `packages/sandbox-extension` contains the filesystem/shell tool adapters,
-authorization engine, Bubblewrap/direct executors and required worker assets.
+authorization engine, Bubblewrap/direct/smolvm executors and required worker assets.
 The managed application imports this source directly and bundles it into its
 executable. Administrative configuration, identity resolution, admitted host
 extensions/MCP, model restrictions and audit submission stay in the managed layer.
@@ -29,7 +29,7 @@ terminal UI, provider credentials, provider traffic, and session state. The
 compiled Pi Sandbox extension owns tool presentation, approval, and process
 lifecycle. One Bubblewrap worker lives for the `pi-sandbox` process; each
 allowed built-in operation runs through the administrator-selected Bubblewrap
-or direct backend.
+or direct backend, or through the optional smolvm VM.
 
 ```text
 trusted host
@@ -44,6 +44,7 @@ trusted host
         selected built-in executor
           -> Bubblewrap process-lifetime worker and framed pipe IPC (Linux)
           -> or bounded direct host child (Linux/macOS)
+          -> or smolvm tools in a private Linux guest (Linux x86-64)
 ```
 
 Allowing a tool call never delegates to Pi's stock host implementation. The
@@ -195,6 +196,8 @@ broker selection, or models. Missing or invalid effective inputs abort startup.
 Before applying the effective environment or starting executors, operational
 startup expands bare `~`, leading `~/`, and account macros in configured scoped
 environment values and hidden paths using the invoking effective OS account.
+The same lookup expands account macros in the absolute `smolvm.state_directory`
+template, giving each account private VM state while keeping the image path fixed.
 Expansion follows the broker merge and is independent of `$HOME` and CWD.
 Expanded values retain the existing environment bounds and filesystem checks.
 Installation validation checks syntax without expanding the installer's home.
@@ -469,3 +472,14 @@ structured records to local syslog and acknowledges successful submission.
 Server logging infrastructure owns persistence, rotation, retention, and
 forwarding. This service is independent of user/group configuration resolution;
 it is not an execution backend and does not run tool operations.
+
+## Optional smolvm tool executor
+
+On Linux x86-64, the same extracted tool factory can use a smolvm 1.25.4
+executor. The managed application still owns one executor for its lifetime and
+keeps configuration, permissions, audit and host MCP outside it. A fixed
+build-selected runtime plus administrator-selected image creates the private
+Linux guest; only the launch directory is host-mounted. Runtime startup validates
+the external distribution and image before tool execution. No extra process
+supervisor is introduced. Normal shutdown requests VM cleanup; an abrupt owner
+exit can require manual cleanup with smolvm's CLI.

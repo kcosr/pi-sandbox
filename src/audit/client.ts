@@ -14,7 +14,7 @@ export interface AuditEvent {
   cwd?: string;
   invocation_id?: string;
   tool?: string;
-  boundary?: "bubblewrap" | "direct" | "host";
+  boundary?: "bubblewrap" | "direct" | "smolvm" | "host";
   extension?: string;
   mcp_server?: string;
   mcp_tool?: string;
@@ -89,7 +89,7 @@ function validateEvent(event: AuditEvent): void {
       "tool_execution_intent",
       "tool_completed",
     ],
-    boundary: ["bubblewrap", "direct", "host"],
+    boundary: ["bubblewrap", "direct", "smolvm", "host"],
     mcp_transport: ["http", "stdio"],
     approval_source: ["policy", "prompt", "session_grant"],
     reason: [

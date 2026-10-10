@@ -7,6 +7,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { parseSandboxArguments } from "./config-arguments.js";
 
 import { InMemoryCredentialStore } from "@earendil-works/pi-ai";
+import { SandboxExecutionError } from "../../packages/sandbox-extension/src/runtime/contracts.js";
 
 import { IDENTITY_BROKER_SOCKET_PATH } from "../domain/index.js";
 import type { SandboxConfig } from "../domain/index.js";
@@ -21,6 +22,7 @@ import {
   runPiSandbox,
   SYSTEM_CONFIG_PATH,
   assertExecutionPlatform,
+  actionableErrorMessage,
   instantiateConfiguredManagedExtensions,
   resolveEffectiveAdministrativeConfiguration,
   resolveManagedExtensionHostEnvironments,
@@ -52,6 +54,50 @@ function rooted(root: string, absolutePath: string): string {
   return join(root, absolutePath.slice(1));
 }
 
+describe("execution startup diagnostics", () => {
+  it("preserves the concrete nested failure and retained-state recovery context", () => {
+    const failure = new SandboxExecutionError("sandbox_start_failed", {
+      cause: new AggregateError(
+        [
+          new SandboxExecutionError("sandbox_process_failed", {
+            cause: new Error("smolvm_command_failed: KVM permission denied"),
+          }),
+          new Error("smolvm_cleanup_uncertain; use owner.json for scoped CLI recovery", {
+            cause: new Error("stop not confirmed"),
+          }),
+        ],
+        "smolvm_start_failed; retained state: /private/vm-state/vm-example",
+      ),
+    });
+    const message = actionableErrorMessage(failure);
+    expect(message).toContain("KVM permission denied");
+    expect(message).toContain("retained state: /private/vm-state/vm-example");
+    expect(message).toContain("owner.json");
+    expect(message).toContain("stop not confirmed");
+  });
+
+  it("deduplicates shared errors and terminates cyclic error graphs", () => {
+    const detail = new Error("specific failure");
+    const aggregate = new AggregateError([detail, detail, new Error(detail.message)], "startup");
+    aggregate.cause = aggregate;
+    detail.cause = aggregate;
+    expect(actionableErrorMessage(aggregate)).toBe("startup; specific failure");
+  });
+
+  it("bounds noisy diagnostics and preserves the generic startup fallback", () => {
+    const failure = new AggregateError(
+      Array.from({ length: 100 }, (_, index) => new Error(`${index}: ${"x".repeat(10000)}`)),
+      "retained state: /private/vm-state/vm-example",
+    );
+    const message = actionableErrorMessage(failure);
+    expect(message).toContain("retained state: /private/vm-state/vm-example");
+    expect(message.length).toBeLessThanOrEqual(4096);
+    expect(actionableErrorMessage(new SandboxExecutionError("sandbox_start_failed"))).toBe(
+      "sandbox_start_failed",
+    );
+  });
+});
+
 describe("administrative configuration", () => {
   it("reports the pinned Pi version without reading policy or inspecting the probe workspace", async () => {
     const write = vi.spyOn(process.stdout, "write").mockReturnValue(true);
@@ -75,7 +121,7 @@ describe("administrative configuration", () => {
 
   it("enforces the execution backend's platform contract", () => {
     const config = {
-      configVersion: 10,
+      configVersion: 11,
       codemode: { enabled: false, timeoutMs: 300000 },
       mcp: { servers: {} },
       sessions: { retentionDays: 0 },
@@ -301,7 +347,7 @@ describe("administrative configuration", () => {
     ]);
     const allow = { audit: false, mode: "allow", sessionGrant: "never" } as const;
     const config = {
-      configVersion: 10,
+      configVersion: 11,
       codemode: { enabled: false, timeoutMs: 300000 },
       mcp: { servers: {} },
       sessions: { retentionDays: 0 },
@@ -551,6 +597,34 @@ describe("administrative configuration", () => {
     await expect(validateAdministrativeConfiguration(root)).rejects.toThrow(
       "Failed to parse models.json",
     );
+  });
+
+  it("resolves the smolvm state template before applying managed HOME", async () => {
+    const root = await createRoot();
+    const configPath = rooted(root, "/etc/pi-sandbox/config.toml");
+    const source = await readFile(configPath, "utf8");
+    await writeFile(rooted(root, "/etc/pi-sandbox/models.json"), JSON.stringify({ providers: {} }));
+    await writeFile(
+      configPath,
+      source.replace("[environment.pi]", '[environment.pi]\nHOME = "/managed/home"') +
+        `\n[smolvm]\nimage = "/opt/images/tools.smolmachine"\nimage_sha256 = "${"a".repeat(64)}"\nstate_directory = "/var/tmp/pi-vm-{{uid}}"\ncpus = 2\nmemory_mib = 1024\nstorage_gib = 1\noverlay_gib = 1\n`,
+    );
+    const environment = { HOME: "/ambient/home", USER: "wrong-user", UID: "9000" };
+    const getIdentity = vi.fn(() => {
+      expect(environment.HOME).toBe("/ambient/home");
+      return { username: "alice", uid: 1001, homeDirectory: "/accounts/alice" };
+    });
+    const effective = await resolveEffectiveAdministrativeConfiguration(
+      root,
+      environment,
+      undefined,
+      SYSTEM_CONFIG_PATH,
+      getIdentity,
+    );
+    expect(effective.config.smolvm?.stateDirectory).toBe("/var/tmp/pi-vm-1001");
+    expect(effective.config.environment.pi.HOME).toBe("/managed/home");
+    expect(getIdentity).toHaveBeenCalledTimes(1);
+    expect(environment.HOME).toBe("/ambient/home");
   });
 
   it("loads only the broker-selected model catalog and applies its tool overrides", async () => {

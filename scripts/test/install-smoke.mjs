@@ -32,6 +32,13 @@ try {
   await createRelease(release2, "2");
   await createRelease(bundledRelease, "bundled", true);
 
+  const smolvmRelease = path.join(temporaryRoot, "release-smolvm");
+  const smolvmRoot = path.join(temporaryRoot, "smolvm-root");
+  await createRelease(smolvmRelease, "smolvm", false, "smolvm");
+  run(path.join(smolvmRelease, "install.sh"), [], { DESTDIR: smolvmRoot });
+  await assertMode(path.join(smolvmRoot, "usr/libexec/pi-sandbox/pi-sandbox"), 0o755);
+  run(path.join(smolvmRelease, "uninstall.sh"), [], { DESTDIR: smolvmRoot });
+
   const bundledRoot = path.join(temporaryRoot, "bundled-root");
   const bundledInstall = run(path.join(bundledRelease, "install.sh"), [], {
     DESTDIR: bundledRoot,
@@ -326,7 +333,12 @@ try {
   await rm(temporaryRoot, { recursive: true, force: true });
 }
 
-async function createRelease(directory, release, bundledBubblewrap = false) {
+async function createRelease(
+  directory,
+  release,
+  bundledBubblewrap = false,
+  executionBackend = "bubblewrap",
+) {
   const payload = path.join(directory, "payload/pi-sandbox");
   await mkdir(path.join(payload, "defaults"), { recursive: true });
   await mkdir(path.join(payload, "theme"));
@@ -369,7 +381,7 @@ grep -q '^valid = true$' "$config"
 models_path=$(awk -F '"' '/^models_file = "/ { print $2; exit }' "$config")
 [ -n "$models_path" ]
 grep -q '"valid":true' "$root$models_path"
-[ "$operation" != --print-execution-backend ] || echo bubblewrap
+[ "$operation" != --print-execution-backend ] || echo ${executionBackend}
 `,
     { mode: 0o755 },
   );
