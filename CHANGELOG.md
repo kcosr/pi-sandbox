@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 0.7.0 - 2026-10-10
+
 ### Breaking changes
 
 - Require standalone sandbox configuration version 4 without tool policies; approvals remain managed-only. ([#21](https://github.com/kcosr/pi-sandbox/pull/21))
@@ -13,8 +15,14 @@
 - Run smolvm tools concurrently with bounded admission, coordinated VM cleanup and Pi-compatible output draining. ([#20](https://github.com/kcosr/pi-sandbox/pull/20))
 - Run Bubblewrap tools concurrently with sandbox process lifetime, preserving coordinated cancellation and cleanup. ([#19](https://github.com/kcosr/pi-sandbox/pull/19))
 
+### Changed
+
+- Clarify source-only installation, backend selection, and reusable extension documentation. ([#23](https://github.com/kcosr/pi-sandbox/pull/23))
+- Add an explicit required Linux smolvm release lane covering managed, standalone, OCI, and interactive terminal checks. ([#23](https://github.com/kcosr/pi-sandbox/pull/23))
+
 ### Fixed
 
+- Update four development dependency resolutions to address denial-of-service advisories in lint/test tooling. ([#23](https://github.com/kcosr/pi-sandbox/pull/23))
 - Retire OCI families when terminal opening detects a lost VM identity, and report each terminal cleanup failure once. ([#22](https://github.com/kcosr/pi-sandbox/pull/22))
 
 ## 0.6.0 - 2026-10-10
