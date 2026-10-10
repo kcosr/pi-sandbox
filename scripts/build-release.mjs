@@ -448,6 +448,7 @@ async function inspectReleaseArchive(
     manifestVersion: 4,
     product: "pi-sandbox",
     version: expectedRelease.version,
+    buildVersion: expectedRelease.buildVersion,
     platform: expectedRelease.platform,
     architecture: expectedRelease.architecture,
     executionBackends: expectedRelease.executionBackends,
@@ -463,6 +464,7 @@ async function inspectReleaseArchive(
     manifestVersion: manifest.manifestVersion,
     product: manifest.product,
     version: manifest.version,
+    buildVersion: manifest.buildVersion,
     platform: manifest.platform,
     architecture: manifest.architecture,
     executionBackends: manifest.executionBackends,
@@ -587,6 +589,16 @@ async function main() {
       );
     }
 
+    const buildVersion = JSON.parse(
+      await readFile(join(repositoryRoot, "dist/private/build-version.json"), "utf8"),
+    );
+    if (
+      buildVersion.productVersion !== packageJson.version ||
+      buildVersion.piVersion !== lock.version
+    ) {
+      throw new Error("compiled version does not match the requested product and Pi versions");
+    }
+
     const upstreamOutput = join(temporaryDirectory, "upstream-binaries");
     process.stdout.write(`Building pinned Pi for ${platform} with bundled model data\n`);
     await run(
@@ -620,6 +632,7 @@ async function main() {
         "packages/coding-agent/test/auth-check.test.ts",
         "packages/coding-agent/test/managed-model-runtime.test.ts",
         "packages/coding-agent/test/managed-main.test.ts",
+        "packages/coding-agent/test/managed-version.test.ts",
         "packages/coding-agent/test/managed-extensions.test.ts",
         "packages/coding-agent/test/managed-session-sharing.test.ts",
         "packages/coding-agent/test/managed-session-cwd.test.ts",
@@ -749,6 +762,12 @@ async function main() {
     await mkdir(validationConfigDirectory, { recursive: true });
     await copyFile(options.config, join(validationConfigDirectory, "config.toml"));
     await copyFile(options.models, join(validationConfigDirectory, "models.json"));
+    if (
+      (await capture(join(payload, "pi-sandbox"), ["--version"])).trim() !==
+      buildVersion.displayVersion
+    ) {
+      throw new Error("compiled executable does not report the captured build version");
+    }
     process.stdout.write("Validating the compiled executable and packaged defaults\n");
     await run(join(payload, "pi-sandbox"), ["--validate-installation", "--root", validationRoot], {
       env: cleanEnvironment,
@@ -799,6 +818,7 @@ async function main() {
       manifestVersion: 4,
       product: "pi-sandbox",
       version: packageJson.version,
+      buildVersion,
       platform,
       architecture: process.arch,
       executionBackends:
@@ -857,6 +877,7 @@ async function main() {
       temporaryDirectory,
       {
         version: packageJson.version,
+        buildVersion,
         platform,
         architecture: process.arch,
         executionBackends:

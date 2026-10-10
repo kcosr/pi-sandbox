@@ -103,6 +103,7 @@ try {
   console.log("Pi contract accepts the actual patched declarations");
 
   const cases = [
+    ["missing display version", "main.d.ts", removeMember("MainOptions", "displayVersion")],
     ["missing main hook", "main.d.ts", removeMember("MainOptions", "beforeRun")],
     ["missing mandatory startup hook", "main.d.ts", removeMember("MainOptions", "beforeInterface")],
     [

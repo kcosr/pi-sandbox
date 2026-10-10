@@ -1,0 +1,92 @@
+diff --git a/packages/coding-agent/src/main.ts b/packages/coding-agent/src/main.ts
+index 89f9250..cc2bfc8 100644
+--- a/packages/coding-agent/src/main.ts
++++ b/packages/coding-agent/src/main.ts
+@@ -571,6 +571,8 @@ async function promptForMissingSessionCwd(
+ }
+ 
+ export interface MainOptions {
++	/** Application identity shown by --version and the TUI; internal Pi version stays unchanged. */
++	displayVersion?: string;
+ 	extensionFactories?: InlineExtension[];
+ 	createModelRuntime?: ModelRuntimeFactory;
+ 	/** Reject a target workspace before reading its settings or resources. */
+@@ -645,7 +647,7 @@ export async function main(args: string[], options?: MainOptions) {
+ 	time("parseArgs");
+ 
+ 	if (parsed.version) {
+-		console.log(VERSION);
++		console.log(options?.displayVersion ?? VERSION);
+ 		process.exit(0);
+ 	}
+ 
+@@ -986,6 +988,7 @@ export async function main(args: string[], options?: MainOptions) {
+ 		await runRpcMode(runtime);
+ 	} else if (appMode === "interactive") {
+ 		const interactiveMode = new InteractiveMode(runtime, {
++			displayVersion: options?.displayVersion,
+ 			migratedProviders,
+ 			startupDiagnostics,
+ 			modelFallbackMessage,
+diff --git a/packages/coding-agent/src/modes/interactive/interactive-mode.ts b/packages/coding-agent/src/modes/interactive/interactive-mode.ts
+index 9d0caf3..8485bdc 100644
+--- a/packages/coding-agent/src/modes/interactive/interactive-mode.ts
++++ b/packages/coding-agent/src/modes/interactive/interactive-mode.ts
+@@ -423,6 +423,8 @@ function formatLoginProviderCompletionDescription(provider: LoginProviderComplet
+  * Options for InteractiveMode initialization.
+  */
+ export interface InteractiveModeOptions {
++	/** Application identity for the header only; does not affect update or changelog comparisons. */
++	displayVersion?: string;
+ 	/** Providers that were migrated to auth.json (shows warning) */
+ 	migratedProviders?: string[];
+ 	/** Diagnostics collected before the interactive TUI was initialized. */
+@@ -1012,9 +1014,10 @@ export class InteractiveMode {
+ 			// "Pi vX" line instead, with the key hints below it.
+ 			const showLogo = supportsPiLogo();
+ 			const withLogo = (hints: string) => {
+-				if (!showLogo) return `${piWordmark()} ${theme.fg("dim", `v${this.version}`)}\n${hints}`;
++				const version = this.options.displayVersion ?? this.version;
++				if (!showLogo) return `${piWordmark()} ${theme.fg("dim", `v${version}`)}\n${hints}`;
+ 				const [top, bottom] = piLogoLines();
+-				return `${top} ${theme.fg("dim", `v${this.version}`)}\n${bottom} ${hints}`;
++				return `${top} ${theme.fg("dim", `v${version}`)}\n${bottom} ${hints}`;
+ 			};
+ 
+ 			// Build startup instructions using keybinding hint helpers
+diff --git a/packages/coding-agent/test/managed-version.test.ts b/packages/coding-agent/test/managed-version.test.ts
+new file mode 100644
+index 0000000..f9b4c3e
+--- /dev/null
++++ b/packages/coding-agent/test/managed-version.test.ts
+@@ -0,0 +1,30 @@
++import { mkdtempSync, rmSync } from "node:fs";
++import { tmpdir } from "node:os";
++import { join } from "node:path";
++import { afterEach, beforeEach, expect, test, vi } from "vitest";
++import { VERSION } from "../src/config.ts";
++import { restoreStdout } from "../src/core/output-guard.ts";
++import { main } from "../src/main.ts";
++
++let agentDir: string;
++beforeEach(() => {
++	agentDir = mkdtempSync(join(tmpdir(), "pi-managed-version-"));
++	vi.stubEnv("PI_CODING_AGENT_DIR", agentDir);
++	vi.stubEnv("PI_OFFLINE", "1");
++});
++afterEach(() => {
++	restoreStdout();
++	vi.restoreAllMocks();
++	vi.unstubAllEnvs();
++	rmSync(agentDir, { recursive: true, force: true });
++});
++test.each([undefined, "1.1.0+ps.0.6.0", "1.1.0+ps.0.6.0.dev.g1234567"])(
++	"version output accepts a presentation override: %s", async (displayVersion) => {
++		const log = vi.spyOn(console, "log").mockImplementation(() => {});
++		const exit = new Error("version exit");
++		vi.spyOn(process, "exit").mockImplementation(() => { throw exit; });
++		await expect(main(["--version"], displayVersion === undefined ? {} : { displayVersion })).rejects.toBe(exit);
++		expect(log).toHaveBeenCalledExactlyOnceWith(displayVersion ?? VERSION);
++		expect(VERSION).toBe("1.1.0");
++	},
++);

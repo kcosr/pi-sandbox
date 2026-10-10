@@ -30,6 +30,17 @@ pre-1.0 API or launch compatibility paths.
 
 ## Product boundary
 
+The managed application's `--version` output and TUI header display the pinned
+Pi version followed by the product identity, for example `1.1.0+ps.0.6.0` for
+a clean checkout at product tag `v0.6.0`. Untagged Git builds append
+`.dev.g<short-sha>` and modified builds append `.dirty`; source execution or
+application builds without Git metadata use `.dev.source`. The full release
+builder requires Git metadata for source provenance. Compute and embed Git
+identity at build time, never during operational startup. Preserve Pi's internal
+`VERSION` and all upstream update/changelog comparisons. Product package and
+release versions remain independent from upstream and extension package
+versions; see [versions and releases](../docs/releases.md).
+
 The release contains one prebuilt Bun application named `pi-sandbox`. The Pi
 Sandbox extension remains a separately maintained source module but is imported
 by the private entry point and compiled into that executable. The extension is
@@ -249,6 +260,11 @@ provides these seams:
    Managed cleanup sets failure status and reports underlying errors, including
    the retained VM-state path, before Pi reports an extension shutdown error.
    Cleanup still attempts and awaits every owned resource.
+9. `0007-application-version-display.patch` accepts an optional `displayVersion`
+   in `main()` and interactive-mode options. Use it only for CLI version output
+   and the TUI header, falling back to Pi's own version when it is absent. The
+   managed entry point supplies its build identity; ordinary Pi behavior and
+   Pi's internal version remain unchanged.
 
 Pi 1.0's resource loader separates built-in factories from ordinary inline
 factories. The forced `--no-extensions` flag disables the built-in factories and
