@@ -1,5 +1,5 @@
 import { existsSync } from "node:fs";
-import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, readdir, rm, writeFile } from "node:fs/promises";
 import path from "node:path";
 import type {
   ExtensionAPI,
@@ -211,6 +211,21 @@ describe.skipIf(!REAL_BWRAP_AVAILABLE)(
           request.argv.some((argument) => argument.includes("/bin/grep")),
         ),
       ).toBe(true);
+    });
+
+    it("reports a failed write over a directory and removes its temporary sibling", async () => {
+      const parent = path.join(workspace, "failed-write");
+      const target = path.join(parent, "directory");
+      await mkdir(target, { recursive: true });
+      await writeFile(path.join(target, "keep.txt"), "unchanged\n");
+
+      await expect(
+        invoke(fakePi, "write", { path: target, content: "replacement\n" }),
+      ).rejects.toThrow(/directory/i);
+
+      expect(await readFile(path.join(target, "keep.txt"), "utf8")).toBe("unchanged\n");
+      expect(await readdir(target)).toEqual(["keep.txt"]);
+      expect(await readdir(parent)).toEqual(["directory"]);
     });
 
     it("routes user shell through the same executor without host fallback", async () => {
