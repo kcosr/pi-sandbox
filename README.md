@@ -212,7 +212,16 @@ These subject documents collectively describe the current product behavior.
 
 [MIT](LICENSE)
 
-## Upstream attribution
+## Acknowledgements
+
+Pi Sandbox builds on several open-source projects:
+
+- [Pi](https://github.com/earendil-works/pi), the coding agent and extension API
+  used by the managed application and standalone extensions.
+- [Bubblewrap](https://github.com/containers/bubblewrap), the default Linux
+  sandboxing backend.
+- [smolvm](https://github.com/smol-machines/smolvm), the optional virtual-machine
+  backend and its VM branching capabilities.
 
 Pi Sandbox incorporates a pinned, minimally modified build of
 [Pi](https://github.com/earendil-works/pi), Copyright (c) 2025 Mario Zechner,
