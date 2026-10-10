@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { Buffer } from "node:buffer";
 import { execFileSync, spawn } from "node:child_process";
 import { createHash } from "node:crypto";
 import { mkdtemp, mkdir, readFile, readdir, rm, symlink, writeFile } from "node:fs/promises";
@@ -97,7 +98,7 @@ try {
         stateDirectory,
         cwd: "/workspace",
         networkMode: "none",
-        resources: { cpus: 1, memoryMiB: 512, storageGiB: 1, overlayGiB: 1 },
+        resources: { cpus: 1, memoryMiB: 512, storageGiB: 2, overlayGiB: 1 },
       });
       families.push(family);
     }
@@ -243,13 +244,31 @@ try {
       JSON.stringify(messages),
     );
     children.delete(child);
-    if (selected.kind === "bubblewrap") {
-      await testParallelTools({
-        launch: (args) => launch(["-e", "builtin:codemode", ...args]),
-        modelsPath: join(home, "agent/models.json"),
-        workspace,
-      });
-    }
+    await testParallelTools({
+      launch: (args) => launch(["-e", "builtin:codemode", ...args]),
+      modelsPath: join(home, "agent/models.json"),
+      workspace,
+      ...(family
+        ? {
+            workspaceFiles: {
+              write: async (name, content) => {
+                const result = await family.execute(family.sourceId, {
+                  argv: ["/bin/bash", "-c", 'cat > "$1"', "fixture", `/workspace/${name}`],
+                  stdin: Buffer.from(content),
+                });
+                assert.equal(result.exitCode, 0, result.stderr.toString());
+              },
+              read: async (name) => {
+                const result = await family.execute(family.sourceId, {
+                  argv: ["/bin/cat", `/workspace/${name}`],
+                });
+                assert.equal(result.exitCode, 0, result.stderr.toString());
+                return result.stdout.toString();
+              },
+            },
+          }
+        : {}),
+    });
     if (family) {
       const alive = await family.execute(family.sourceId, {
         argv: ["/bin/cat", "/workspace/result.txt"],

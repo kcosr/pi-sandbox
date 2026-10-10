@@ -442,8 +442,18 @@ from changing the shared project directory, and nested Code Mode has the
 scheduling limitation described above. No staging,
 publication helper, clone-specific process termination or guardian is added.
 
-The owner stops its VM during normal shutdown. Cancellation or a lifecycle
-failure may retire the entire VM, including background services. Abrupt owner
+Execution is bounded to four active and 64 outstanding requests per owned VM or
+OCI family. Branch/remove/retain operations are exclusive, but ordinary calls
+can overlap across borrowed attachments. Queue cancellation and queue timeout
+affect only the queued request. Active cancellation, timeout, output overflow or
+execution infrastructure failure closes admission and retires the whole owned VM
+or family, including peers and background services; it does not restart silently.
+Admission marks a call active, including its pre-launch VM identity check. An
+abort or deadline expiry in that check therefore also retires the boundary, even
+if the guest command has not started.
+An ordinary nonzero exit is a command result and does not trigger retirement.
+
+The owner stops its VM during normal shutdown. Abrupt owner
 death can leave the VM running with its original mount grants. Manual smolvm
 cleanup is part of the accepted crash-recovery contract; no independent watcher
 or daemon is added by Pi Sandbox. Do not infer successful cleanup from a missing

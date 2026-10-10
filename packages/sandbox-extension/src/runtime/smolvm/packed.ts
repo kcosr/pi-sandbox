@@ -10,6 +10,7 @@ import {
 } from "../contracts.js";
 import { LINUX_TOOL_COMMANDS, REQUIRED_SANDBOX_EXECUTABLES } from "../tool-commands.js";
 import { AdmissionQueue } from "./admission.js";
+import { SMOLVM_GUEST_COMMAND } from "./guest-command.js";
 import { hostControlPaths } from "./host-control-paths.js";
 import { SmolvmCli, createStateEnvironment } from "./cli.js";
 import {
@@ -26,7 +27,6 @@ import { resolveSmolvmLimits, smolvmEnvironment, smolvmRequest } from "./request
 import { SMOLVM_VERSION, verifySmolvmRuntime } from "./runtime-release.js";
 
 const NAME = "workspace";
-const GUEST_COMMAND = String.raw`const{spawn}=require('node:child_process');const r=JSON.parse(Buffer.from(process.argv[1],'base64'));const p=spawn(r.argv[0],r.argv.slice(1),{cwd:r.cwd,env:{PATH:'/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin',HOME:'/root',TMPDIR:'/tmp',LANG:'C.UTF-8',...r.environment},stdio:'inherit'});p.on('error',()=>process.exit(126));p.on('exit',(code,signal)=>process.exit(code??(signal?137:126)));`;
 
 /** Host project mode: one mount, disposable guest root, in-process ownership. */
 export async function createSmolvmExecutor(
@@ -73,7 +73,7 @@ class PackedExecutor implements SandboxExecutor {
   readonly commands = LINUX_TOOL_COMMANDS;
   readonly cwd: string;
   readonly #cli: SmolvmCli;
-  readonly #queue = new AdmissionQueue(64, 600000);
+  readonly #queue = new AdmissionQueue();
   readonly #limits;
   readonly #environment;
   #identity: MachineIdentity | undefined;
@@ -167,27 +167,22 @@ class PackedExecutor implements SandboxExecutor {
     options: SandboxExecutionOptions = {},
   ): Promise<SandboxCommandResult> {
     if (this.#closed) throw new SandboxExecutionError("sandbox_closed");
+    this.#queue.assertAvailable(options);
     const parsed = smolvmRequest(request, this.#limits, this.cwd);
+    const deadline = performance.now() + parsed.timeoutMs;
     if (request.cwd !== undefined || request.environment !== undefined)
       throw new SandboxExecutionError("sandbox_invalid_request");
-    if (
-      request.stdin !== undefined &&
-      typeof request.stdin !== "string" &&
-      !(request.stdin instanceof Uint8Array)
-    )
-      throw new SandboxExecutionError("sandbox_invalid_request");
-    const stdin = Buffer.from(request.stdin ?? "");
-    if (stdin.length > this.#limits.maximumInputBytes)
-      throw new SandboxExecutionError("sandbox_input_too_large");
     const payload = Buffer.from(
       JSON.stringify({ argv: parsed.argv, cwd: this.cwd, environment: this.#environment }),
     ).toString("base64");
     if (payload.length > 98304) throw new SandboxExecutionError("sandbox_invalid_request");
-    const release = await this.#queue.acquire(options);
+    const release = await this.#queue.acquire({ ...options, deadline });
     try {
       if (this.#closed || !this.#identity) throw new SandboxExecutionError("sandbox_closed");
       await assertMachineAlive(this.#identity);
       if (this.#closed) throw new SandboxExecutionError("sandbox_closed");
+      const timeoutMs = Math.ceil(deadline - performance.now());
+      if (timeoutMs <= 0) throw new SandboxExecutionError("sandbox_timeout");
       const result = await this.#cli.run(
         {
           argv: [
@@ -199,24 +194,28 @@ class PackedExecutor implements SandboxExecutor {
             "--",
             "/usr/bin/node",
             "-e",
-            GUEST_COMMAND,
+            SMOLVM_GUEST_COMMAND,
             payload,
           ],
-          stdin,
-          timeoutMs: parsed.timeoutMs,
+          stdin: parsed.stdin,
+          timeoutMs,
           maxOutputBytes: parsed.maxOutputBytes,
         },
         options,
       );
       if (result.signal !== null) throw new SandboxExecutionError("sandbox_process_failed");
       await assertMachineAlive(this.#identity);
+      if (this.#closed) throw new SandboxExecutionError("sandbox_closed");
+      if (options.signal?.aborted) throw new SandboxExecutionError("sandbox_aborted");
+      if (performance.now() >= deadline) throw new SandboxExecutionError("sandbox_timeout");
       return result;
     } catch (cause) {
       // Cancellation cannot leave a command mutating the shared project while a
       // later call starts. Retire the owned VM; no hidden replacement is started.
+      const closing = this.close();
       release();
       try {
-        await this.close();
+        await closing;
       } catch (cleanup) {
         throw new AggregateError(
           [cause, cleanup],

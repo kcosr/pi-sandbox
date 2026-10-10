@@ -566,9 +566,10 @@ text("MCP_REMOVAL_OK");`,
       if (serverFailure) throw serverFailure;
     }
 
-    if (config.execution.backend === "bubblewrap") {
+    if (["bubblewrap", "smolvm"].includes(config.execution.backend)) {
       const parallelConfig = JSON.parse(JSON.stringify(config));
-      parallelConfig.execution.process_lifetime = "sandbox";
+      if (config.execution.backend === "bubblewrap")
+        parallelConfig.execution.process_lifetime = "sandbox";
       parallelConfig.filesystem.cwd_writable = true;
       parallelConfig.mcp = { servers: {} };
       for (const name of ["read", "write", "edit", "bash"])

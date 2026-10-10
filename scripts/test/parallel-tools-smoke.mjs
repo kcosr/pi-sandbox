@@ -15,12 +15,20 @@ function barrier(prefix, side) {
 }
 
 /** Exercise stock scheduling and real tool factories in either packaged consumer. */
-export async function testParallelTools({ launch, modelsPath, workspace }) {
+export async function testParallelTools({
+  launch,
+  modelsPath,
+  workspace,
+  workspaceFiles = {
+    write: (name, content) => writeFile(join(workspace, name), content),
+    read: (name) => readFile(join(workspace, name), "utf8"),
+  },
+}) {
   const originalModels = await readFile(modelsPath, "utf8").catch((error) => {
     if (error.code === "ENOENT") return undefined;
     throw error;
   });
-  await writeFile(join(workspace, "parallel-edit.txt"), "alpha\nbeta\ngamma\ndelta\n");
+  await workspaceFiles.write("parallel-edit.txt", "alpha\nbeta\ngamma\ndelta\n");
   const nestedScript = `
 for (const result of await Promise.all([
   tools.bash({command:${JSON.stringify(barrier("nested", "left"))}}),
@@ -155,7 +163,7 @@ text("NESTED_PARALLEL_OK");`;
     child.stdin.write(
       `${JSON.stringify({ id: "parallel-prompt", type: "prompt", message: "Exercise parallel tools" })}\n`,
     );
-    const deadline = Date.now() + 30000;
+    const deadline = Date.now() + 90000;
     while (!messages.some((message) => message.type === "agent_end")) {
       if (failure) throw failure;
       assert(child.exitCode === null && child.signalCode === null, `Pi exited: ${stderr}`);
@@ -182,11 +190,8 @@ text("NESTED_PARALLEL_OK");`;
       "NESTED_PARALLEL_OK",
     ])
       assert(output.includes(marker), `Missing ${marker}: ${output}`);
-    assert.equal(
-      await readFile(join(workspace, "parallel-edit.txt"), "utf8"),
-      "first\nsecond\nthird\nfourth\n",
-    );
-    assert.equal(await readFile(join(workspace, "parallel-queued.txt"), "utf8"), "committed");
+    assert.equal(await workspaceFiles.read("parallel-edit.txt"), "first\nsecond\nthird\nfourth\n");
+    assert.equal(await workspaceFiles.read("parallel-queued.txt"), "committed");
     child.stdin.end();
     const timer = setTimeout(() => child.kill("SIGKILL"), 10000);
     try {

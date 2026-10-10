@@ -39,6 +39,10 @@ reimplemented rather than mechanically reapplied.
   the launch directory at its host path, require offline networking and no hidden
   paths, and keep its fixed VM process lifetime. Normal shutdown cleans up; abrupt
   owner death can require manual smolvm cleanup. Add no guardian or watcher.
+  Admit up to four executions and 64 outstanding requests per VM/OCI family;
+  keep family lifecycle operations exclusive. Include queue wait in request
+  deadlines, isolate queued cancellation, and retire the entire owned VM/family
+  on active cancellation or infrastructure failure. Match Pi's post-exit idle drain.
 - Preserve host absolute paths inside the sandbox.
 - Present the ordinary host filesystem read-only except main-policy `filesystem.hidden_paths`, which masks canonical existing directories with private read-only filesystems and regular files with private empty read-only data. Silently skip missing targets at worker startup while rejecting symlink components and other invalid targets; skipped paths created later on the host may remain visible until restart. Restore only the launch CWD through hidden ancestors at its identical path, read/write or read-only according to `filesystem.cwd_writable`, then honor explicit hidden descendants. User/group overrides cannot erase masks. Preserve private writable runtime/temp locations; reject hidden paths in direct mode and read-only CWD access with direct execution or CWD exactly `/tmp`.
 - Default Bubblewrap networking to `none`, denying connectable sockets. Permit

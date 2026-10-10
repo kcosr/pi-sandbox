@@ -130,9 +130,18 @@ the guest. Host Pi keeps its providers, MCP connections, logs and credentials.
 This backend disables external guest networking. It does not prohibit guest-local
 socket operations. Background programs persist between ordinary calls.
 
+Up to four commands execute concurrently, with at most 64 outstanding requests.
+Timeouts include queue wait; queued cancellation/timeout affects only that call.
+The existing guest agent handles separate execution connections. A transient
+wrapper matches Pi's 100 ms post-exit idle drain, resetting on further output;
+redirect background output to files to allow prompt completion.
+
 The extension runs smolvm CLI commands in the Pi process's lifecycle and closes
-its VM on normal quit/reload. Cancellation, timeout and transport failures retire
-the VM. There is no custom background watcher. If Pi is killed or crashes, a
+its VM on normal quit/reload. Active cancellation, timeout, output overflow and
+transport failures interrupt peer calls and retire the VM, including earlier
+background processes. This differs from Bubblewrap's reusable sandbox cleanup;
+smolvm does not expose an equivalent whole-workload reset. Normal nonzero command
+exits keep the VM available. There is no custom background watcher. If Pi is killed or crashes, a
 smolvm VM can remain alive. Private state contains `owner.json`, recording the
 runtime path and private HOME/XDG environment. Use those values with
 `smolvm machine ls --json`, then `machine stop --name workspace` and
@@ -153,6 +162,10 @@ templates requires host `resize2fs` from e2fsprogs in a system directory
 (`/usr/bin`, `/bin`, `/usr/sbin` or `/sbin`). The launcher clears the inherited
 PATH. Prepared plain packs already contain sized templates and do not require
 this host shrink step.
+
+Owned and OCI guest commands use the same fixed environment defaults, including
+`HOME=/root` and `TMPDIR=/tmp`; scoped environment cannot override those names.
+OCI commands now receive `TMPDIR` explicitly, where it was previously unset.
 
 `family.branch(id, { branchable: false })` freezes the source and makes a cheap,
 independently writable leaf. Use `branchable: true` only for a child that must
@@ -178,6 +191,12 @@ The attachment is a host-only capability. Do not place it in the guest or model
 context. Pi receives only that machine's tool access. Quitting/reloading Pi closes
 the attachment; the orchestrator owns VM shutdown and retained disks. The
 controller's socket server runs inside the orchestrator, not a separate daemon.
+
+The four-active/64-outstanding limit is shared across the family and its borrowed
+attachments. Branching, removal and retention take exclusive FIFO admission;
+they wait for earlier calls and block later calls until complete. An active
+execution failure retires the entire family. Cancelling a queued attachment
+request leaves other work intact.
 Normal controller close stops machines and removes disposable state. Abrupt
 owner death may require manual recovery using its recorded private environment.
 Evaluator application adoption is a separate milestone.
