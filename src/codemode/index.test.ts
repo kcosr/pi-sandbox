@@ -56,6 +56,7 @@ describe("managed code-mode composition", () => {
       registered: [read],
       getExposure: () => "direct" as const,
       getNamespace: () => undefined,
+      getPromptGuidelines: () => [],
     };
     expect(definition!.prepareLoadout!(loadout)?.hiddenDeclarations).toEqual(["read"]);
     mode = "on";

@@ -16,7 +16,7 @@ env -u NODE_ENV npm run verify:release
 To use a previously downloaded pinned Pi source archive, pass it through:
 
 ```sh
-env -u NODE_ENV npm run verify:release -- --pi-source-archive /path/to/pi-1.0.2-source.tar.gz
+env -u NODE_ENV npm run verify:release -- --pi-source-archive /path/to/pi-1.1.0-source.tar.gz
 ```
 
 The verifier runs formatting, lint, type checking, Rust service checks, unit,
@@ -200,7 +200,7 @@ the absence of runtime extension loading, bundled Bubblewrap input digest,
 architecture, version, required options, license packaging, installer mode, and
 release-manifest consistency.
 They verify the `pi-source.lock.json` source-archive checksum, apply
-the patch series to a clean temporary Pi 1.0.2 tree, check production adapter types
+the patch series to a clean temporary Pi 1.1.0 tree, check production adapter types
 against the resulting declarations, and run relevant upstream Pi tests. The contract
 check verifies option keys and callback compatibility, including nested settings;
 negative controls remove or alter declarations in disposable copies to prove it
@@ -265,11 +265,13 @@ shipped with the matching application.
 Offline fixtures verify administrator-only configuration, credential projection,
 path/environment account macros and literal URL query preservation, original-name wildcard policies, bounded
 approvals, exact grants, stale-catalog revocation, tool narrowing and session
-cleanup. Activation tests cover merged Pi settings, CLI ceilings, admin disablement,
+cleanup. Activation tests cover merged Pi settings, additive and wildcard CLI selection,
+registration ceilings, effective TOML disablement, `--no-mcp`,
 MCP autoactivation, and stock `on`/`only` presentation. Preference/menu fixtures
 verify persistence, immutable managed connections, unavailable servers, save failures,
 and revocation on disable/exposure changes. HTTP and stdio transports share policy tests. Patched-source tests cover
 bounded HTTP JSON/error/SSE reads, stdio process-group cleanup, inline results,
 code VM source/call/output limits, deadlines and awaited nested cancellation.
 The packaged fixture exercises the compiled application with a local scripted
-provider and local MCP servers; it never contacts a live model provider.
+provider and local MCP servers; it never contacts a live model provider. Project
+`.env` files must not redirect session storage through Bun environment autoload.

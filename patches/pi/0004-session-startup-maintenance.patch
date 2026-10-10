@@ -1,5 +1,5 @@
 diff --git a/packages/coding-agent/src/main.ts b/packages/coding-agent/src/main.ts
-index cec254a..332c34c 100644
+index 8640361..b953c68 100644
 --- a/packages/coding-agent/src/main.ts
 +++ b/packages/coding-agent/src/main.ts
 @@ -575,6 +575,12 @@ export interface MainOptions {
@@ -15,7 +15,7 @@ index cec254a..332c34c 100644
  }
  
  export async function main(args: string[], options?: MainOptions) {
-@@ -907,6 +913,12 @@ export async function main(args: string[], options?: MainOptions) {
+@@ -908,6 +914,12 @@ export async function main(args: string[], options?: MainOptions) {
  		process.exit(0);
  	}
  

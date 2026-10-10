@@ -1,8 +1,8 @@
 diff --git a/packages/codemode/src/runtime/host.ts b/packages/codemode/src/runtime/host.ts
-index 940359b..f16de1c 100644
+index 21a9352..49d79d8 100644
 --- a/packages/codemode/src/runtime/host.ts
 +++ b/packages/codemode/src/runtime/host.ts
-@@ -67,6 +67,10 @@ interface PendingCall {
+@@ -106,6 +106,10 @@ interface PendingCall {
  }
  
  interface ExecutionOptions {
@@ -13,7 +13,7 @@ index 940359b..f16de1c 100644
  	code: string;
  	tools: ReadonlyMap<string, CodemodeTool>;
  	globals: ReadonlyMap<string, CodemodeTool>;
-@@ -96,11 +100,22 @@ class Execution {
+@@ -135,11 +139,22 @@ class Execution {
  	private readonly calls: CodemodeCall[] = [];
  	private readonly pending = new Map<number, PendingCall>();
  	private finished = false;
@@ -36,8 +36,8 @@ index 940359b..f16de1c 100644
  		this.tools = options.tools;
  		this.globals = options.globals;
  		this.signal = options.signal;
-@@ -184,11 +199,23 @@ class Execution {
- 		if (this.finished || !isWorkerToHostMessage(message)) return;
+@@ -237,12 +252,24 @@ class Execution {
+ 		if (!isWorkerToHostMessage(message)) throw new BridgeError("unknown message from the worker");
  		switch (message.type) {
  			case "output":
 +				this.outputBytes += Buffer.byteLength(JSON.stringify(message.item));
@@ -48,8 +48,9 @@ index 940359b..f16de1c 100644
  				this.output.push(message.item);
  				break;
 -			case "call":
--				void this.handleCall(message);
 +			case "call": {
+ 				if (this.pending.has(message.id)) throw new BridgeError(`duplicate call id ${message.id}`);
+-				void this.handleCall(message);
 +				if (++this.callCount > this.maxCalls || this.pending.size >= this.maxConcurrentCalls) {
 +					this.finish({ kind: "sandbox", message: "Script bridge call limit exceeded" });
 +					return;
@@ -62,8 +63,8 @@ index 940359b..f16de1c 100644
  			case "done":
  				this.handleDone(message);
  				break;
-@@ -204,6 +231,16 @@ class Execution {
- 			this.finish({ kind: "script", ...parsed });
+@@ -258,6 +285,16 @@ class Execution {
+ 			this.finish(parseScriptError(message.error));
  			return;
  		}
 +		// Store's live-state limits do not bound its deletion journal. Check the serialized
@@ -76,10 +77,10 @@ index 940359b..f16de1c 100644
 +			this.finish({ kind: "sandbox", message: "Script output exceeds configured byte limit" });
 +			return;
 +		}
- 		this.finish(undefined, message.value === undefined ? undefined : JSON.parse(message.value), message.writes);
+ 		const value = message.value === undefined ? undefined : parseBridgeJson(message.value, "return value");
+ 		this.finish(undefined, value, parseStoreWrites(message.writes));
  	}
- 
-@@ -229,6 +266,20 @@ class Execution {
+@@ -284,6 +321,20 @@ class Execution {
  			status = "error";
  		}
  
@@ -100,9 +101,9 @@ index 940359b..f16de1c 100644
  		// Already cancelled by finish(): the record keeps "cancelled" and the
  		// worker is gone or going.
  		if (!this.pending.delete(id)) return;
-@@ -261,15 +312,12 @@ class Execution {
+@@ -316,15 +367,12 @@ class Execution {
  					calls: this.calls,
- 					storeWrites: writes === undefined ? { set: {}, delete: [] } : parseStoreWrites(writes),
+ 					storeWrites: writes ?? { set: {}, delete: [] },
  				};
 -		if (!this.worker) {
 -			this.resolveResult(result);
@@ -121,7 +122,7 @@ index 940359b..f16de1c 100644
  	}
  }
  
-@@ -285,6 +333,10 @@ class Execution {
+@@ -340,6 +388,10 @@ class Execution {
  export class CodemodeSandbox {
  	private readonly toolsByName = new Map<string, CodemodeTool>();
  	private readonly globalsByName = new Map<string, CodemodeTool>();
@@ -132,7 +133,7 @@ index 940359b..f16de1c 100644
  	private readonly timeoutMs: number;
  	private readonly memoryLimitBytes: number | undefined;
  	private readonly wasm: CodemodeWasmModule | Promise<CodemodeWasmModule> | undefined;
-@@ -293,6 +345,7 @@ export class CodemodeSandbox {
+@@ -348,6 +400,7 @@ export class CodemodeSandbox {
  	private closed = false;
  
  	constructor(options: CodemodeSandboxOptions = {}) {
@@ -140,7 +141,7 @@ index 940359b..f16de1c 100644
  		this.timeoutMs = options.timeoutMs ?? DEFAULT_TIMEOUT_MS;
  		this.memoryLimitBytes = options.memoryLimitBytes;
  		this.wasm = options.wasm;
-@@ -316,6 +369,12 @@ export class CodemodeSandbox {
+@@ -371,6 +424,12 @@ export class CodemodeSandbox {
  	/** Throws if a tool with the same name is already registered. */
  	registerTool(tool: CodemodeTool): void {
  		if (this.toolsByName.has(tool.name)) throw new Error(`Tool "${tool.name}" is already registered`);
@@ -153,7 +154,7 @@ index 940359b..f16de1c 100644
  		this.toolsByName.set(tool.name, tool);
  	}
  
-@@ -339,6 +398,7 @@ export class CodemodeSandbox {
+@@ -394,6 +453,7 @@ export class CodemodeSandbox {
  	execute(code: string, options: CodemodeExecuteOptions = {}): Promise<CodemodeResult> {
  		if (this.closed) return Promise.reject(new Error("Sandbox is closed"));
  		const execution = new Execution({
@@ -162,10 +163,10 @@ index 940359b..f16de1c 100644
  			tools: new Map(this.toolsByName),
  			globals: this.globalsByName,
 diff --git a/packages/codemode/src/types.ts b/packages/codemode/src/types.ts
-index 4bc4f32..bd1b4a2 100644
+index b59f819..461d3b5 100644
 --- a/packages/codemode/src/types.ts
 +++ b/packages/codemode/src/types.ts
-@@ -90,6 +90,14 @@ export type CodemodeResult =
+@@ -92,6 +92,14 @@ export type CodemodeResult =
  	| { ok: false; error: CodemodeError; output: CodemodeOutputItem[]; calls: CodemodeCall[] };
  
  export interface CodemodeSandboxOptions {
@@ -182,12 +183,13 @@ index 4bc4f32..bd1b4a2 100644
  	 * Functions exposed as top-level identifiers instead of on `tools`, for host helpers such as
 diff --git a/packages/codemode/test/managed-limits.test.ts b/packages/codemode/test/managed-limits.test.ts
 new file mode 100644
-index 0000000..cec3511
+index 0000000..b6cbb33
 --- /dev/null
 +++ b/packages/codemode/test/managed-limits.test.ts
-@@ -0,0 +1,174 @@
+@@ -0,0 +1,175 @@
 +import { afterEach, describe, expect, it } from "vitest";
 +import { CodemodeSandbox } from "../src/index.ts";
++
 +const sandboxes: CodemodeSandbox[] = [];
 +afterEach(async () => {
 +	await Promise.all(sandboxes.splice(0).map((sandbox) => sandbox.close()));
@@ -361,10 +363,10 @@ index 0000000..cec3511
 +	});
 +});
 diff --git a/packages/coding-agent/src/extensions/codemode/execute.ts b/packages/coding-agent/src/extensions/codemode/execute.ts
-index 3d7bdf6..ce4af65 100644
+index 3aafd61..2433bd7 100644
 --- a/packages/coding-agent/src/extensions/codemode/execute.ts
 +++ b/packages/coding-agent/src/extensions/codemode/execute.ts
-@@ -277,6 +277,7 @@ async function spillOutput(text: string): Promise<{ path: string } | { error: st
+@@ -373,6 +373,7 @@ async function saveImages(items: (TextContent | ImageContent)[]): Promise<(TextC
  async function truncateOutput(
  	items: (TextContent | ImageContent)[],
  	maxTokens: number,
@@ -372,7 +374,7 @@ index 3d7bdf6..ce4af65 100644
  ): Promise<{ items: (TextContent | ImageContent)[]; fullOutputPath?: string }> {
  	const texts = items.filter((item): item is TextContent => item.type === "text").map((item) => item.text);
  	const combined = texts.join("\n");
-@@ -288,7 +289,9 @@ async function truncateOutput(
+@@ -384,7 +385,9 @@ async function truncateOutput(
  	const head = combined.slice(0, headChars);
  	const tail = tailChars > 0 ? combined.slice(-tailChars) : "";
  	let text = `Warning: truncated output (original token count: ${Math.ceil(combined.length / CHARS_PER_TOKEN)})\nTotal output lines: ${combined.split("\n").length}\n\n${head}…${Math.ceil(removed / CHARS_PER_TOKEN)} tokens truncated…${tail}`;
@@ -383,7 +385,7 @@ index 3d7bdf6..ce4af65 100644
  	text +=
  		"path" in spilled
  			? `\n\n[Full output: ${spilled.path} (read with offset/limit)]`
-@@ -326,6 +329,9 @@ export async function executeCodemode(
+@@ -422,6 +425,9 @@ export async function executeCodemode(
  	options: CodemodeToolOptions = {},
  ): Promise<AgentToolResult<CodemodeToolDetails>> {
  	const startedAt = performance.now();
@@ -393,7 +395,7 @@ index 3d7bdf6..ce4af65 100644
  	const { code, options: sourceOptions } = parseCodemodeSource(input.code);
  	const calls: CodemodeNestedCall[] = [];
  	// Usage of the script's `models.*` calls. Nested tool calls report theirs through the session.
-@@ -382,7 +388,15 @@ export async function executeCodemode(
+@@ -481,7 +487,15 @@ export async function executeCodemode(
  				? createModelGlobals(ctx.modelRegistry, toolCallId, calls, publish, addModelUsage, addGeneratedImages)
  				: []),
  		],
@@ -410,28 +412,25 @@ index 3d7bdf6..ce4af65 100644
  		memoryLimitBytes: CODEMODE_MEMORY_LIMIT_BYTES,
  		wasm: loadQuickJSWasm(getQuickJSWasmPath()),
  		workerUrl: getCodemodeWorkerSpecifier(),
-@@ -420,10 +434,18 @@ export async function executeCodemode(
- 		});
- 	}
- 
--	const truncated = await truncateOutput(items, sourceOptions.maxOutputTokens ?? DEFAULT_MAX_OUTPUT_TOKENS);
-+	const truncated = await truncateOutput(
-+		items,
-+		Math.min(
-+			sourceOptions.maxOutputTokens ?? DEFAULT_MAX_OUTPUT_TOKENS,
-+			limits ? DEFAULT_MAX_OUTPUT_TOKENS : Number.POSITIVE_INFINITY,
-+		),
+@@ -520,13 +534,15 @@ export async function executeCodemode(
+ 	const truncated = await truncateOutput(
+ 		joinAdjacentText(items),
+ 		sourceOptions.maxOutputTokens ?? DEFAULT_MAX_OUTPUT_TOKENS,
 +		limits?.inlineOnly,
-+	);
+ 	);
+ 	// After truncation, which joins the text items and moves images after them, so each path stays
+ 	// next to its image and is never cut.
+-	const output = joinAdjacentText(await saveImages(truncated.items));
++	const output = joinAdjacentText(limits?.inlineOnly ? truncated.items : await saveImages(truncated.items));
  	const wallTime = ((performance.now() - startedAt) / 1000).toFixed(1);
  	const header = `${result.ok ? "Script completed" : "Script failed"}\nWall time ${wallTime} seconds\nOutput:\n`;
  	const details = snapshot();
 +	if (!result.ok) details.failureKind = result.error.kind;
  	if (truncated.fullOutputPath) details.fullOutputPath = truncated.fullOutputPath;
  	return {
- 		content: [{ type: "text", text: header }, ...truncated.items],
+ 		content: [{ type: "text", text: header }, ...output],
 diff --git a/packages/coding-agent/src/extensions/codemode/index.ts b/packages/coding-agent/src/extensions/codemode/index.ts
-index 4b58b1b..99743da 100644
+index b883520..e8cae56 100644
 --- a/packages/coding-agent/src/extensions/codemode/index.ts
 +++ b/packages/coding-agent/src/extensions/codemode/index.ts
 @@ -8,9 +8,10 @@
@@ -469,7 +468,7 @@ index 4b58b1b..99743da 100644
  				appendEntry: (customType, data) => pi.appendEntry(customType, data),
  				models: options.models ?? true,
  				getToolNamespace: (name) => pi.getAllTools().find((tool) => tool.name === name)?.namespace,
-@@ -39,6 +53,23 @@ export function createCodemodeExtension(options: CodemodeExtensionOptions = {}):
+@@ -41,6 +55,23 @@ export function createCodemodeExtension(options: CodemodeExtensionOptions = {}):
  				getInlineBudget: () => options.inlineBudget ?? readInlineBudget(pi),
  			}),
  			defaultActive: false,
@@ -494,7 +493,7 @@ index 4b58b1b..99743da 100644
  	};
  }
 diff --git a/packages/coding-agent/src/extensions/codemode/tool.ts b/packages/coding-agent/src/extensions/codemode/tool.ts
-index bf239ff..304c153 100644
+index ae8285a..28ad8f7 100644
 --- a/packages/coding-agent/src/extensions/codemode/tool.ts
 +++ b/packages/coding-agent/src/extensions/codemode/tool.ts
 @@ -63,7 +63,17 @@ export type CodemodeModelRuntime = Pick<
@@ -514,8 +513,8 @@ index bf239ff..304c153 100644
 +	executionLimits?: CodemodeExecutionLimits;
  	/** Namespace of a tool, for `searchTools()` ranking and its `namespace` filter. */
  	getToolNamespace?: (toolName: string) => ToolNamespace | undefined;
- 	/**
-@@ -117,6 +127,8 @@ export interface CodemodeNestedCall {
+ 	/** Prompt guidelines of every tool, by tool name, shown with declarations by `describeTool()` and `ALL_TOOLS`. */
+@@ -119,6 +129,8 @@ export interface CodemodeNestedCall {
  }
  
  export interface CodemodeToolDetails {
@@ -525,7 +524,7 @@ index bf239ff..304c153 100644
  	/** Temp file with the full text output, when the output was truncated. */
  	fullOutputPath?: string;
 diff --git a/packages/coding-agent/src/extensions/mcp/index.ts b/packages/coding-agent/src/extensions/mcp/index.ts
-index b2b8cb7..2b4f742 100644
+index 43e2ece..01843b1 100644
 --- a/packages/coding-agent/src/extensions/mcp/index.ts
 +++ b/packages/coding-agent/src/extensions/mcp/index.ts
 @@ -27,6 +27,7 @@
@@ -583,7 +582,7 @@ index b2b8cb7..2b4f742 100644
  	/** Defaults to reading `mcp.json` from the agent directory and the trusted project. */
  	loadConfig?: (ctx: ExtensionContext) => LoadedMcpConfig;
  	/** Defaults to stdio and streamable HTTP transports built from the server config. */
-@@ -275,6 +309,16 @@ const MCP_USAGE = "Usage: /mcp, /mcp login [server], /mcp logout [server], /mcp
+@@ -279,6 +313,16 @@ const MCP_USAGE = "Usage: /mcp, /mcp login [server], /mcp logout [server], /mcp
  
  export function createMcpExtension(options: McpExtensionOptions = {}): ExtensionFactory {
  	return (pi: ExtensionAPI) => {
@@ -600,7 +599,7 @@ index b2b8cb7..2b4f742 100644
  		let servers: McpServer[] = [];
  		/** Servers from `mcp.json`, which take precedence over registered servers of the same name. */
  		let configuredEntries: McpServerEntry[] = [];
-@@ -324,6 +368,7 @@ export function createMcpExtension(options: McpExtensionOptions = {}): Extension
+@@ -344,6 +388,7 @@ export function createMcpExtension(options: McpExtensionOptions = {}): Extension
  
  		/** Servers extensions registered, except names `mcp.json` defines, which take precedence. */
  		const registeredServers = (): { servers: McpServer[]; overridden: string[] } => {
@@ -608,7 +607,7 @@ index b2b8cb7..2b4f742 100644
  			const registered: McpServer[] = [];
  			const overriddenNames: string[] = [];
  			for (const { name, config, extensionPath } of pi.getMcpServers()) {
-@@ -357,7 +402,7 @@ export function createMcpExtension(options: McpExtensionOptions = {}): Extension
+@@ -377,7 +422,7 @@ export function createMcpExtension(options: McpExtensionOptions = {}): Extension
  		/** Tool names currently offered by each server. */
  		const serverTools = new Map<string, Set<string>>();
  		/** Last definition registered under each tool name, to re-register withdrawn tools as hidden. */
@@ -617,7 +616,7 @@ index b2b8cb7..2b4f742 100644
  
  		// A resumed session renders calls to MCP tools before their server connected, if it ever does.
  		pi.registerToolRenderer((toolName, next) => {
-@@ -394,6 +439,7 @@ export function createMcpExtension(options: McpExtensionOptions = {}): Extension
+@@ -414,6 +459,7 @@ export function createMcpExtension(options: McpExtensionOptions = {}): Extension
  				current.add(name);
  				return name;
  			};
@@ -625,10 +624,19 @@ index b2b8cb7..2b4f742 100644
  			for (const tool of connection.tools) {
  				const definition = createMcpToolDefinition({
  					server,
-@@ -404,7 +450,15 @@ export function createMcpExtension(options: McpExtensionOptions = {}): Extension
+@@ -423,6 +469,8 @@ export function createMcpExtension(options: McpExtensionOptions = {}): Extension
+ 					namespace,
  					timeoutMs: connection.timeoutMs,
- 					getClient: async () => connection,
- 					readableResources: () => resourceServers().includes(connection),
+ 					getClient: async () => {
++						// Adapted definitions are bound to the catalog their caller admitted.
++						if (options.adaptTools) return connection;
+ 						// A prepared call can outlive this definition's connection while the readiness
+ 						// hook waits for a disable/re-enable. Resolve the replacement at execution time.
+ 						const current = findServer(server);
+@@ -438,7 +486,15 @@ export function createMcpExtension(options: McpExtensionOptions = {}): Extension
+ 						return client;
+ 					},
+ 					readableResources: () => resourceServers().some((current) => current.name === server),
 +					inlineOnly: options.resultMode === "inline",
  				});
 +				catalog.push({ tool, definition });
@@ -641,7 +649,7 @@ index b2b8cb7..2b4f742 100644
  				definitions.set(definition.name, definition);
  				pi.registerTool(definition);
  			}
-@@ -443,6 +497,7 @@ export function createMcpExtension(options: McpExtensionOptions = {}): Extension
+@@ -477,6 +533,7 @@ export function createMcpExtension(options: McpExtensionOptions = {}): Extension
  		 * one of them is direct, and so on. They are hidden when no server has resources.
  		 */
  		const syncResourceTools = () => {
@@ -649,19 +657,21 @@ index b2b8cb7..2b4f742 100644
  			const exposures = new Set(serversWithResources().map((server) => exposureOf(server.entry)));
  			const exposure = (["direct", "codemode", "deferred"] as const).find((candidate) => exposures.has(candidate));
  			const next = exposure ?? "hidden";
-@@ -508,6 +563,11 @@ export function createMcpExtension(options: McpExtensionOptions = {}): Extension
+@@ -541,7 +598,13 @@ export function createMcpExtension(options: McpExtensionOptions = {}): Extension
+ 			const url = connection.oauthUrl;
  			return url && credentials ? JSON.stringify(credentials.tokens(connection.name, url) ?? null) : "null";
  		};
++		const withdrawCatalog = (connection: McpServerConnection) => {
++			options.adaptTools?.(connection.entry, [], connection);
++			hideTools(connection.entry.name);
++		};
  		const onConnectionChange = (connection: McpServerConnection) => {
 +			options.onServerState?.(connection.entry, connection);
-+			if (connection.state !== "connected" && options.adaptTools) {
-+				options.adaptTools(connection.entry, [], connection);
-+				hideTools(connection.entry.name);
-+			}
++			if (connection.state !== "connected" && options.adaptTools) withdrawCatalog(connection);
  			if (connection.state !== "needs-auth") tokensAtSignIn.delete(connection);
  			else if (!tokensAtSignIn.has(connection)) tokensAtSignIn.set(connection, storedTokens(connection));
  			emitChange();
-@@ -528,9 +588,14 @@ export function createMcpExtension(options: McpExtensionOptions = {}): Extension
+@@ -566,9 +629,14 @@ export function createMcpExtension(options: McpExtensionOptions = {}): Extension
  				entry: server.entry,
  				cwd: sessionCwd,
  				createTransport: options.createTransport ?? runtime.createDefaultTransport,
@@ -676,10 +686,10 @@ index b2b8cb7..2b4f742 100644
 +						? undefined
 +						: async (provider) => modelRegistry?.getApiKeyForProvider(provider),
 +				log: options.serverLogging === false ? undefined : getServerLog(runtime),
- 				onTools: registerTools,
- 				onChange: onConnectionChange,
- 			});
-@@ -580,15 +645,17 @@ export function createMcpExtension(options: McpExtensionOptions = {}): Extension
+ 				onTools: (connection) => {
+ 					if (isCurrent()) registerTools(connection);
+ 				},
+@@ -638,15 +706,17 @@ export function createMcpExtension(options: McpExtensionOptions = {}): Extension
  		 * that connected later.
  		 */
  		const reportProblems = (ctx: ExtensionContext, only?: readonly McpServer[]) => {
@@ -700,7 +710,7 @@ index b2b8cb7..2b4f742 100644
  				"warning",
  			);
  		};
-@@ -597,16 +664,31 @@ export function createMcpExtension(options: McpExtensionOptions = {}): Extension
+@@ -655,17 +725,32 @@ export function createMcpExtension(options: McpExtensionOptions = {}): Extension
  		 * Save a config change; returns an error message when the file could not be updated. Changes to
  		 * registered servers only apply to the current session. `inProject` adds a project override.
  		 */
@@ -710,7 +720,7 @@ index b2b8cb7..2b4f742 100644
 +			patch: McpServerConfigPatch,
 +			inProject = false,
 +		): Promise<string | undefined> => {
-+			const current = generation;
++			const { signal } = session;
 +			if (
 +				management &&
 +				(inProject || (patch.exposure !== undefined && !management.exposures.includes(patch.exposure)))
@@ -732,12 +742,14 @@ index b2b8cb7..2b4f742 100644
 +						: `Could not update ${entry.override ?? entry.source}: ${errorMessage(error)}`;
  				}
  			}
-+			if (current !== generation || findServer(entry.name) !== server) return "MCP session changed.";
- 			server.entry = { ...entry, config: { ...entry.config, ...patch } };
+-			server.entry = { ...entry, config: { ...entry.config, ...patch } };
++			if (signal.aborted || findServer(entry.name) !== server) return "MCP session changed.";
++			server.entry = { ...entry, config: { ...server.entry.config, ...patch } };
  			return undefined;
  		};
-@@ -654,7 +736,7 @@ export function createMcpExtension(options: McpExtensionOptions = {}): Extension
- 				await connection.reconnect();
+ 
+@@ -727,7 +812,7 @@ export function createMcpExtension(options: McpExtensionOptions = {}): Extension
+ 				await ready;
  				return undefined;
  			} catch (error) {
 -				return errorMessage(error);
@@ -745,7 +757,7 @@ index b2b8cb7..2b4f742 100644
  			}
  		};
  
-@@ -664,7 +746,7 @@ export function createMcpExtension(options: McpExtensionOptions = {}): Extension
+@@ -737,10 +822,11 @@ export function createMcpExtension(options: McpExtensionOptions = {}): Extension
  			enabled: boolean,
  			inProject = false,
  		): Promise<string | undefined> => {
@@ -754,13 +766,11 @@ index b2b8cb7..2b4f742 100644
  			if (failed) return failed;
  			if (!enabled) {
  				const connection = server.connection;
-@@ -674,12 +756,13 @@ export function createMcpExtension(options: McpExtensionOptions = {}): Extension
- 				await connection?.close();
- 				return undefined;
- 			}
--			await startConnection(server, () => true);
-+			const current = generation;
-+			await startConnection(server, () => current === generation && findServer(server.entry.name) === server);
++				if (connection && options.adaptTools) withdrawCatalog(connection);
+ 				server.attempt = undefined;
+ 				server.connection = undefined;
+ 				if (connection) {
+@@ -762,8 +848,8 @@ export function createMcpExtension(options: McpExtensionOptions = {}): Extension
  			return undefined;
  		};
  
@@ -771,7 +781,7 @@ index b2b8cb7..2b4f742 100644
  			if (failed) return failed;
  			if (server.connection?.state === "connected") registerTools(server.connection);
  			syncResourceTools();
-@@ -701,8 +784,8 @@ export function createMcpExtension(options: McpExtensionOptions = {}): Extension
+@@ -785,8 +871,8 @@ export function createMcpExtension(options: McpExtensionOptions = {}): Extension
  		// ---------------------------------------------------------------------------------------
  
  		const notices = () => [
@@ -782,7 +792,7 @@ index b2b8cb7..2b4f742 100644
  		];
  
  		const serversMenu = (): McpMenu => ({
-@@ -713,9 +796,11 @@ export function createMcpExtension(options: McpExtensionOptions = {}): Extension
+@@ -797,9 +883,11 @@ export function createMcpExtension(options: McpExtensionOptions = {}): Extension
  				.map((server) => ({
  					value: server.entry.name,
  					label: server.entry.name,
@@ -796,7 +806,7 @@ index b2b8cb7..2b4f742 100644
  			confirmLabel: "manage",
  			cancelLabel: "close",
  		});
-@@ -732,8 +817,9 @@ export function createMcpExtension(options: McpExtensionOptions = {}): Extension
+@@ -816,8 +904,9 @@ export function createMcpExtension(options: McpExtensionOptions = {}): Extension
  				};
  			}
  			const { entry, connection } = server;
@@ -808,7 +818,7 @@ index b2b8cb7..2b4f742 100644
  					? "for this session"
  					: entry.override
  						? "saved to the project mcp.json"
-@@ -741,7 +827,7 @@ export function createMcpExtension(options: McpExtensionOptions = {}): Extension
+@@ -825,7 +914,7 @@ export function createMcpExtension(options: McpExtensionOptions = {}): Extension
  							? `saved to the ${entry.scope} mcp.json`
  							: "saved to mcp.json";
  			// Global servers without an override can be turned on or off for the trusted project alone.
@@ -817,7 +827,7 @@ index b2b8cb7..2b4f742 100644
  			const inProjectSaved = "saved to the project mcp.json";
  			const items: SelectItem[] = [];
  			if (!isEnabled(server)) {
-@@ -751,7 +837,7 @@ export function createMcpExtension(options: McpExtensionOptions = {}): Extension
+@@ -835,7 +924,7 @@ export function createMcpExtension(options: McpExtensionOptions = {}): Extension
  				}
  			} else {
  				const state = connection?.state;
@@ -826,7 +836,7 @@ index b2b8cb7..2b4f742 100644
  					items.push({ value: "signin", label: "Sign in", description: "opens the browser" });
  				if (state === "connected" && connection) {
  					items.push({ value: "tools", label: "Tools", description: `${connection.tools.length} offered` });
-@@ -759,22 +845,36 @@ export function createMcpExtension(options: McpExtensionOptions = {}): Extension
+@@ -843,22 +932,36 @@ export function createMcpExtension(options: McpExtensionOptions = {}): Extension
  				if (state === "failed" || state === "disconnected" || state === "connected" || state === "needs-auth") {
  					items.push({ value: "reconnect", label: "Reconnect" });
  				}
@@ -870,7 +880,7 @@ index b2b8cb7..2b4f742 100644
  				.filter((line): line is string => line !== undefined)
  				.join("\n");
  			return {
-@@ -797,10 +897,12 @@ export function createMcpExtension(options: McpExtensionOptions = {}): Extension
+@@ -881,10 +984,12 @@ export function createMcpExtension(options: McpExtensionOptions = {}): Extension
  				items: (server.connection?.tools ?? []).map((tool) => {
  					const toolExposure = getMcpToolExposure(server.entry.config, tool.name);
  					const description = firstLine(tool.description ?? "");
@@ -885,7 +895,7 @@ index b2b8cb7..2b4f742 100644
  					};
  				}),
  				empty: "The server offers no tools.",
-@@ -811,16 +913,19 @@ export function createMcpExtension(options: McpExtensionOptions = {}): Extension
+@@ -895,16 +1000,19 @@ export function createMcpExtension(options: McpExtensionOptions = {}): Extension
  
  		const chooseExposure = async (ui: McpUi, server: McpServer): Promise<string | undefined> => {
  			const current = exposureOf(server.entry);
@@ -909,15 +919,45 @@ index b2b8cb7..2b4f742 100644
  				})),
  				selected: current,
  				confirmLabel: "save",
-@@ -850,6 +955,7 @@ export function createMcpExtension(options: McpExtensionOptions = {}): Extension
+@@ -938,25 +1046,33 @@ export function createMcpExtension(options: McpExtensionOptions = {}): Extension
+ 			);
+ 		};
+ 
++		// Preference persistence may await before changing the connection attempt. Track UI
++		// operations independently so late failures cannot replace a newer action's result.
++		const backgroundActionIds = new WeakMap<McpServer, symbol>();
++
+ 		/** Keep the subscribed menu usable while a connection opens or closes. */
+ 		const runInBackground = (
+ 			ctx: ExtensionContext,
+ 			server: McpServer,
+ 			operation: () => Promise<string | undefined>,
+ 		) => {
+-			const ready = operation();
+-			const attempt = server.attempt;
++			const actionId = Symbol();
++			backgroundActionIds.set(server, actionId);
+ 			const { signal } = session;
++			const ready = operation();
+ 			const finish = (message: string | undefined) => {
+-				if (signal.aborted || server.attempt !== attempt || !servers.includes(server)) return;
++				if (signal.aborted || backgroundActionIds.get(server) !== actionId || !servers.includes(server)) return;
+ 				server.message = message;
+ 				ensureDiscoveryActive(ctx);
+ 				emitChange();
+ 			};
+-			void track(ready.then(finish, (error: unknown) => finish(errorMessage(error))));
++			void track(
++				ready.then(finish, (error: unknown) => finish(sanitized ? "MCP server unavailable." : errorMessage(error))),
++			);
+ 		};
  
  		const runAction = async (ui: McpUi, ctx: ExtensionContext, server: McpServer, action: string) => {
- 			const { name } = server.entry;
 +			if (management && ["signin", "signout", "enable-project", "disable-project"].includes(action)) return;
+ 			const { signal } = session;
  			let message: string | undefined;
  			switch (action) {
- 				case "signin":
-@@ -902,12 +1008,13 @@ export function createMcpExtension(options: McpExtensionOptions = {}): Extension
+@@ -1013,12 +1129,13 @@ export function createMcpExtension(options: McpExtensionOptions = {}): Extension
  
  		const formatStatus = (): string => {
  			if (servers.length === 0 && configErrors.length === 0 && overridden.length === 0) {
@@ -932,7 +972,7 @@ index b2b8cb7..2b4f742 100644
  				if (connection?.state === "needs-auth")
  					return `${name}: needs sign-in, run /mcp login ${name} (${exposure})`;
  				const tools = connection?.state === "connected" ? `, ${connection.tools.length} tools` : "";
-@@ -922,8 +1029,9 @@ export function createMcpExtension(options: McpExtensionOptions = {}): Extension
+@@ -1033,8 +1150,9 @@ export function createMcpExtension(options: McpExtensionOptions = {}): Extension
  						: "";
  				return `${name}: ${state}${tools} (${exposure})${error}`;
  			});
@@ -944,7 +984,7 @@ index b2b8cb7..2b4f742 100644
  			return lines.join("\n");
  		};
  
-@@ -1029,7 +1137,10 @@ export function createMcpExtension(options: McpExtensionOptions = {}): Extension
+@@ -1142,7 +1260,10 @@ export function createMcpExtension(options: McpExtensionOptions = {}): Extension
  				.catch((error: unknown) => {
  					// The session may have been disposed meanwhile, which makes ctx stale.
  					try {
@@ -956,7 +996,7 @@ index b2b8cb7..2b4f742 100644
  					} catch {}
  				});
  		});
-@@ -1060,6 +1171,21 @@ export function createMcpExtension(options: McpExtensionOptions = {}): Extension
+@@ -1173,6 +1294,21 @@ export function createMcpExtension(options: McpExtensionOptions = {}): Extension
  		// Every prompt lists the servers in the `mcp_servers` section as they are when it starts. Pi
  		// appends the section to the conversation when it changed, for example after a server connected.
  		pi.on("before_agent_start", async (event, ctx) => {
@@ -978,16 +1018,16 @@ index b2b8cb7..2b4f742 100644
  			await waitForDirectServers(ctx);
  			const { sections } = event.systemPromptOptions;
  			const section = renderServersSection(servers);
-@@ -1095,7 +1221,7 @@ export function createMcpExtension(options: McpExtensionOptions = {}): Extension
- 
+@@ -1213,7 +1349,7 @@ export function createMcpExtension(options: McpExtensionOptions = {}): Extension
  		// Servers registered or unregistered during the session connect or disconnect right away.
  		pi.on("mcp_servers_change", async (_event, ctx) => {
--			if (!sessionActive) return;
-+			if (!sessionActive || options.allowRegisteredServers === false) return;
- 			const current = generation;
+ 			const { signal } = session;
+-			if (signal.aborted) return;
++			if (signal.aborted || options.allowRegisteredServers === false) return;
  			const registered = registeredServers();
  			overridden = registered.overridden;
-@@ -1122,7 +1248,10 @@ export function createMcpExtension(options: McpExtensionOptions = {}): Extension
+ 			const next = new Map(registered.servers.map((server) => [server.entry.name, server]));
+@@ -1239,7 +1375,10 @@ export function createMcpExtension(options: McpExtensionOptions = {}): Extension
  					return;
  				}
  			} catch (error) {
@@ -998,9 +1038,15 @@ index b2b8cb7..2b4f742 100644
 +				);
  				return;
  			}
- 			if (current !== generation) return;
-@@ -1138,17 +1267,21 @@ export function createMcpExtension(options: McpExtensionOptions = {}): Extension
- 			await Promise.all(closing.map((connection) => connection.close()));
+ 			if (signal.aborted) return;
+@@ -1249,22 +1388,27 @@ export function createMcpExtension(options: McpExtensionOptions = {}): Extension
+ 		pi.on("session_shutdown", async () => {
+ 			session.abort();
+ 			const closing = connections();
++			if (options.adaptTools) for (const connection of closing) withdrawCatalog(connection);
+ 			servers = [];
+ 			emitChange();
+ 			await Promise.all([...backgroundActions, ...closing.map((connection) => connection.close())]);
  		});
  
 +		if (options.management === false) return;
@@ -1023,7 +1069,7 @@ index b2b8cb7..2b4f742 100644
  				const items = servers
  					.filter((candidate) =>
  						action === "reconnect" ? candidate.connection !== undefined : usesOAuth(candidate),
-@@ -1157,7 +1290,7 @@ export function createMcpExtension(options: McpExtensionOptions = {}): Extension
+@@ -1273,7 +1417,7 @@ export function createMcpExtension(options: McpExtensionOptions = {}): Extension
  					.map((candidate) => ({
  						value: `${action} ${candidate.entry.name}`,
  						label: candidate.entry.name,
@@ -1032,8 +1078,8 @@ index b2b8cb7..2b4f742 100644
  					}));
  				return items.length > 0 ? items : null;
  			},
-@@ -1169,8 +1302,8 @@ export function createMcpExtension(options: McpExtensionOptions = {}): Extension
- 					else ctx.ui.notify(formatStatus(), "info");
+@@ -1287,8 +1431,8 @@ export function createMcpExtension(options: McpExtensionOptions = {}): Extension
+ 					}
  					return;
  				}
 -				if (extra.length > 0) {
@@ -1042,8 +1088,8 @@ index b2b8cb7..2b4f742 100644
 +					ctx.ui.notify(usage, "warning");
  					return;
  				}
- 				switch (action) {
-@@ -1204,14 +1337,14 @@ export function createMcpExtension(options: McpExtensionOptions = {}): Extension
+ 				await pending;
+@@ -1323,14 +1467,14 @@ export function createMcpExtension(options: McpExtensionOptions = {}): Extension
  						else {
  							ensureDiscoveryActive(ctx);
  							ctx.ui.notify(
@@ -1061,22 +1107,21 @@ index b2b8cb7..2b4f742 100644
  			},
  		});
 diff --git a/packages/coding-agent/src/extensions/mcp/runtime.ts b/packages/coding-agent/src/extensions/mcp/runtime.ts
-index 6debc6f..73ede58 100644
+index 0c42f79..6706ed9 100644
 --- a/packages/coding-agent/src/extensions/mcp/runtime.ts
 +++ b/packages/coding-agent/src/extensions/mcp/runtime.ts
-@@ -171,6 +171,11 @@ export class McpServerConnection implements McpToolCaller, McpResourceServer {
+@@ -171,6 +171,10 @@ export class McpServerConnection implements McpToolCaller, McpResourceServer {
+ 	challenge: OAuthChallenge | undefined;
  	private client: McpClient | undefined;
  	private opening: Promise<McpClient> | undefined;
- 	private closed = false;
 +	private readonly toolsOnly: boolean;
 +	private readonly authentication: boolean;
-+	private connectingClient: McpClient | undefined;
 +	private refreshing = false;
 +	private pendingRefresh: McpClient | undefined;
+ 	/** Aborted by `close()`; cancels a connect in progress, including the wait between retries. */
+ 	private readonly shutdown = new AbortController();
  	/** Stderr of the last stdio server that failed to connect. */
- 	private stderrTail: string | undefined;
- 	private readonly cwd: string;
-@@ -184,7 +189,9 @@ export class McpServerConnection implements McpToolCaller, McpResourceServer {
+@@ -186,7 +190,9 @@ export class McpServerConnection implements McpToolCaller, McpResourceServer {
  		entry: McpServerEntry;
  		cwd: string;
  		createTransport: McpTransportFactory;
@@ -1087,7 +1132,7 @@ index 6debc6f..73ede58 100644
  		/** The current token of a pi provider, for servers with `auth.provider`. */
  		providerToken?: (provider: string) => Promise<string | undefined>;
  		onTools: (connection: McpServerConnection) => void;
-@@ -193,6 +200,8 @@ export class McpServerConnection implements McpToolCaller, McpResourceServer {
+@@ -195,6 +201,8 @@ export class McpServerConnection implements McpToolCaller, McpResourceServer {
  		/** Receives the server's log messages (`notifications/message`). */
  		log?: McpServerLog;
  	}) {
@@ -1096,7 +1141,7 @@ index 6debc6f..73ede58 100644
  		this.entry = options.entry;
  		this.cwd = options.cwd;
  		this.createTransport = options.createTransport;
-@@ -200,11 +209,11 @@ export class McpServerConnection implements McpToolCaller, McpResourceServer {
+@@ -202,11 +210,11 @@ export class McpServerConnection implements McpToolCaller, McpResourceServer {
  		this.onChange = options.onChange;
  		this.log = options.log;
  		const url = this.oauthUrl;
@@ -1110,7 +1155,7 @@ index 6debc6f..73ede58 100644
  					settings: () => this.oauthSettings(),
  					onChallenge: (challenge) => {
  						this.challenge = challenge;
-@@ -226,7 +235,9 @@ export class McpServerConnection implements McpToolCaller, McpResourceServer {
+@@ -232,7 +240,9 @@ export class McpServerConnection implements McpToolCaller, McpResourceServer {
  
  	/** Server URL when the server authenticates with OAuth. */
  	get oauthUrl(): string | undefined {
@@ -1121,7 +1166,7 @@ index 6debc6f..73ede58 100644
  	}
  
  	oauthSettings(): McpOAuthSettings {
-@@ -256,8 +267,20 @@ export class McpServerConnection implements McpToolCaller, McpResourceServer {
+@@ -262,8 +272,20 @@ export class McpServerConnection implements McpToolCaller, McpResourceServer {
  		return this.opening;
  	}
  
@@ -1144,7 +1189,7 @@ index 6debc6f..73ede58 100644
  	}
  
  	readResource(uri: string, options: McpRequestOptions): Promise<ReadResourceResult> {
-@@ -346,14 +369,20 @@ export class McpServerConnection implements McpToolCaller, McpResourceServer {
+@@ -352,14 +374,20 @@ export class McpServerConnection implements McpToolCaller, McpResourceServer {
  	}
  
  	private async dropClient(client: McpClient): Promise<void> {
@@ -1167,7 +1212,7 @@ index 6debc6f..73ede58 100644
  		for (let attempt = 0; ; attempt++) {
  			this.stderrTail = undefined;
  			try {
-@@ -373,9 +402,17 @@ export class McpServerConnection implements McpToolCaller, McpResourceServer {
+@@ -379,8 +407,10 @@ export class McpServerConnection implements McpToolCaller, McpResourceServer {
  		const client = new McpClient({
  			name: "pi",
  			version: VERSION,
@@ -1178,16 +1223,17 @@ index 6debc6f..73ede58 100644
 +			listLimits: this.toolsOnly ? { pages: 64, items: 1024, bytes: 8 * 1024 * 1024 } : undefined,
 +			resetTimeoutOnProgress: !this.toolsOnly,
  		});
-+		this.connectingClient = client;
-+		const setupTimer = this.toolsOnly
-+			? setTimeout(() => {
-+					void client.close();
-+				}, 30_000)
-+			: undefined;
  		const log = this.log;
  		if (log) client.onNotification("notifications/message", (params) => log.write(this.entry.name, params));
+@@ -391,6 +421,7 @@ export class McpServerConnection implements McpToolCaller, McpResourceServer {
+ 			closing ??= client.close().catch(() => undefined);
+ 			return closing;
+ 		};
++		const setupTimer = this.toolsOnly ? setTimeout(() => void closeClient(), 30_000) : undefined;
+ 		this.shutdown.signal.addEventListener("abort", closeClient, { once: true });
  		let transport: McpTransport | undefined;
-@@ -385,13 +422,14 @@ export class McpServerConnection implements McpToolCaller, McpResourceServer {
+ 		try {
+@@ -399,13 +430,14 @@ export class McpServerConnection implements McpToolCaller, McpResourceServer {
  			client.onNotification("notifications/tools/list_changed", () => {
  				void this.refreshTools(client);
  			});
@@ -1206,19 +1252,18 @@ index 6debc6f..73ede58 100644
  			const [tools, resources] = await Promise.all([
  				client.serverCapabilities?.tools ? client.listTools() : [],
  				hasResources ? fetchResources(client) : { resources: [], resourceTemplates: [] },
-@@ -414,7 +452,11 @@ export class McpServerConnection implements McpToolCaller, McpResourceServer {
+@@ -428,8 +460,10 @@ export class McpServerConnection implements McpToolCaller, McpResourceServer {
  			if (transport instanceof StdioTransport) {
  				this.stderrTail = transport.stderr.trim().slice(-STDERR_TAIL_CHARS) || undefined;
  			}
 +			if (this.client === client) this.client = undefined;
  			throw error;
-+		} finally {
+ 		} finally {
 +			clearTimeout(setupTimer);
-+			if (this.connectingClient === client) this.connectingClient = undefined;
+ 			this.shutdown.signal.removeEventListener("abort", closeClient);
  		}
  	}
- 
-@@ -440,13 +482,27 @@ export class McpServerConnection implements McpToolCaller, McpResourceServer {
+@@ -456,13 +490,27 @@ export class McpServerConnection implements McpToolCaller, McpResourceServer {
  	}
  
  	private async refreshTools(client: McpClient): Promise<void> {
@@ -1247,21 +1292,11 @@ index 6debc6f..73ede58 100644
  		}
  		this.changed();
  	}
-@@ -466,7 +522,8 @@ export class McpServerConnection implements McpToolCaller, McpResourceServer {
- 		this.changed();
- 		const client = this.client;
- 		this.client = undefined;
--		await client?.close().catch(() => undefined);
-+		await Promise.all([client, this.connectingClient].map((pending) => pending?.close().catch(() => undefined)));
-+		await this.opening?.catch(() => undefined);
- 		// A refresh the server already answered may have rotated the refresh token; exiting before the
- 		// new tokens are saved would lose the grant.
- 		await this.authProvider?.settled();
 diff --git a/packages/coding-agent/src/extensions/mcp/tools.ts b/packages/coding-agent/src/extensions/mcp/tools.ts
-index 4f38d91..4b15f9b 100644
+index ca4da96..0275bcb 100644
 --- a/packages/coding-agent/src/extensions/mcp/tools.ts
 +++ b/packages/coding-agent/src/extensions/mcp/tools.ts
-@@ -127,7 +127,7 @@ export function createMcpResultSchema(structuredContentSchema: Record<string, un
+@@ -123,7 +123,7 @@ export function createMcpResultSchema(structuredContentSchema: Record<string, un
   */
  export async function limitMcpContent(
  	content: (TextContent | ImageContent)[],
@@ -1270,7 +1305,7 @@ index 4f38d91..4b15f9b 100644
  ): Promise<{ content: (TextContent | ImageContent)[]; fullOutputPath?: string }> {
  	const combined = textOf(content);
  	const truncation = truncateMiddle(combined, MCP_OUTPUT_MAX_BYTES);
-@@ -135,6 +135,7 @@ export async function limitMcpContent(
+@@ -131,6 +131,7 @@ export async function limitMcpContent(
  	let fullOutputPath: string | undefined;
  	let where: string;
  	try {
@@ -1278,7 +1313,7 @@ index 4f38d91..4b15f9b 100644
  		fullOutputPath = await saveOutput(combined, ".txt");
  		where = `[Full output: ${fullOutputPath} (read it with offset/limit)]`;
  	} catch (error) {
-@@ -149,6 +150,7 @@ export async function limitMcpContent(
+@@ -145,6 +146,7 @@ export async function limitMcpContent(
  }
  
  export interface ConvertMcpResultOptions {
@@ -1286,7 +1321,7 @@ index 4f38d91..4b15f9b 100644
  	/** Saves truncated text and binary resources. Default: a temp file. */
  	saveOutput?: McpOutputSaver;
  	/** Whether the server's resources can be read with `read_mcp_resource`, which resource links then name. */
-@@ -190,6 +192,8 @@ async function blockToContent(
+@@ -186,6 +188,8 @@ async function blockToContent(
  		const data = Buffer.from(blob, "base64");
  		if (isTextMimeType(mimeType)) return [{ type: "text", text: data.toString("utf8") }];
  		const kind = `${mimeType ?? "unknown type"}, ${formatSize(data.length)}`;
@@ -1295,7 +1330,7 @@ index 4f38d91..4b15f9b 100644
  		try {
  			const path = await (options.saveOutput ?? saveToTempFile)(data, extensionOf(uri));
  			return [{ type: "text", text: `[Binary resource ${uri} (${kind}) saved to ${path}]` }];
-@@ -223,7 +227,7 @@ export async function convertMcpResult(
+@@ -219,7 +223,7 @@ export async function convertMcpResult(
  	if (result.isError && textOf(converted) === "") {
  		converted.push({ type: "text", text: `MCP tool ${server}/${tool} returned an error` });
  	}
@@ -1304,7 +1339,7 @@ index 4f38d91..4b15f9b 100644
  	const { _meta: _ignored, ...scriptResult } = result;
  	return {
  		content,
-@@ -264,6 +268,7 @@ export function createMcpToolDefinition(options: {
+@@ -260,6 +264,7 @@ export function createMcpToolDefinition(options: {
  	exposure: McpExposure;
  	namespace: ToolNamespace;
  	timeoutMs: number;
@@ -1312,7 +1347,7 @@ index 4f38d91..4b15f9b 100644
  	getClient: () => Promise<McpToolCaller>;
  	/** Whether `read_mcp_resource` can read the server's resources. */
  	readableResources?: () => boolean;
-@@ -293,7 +298,10 @@ export function createMcpToolDefinition(options: {
+@@ -289,7 +294,10 @@ export function createMcpToolDefinition(options: {
  					onUpdate?.({ content: [{ type: "text", text }], details: { server, tool: tool.name } });
  				},
  			});
@@ -1326,24 +1361,24 @@ index 4f38d91..4b15f9b 100644
  }
 diff --git a/packages/coding-agent/test/managed-mcp-codemode.test.ts b/packages/coding-agent/test/managed-mcp-codemode.test.ts
 new file mode 100644
-index 0000000..2269db0
+index 0000000..180be28
 --- /dev/null
 +++ b/packages/coding-agent/test/managed-mcp-codemode.test.ts
-@@ -0,0 +1,627 @@
-+import { afterEach, describe, expect, it, vi } from "vitest";
+@@ -0,0 +1,728 @@
 +import { LATEST_PROTOCOL_VERSION, McpSessionExpiredError, type Tool } from "@earendil-works/pi-mcp";
 +import { createInMemoryTransportPair } from "@earendil-works/pi-mcp/testing";
-+import { McpServerConnection } from "../src/extensions/mcp/runtime.ts";
-+import { createMcpExtension, type McpManagementOptions } from "../src/extensions/mcp/index.ts";
-+import { convertMcpResult } from "../src/extensions/mcp/tools.ts";
++import { afterEach, describe, expect, it, vi } from "vitest";
 +import type {
 +	ExtensionAPI,
 +	ExtensionCommandContext,
 +	ExtensionContext,
 +	ToolDefinition,
 +} from "../src/core/extensions/types.ts";
-+import type { McpMenu, McpUi } from "../src/extensions/mcp/ui.ts";
 +import { codemodeSchema } from "../src/extensions/codemode/tool.ts";
++import { createMcpExtension, type McpManagementOptions } from "../src/extensions/mcp/index.ts";
++import { McpServerConnection } from "../src/extensions/mcp/runtime.ts";
++import { convertMcpResult } from "../src/extensions/mcp/tools.ts";
++import type { McpMenu, McpUi } from "../src/extensions/mcp/ui.ts";
 +
 +const manager = vi.hoisted(() => ({ ui: undefined as McpUi | undefined }));
 +vi.mock("../src/extensions/mcp/ui.ts", async (original) => ({
@@ -1634,6 +1669,38 @@ index 0000000..2269db0
 +});
 +
 +describe("managed code-mode factory", () => {
++	it("keeps code-mode text and images inline without writing host output files", async () => {
++		const outputFiles = await import("../src/utils/output-files.ts");
++		const save = vi.spyOn(outputFiles, "writeOutputFile").mockRejectedValue(new Error("unexpected host write"));
++		const { executeCodemode } = await import("../src/extensions/codemode/execute.ts");
++		try {
++			const result = await executeCodemode(
++				"inline",
++				{ code: 'text("first"); text("second"); image("data:image/png;base64,iVBORw0KGgo=");' },
++				undefined,
++				undefined,
++				undefined,
++				{
++					executionLimits: {
++						timeoutMs: 5000,
++						maxSourceBytes: 1024,
++						maxCalls: 10,
++						maxConcurrentCalls: 2,
++						maxOutputBytes: 4096,
++						inlineOnly: true,
++					},
++				},
++			);
++			expect(result.isError).toBeUndefined();
++			expect(result.content).toContainEqual({ type: "image", data: "iVBORw0KGgo=", mimeType: "image/png" });
++			expect(JSON.stringify(result.content)).toContain("==> text 1/2 <==");
++			expect(JSON.stringify(result.content)).toContain("==> text 2/2 <==");
++			expect(save).not.toHaveBeenCalled();
++		} finally {
++			save.mockRestore();
++		}
++	});
++
 +	it("bounds source and deadline and rejects execution after shutdown", async () => {
 +		const { createCodemodeExtension } = await import("../src/extensions/codemode/index.ts");
 +		let definition: ToolDefinition<any, any> | undefined;
@@ -1817,7 +1884,11 @@ index 0000000..2269db0
 +	}
 +
 +	function menus(
-+		choices: (string | undefined | ((menu: McpMenu) => string | undefined | Promise<string | undefined>))[],
++		choices: (
++			| string
++			| undefined
++			| ((menu: McpMenu, build: () => McpMenu) => string | undefined | Promise<string | undefined>)
++		)[],
 +	) {
 +		const seen: McpMenu[] = [];
 +		manager.ui = {
@@ -1825,7 +1896,7 @@ index 0000000..2269db0
 +				const menu = build();
 +				seen.push(menu);
 +				const next = choices.shift();
-+				return typeof next === "function" ? next(menu) : next;
++				return typeof next === "function" ? next(menu, build) : next;
 +			},
 +			status: () => {},
 +			redirectUrl: async () => {
@@ -1857,18 +1928,21 @@ index 0000000..2269db0
 +				expect(state.definitions.get("mcp__docs__echo")?.exposure).toBe("hidden");
 +				return "disable";
 +			},
-+			(menu) => {
-+				expect(menu.items.map((item) => item.value)).toEqual(["enable"]);
++			async (_menu, build) => {
++				await vi.waitFor(() => expect(build().items.map((item) => item.value)).toEqual(["enable"]));
 +				expect(state.published.at(-1)?.names).toEqual([]);
 +				return "enable";
 +			},
-+			"reconnect",
++			async (_menu, build) => {
++				await vi.waitFor(() => expect(build().items.some((item) => item.value === "reconnect")).toBe(true));
++				return "reconnect";
++			},
 +			undefined,
 +			undefined,
 +		]);
 +		await state.command.handler("", state.ctx);
 +		expect(saved).toEqual([{ exposure: "hidden" }, { enabled: false }, { enabled: true }]);
-+		expect(state.fixtures).toHaveLength(3);
++		await vi.waitFor(() => expect(state.fixtures).toHaveLength(3));
 +		expect(state.writeDefaultConfig).not.toHaveBeenCalled();
 +		expect(seen.find((menu) => menu.title === "Exposure of docs")?.items.map((item) => item.value)).toEqual([
 +			"direct",
@@ -1888,6 +1962,68 @@ index 0000000..2269db0
 +		expect((await state.command.getArgumentCompletions?.(""))?.map((item) => item.label)).toEqual(["reconnect"]);
 +		await state.command.handler("login docs", state.ctx);
 +		expect(state.notify).toHaveBeenLastCalledWith("Usage: /mcp, /mcp reconnect [server]", "warning");
++	});
++
++	it("keeps the manager responsive during preference saves and displays sanitized background failures", async () => {
++		let rejectSave!: (error: Error) => void;
++		const save = vi.fn(
++			() =>
++				new Promise<void>((_resolve, reject) => {
++					rejectSave = reject;
++				}),
++		);
++		const state = await setup({ exposures: ["direct", "hidden"], updateConfig: save });
++		menus([
++			"docs",
++			"disable",
++			(menu) => {
++				expect(save).toHaveBeenCalledOnce();
++				expect(menu.items.some((item) => item.value === "disable")).toBe(true);
++				expect(state.definitions.get("mcp__docs__echo")?.exposure).toBe("direct");
++				return undefined;
++			},
++			undefined,
++		]);
++		await state.command.handler("", state.ctx);
++		rejectSave(new Error("SECRET preference path"));
++		const seen = menus([
++			"docs",
++			async (_menu, build) => {
++				await vi.waitFor(() => expect(build().error).toBe("Could not save MCP preferences."));
++				expect(build().items.some((item) => item.value === "disable")).toBe(true);
++				return undefined;
++			},
++			undefined,
++		]);
++		await state.command.handler("", state.ctx);
++		expect(JSON.stringify([seen, state.notify.mock.calls])).not.toContain("SECRET");
++		expect(state.definitions.get("mcp__docs__echo")?.exposure).toBe("direct");
++	});
++
++	it("does not send an old adapted definition through a replacement connection", async () => {
++		const state = await setup({ exposures: ["direct", "hidden"], updateConfig: () => {} });
++		const original = state.definitions.get("mcp__docs__echo")!;
++		menus([
++			"docs",
++			"disable",
++			async (_menu, build) => {
++				await vi.waitFor(() => expect(build().items.map((item) => item.value)).toEqual(["enable"]));
++				return "enable";
++			},
++			async (_menu, build) => {
++				await vi.waitFor(() => expect(build().items.some((item) => item.value === "tools")).toBe(true));
++				return undefined;
++			},
++			undefined,
++		]);
++		await state.command.handler("", state.ctx);
++		expect(state.fixtures).toHaveLength(2);
++		await expect(original.execute("stale", {}, undefined, undefined, state.ctx as never)).rejects.toThrow(
++			"unavailable",
++		);
++		expect(state.fixtures.flatMap((fixture) => fixture.methods)).not.toContain("tools/call");
++		await state.definitions.get("mcp__docs__echo")!.execute("fresh", {}, undefined, undefined, state.ctx as never);
++		expect(state.fixtures[1].methods).toContain("tools/call");
 +	});
 +
 +	it("leaves failed saves unchanged and rejects exposure choices outside the ceiling", async () => {
@@ -2065,10 +2201,10 @@ index 26479ac..cd62fb4 100644
  			return;
  		}
 diff --git a/packages/mcp/src/transports/streamable-http.ts b/packages/mcp/src/transports/streamable-http.ts
-index 8fa8f3a..f5b3d3a 100644
+index 6624651..9e2aee0 100644
 --- a/packages/mcp/src/transports/streamable-http.ts
 +++ b/packages/mcp/src/transports/streamable-http.ts
-@@ -241,7 +241,9 @@ export class StreamableHttpTransport extends TransportEvents implements McpTrans
+@@ -243,7 +243,9 @@ export class StreamableHttpTransport extends TransportEvents implements McpTrans
  		}
  		const type = contentType(response);
  		if (type === "application/json") {
@@ -2079,7 +2215,7 @@ index 8fa8f3a..f5b3d3a 100644
  			for (const item of Array.isArray(body) ? body : [body]) this.emitMessage(parseJsonRpcMessage(item));
  			return;
  		}
-@@ -317,7 +319,7 @@ export class StreamableHttpTransport extends TransportEvents implements McpTrans
+@@ -322,7 +324,7 @@ export class StreamableHttpTransport extends TransportEvents implements McpTrans
  
  	private async checkResponse(response: Response): Promise<void> {
  		if (response.ok) return;
@@ -2088,7 +2224,7 @@ index 8fa8f3a..f5b3d3a 100644
  		if (response.status === 401) throw new McpAuthRequiredError(response, body);
  		if (response.status === 404 && this.sessionIdValue) throw new McpSessionExpiredError(body);
  		throw new McpHttpError(response.status, describeHttpFailure(response.status, body), body);
-@@ -498,3 +500,35 @@ export class StreamableHttpTransport extends TransportEvents implements McpTrans
+@@ -503,3 +505,35 @@ export class StreamableHttpTransport extends TransportEvents implements McpTrans
  		});
  	}
  }
@@ -2126,19 +2262,20 @@ index 8fa8f3a..f5b3d3a 100644
 +}
 diff --git a/packages/mcp/test/managed-transport.test.ts b/packages/mcp/test/managed-transport.test.ts
 new file mode 100644
-index 0000000..4671499
+index 0000000..256fa63
 --- /dev/null
 +++ b/packages/mcp/test/managed-transport.test.ts
-@@ -0,0 +1,176 @@
-+import { afterEach, describe, expect, it, vi } from "vitest";
+@@ -0,0 +1,177 @@
 +import { mkdtemp, readFile, rm } from "node:fs/promises";
 +import { tmpdir } from "node:os";
 +import { join } from "node:path";
-+import { StdioTransport } from "../src/transports/stdio.ts";
++import { afterEach, describe, expect, it, vi } from "vitest";
 +import { McpClient } from "../src/client.ts";
 +import { createInMemoryTransportPair } from "../src/testing/index.ts";
++import { StdioTransport } from "../src/transports/stdio.ts";
 +import { StreamableHttpTransport } from "../src/transports/streamable-http.ts";
 +import { closeServers, listen, readBody } from "./helpers.ts";
++
 +afterEach(closeServers);
 +
 +describe("managed HTTP transport bounds and URL routing", () => {

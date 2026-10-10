@@ -225,6 +225,18 @@ can activate code mode, unless excluded by CLI or the user's `autoEnableCodemode
 preference is false. Administrator disablement prevents registration regardless
 of these settings.
 
+Pi 1.1 supports additive CLI selection, for example
+`--tools +codemode,-bash`, which keeps the other default tools. Plain `--tools`
+lists replace the selection; plain lists and `--exclude-tools` support `*`
+patterns, while `+name`/`-name` entries require exact names and cannot be mixed
+with plain entries. In Pi Sandbox, a final `-name` also prevents later MCP
+autoactivation or nested access to that tool; a later `+name` reverses that
+removal. `--no-tools` and `--exclude-tools` always take precedence. Additions
+remain limited by the effective TOML, including when selected with `--config`:
+they cannot restore disabled tools or bypass `ask`/`deny` policies. An explicit
+plain allowlist must include any desired MCP tools. `--no-mcp` prevents all MCP
+connections for that launch.
+
 While code mode is active, Pi Sandbox adds prompt guidance to prefer dedicated
 file tools and use code mode to coordinate calls or process results. If Bash is
 also active, the guidance reserves it for programs, builds, tests, and operations

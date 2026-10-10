@@ -326,9 +326,10 @@ describe("managed initial tool activation", () => {
     settings: ReturnType<ExtensionAPI["getSettings"]> = {},
     args: readonly string[] = [],
     enabled = true,
+    policies: Parameters<typeof config>[0] = {},
   ): Promise<FakePi> {
     const pi = fakePi(settings);
-    const cfg = { ...config(), codemode: { enabled, timeoutMs: 1000 } };
+    const cfg = { ...config(policies), codemode: { enabled, timeoutMs: 1000 } };
     await createPiSandboxExtension({
       cwd: "/work/project",
       configPath: "/etc/pi-sandbox/config.toml",
@@ -379,7 +380,12 @@ describe("managed initial tool activation", () => {
   it("allows an explicit CLI selection and treats CLI exclusions as an availability ceiling", async () => {
     const included = await activate({ defaultTools: ["read"] }, ["--tools", "read,codemode"]);
     expect(included.activeTools.at(-1)).toEqual(["read", "codemode"]);
-    for (const args of [["--tools", "read"], ["--exclude-tools", "codemode"], ["--no-tools"]]) {
+    for (const args of [
+      ["--tools", "read"],
+      ["--tools", "+codemode,-codemode"],
+      ["--exclude-tools", "codemode"],
+      ["--no-tools"],
+    ]) {
       const pi = await activate({ defaultTools: ["+codemode"] }, args);
       expect(pi.activeTools.at(-1)).not.toContain("codemode");
       expect(pi.tools.get("codemode")?.exposure).toBe("hidden");
@@ -393,6 +399,50 @@ describe("managed initial tool activation", () => {
     const pi = await activate({ defaultTools: ["+codemode"] }, ["--tools", "read,codemode"], false);
     expect(pi.tools.has("codemode")).toBe(false);
     expect(pi.activeTools.at(-1)).toEqual(["read"]);
+  });
+
+  it("adds code mode and removes Bash without deactivating other effective tools", async () => {
+    const pi = await activate({}, ["--tools", "+codemode,-bash"]);
+    expect(pi.tools.has("bash")).toBe(false);
+    expect(pi.activeTools.at(-1)).toEqual([
+      ...TOOL_NAMES.filter((name) => name !== "bash"),
+      "codemode",
+    ]);
+    const withDefaults = await activate({ defaultTools: ["read", "bash"] }, [
+      "-t",
+      "+codemode,-bash",
+    ]);
+    expect(withDefaults.activeTools.at(-1)).toEqual(["read", "codemode"]);
+  });
+
+  it("enforces final CLI removals at registration while retaining the effective policy ceiling", async () => {
+    const removed = await activate({}, ["-t", "+bash,-bash"]);
+    expect(removed.tools.has("bash")).toBe(false);
+    const restored = await activate({}, ["-t", "-bash,+bash"]);
+    expect(restored.tools.has("bash")).toBe(true);
+    expect(restored.activeTools.at(-1)).toContain("bash");
+    const disabled = await activate({}, ["-t", "-bash,+bash"], true, { bash: "disabled" });
+    expect(disabled.tools.has("bash")).toBe(false);
+    const toolLess = await activate({}, ["--no-tools", "-t", "+read,+bash"]);
+    for (const name of TOOL_NAMES) expect(toolLess.tools.has(name)).toBe(false);
+    expect(toolLess.activeTools.at(-1)).toEqual([]);
+  });
+
+  it("keeps disabled, deny, and ask policies authoritative over additive selection", async () => {
+    const pi = await activate({}, ["-t", "+codemode,+edit,+write,+bash"], false, {
+      edit: "disabled",
+      write: "ask",
+      bash: "deny",
+    });
+    expect(pi.tools.has("codemode")).toBe(false);
+    expect(pi.tools.has("edit")).toBe(false);
+    expect(pi.activeTools.at(-1)).not.toContain("edit");
+    expect(pi.activeTools.at(-1)).toContain("write");
+    expect(pi.activeTools.at(-1)).toContain("bash");
+    await expect(executeTool(pi, "write", { path: "file", content: "text" })).rejects.toThrow(
+      "no_ui",
+    );
+    await expect(executeTool(pi, "bash", { command: "true" })).rejects.toThrow("policy_denied");
   });
 
   it("updates prompt guidance from actual activation without replacing user prompt content", async () => {

@@ -11,11 +11,11 @@ those patches to be reimplemented.
 
 | Field                  | Pinned value                                                                           |
 | ---------------------- | -------------------------------------------------------------------------------------- |
-| Version                | `1.0.2`                                                                                |
-| Tag                    | `v1.0.2`                                                                               |
-| Commit                 | `cd32f7725fdbddbaecdff5b1e68491563394e0ca`                                             |
-| Source archive         | `https://github.com/earendil-works/pi/releases/download/v1.0.2/pi-1.0.2-source.tar.gz` |
-| Source archive SHA-256 | `fee98d8778c42432906066728b7e6325e315a0df6c12177ce61fc4f7262f0473`                     |
+| Version                | `1.1.0`                                                                                |
+| Tag                    | `v1.1.0`                                                                               |
+| Commit                 | `abe508e1b89912adde45528136c3221eb69acdd7`                                             |
+| Source archive         | `https://github.com/earendil-works/pi/releases/download/v1.1.0/pi-1.1.0-source.tar.gz` |
+| Source archive SHA-256 | `63b17b48b855e36e64c5013523acd48131ffcfa90ae48fe2f3e6fa9fe3d0da32`                     |
 
 The build may download that archive or accept the identical archive from a
 local path. It must verify the SHA-256 digest before extraction. It extracts Pi
@@ -25,7 +25,7 @@ committed to this repository or distributed to installed hosts.
 
 Moving any pinned field is an explicit Pi upgrade. A moving branch, version
 range, package-manager resolution, target-host download, or unverified source
-tree is not allowed. The integration targets Pi 1.0 only; it does not retain
+tree is not allowed. The integration targets the pinned Pi 1.x release only; it does not retain
 pre-1.0 API or launch compatibility paths.
 
 ## Product boundary
@@ -199,7 +199,7 @@ global scoped environment.
 
 ## Required Pi patch behavior
 
-Keep the patch series as small and generic as practical. Against Pi 1.0.2 it
+Keep the patch series as small and generic as practical. Against Pi 1.1.0 it
 provides these seams:
 
 1. `main()` accepts a caller-provided model-runtime factory and consistently
@@ -372,7 +372,13 @@ script per managed instance, and aborts/awaits that script on session shutdown.
 Pi Sandbox keeps code mode inactive by default, honors Pi's merged `defaultTools`
 and `codemode.mode` settings, and applies CLI inclusion/exclusion ceilings to
 initial activation and later MCP autoactivation. The administrator flag controls
-registration. Preserve stock `model-only` exposure to prevent recursive code-mode
+registration. CLI modifier-only `--tools` lists adjust the managed defaults;
+plain lists replace them. Final subtractive modifiers, explicit exclusions, and
+`--no-tools` remain managed availability ceilings even for MCP autoactivation and
+nested calls. Additions never broaden the effective TOML. Plain allowlists and
+exclusions support `*` patterns; modifier entries use exact names. `--no-mcp`
+suppresses managed connections as well as the upstream built-in factory.
+Preserve stock `model-only` exposure to prevent recursive code-mode
 calls. A fixed 3000-token declaration budget and omitted `models` bridge remain
 managed constraints. The runtime caps source bytes, deadline, total and
 concurrent bridge calls (including discovery helpers), and accumulated UTF-8
@@ -396,4 +402,5 @@ upstream development tsconfig's source aliases. Runtime setup and the managed
 factory must share one compiled Pi configuration module so the registered
 embedded-WASM path is visible to code mode. Check the bundle metadata for that
 single runtime and its embedded QuickJS asset; the packaged smoke test must
-execute a real script.
+execute a real script. Disable Bun's project `bunfig.toml` and `.env` autoload
+in the compiled application; project files cannot inject startup environment.

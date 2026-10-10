@@ -613,8 +613,15 @@ async function main() {
         "packages/coding-agent/test/managed-mcp-codemode.test.ts",
         "packages/mcp/test/managed-transport.test.ts",
         "packages/codemode/test/managed-limits.test.ts",
+        "packages/coding-agent/test/args.test.ts",
+        "packages/coding-agent/test/mcp-extension.test.ts",
+        "packages/coding-agent/test/mcp-manager-view.test.ts",
+        "packages/coding-agent/test/suite/agent-session-codemode.test.ts",
+        "packages/coding-agent/test/suite/agent-session-mcp.test.ts",
+        "packages/coding-agent/test/suite/regressions/2835-tools-allowlist-filters-extension-tools.test.ts",
+        "packages/codemode/test/sandbox.test.ts",
       ],
-      { cwd: sourceRoot, env: cleanEnvironment },
+      { cwd: sourceRoot, env: { ...cleanEnvironment, PI_OFFLINE: "1" } },
     );
 
     await copyPrivateEntrypoint(sourceRoot);
@@ -641,6 +648,7 @@ async function main() {
         `--metafile=${bunMetafile}`,
         `--tsconfig-override=${bunTsconfig}`,
         "--no-compile-autoload-bunfig",
+        "--no-compile-autoload-dotenv",
         `--target=${bunTarget}`,
         "./dist/pi-sandbox/private-entrypoint.mjs",
         "./src/utils/image-resize-worker.ts",

@@ -1,8 +1,8 @@
 diff --git a/packages/coding-agent/src/cli/args.ts b/packages/coding-agent/src/cli/args.ts
-index e295243..5b5f0bd 100644
+index 38d268a..6c2bfe2 100644
 --- a/packages/coding-agent/src/cli/args.ts
 +++ b/packages/coding-agent/src/cli/args.ts
-@@ -444,7 +444,6 @@ ${chalk.bold("Environment Variables:")}
+@@ -464,7 +464,6 @@ ${chalk.bold("Environment Variables:")}
    PI_PACKAGE_DIR                   - Override package directory (for Nix/Guix store paths)
    PI_OFFLINE                       - Disable startup network operations when set to 1/true/yes
    PI_TELEMETRY                     - Override install telemetry when set to 1/true/yes or 0/false/no
@@ -23,18 +23,18 @@ index 934de40..d5f2dc7 100644
  	{ name: "copy", description: "Copy last agent message to clipboard" },
  	{ name: "name", description: "Set session display name" },
 diff --git a/packages/coding-agent/src/modes/interactive/interactive-mode.ts b/packages/coding-agent/src/modes/interactive/interactive-mode.ts
-index 158f59e..a2eb2f4 100644
+index 55ea404..ddbcc5a 100644
 --- a/packages/coding-agent/src/modes/interactive/interactive-mode.ts
 +++ b/packages/coding-agent/src/modes/interactive/interactive-mode.ts
-@@ -183,7 +183,6 @@ import { UserMessageSelectorComponent } from "./components/user-message-selector
- import { editInExternalEditor } from "./external-editor.ts";
+@@ -185,7 +185,6 @@ import { editInExternalEditor } from "./external-editor.ts";
  import { refreshModelCatalogs } from "./model-catalog-refresh.ts";
  import { getModelSearchText } from "./model-search.ts";
+ import { type BlockedStatus, ProgramStatusReporter } from "./program-status-reporter.ts";
 -import { shareSession } from "./session-share.ts";
  import {
  	getAvailableThemes,
  	getAvailableThemesWithPaths,
-@@ -3175,7 +3174,7 @@ export class InteractiveMode {
+@@ -3234,7 +3233,7 @@ export class InteractiveMode {
  				this.editor.setText("");
  				return;
  			}
@@ -43,7 +43,7 @@ index 158f59e..a2eb2f4 100644
  				await this.handleShareCommand();
  				this.editor.setText("");
  				return;
-@@ -6528,14 +6527,7 @@ export class InteractiveMode {
+@@ -6609,14 +6608,7 @@ export class InteractiveMode {
  	}
  
  	private async handleShareCommand(): Promise<void> {
