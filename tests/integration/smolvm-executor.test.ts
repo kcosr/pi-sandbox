@@ -187,12 +187,13 @@ describe.skipIf(!enabled)("native packed smolvm", () => {
       ).toBe(0);
       const local = await vm.execute({
         argv: [
-          "/bin/bash",
-          "-c",
-          'for n in {1..100}; do test -f server.port && break; sleep .02; done; curl --fail --silent "http://127.0.0.1:$(cat server.port)/"',
+          "/usr/bin/node",
+          "-e",
+          "const fs=require('fs');function connect(){if(!fs.existsSync('server.port'))return setTimeout(connect,20);require('http').get('http://127.0.0.1:'+fs.readFileSync('server.port','utf8'),r=>r.pipe(process.stdout)).on('error',()=>process.exit(1));}connect();",
         ],
+        timeoutMs: 5000,
       });
-      expect(local.exitCode).toBe(0);
+      expect(local.exitCode, local.stderr.toString()).toBe(0);
       expect(local.stdout.toString()).toBe("guest-local");
       const started = await vm.execute({
         argv: [
