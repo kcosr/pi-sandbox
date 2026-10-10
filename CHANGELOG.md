@@ -13,6 +13,10 @@
 - Run smolvm tools concurrently with bounded admission, coordinated VM cleanup and Pi-compatible output draining. ([#20](https://github.com/kcosr/pi-sandbox/pull/20))
 - Run Bubblewrap tools concurrently with sandbox process lifetime, preserving coordinated cancellation and cleanup. ([#19](https://github.com/kcosr/pi-sandbox/pull/19))
 
+### Fixed
+
+- Retire OCI families when terminal opening detects a lost VM identity, and report each terminal cleanup failure once. ([#22](https://github.com/kcosr/pi-sandbox/pull/22))
+
 ## 0.6.0 - 2026-10-10
 
 ### Breaking changes

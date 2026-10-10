@@ -441,6 +441,28 @@ suite("OCI family controller policy with a simulated CLI", () => {
       await family.close();
     }
   });
+  it("retires the family and its terminals when a terminal open detects lost VM identity", async () => {
+    const family = await fixture();
+    const descriptor = family.attachment(family.sourceId);
+    const peer = terminalFixture();
+    await family.openTerminal(family.sourceId, peer.options);
+    const failed = terminalFixture();
+    const identityFailure = new SandboxExecutionError("sandbox_process_failed");
+    mocks.alive = () => Promise.reject(identityFailure);
+    await expect(family.openTerminal(family.sourceId, failed.options)).rejects.toBe(
+      identityFailure,
+    );
+    expect(failed.launch).not.toHaveBeenCalled();
+    expect(peer.close).toHaveBeenCalledTimes(1);
+    expect(mocks.events).toEqual(["stop:candidate"]);
+    expect(() => family.attachment(family.sourceId)).toThrow("sandbox_closed");
+    await expect(family.execute(family.sourceId, { argv: ["/bin/true"] })).rejects.toMatchObject({
+      code: "sandbox_closed",
+    });
+    expect((await stat(family.statePath)).isDirectory()).toBe(true);
+    await expect(stat(descriptor.socketPath)).rejects.toMatchObject({ code: "ENOENT" });
+    await family.close();
+  });
   it("retains state and reports a terminal cleanup failure without blocking family teardown", async () => {
     const family = await fixture();
     const terminal = terminalFixture();

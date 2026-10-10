@@ -449,7 +449,15 @@ class Family implements SmolvmOciFamily {
       const machine = this.#machines.get(machineId);
       if (!machine || machine.frozen || this.#closed)
         throw new SandboxExecutionError("sandbox_closed");
-      await this.assertAlive();
+      try {
+        await this.assertAlive();
+      } catch (error) {
+        // A dead or replaced VM is a family failure, not a scoped terminal failure.
+        const closing = this.close({ retainState: true });
+        release();
+        await closing;
+        throw error;
+      }
       if (this.#closed) throw new SandboxExecutionError("sandbox_closed");
       const readyMarker = `\u001b]777;smolvm-terminal-ready;${randomBytes(24).toString("hex")}\u0007`;
       const terminal = await this.#terminals.open(

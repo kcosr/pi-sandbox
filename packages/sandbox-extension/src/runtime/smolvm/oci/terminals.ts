@@ -49,6 +49,12 @@ export class TerminalSessions {
     if (this.#entries.size >= 16) throw new SandboxExecutionError("sandbox_queue_full");
     if (options.signal?.aborted) throw new SandboxExecutionError("sandbox_aborted");
     const controller = new AbortController();
+    const recordedFailures = new Set<unknown>();
+    const recordFailure = (error: unknown) => {
+      if (recordedFailures.has(error)) return;
+      recordedFailures.add(error);
+      this.#failures.push({ machineId, error });
+    };
     let finished = false;
     let closePromise: Promise<void> | undefined;
     let settle!: () => void;
@@ -63,8 +69,7 @@ export class TerminalSessions {
         return options.launch({ ...request, signal: controller.signal });
       })
       .catch((error: unknown) => {
-        if (error instanceof SmolvmOciTerminalCleanupError)
-          this.#failures.push({ machineId, error });
+        if (error instanceof SmolvmOciTerminalCleanupError) recordFailure(error);
         throw error;
       });
     const completion = startup
@@ -72,7 +77,7 @@ export class TerminalSessions {
         try {
           return await process.completion;
         } catch (error) {
-          this.#failures.push({ machineId, error });
+          recordFailure(error);
           throw error;
         }
       })
@@ -113,7 +118,7 @@ export class TerminalSessions {
               await child.close();
               await completion;
             } catch (error) {
-              this.#failures.push({ machineId, error });
+              recordFailure(error);
               // A failed reap must release lifecycle waiters to report the
               // failure, never deadlock shutdown waiting for an uncertain child.
               settle();
@@ -155,16 +160,10 @@ export class TerminalSessions {
   }
 
   async closeAll(): Promise<void> {
-    const results = await Promise.allSettled(
-      [...this.#entries].map((entry) => entry.terminal.close()),
-    );
-    const failures = results.filter((result) => result.status === "rejected");
-    if (failures.length || this.#failures.length)
+    await Promise.allSettled([...this.#entries].map((entry) => entry.terminal.close()));
+    if (this.#failures.length)
       throw new AggregateError(
-        [
-          ...failures.map((result) => result.reason as unknown),
-          ...this.#failures.map((failure) => failure.error),
-        ],
+        this.#failures.map((failure) => failure.error),
         "smolvm_terminal_cleanup_unconfirmed",
       );
   }
