@@ -40,6 +40,11 @@ display.
 
 ## Release procedure
 
+Group release entries under `Breaking changes`, `Added`, `Changed`, and `Fixed`,
+omitting empty sections. Put required administrator actions first under
+`Breaking changes`, including the current configuration schema. Keep an
+`Unreleased` section above dated releases and retain PR links.
+
 1. Update the root package version and corresponding lockfile entries. Move
    the completed `CHANGELOG.md` entries from `Unreleased` into a dated section
    for that version, retaining PR links and noting configuration changes.
