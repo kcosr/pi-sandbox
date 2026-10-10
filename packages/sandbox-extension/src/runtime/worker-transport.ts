@@ -20,7 +20,9 @@ export async function writeWorkerFrame(destination: Writable, frame: Buffer): Pr
         });
       } catch (cause) {
         clearTimeout(timer);
-        reject(cause);
+        reject(
+          cause instanceof Error ? cause : new Error("sandbox_worker_write_failed", { cause }),
+        );
       }
     });
   }
