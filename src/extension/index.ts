@@ -54,7 +54,7 @@ import type { ExtensionDependencies, SandboxExecutor } from "./types.js";
 import { approvalUi, approvalPreview } from "./approval.js";
 import { ManagedMcpRuntime } from "../mcp/runtime.js";
 import { createManagedCodemodeExtension } from "../codemode/index.js";
-import { selectManagedActiveTools } from "../runtime/arguments.js";
+import { isManagedToolSelected, selectManagedActiveTools } from "../runtime/arguments.js";
 
 interface ExtensionState {
   executor: SandboxExecutor | undefined;
@@ -839,7 +839,11 @@ export function createPiSandboxExtension(dependencies: ExtensionDependencies): E
           },
         });
         const enabled = new Set(
-          Object.keys(config.tools).filter((name) => state.policy?.isEnabled(name) === true),
+          Object.keys(config.tools).filter(
+            (name) =>
+              state.policy?.isEnabled(name) === true &&
+              isManagedToolSelected(dependencies.toolArguments ?? [], name),
+          ),
         );
         registerTools(registrationApi, state, enabled, dependencies.cwd);
         registerManagedTools(registrationApi, state, enabled, dependencies.cwd);

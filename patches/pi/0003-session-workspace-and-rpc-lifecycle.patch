@@ -128,10 +128,10 @@ index 9673ba6..8f541f8 100644
  		modelRuntime: options.services.modelRuntime,
  		settingsManager: options.services.settingsManager,
 diff --git a/packages/coding-agent/src/core/agent-session.ts b/packages/coding-agent/src/core/agent-session.ts
-index 63aa588..2178a79 100644
+index 5decccd..fefe031 100644
 --- a/packages/coding-agent/src/core/agent-session.ts
 +++ b/packages/coding-agent/src/core/agent-session.ts
-@@ -244,6 +244,7 @@ function withoutDeletedHeaders(headers: ProviderHeaders | undefined): Record<str
+@@ -250,6 +250,7 @@ function withoutDeletedHeaders(headers: ProviderHeaders | undefined): Record<str
  }
  
  export interface AgentSessionConfig {
@@ -139,15 +139,15 @@ index 63aa588..2178a79 100644
  	agent: Agent;
  	sessionManager: SessionManager;
  	settingsManager: SettingsManager;
-@@ -433,6 +434,7 @@ export class AgentSession {
- 	private _allowedToolNames?: Set<string>;
- 	private _excludedToolNames?: Set<string>;
+@@ -456,6 +457,7 @@ export class AgentSession {
+ 	private _allowlistFiltersMcp = false;
+ 	private _excludedTools?: (name: string) => boolean;
  	private _baseToolsOverride?: Record<string, AgentTool>;
 +	private readonly validateSessionCwd?: (cwd: string) => void;
  	private _sessionStartEvent: SessionStartEvent;
  	private _extensionUIContext?: ExtensionUIContext;
  	private _extensionMode: ExtensionMode = "print";
-@@ -467,6 +469,7 @@ export class AgentSession {
+@@ -490,6 +492,7 @@ export class AgentSession {
  		this._resourceLoader = config.resourceLoader;
  		this._customTools = config.customTools ?? [];
  		this._cwd = config.cwd;
@@ -155,7 +155,7 @@ index 63aa588..2178a79 100644
  		this._modelRuntime = config.modelRuntime;
  		this._cacheWarmer = config.cacheWarmer;
  		if (this._cacheWarmer) {
-@@ -3610,6 +3613,8 @@ export class AgentSession {
+@@ -3658,6 +3661,8 @@ export class AgentSession {
  	}
  
  	async reload(options?: { beforeSessionStart?: () => void | Promise<void> }): Promise<void> {
@@ -165,10 +165,10 @@ index 63aa588..2178a79 100644
  		const previousFlagValues = oldRunner.getFlagValues();
  		await emitSessionShutdownEvent(oldRunner, { type: "session_shutdown", reason: "reload" });
 diff --git a/packages/coding-agent/src/core/sdk.ts b/packages/coding-agent/src/core/sdk.ts
-index 035304a..e8c6234 100644
+index f678ba4..6b0c0ff 100644
 --- a/packages/coding-agent/src/core/sdk.ts
 +++ b/packages/coding-agent/src/core/sdk.ts
-@@ -41,6 +41,8 @@ setDefaultStreamFn(streamSimple);
+@@ -48,6 +48,8 @@ setDefaultStreamFn(streamSimple);
  export interface CreateAgentSessionOptions {
  	/** Working directory for project-local discovery. Default: process.cwd() */
  	cwd?: string;
@@ -177,7 +177,7 @@ index 035304a..e8c6234 100644
  	/** Global config directory. Default: ~/.pi/agent */
  	agentDir?: string;
  
-@@ -174,6 +176,8 @@ function getDefaultAgentDir(): string {
+@@ -190,6 +192,8 @@ function getDefaultAgentDir(): string {
   */
  export async function createAgentSession(options: CreateAgentSessionOptions = {}): Promise<CreateAgentSessionResult> {
  	const cwd = resolvePath(options.cwd ?? options.sessionManager?.getCwd() ?? process.cwd());
@@ -186,7 +186,7 @@ index 035304a..e8c6234 100644
  	const agentDir = options.agentDir ? resolvePath(options.agentDir) : getDefaultAgentDir();
  	let resourceLoader = options.resourceLoader;
  
-@@ -439,6 +443,7 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
+@@ -463,6 +467,7 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
  		sessionManager,
  		settingsManager,
  		cwd,
@@ -195,7 +195,7 @@ index 035304a..e8c6234 100644
  		resourceLoader,
  		customTools: options.customTools,
 diff --git a/packages/coding-agent/src/main.ts b/packages/coding-agent/src/main.ts
-index d626736..cec254a 100644
+index b758b6b..8640361 100644
 --- a/packages/coding-agent/src/main.ts
 +++ b/packages/coding-agent/src/main.ts
 @@ -573,6 +573,8 @@ async function promptForMissingSessionCwd(
@@ -224,7 +224,7 @@ index d626736..cec254a 100644
  		const isInitialRuntime = sessionStartEvent === undefined;
  		const projectTrustDiagnostics: AgentSessionRuntimeDiagnostic[] = [];
  		const cachedProjectTrust = projectTrustByCwd.get(cwd);
-@@ -859,6 +864,7 @@ export async function main(args: string[], options?: MainOptions) {
+@@ -860,6 +865,7 @@ export async function main(args: string[], options?: MainOptions) {
  			excludeTools: sessionOptions.excludeTools,
  			noTools: sessionOptions.noTools,
  			customTools: sessionOptions.customTools,
@@ -232,7 +232,7 @@ index d626736..cec254a 100644
  		});
  		const cliThinkingOverride = parsed.thinking !== undefined || cliThinkingFromModel;
  		if (created.session.model && cliThinkingOverride) {
-@@ -873,6 +879,7 @@ export async function main(args: string[], options?: MainOptions) {
+@@ -874,6 +880,7 @@ export async function main(args: string[], options?: MainOptions) {
  	};
  	time("createRuntime");
  	const runtime = await createAgentSessionRuntime(createRuntime, {

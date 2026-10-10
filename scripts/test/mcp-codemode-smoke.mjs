@@ -68,6 +68,13 @@ export async function testManagedMcpCodemode({
         counts.set(marker, count + 1);
         const tools = body.tools ?? [];
         const names = tools.map((tool) => tool.function?.name ?? tool.custom?.name);
+        if (providerScenario.expectedTools !== undefined) {
+          assert.deepEqual(
+            [...names].sort(),
+            [...providerScenario.expectedTools].sort(),
+            `${marker}: selected tools`,
+          );
+        }
         assert.equal(
           names.includes("codemode"),
           providerScenario.codemode,
@@ -367,6 +374,25 @@ export async function testManagedMcpCodemode({
         ],
       },
       {
+        marker: "ADDITIVE_CODEMODE_WITHOUT_BASH",
+        codemode: true,
+        bash: false,
+        directMcp: false,
+        mcp: false,
+        args: ["--tools", "+codemode,-bash"],
+        expectedTools: ["read", "grep", "find", "ls", "write", "edit", "codemode"],
+        expectedResult: "ADDITIVE_SELECTION_OK",
+        script: `
+if(ALL_TOOLS.some(t=>t.name==="bash")) throw new Error("Bash exposed to code mode");
+for(const name of ["read","grep","find","ls","write","edit"])
+  if(!ALL_TOOLS.some(t=>t.name===name)) throw new Error("Unrelated tool removed: "+name);
+text(await tools.read({path:"input.txt"}));
+let rejected=false;
+try { await tools.bash({command:"printf bypass > additive-bash-bypass.txt"}); } catch { rejected=true; }
+if(!rejected) throw new Error("CLI Bash removal bypassed");
+text("ADDITIVE_SELECTION_OK");`,
+      },
+      {
         marker: "CODEMODE_ONLY_PRESENTATION",
         codemode: true,
         directMcp: false,
@@ -382,6 +408,49 @@ export async function testManagedMcpCodemode({
         preference: { enabled: true, exposure: "codemode" },
         settings: { defaultTools: ["+codemode"] },
         args: ["--exclude-tools", "codemode"],
+      },
+      {
+        marker: "CLI_REMOVES_CODEMODE",
+        codemode: false,
+        directMcp: false,
+        mcp: true,
+        adminExposure: "codemode",
+        preference: { enabled: true, exposure: "codemode" },
+        settings: { defaultTools: ["+codemode"] },
+        args: ["--tools", "+codemode,-codemode"],
+      },
+      {
+        marker: "CLI_ADDITION_RETAINS_MCP",
+        codemode: true,
+        directMcp: true,
+        mcp: true,
+        preference: { enabled: true, exposure: "direct" },
+        args: ["--tools", "+codemode"],
+        script: 'text(await tools.mcp__docs__search_allowed({query:"additive"}));',
+      },
+      {
+        marker: "CLI_REMOVES_NESTED_MCP",
+        codemode: true,
+        directMcp: false,
+        mcp: true,
+        preference: { enabled: true, exposure: "codemode" },
+        args: ["--tools", "+codemode,-mcp__docs__search_allowed"],
+        expectedResult: "MCP_REMOVAL_OK",
+        script: `
+if(ALL_TOOLS.some(t=>t.name==="mcp__docs__search_allowed")) throw new Error("Removed MCP tool exposed");
+let rejected=false;
+try { await tools.mcp__docs__search_allowed({query:"removed"}); } catch { rejected=true; }
+if(!rejected) throw new Error("CLI MCP removal bypassed");
+text("MCP_REMOVAL_OK");`,
+      },
+      {
+        marker: "CLI_NO_MCP",
+        codemode: true,
+        directMcp: false,
+        mcp: true,
+        noMcp: true,
+        preference: { enabled: true, exposure: "direct" },
+        args: ["--no-mcp", "--tools", "+codemode"],
       },
       {
         marker: "PREFERENCES_DISABLED",
@@ -467,10 +536,14 @@ export async function testManagedMcpCodemode({
         );
         assert.equal(result.isError, false, JSON.stringify(result));
         assert(
-          JSON.stringify(result.result).includes("HTTP_search_allowed_OK"),
-          "code-only preference must still route calls through the administrative connection",
+          JSON.stringify(result.result).includes(
+            scenario.expectedResult ?? "HTTP_search_allowed_OK",
+          ),
+          `${scenario.marker}: nested execution must follow the effective tool selection`,
         );
       }
+      if (scenario.marker === "ADDITIVE_CODEMODE_WITHOUT_BASH")
+        await assert.rejects(access(join(workspace, "additive-bash-bypass.txt")));
       await running.stop();
       running = undefined;
       assert.deepEqual(
@@ -478,7 +551,7 @@ export async function testManagedMcpCodemode({
         pidsBefore,
         "user-disabled stdio must not start despite project preferences",
       );
-      if (!scenario.mcp || scenario.preference?.enabled === false)
+      if (!scenario.mcp || scenario.noMcp || scenario.preference?.enabled === false)
         assert.equal(
           receivedHttp.length,
           httpBefore,
@@ -493,6 +566,7 @@ export async function testManagedMcpCodemode({
     }
 
     config.codemode.enabled = false;
+    config.tools.write = toolPolicy("disabled");
     for (const server of Object.values(config.mcp.servers)) server.enabled = false;
     config.mcp.servers.local.command = "/missing/disabled-mcp-server";
     await writeFile(configPath, stringifyToml(config));
@@ -500,10 +574,18 @@ export async function testManagedMcpCodemode({
       join(userState, "settings.json"),
       JSON.stringify({ defaultTools: ["codemode"], codemode: { mode: "only" } }),
     );
-    providerScenario = { marker: "MCP_DISABLED_SMOKE", codemode: false, directMcp: false };
+    providerScenario = {
+      marker: "MCP_DISABLED_SMOKE",
+      codemode: false,
+      directMcp: false,
+      expectedTools: [],
+    };
     const before = receivedHttp.length;
     const pidsBefore = await readPids(pidLog);
-    running = rpc(launch(["--provider", "fixture", "--model", "fixture"]), () => serverFailure);
+    running = rpc(
+      launch(["--provider", "fixture", "--model", "fixture", "--tools", "+codemode,+write"]),
+      () => serverFailure,
+    );
     await running.request("get_state");
     await running.request("prompt", { message: "MCP_DISABLED_SMOKE" });
     await running.wait(

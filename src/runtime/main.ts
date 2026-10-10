@@ -43,7 +43,11 @@ import {
   createDirectExecutor,
   type SandboxExecutor,
 } from "../sandbox/index.js";
-import { createManagedPiArguments, isManagedToolSelected } from "./arguments.js";
+import {
+  createManagedPiArguments,
+  isManagedMcpSelected,
+  isManagedToolSelected,
+} from "./arguments.js";
 import { applyManagedEnvironment } from "./environment.js";
 import { assertHostPrerequisites } from "./prerequisites.js";
 import { createWorkspaceBoundary } from "./workspace.js";
@@ -465,7 +469,9 @@ export async function runPiSandbox({ piArgs: args, configPath }: SandboxArgument
     const lease = applyManagedEnvironment(identityEnvironment.pi);
     try {
       const userStateDir = getAgentDir();
-      const servers = await resolveMcpServers(config.mcp, process.env, getAccountIdentity);
+      const servers = isManagedMcpSelected(args)
+        ? await resolveMcpServers(config.mcp, process.env, getAccountIdentity)
+        : [];
       const mcpPreferences = servers.some((server) => server.status === "ready")
         ? await loadMcpPreferences(userStateDir)
         : undefined;

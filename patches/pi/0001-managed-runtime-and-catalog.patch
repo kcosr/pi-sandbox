@@ -25,10 +25,10 @@ index 9266ddb..e0056ed 100644
  		modelsStore: new InMemoryCodingAgentModelsStore(),
  		allowModelNetwork: false,
 diff --git a/packages/coding-agent/src/core/model-runtime.ts b/packages/coding-agent/src/core/model-runtime.ts
-index 7edd440..028f463 100644
+index 81acdbb..709a682 100644
 --- a/packages/coding-agent/src/core/model-runtime.ts
 +++ b/packages/coding-agent/src/core/model-runtime.ts
-@@ -120,8 +120,12 @@ export interface CreateModelRuntimeOptions {
+@@ -121,8 +121,12 @@ export interface CreateModelRuntimeOptions {
  	signal?: AbortSignal;
  	/** Skip initial catalog and availability refresh. Static models remain available. */
  	refreshOnCreate?: boolean;
@@ -41,7 +41,7 @@ index 7edd440..028f463 100644
  export interface ModelRuntimeAuthOverrides extends AuthOperationOptions {
  	apiKey?: string;
  	env?: Record<string, string>;
-@@ -180,6 +184,7 @@ export class ModelRuntime implements Models {
+@@ -181,6 +185,7 @@ export class ModelRuntime implements Models {
  	private readonly compositionErrors = new Map<string, string>();
  	private readonly modelsPath: string | undefined;
  	private readonly modelNetworkEnabled: boolean;
@@ -49,7 +49,7 @@ index 7edd440..028f463 100644
  	private config: ModelConfig;
  	private snapshot: ModelRuntimeSnapshot = {
  		all: [],
-@@ -201,11 +206,13 @@ export class ModelRuntime implements Models {
+@@ -202,11 +207,13 @@ export class ModelRuntime implements Models {
  		modelsStore: ModelsStore,
  		providers: readonly Provider[],
  		modelNetworkEnabled: boolean,
@@ -63,7 +63,7 @@ index 7edd440..028f463 100644
  		this.defaultBuiltins = new Map(providers.map((provider) => [provider.id, provider]));
  		for (const [providerId, provider] of this.defaultBuiltins) this.builtins.set(providerId, provider);
  		this.models = createModels({ credentials, modelsStore });
-@@ -226,7 +233,7 @@ export class ModelRuntime implements Models {
+@@ -227,7 +234,7 @@ export class ModelRuntime implements Models {
  		const providers = builtinProviderCatalog
  			.builtinProviders()
  			.map((provider) =>
@@ -72,7 +72,7 @@ index 7edd440..028f463 100644
  					? provider
  					: withRemoteCatalog(provider, options.catalogBaseUrl, builtinModelDataGeneratedAt),
  			);
-@@ -237,6 +244,7 @@ export class ModelRuntime implements Models {
+@@ -238,6 +245,7 @@ export class ModelRuntime implements Models {
  			modelsStore,
  			providers,
  			process.env.PI_OFFLINE === undefined,
@@ -80,7 +80,7 @@ index 7edd440..028f463 100644
  		);
  		runtime.configureRadiusProviders();
  		runtime.rebuildProviders();
-@@ -278,7 +286,7 @@ export class ModelRuntime implements Models {
+@@ -279,7 +287,7 @@ export class ModelRuntime implements Models {
  
  	private providerIds(): Set<string> {
  		return new Set([
@@ -89,7 +89,7 @@ index 7edd440..028f463 100644
  			...this.nativeExtensionProviders.keys(),
  			...this.config.getProviderIds(),
  			...this.extensionProviders.keys(),
-@@ -298,20 +306,24 @@ export class ModelRuntime implements Models {
+@@ -299,20 +307,24 @@ export class ModelRuntime implements Models {
  
  	/** The provider without virtual models, or undefined when nothing defines it. */
  	private composeProvider(providerId: string): Provider | undefined {
@@ -119,10 +119,10 @@ index 7edd440..028f463 100644
  	}
  
 diff --git a/packages/coding-agent/src/core/provider-composer.ts b/packages/coding-agent/src/core/provider-composer.ts
-index caa5023..0fb8c0c 100644
+index 94bd2ba..4ebef63 100644
 --- a/packages/coding-agent/src/core/provider-composer.ts
 +++ b/packages/coding-agent/src/core/provider-composer.ts
-@@ -525,20 +525,19 @@ export function composeModelProvider(
+@@ -544,20 +544,19 @@ export function composeModelProvider(
  	base: Provider | undefined,
  	modelConfig: ModelConfig,
  	extension: ProviderConfigInput | undefined,
@@ -147,7 +147,7 @@ index caa5023..0fb8c0c 100644
  		if (extensionOAuthCredential && extension?.oauth?.modifyModels) {
  			// The extension hook is chat-only; other model types pass through untouched.
  			models = [
-@@ -592,9 +591,9 @@ export function composeModelProvider(
+@@ -611,9 +610,9 @@ export function composeModelProvider(
  		getModels: () => getAllModels().filter((model) => isModelType(model, "chat")),
  		getAllModels,
  		refreshModels:
@@ -159,7 +159,7 @@ index caa5023..0fb8c0c 100644
  						let refreshed: NonNullable<ProviderConfigInput["models"]> | undefined;
  						if (extension?.refreshModels) refreshed = await extension.refreshModels(context);
  						if (context.signal.aborted) return;
-@@ -603,7 +602,7 @@ export function composeModelProvider(
+@@ -622,7 +621,7 @@ export function composeModelProvider(
  							update: () => {
  								if (refreshed) {
  									// Validate before publishing the new synchronous list.
@@ -169,10 +169,10 @@ index caa5023..0fb8c0c 100644
  										models: refreshed,
  									});
 diff --git a/packages/coding-agent/src/index.ts b/packages/coding-agent/src/index.ts
-index 9e2d993..07d1dbb 100644
+index 3a25f85..3b13460 100644
 --- a/packages/coding-agent/src/index.ts
 +++ b/packages/coding-agent/src/index.ts
-@@ -230,6 +230,7 @@ export {
+@@ -232,6 +232,7 @@ export {
  	type CredentialSynchronizationOperation,
  	ModelRuntime,
  	type ModelRuntimeAuthOverrides,
@@ -181,7 +181,7 @@ index 9e2d993..07d1dbb 100644
  export type {
  	PackageManager,
 diff --git a/packages/coding-agent/src/main.ts b/packages/coding-agent/src/main.ts
-index d9c6ce3..d626736 100644
+index dea9e15..b758b6b 100644
 --- a/packages/coding-agent/src/main.ts
 +++ b/packages/coding-agent/src/main.ts
 @@ -5,6 +5,7 @@

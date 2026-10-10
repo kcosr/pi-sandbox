@@ -55,6 +55,10 @@ try {
   await mkdir(workspace);
   await mkdir(decoyHome);
   await mkdir(userState, { recursive: true });
+  const dotenvSessionDir = join(workspace, "dotenv-sessions-must-not-exist");
+  for (const filename of [".env", ".env.local", ".env.development"]) {
+    await writeFile(join(workspace, filename), `PI_CODING_AGENT_SESSION_DIR=${dotenvSessionDir}\n`);
+  }
   const hiddenFile = join(workspace, ".private-credentials");
   const homeHiddenFile = join(accountHome, ".private-home-credentials");
   await writeFile(hiddenFile, "smoke-private-credential\n");
@@ -345,6 +349,7 @@ try {
     username: accountRecord[0],
     uid: process.geteuid(),
   });
+  await assert.rejects(lstat(dotenvSessionDir), { code: "ENOENT" });
   console.log("packaged diagnostics, RPC lifecycle, MCP and code-mode smoke tests passed");
 } finally {
   if (child !== undefined && child.exitCode === null && child.signalCode === null) {

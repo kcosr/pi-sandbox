@@ -211,7 +211,7 @@ These subject documents collectively describe the current product behavior.
 Pi Sandbox incorporates a pinned, minimally modified build of
 [Pi](https://github.com/earendil-works/pi), Copyright (c) 2025 Mario Zechner,
 distributed under the
-[MIT License](https://github.com/earendil-works/pi/blob/v1.0.2/LICENSE). The
+[MIT License](https://github.com/earendil-works/pi/blob/v1.1.0/LICENSE). The
 exact upstream version, commit, and source archive are recorded in
 [`pi-source.lock.json`](pi-source.lock.json); Pi Sandbox's changes to that source
 are maintained in [`patches/pi`](patches/pi/).

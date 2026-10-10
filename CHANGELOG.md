@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- Upgrade Pi to 1.1.0; support additive tool selection within TOML policy and disable project `.env` autoload. ([#14](https://github.com/kcosr/pi-sandbox/pull/14))
 - Report failed write/edit replacements and clean up temporary files. ([#13](https://github.com/kcosr/pi-sandbox/pull/13))
 - Add managed HTTP/stdio MCP and optional code mode with nested tool permissions and tool-selection guidance; require config schema 10. ([#13](https://github.com/kcosr/pi-sandbox/pull/13))
 - Support `{{username}}` and `{{uid}}` in configured paths and environment values. ([#13](https://github.com/kcosr/pi-sandbox/pull/13))
