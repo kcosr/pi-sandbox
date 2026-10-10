@@ -191,7 +191,7 @@ function validateSandboxEnvironment(
 }
 
 function assertNetworkMode(networkMode: NetworkMode): void {
-  if (networkMode !== "none" && networkMode !== "host") {
+  if (networkMode !== "none" && networkMode !== "local" && networkMode !== "host") {
     throw new Error("sandbox_network_mode_invalid");
   }
 }

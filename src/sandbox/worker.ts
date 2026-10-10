@@ -3,6 +3,7 @@ import { readdir } from "node:fs/promises";
 import path from "node:path";
 
 import type { SandboxExecutionErrorCode } from "./contracts.js";
+import { waitForSandboxCommand, type CommandExit } from "./command-completion.js";
 import {
   encodeWorkerFrame,
   isWorkerRequest,
@@ -141,9 +142,10 @@ class SandboxWorker {
       });
       active.child = child;
       let exitCleanup = Promise.resolve();
+      let acceptingOutput = true;
       let outputBytes = 0;
       const output = (type: "stdout" | "stderr", value: Buffer | string) => {
-        if (active.failure !== undefined) return;
+        if (!acceptingOutput || active.failure !== undefined) return;
         const chunk = Buffer.isBuffer(value) ? value : Buffer.from(value);
         outputBytes += chunk.byteLength;
         if (outputBytes > queued.request.maxOutputBytes) {
@@ -156,33 +158,52 @@ class SandboxWorker {
           data: chunk.toString("base64"),
         });
       };
-      child.stdout?.on("data", (chunk: Buffer) => output("stdout", chunk));
-      child.stderr?.on("data", (chunk: Buffer) => output("stderr", chunk));
+      const stdout = (chunk: Buffer) => output("stdout", chunk);
+      const stderr = (chunk: Buffer) => output("stderr", chunk);
+      child.stdout?.on("data", stdout);
+      child.stderr?.on("data", stderr);
       child.once("error", (cause) => {
         active.failure ??= failure(queued.request.id, "sandbox_process_failed", cause);
       });
       child.once("exit", () => {
-        exitCleanup = this.killOtherSandboxProcesses();
+        if (queued.request.processLifetime === "command" || active.failure !== undefined) {
+          exitCleanup = this.killOtherSandboxProcesses();
+        }
         void exitCleanup.catch(() => undefined);
       });
       timeout = setTimeout(() => this.failActive("sandbox_timeout"), queued.request.timeoutMs);
       timeout.unref();
       child.stdin?.on("error", () => undefined);
       child.stdin?.end(stdin);
-      const result = await new Promise<{
-        readonly exitCode: number | null;
-        readonly signal: NodeJS.Signals | null;
-      }>((resolve) => {
-        child.once("close", (exitCode, signal) => resolve({ exitCode, signal }));
-      });
+      let result: CommandExit;
+      try {
+        result = await (queued.request.processLifetime === "sandbox"
+          ? waitForSandboxCommand(child)
+          : new Promise<CommandExit>((resolve) => {
+              child.once("close", (exitCode, signal) => resolve({ exitCode, signal }));
+            }));
+      } finally {
+        // No old request may emit frames or trigger failActive after the next
+        // command starts. All frames already queued precede the terminal frame.
+        acceptingOutput = false;
+        child.stdout?.removeListener("data", stdout);
+        child.stderr?.removeListener("data", stderr);
+      }
       await exitCleanup;
-      await this.killOtherSandboxProcesses();
+      if (queued.request.processLifetime === "command" || active.failure !== undefined) {
+        await this.killOtherSandboxProcesses();
+      }
       if (active.failure !== undefined) await this.send(active.failure);
       else await this.send({ type: "result", id: queued.request.id, ...result });
     } catch (cause) {
       await this.killOtherSandboxProcesses();
       await this.send(failure(queued.request.id, "sandbox_process_failed", cause));
     } finally {
+      // A cancel may arrive while the terminal frame is being flushed. Do not
+      // clear its escalation timer without completing namespace cleanup first.
+      if (queued.request.processLifetime === "sandbox" && active.failure !== undefined) {
+        await this.killOtherSandboxProcesses();
+      }
       if (timeout !== undefined) clearTimeout(timeout);
       if (active.forceKillTimer !== undefined) clearTimeout(active.forceKillTimer);
       this.#ids.delete(queued.request.id);

@@ -4,6 +4,7 @@ import { access, lstat, realpath, stat } from "node:fs/promises";
 import path from "node:path";
 import type { Writable } from "node:stream";
 
+import { PROCESS_LIFETIMES, type NetworkMode, type ProcessLifetime } from "../domain/index.js";
 import {
   BUBBLEWRAP_SECCOMP_FD,
   BUBBLEWRAP_STATUS_FD,
@@ -100,6 +101,12 @@ export async function createBubblewrapExecutor(
   options: CreateBubblewrapExecutorOptions,
 ): Promise<SandboxExecutor> {
   const cwd = path.normalize(options.cwd);
+  const processLifetime = options.processLifetime ?? "command";
+  if (!PROCESS_LIFETIMES.includes(processLifetime)) {
+    throw new SandboxExecutionError("sandbox_start_failed", {
+      cause: new Error("sandbox_process_lifetime_invalid"),
+    });
+  }
   assertSandboxCwd(cwd);
   const canonicalCwd = await realpath(cwd).catch((cause: unknown) => {
     throw new SandboxExecutionError("sandbox_start_failed", { cause });
@@ -172,6 +179,7 @@ export async function createBubblewrapExecutor(
     resolveLimits(options),
     seccompFilter,
     options.networkMode ?? "none",
+    processLifetime,
     environment,
     options.cwdWritable ?? true,
     Object.freeze(hiddenMasks),
@@ -252,7 +260,8 @@ class PersistentBubblewrapExecutor implements SandboxExecutor {
     readonly bubblewrapPath: string,
     private readonly limits: ResolvedLimits,
     private readonly seccompFilter: Buffer,
-    private readonly networkMode: "none" | "host",
+    private readonly networkMode: NetworkMode,
+    private readonly processLifetime: ProcessLifetime,
     private readonly environment: Readonly<Record<string, string>>,
     private readonly cwdWritable: boolean,
     private readonly hiddenMasks: readonly HiddenPathMask[],
@@ -419,6 +428,7 @@ class PersistentBubblewrapExecutor implements SandboxExecutor {
         stdin: validated.stdin.toString("base64"),
         timeoutMs: validated.timeoutMs,
         maxOutputBytes: validated.maxOutputBytes,
+        processLifetime: this.processLifetime,
       }).catch((cause: unknown) => this.workerFailed(cause));
     });
   }

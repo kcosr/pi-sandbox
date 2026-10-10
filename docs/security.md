@@ -20,8 +20,8 @@ The default Linux Bubblewrap ceiling is:
   `filesystem.cwd_writable = false` also makes that host directory read-only;
 - private temporary/runtime storage writable, except when host `/tmp` itself is
   deliberately selected as the writable launch CWD;
-- no network access from sandbox tools or shell commands unless an
-  administrator explicitly selects unrestricted host networking;
+- no network access by default; administrators may allow private loopback with
+  `local` or unrestricted host networking with `host`;
 - no ambient host credentials or service sockets in the sandbox environment.
 
 Managed host tools are explicit exceptions to this sandbox ceiling and carry
@@ -172,6 +172,16 @@ allowlist still does not constrain SSH aliases and jumps, DNS resolution,
 proxies, redirects, or behavior of the contacted repository. It is a locator
 admission rule, not a network-destination or egress guarantee.
 
+The clone-only tool retains its derived destination and rejects any existing
+destination, including symlinks, at validation. A surviving sandbox background
+process can race that check and Git startup by creating a symlink that redirects
+the host clone into another empty directory writable by the host user. This is
+an accepted residual risk. Ordinary sequential tool scheduling does not stop
+background writers from earlier calls. No clone-specific background termination,
+staging, publication helper, or guardian is used. This decision does not establish
+arbitrary existing-file overwrite capability; future fetch/pull tools require
+their own assessment.
+
 Standard `pi-tool` extensions receive the same invocation policy but are
 trusted host code. Their factory is limited to `registerTool` and `exec` during
 startup, but imported code and tool implementations are not sandboxed. Use the
@@ -284,10 +294,16 @@ host filesystem permissions. Zero retention disables the maintenance entirely.
 
 ## Network details
 
-The required effective mode is `none` or `host`. In the default `none` mode,
+The required effective mode is `none`, `local`, or `host`. In the default `none` mode,
 tool execution uses a new network namespace with no configured egress and the
 seccomp filter denies `socket`. This prevents connections to Internet, LAN,
 host loopback, metadata services, and pathname or abstract Unix-domain sockets.
+
+`local` keeps the private network namespace and allows only IPv4/IPv6 TCP/UDP
+socket creation. Loopback is the only interface; there are no external routes,
+host connections, or port forwarding. Named Unix sockets and other socket
+families/types are denied. Host-side Pi, MCP and managed host tools remain
+outside this network boundary.
 
 In `host` mode, Bubblewrap shares the complete host network namespace and
 seccomp permits `socket`. Sandboxed commands can therefore reach host loopback,
@@ -296,9 +312,11 @@ subject only to ordinary host controls. This is not filtered egress. Bubblewrap
 does not enforce IP, port, hostname, or destination rules. Only the fixed base
 configuration or a root-managed user/group broker drop-in can select this mode.
 
-In both modes the classic seccomp BPF program denies the three `io_uring`
-control syscalls. Anonymous `socketpair()` remains available because Bun uses it
-to spawn command children. On x86-64 the filter rejects the x32 syscall ABI; the
+In every mode the classic seccomp BPF program denies the three `io_uring`
+control syscalls. In `none` and `local`, anonymous `socketpair()` is restricted to
+connected Unix stream pairs, which Bun uses to spawn command children. Datagram
+pairs are denied because they can reconnect to host pathname sockets even in a
+private network namespace. On x86-64 the filter rejects the x32 syscall ABI; the
 filter otherwise supports x86-64 and arm64 only. It is supplied over an inherited
 pipe, not a host temporary file, and startup fails closed on an unsupported CPU
 architecture.
@@ -337,8 +355,13 @@ requests inside the tool sandbox. Separately, optional user resolution occurs
 before sandbox startup through a root systemd Unix socket. That broker derives
 the caller's UID from `SO_PEERCRED`, returns only the matching user/group patch,
 and never enters the Bubblewrap boundary. The worker
-processes one command at a time and removes all command descendants between
-requests.
+processes one command at a time. Default `command` lifetime removes descendants
+between requests. Optional `sandbox` lifetime preserves background processes
+between calls and logical sessions; those processes can continue acting with
+their existing sandbox authority without a new approval for each action.
+Active cancellation, timeout, output overflow and execution failure can terminate
+previously started servers as part of sandbox-wide cleanup. Shutdown terminates
+the sandbox. Ordinary scheduling is not exclusion against background processes.
 
 The filesystem may still contain credentials because broad host read access is
 intentional. Environment cleaning protects against accidental ambient authority;

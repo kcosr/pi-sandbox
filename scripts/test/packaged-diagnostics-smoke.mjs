@@ -23,6 +23,7 @@ import { setTimeout as delay } from "node:timers/promises";
 import { parse as parseToml, stringify as stringifyToml } from "@iarna/toml";
 
 import { testManagedMcpCodemode } from "./mcp-codemode-smoke.mjs";
+import { testLocalProcessLifetime } from "./local-processes-smoke.mjs";
 import { testRpcSessionLifecycle } from "./rpc-lifecycle-smoke.mjs";
 
 const SANDBOX_TOOL_NAMES = Object.freeze(["read", "grep", "find", "ls", "write", "edit", "bash"]);
@@ -336,6 +337,13 @@ try {
     .split("\n")
     .map((line) => line.split(":"))
     .find((fields) => fields.length === 7 && Number(fields[2]) === process.geteuid());
+  await testLocalProcessLifetime({
+    launch,
+    configPath: releaseManifest.layout.allowConfigOverride
+      ? overridePath
+      : join(defaultsDirectory, "config.toml"),
+    workspace,
+  });
   await testManagedMcpCodemode({
     launch,
     configPath: releaseManifest.layout.allowConfigOverride
@@ -350,7 +358,9 @@ try {
     uid: process.geteuid(),
   });
   await assert.rejects(lstat(dotenvSessionDir), { code: "ENOENT" });
-  console.log("packaged diagnostics, RPC lifecycle, MCP and code-mode smoke tests passed");
+  console.log(
+    "packaged diagnostics, RPC lifecycle, local processes, MCP and code-mode smoke tests passed",
+  );
 } finally {
   if (child !== undefined && child.exitCode === null && child.signalCode === null) {
     child.kill("SIGTERM");

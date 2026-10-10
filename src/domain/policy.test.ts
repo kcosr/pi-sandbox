@@ -16,7 +16,7 @@ describe("policy domain", () => {
   it("defines only end-state policy and session-grant values", () => {
     expect(POLICY_MODES).toEqual(["allow", "ask", "deny", "disabled"]);
     expect(SESSION_GRANT_POLICIES).toEqual(["never", "offer"]);
-    expect(NETWORK_MODES).toEqual(["none", "host"]);
+    expect(NETWORK_MODES).toEqual(["none", "local", "host"]);
   });
 
   it("recognizes tool names without treating user shell as a tool", () => {

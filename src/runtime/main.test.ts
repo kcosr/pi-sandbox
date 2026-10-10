@@ -82,7 +82,7 @@ describe("administrative configuration", () => {
       filesystem: { cwdWritable: true, hiddenPaths: [] },
       audit: { enabled: false, facility: "local0" },
       modelsFile: "/etc/pi-sandbox/models.json",
-      execution: { backend: "bubblewrap" },
+      execution: { backend: "bubblewrap", processLifetime: "command" },
       identity: { mode: "disabled" },
       network: { mode: "none" },
       environment: { pi: {}, sandbox: {}, extensions: {} },
@@ -94,7 +94,37 @@ describe("administrative configuration", () => {
       assertExecutionPlatform(
         {
           ...config,
-          execution: { backend: "direct" },
+          network: { mode: "local" },
+          execution: { backend: "bubblewrap", processLifetime: "sandbox" },
+        },
+        "linux",
+      ),
+    ).not.toThrow();
+    expect(() =>
+      assertExecutionPlatform(
+        {
+          ...config,
+          network: { mode: "host" },
+          execution: { backend: "direct", processLifetime: "sandbox" },
+        },
+        "linux",
+      ),
+    ).toThrow("Direct execution requires execution.process_lifetime = command");
+    expect(() =>
+      assertExecutionPlatform(
+        {
+          ...config,
+          network: { mode: "local" },
+          execution: { backend: "direct", processLifetime: "command" },
+        },
+        "linux",
+      ),
+    ).toThrow("Direct execution requires network.mode = host");
+    expect(() =>
+      assertExecutionPlatform(
+        {
+          ...config,
+          execution: { backend: "direct", processLifetime: "command" },
           network: { mode: "host" },
           filesystem: { cwdWritable: true, hiddenPaths: ["/srv/runs"] },
         },
@@ -105,7 +135,7 @@ describe("administrative configuration", () => {
       assertExecutionPlatform(
         {
           ...config,
-          execution: { backend: "direct" },
+          execution: { backend: "direct", processLifetime: "command" },
           network: { mode: "host" },
           filesystem: { cwdWritable: false, hiddenPaths: [] },
         },
@@ -126,7 +156,7 @@ describe("administrative configuration", () => {
       assertExecutionPlatform(
         {
           ...config,
-          execution: { backend: "direct" },
+          execution: { backend: "direct", processLifetime: "command" },
           network: { mode: "host" },
         },
         "darwin",
@@ -134,7 +164,11 @@ describe("administrative configuration", () => {
     ).not.toThrow();
     expect(() =>
       assertExecutionPlatform(
-        { ...config, execution: { backend: "direct" }, network: { mode: "none" } },
+        {
+          ...config,
+          execution: { backend: "direct", processLifetime: "command" },
+          network: { mode: "none" },
+        },
         "linux",
       ),
     ).toThrow("Direct execution requires network.mode = host");
@@ -142,7 +176,7 @@ describe("administrative configuration", () => {
       assertExecutionPlatform(
         {
           ...config,
-          execution: { backend: "direct" },
+          execution: { backend: "direct", processLifetime: "command" },
           identity: { mode: "broker" },
           network: { mode: "host" },
         },
@@ -274,7 +308,7 @@ describe("administrative configuration", () => {
       filesystem: { cwdWritable: true, hiddenPaths: [] },
       audit: { enabled: false, facility: "local0" },
       modelsFile: "/etc/pi-sandbox/models.json",
-      execution: { backend: "bubblewrap" },
+      execution: { backend: "bubblewrap", processLifetime: "command" },
       identity: { mode: "disabled" },
       network: { mode: "none" },
       environment: { pi: {}, sandbox: {}, extensions: {} },
@@ -558,7 +592,7 @@ describe("administrative configuration", () => {
 
     expect(effective.modelsPath).toBe(rooted(root, selectedPath));
     expect(effective.config.modelsFile).toBe(selectedPath);
-    expect(effective.config.execution).toEqual({ backend: "direct" });
+    expect(effective.config.execution).toEqual({ backend: "direct", processLifetime: "command" });
     expect(effective.config.network).toEqual({ mode: "host" });
     expect(effective.config.tools.write).toEqual({
       mode: "disabled",
@@ -594,6 +628,56 @@ describe("administrative configuration", () => {
         }),
       ),
     ).rejects.toThrow("Direct execution requires network.mode = host");
+  });
+
+  it("merges lifetime independently and rejects persistent direct execution after broker overrides", async () => {
+    const root = await createRoot();
+    const configPath = rooted(root, "/etc/pi-sandbox/config.toml");
+    const source = await readFile(configPath, "utf8");
+    await writeFile(rooted(root, "/etc/pi-sandbox/models.json"), JSON.stringify({ providers: {} }));
+    await writeFile(configPath, source.replace('mode = "disabled"', 'mode = "broker"'));
+    const environment = { pi: {}, sandbox: {}, extensions: {} };
+    const selected = await resolveEffectiveAdministrativeConfiguration(root, {}, () =>
+      Promise.resolve({
+        environment,
+        overrides: {
+          execution: { processLifetime: "sandbox" },
+          network: { mode: "local" },
+          tools: {},
+        },
+      }),
+    );
+    expect(selected.config.execution).toEqual({
+      backend: "bubblewrap",
+      processLifetime: "sandbox",
+    });
+    expect(selected.config.network.mode).toBe("local");
+    // A backend-only rule must not erase persistence selected by the base policy.
+    await writeFile(
+      configPath,
+      source
+        .replace('mode = "disabled"', 'mode = "broker"')
+        .replace('backend = "bubblewrap"', 'backend = "bubblewrap"\nprocess_lifetime = "sandbox"'),
+    );
+    await expect(
+      resolveEffectiveAdministrativeConfiguration(root, {}, () =>
+        Promise.resolve({
+          environment,
+          overrides: { execution: { backend: "direct" }, network: { mode: "host" }, tools: {} },
+        }),
+      ),
+    ).rejects.toThrow("Direct execution requires execution.process_lifetime = command");
+    const direct = await resolveEffectiveAdministrativeConfiguration(root, {}, () =>
+      Promise.resolve({
+        environment,
+        overrides: {
+          execution: { backend: "direct", processLifetime: "command" },
+          network: { mode: "host" },
+          tools: {},
+        },
+      }),
+    );
+    expect(direct.config.execution).toEqual({ backend: "direct", processLifetime: "command" });
   });
 
   it("rejects read-only direct execution during installation validation", async () => {

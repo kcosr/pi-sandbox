@@ -38,7 +38,7 @@ extension-specific scoped environment. The required `identity` table either
 disables user resolution or selects the fixed administrator broker. Broker mode
 may overlay a combined patch from `config_dir/users.d/*.toml` and
 `config_dir/groups.d/*.toml` for the caller and its primary/supplementary groups, including scoped environment, selected model file, execution
-backend, network mode, CWD write access, and any subset of model-tool policies. If no rules match,
+backend, process lifetime, network mode, CWD write access, and any subset of model-tool policies. If no rules match,
 the main configuration remains unchanged. See
 [user and group environment and overrides](identity-broker.md).
 
@@ -48,8 +48,8 @@ runs approved built-in operations with the invoking user's ordinary host
 filesystem and process authority. It is an explicit operating mode, never a
 fallback after a Bubblewrap failure. macOS requires `identity.mode = disabled`.
 
-The required `network` table selects `none` or `host` for built-in tools and
-shell commands. Bubblewrap supports both. Direct execution requires `host` so a
+The required `network` table selects `none`, `local`, or `host` for built-in tools and
+shell commands. Bubblewrap supports all three. Direct execution requires `host` so a
 configuration can never claim an isolation mode that the backend does not
 enforce. The Linux packaged default is Bubblewrap plus `none`; the macOS
 packaged default is direct plus `host`.
@@ -201,7 +201,7 @@ therefore removes model Bash while preserving the user's `!` command.
 
 These TOML sections define built-in and compiled-extension tool policy. MCP tools
 use the separate per-server policy below. A broker user/group rule
-may replace the complete execution backend and network mode and may atomically
+may override execution backend, process lifetime and network mode and may atomically
 replace individual complete policies, including setting
 `git_clone` or another selected extension tool to `deny` or `disabled`. User/group environment values
 never select an extension, add a tool, change a policy, or authorize a call.
@@ -491,23 +491,69 @@ enforced data-retention guarantee.
 
 ## Network modes
 
-| Mode   | Tool and shell network authority                                            |
-| ------ | --------------------------------------------------------------------------- |
-| `none` | Private network namespace with connectable socket creation denied           |
-| `host` | Complete host network namespace, including host loopback, LAN, and Internet |
+| Mode    | Tool and shell network authority                                                      |
+| ------- | ------------------------------------------------------------------------------------- |
+| `none`  | Private network namespace with connectable socket creation denied                     |
+| `local` | Private network namespace with TCP/UDP on sandbox loopback only; no host Unix sockets |
+| `host`  | Complete host network namespace, including host loopback, LAN, and Internet           |
+
+`local` retains an isolated namespace with only loopback and no external routes.
+`localhost` refers to this sandbox, not the host or another Pi process. No port
+forwarding or host access is provided, even when a server binds `0.0.0.0` or `::`.
+Named Unix sockets are unavailable, including sandbox-local pathname sockets;
+anonymous connected Unix stream pairs remain available for process IPC.
 
 `host` is deliberately unrestricted. Bubblewrap does not provide IP, port,
 hostname, or destination filtering, and Pi Sandbox does not imply such filtering
 when this mode is selected. There is no dedicated network CLI or environment
 override; the selected TOML supplies the mode. In broker
 mode, an administrator-owned user/group rule may replace the base network mode.
-Provider traffic from host-side Pi is unaffected by either setting.
+Provider traffic from host-side Pi is unaffected by these settings.
 
 `direct` requires `host`. This requirement is checked both for the base TOML
 and after broker execution and network overrides are applied.
 
 Managed host tools are unaffected by this table: they deliberately use the
 invoking user's host network namespace and ordinary host controls.
+
+## Background process lifetime
+
+Optional `execution.process_lifetime` defaults to `command`, which removes all
+remaining sandbox command processes after every operation. With `sandbox`,
+background processes survive ordinary foreground completion, including nonzero
+exit codes, and remain available to subsequent calls. Lifetime covers the whole
+`pi-sandbox` process, including changes of logical Pi session. No new scheduler,
+watcher, or daemon is involved. This setting is independent of network mode.
+
+For a server reachable by later sandbox calls:
+
+```toml
+[execution]
+backend = "bubblewrap"
+process_lifetime = "sandbox"
+
+[network]
+mode = "local"
+```
+
+Start it with input/output redirected, for example
+`my-server </dev/null >server.log 2>&1 &`, then use `curl http://localhost:PORT`
+in a later call. In persistence mode, output completion matches pinned Pi 1.1.0:
+after foreground exit, wait for stream closure or 100 ms without output. Each
+chunk restarts the idle timer; continued output can defer completion under the
+existing command timeout and output limits. There is no separate absolute drain
+deadline. Completion closes that call's streams, so an unredirected background
+writer may receive a broken-pipe error on a later write.
+
+Cancelling active work, exceeding its timeout/output limit, or an execution
+failure cleans up the sandbox's command processes, including previously started
+servers. Cancelling a queued request only removes that request. Closing Pi
+terminates the entire sandbox. A completed call's timeout/output limits do not
+impose a duration or disk quota on its surviving background processes.
+
+Direct execution requires `process_lifetime = "command"`; its behavior is
+unchanged. Administrator user/group overrides may set process lifetime, and the
+effective combination is validated after merging.
 
 ## Compiled extensions
 

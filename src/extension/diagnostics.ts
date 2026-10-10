@@ -81,6 +81,12 @@ export function formatSandboxSummary(input: SandboxSummaryInput): string {
     ],
     ["Lifetime", "pi-sandbox process"],
     [
+      "Processes",
+      input.execution.processLifetime === "sandbox"
+        ? "persist until sandbox shutdown or operation failure"
+        : "cleaned up after each command",
+    ],
+    [
       "Code mode",
       input.codemodeEnabled === true ? "enabled (nested tool policy applies)" : "disabled",
     ],
@@ -241,10 +247,13 @@ function executionDisplay(execution: ExecutionConfig): string {
 }
 
 function networkDisplay(network: NetworkConfig): string {
+  if (network.mode === "local") return "local (sandbox loopback only)";
   return network.mode === "none" ? "disabled (private namespace)" : "host (unrestricted)";
 }
 
 function networkScope(network: NetworkConfig): string {
+  if (network.mode === "local")
+    return "Can access only sandbox-local TCP/UDP services; host networking and named Unix sockets are unavailable.";
   return network.mode === "none"
     ? "Has no network access."
     : "Can access host loopback, LAN, and Internet services through the host network namespace.";

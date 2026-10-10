@@ -209,7 +209,7 @@ struct IdentityOverrides {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     models_file: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    execution: Option<ExecutionConfig>,
+    execution: Option<ExecutionOverrides>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     network: Option<NetworkConfig>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -218,10 +218,20 @@ struct IdentityOverrides {
     tools: ToolOverrides,
 }
 
-#[derive(Debug, Deserialize, Serialize, PartialEq, Eq)]
+#[derive(Debug, Default, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
-struct ExecutionConfig {
-    backend: ExecutionBackend,
+struct ExecutionOverrides {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    backend: Option<ExecutionBackend>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    process_lifetime: Option<ProcessLifetime>,
+}
+
+#[derive(Debug, Deserialize, Serialize, PartialEq, Eq, PartialOrd, Ord)]
+#[serde(rename_all = "lowercase")]
+enum ProcessLifetime {
+    Command,
+    Sandbox,
 }
 
 #[derive(Debug, Deserialize, Serialize, PartialEq, Eq)]
@@ -243,10 +253,11 @@ struct NetworkConfig {
     mode: NetworkMode,
 }
 
-#[derive(Debug, Deserialize, Serialize, PartialEq, Eq)]
+#[derive(Debug, Deserialize, Serialize, PartialEq, Eq, PartialOrd, Ord)]
 #[serde(rename_all = "lowercase")]
 enum NetworkMode {
     None,
+    Local,
     Host,
 }
 
@@ -699,11 +710,21 @@ fn merge_record(target: &mut IdentityRecord, incoming: IdentityRecord) -> Result
     let old = &mut target.overrides;
     let new = incoming.overrides;
     merge_equal(&mut old.models_file, new.models_file)?;
-    merge_equal(&mut old.execution, new.execution)?;
-    if let Some(network) = new
-        .network
-        .filter(|network| old.network.is_none() || matches!(network.mode, NetworkMode::Host))
-    {
+    if let Some(execution) = new.execution {
+        let current = old
+            .execution
+            .get_or_insert_with(ExecutionOverrides::default);
+        merge_equal(&mut current.backend, execution.backend)?;
+        current.process_lifetime = current
+            .process_lifetime
+            .take()
+            .max(execution.process_lifetime);
+    }
+    if let Some(network) = new.network.filter(|network| {
+        old.network
+            .as_ref()
+            .is_none_or(|old| network.mode > old.mode)
+    }) {
         old.network = Some(network);
     }
     if let Some(filesystem) = new
@@ -790,6 +811,9 @@ fn valid_overrides(overrides: &IdentityOverrides) -> bool {
         .models_file
         .as_deref()
         .is_none_or(valid_models_file)
+        && overrides.execution.as_ref().is_none_or(|execution| {
+            execution.backend.is_some() || execution.process_lifetime.is_some()
+        })
         && overrides.tools.len() <= MAX_TOOL_OVERRIDES
         && overrides.tools.iter().all(|(name, policy)| {
             valid_tool_name(name)
@@ -1013,8 +1037,9 @@ session_grant = "offer"
         );
         assert_eq!(
             user.overrides.execution,
-            Some(ExecutionConfig {
-                backend: ExecutionBackend::Direct,
+            Some(ExecutionOverrides {
+                backend: Some(ExecutionBackend::Direct),
+                process_lifetime: None,
             })
         );
         assert_eq!(
@@ -1064,6 +1089,72 @@ session_grant = "offer"
             parse_user_for_test(b"version = 5\nuid = 7\n", 7),
             Err(LookupError::InvalidFile)
         );
+    }
+
+    #[test]
+    fn joins_network_and_lifetime_permissions_without_resetting_omitted_fields() {
+        for (left_index, left) in ["none", "local", "host"].iter().enumerate() {
+            for (right_index, right) in ["none", "local", "host"].iter().enumerate() {
+                let result = resolve(vec![
+                    record(
+                        "uid = 1000",
+                        &format!("[overrides.network]\nmode = {left:?}"),
+                    ),
+                    record(
+                        "gid = 20",
+                        &format!("[overrides.network]\nmode = {right:?}"),
+                    ),
+                ])
+                .unwrap();
+                assert_eq!(
+                    serde_json::to_value(result.overrides.network.unwrap()).unwrap()["mode"],
+                    ["none", "local", "host"][left_index.max(right_index)]
+                );
+            }
+        }
+        for left in ["command", "sandbox"] {
+            for right in ["command", "sandbox"] {
+                let result = resolve(vec![
+                    record("uid = 1000", &format!("[overrides.execution]\nbackend = \"bubblewrap\"\nprocess_lifetime = {left:?}")),
+                    record("gid = 20", &format!("[overrides.execution]\nprocess_lifetime = {right:?}")),
+                    record("gid = 10", "[overrides.execution]\nbackend = \"bubblewrap\""),
+                ]).unwrap();
+                let execution = result.overrides.execution.unwrap();
+                assert_eq!(execution.backend, Some(ExecutionBackend::Bubblewrap));
+                assert_eq!(
+                    execution.process_lifetime,
+                    Some(if left == "sandbox" || right == "sandbox" {
+                        ProcessLifetime::Sandbox
+                    } else {
+                        ProcessLifetime::Command
+                    })
+                );
+            }
+        }
+        let lifetime_only = resolve(vec![record(
+            "uid = 1000",
+            "[overrides.execution]\nprocess_lifetime = \"sandbox\"",
+        )])
+        .unwrap();
+        let value = serde_json::to_value(lifetime_only.overrides).unwrap();
+        assert_eq!(
+            value["execution"],
+            serde_json::json!({"process_lifetime": "sandbox"})
+        );
+        for fields in [
+            "",
+            "process_lifetime = \"session\"",
+            "process_lifetime = false",
+            "process_lifetime = \"sandbox\"\nextra = true",
+        ] {
+            assert!(
+                parse_user_for_test(
+                    format!("version = 7\nuid = 7\n[overrides.execution]\n{fields}\n").as_bytes(),
+                    7
+                )
+                .is_err()
+            );
+        }
     }
 
     #[test]

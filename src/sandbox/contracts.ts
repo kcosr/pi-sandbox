@@ -1,4 +1,4 @@
-import type { NetworkMode } from "../domain/index.js";
+import type { NetworkMode, ProcessLifetime } from "../domain/index.js";
 
 export const TOOL_COMMAND_NAMES = Object.freeze([
   "bash",
@@ -44,6 +44,8 @@ export interface CreateBubblewrapExecutorOptions {
   readonly hiddenPaths?: readonly string[];
   /** Tool and shell network authority. Omitted means a private offline namespace. */
   readonly networkMode?: NetworkMode;
+  /** Whether background processes survive ordinary command completion. Defaults to command. */
+  readonly processLifetime?: ProcessLifetime;
   /** Administrator-provided variables added to the fixed sandbox environment. */
   readonly environment?: Readonly<Record<string, string>>;
   /** Absolute build-selected Bubblewrap executable. No runtime default or fallback exists. */

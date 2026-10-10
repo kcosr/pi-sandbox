@@ -371,8 +371,10 @@ separate host authority.
 
 ## Network authority
 
-For Bubblewrap tools, the required administrative mode is `none` or `host`. `none`
-creates a private network namespace and denies `socket`. `host` shares the
+For Bubblewrap tools, the required administrative mode is `none`, `local`, or `host`.
+`none` creates a private network namespace and denies `socket`. `local` retains
+that namespace, with loopback only, and allows IPv4/IPv6 TCP/UDP sockets. There
+are no external routes, host access or forwarding. `host` shares the
 complete host network namespace and permits socket creation, including host
 loopback, LAN, Internet, and reachable Unix-domain services. Bubblewrap does not
 provide destination filtering, and Pi Sandbox exposes no filtered network mode.
@@ -383,7 +385,9 @@ explicit `host` value.
 
 A classic seccomp BPF filter always denies the `io_uring` control syscalls,
 `link`, and `linkat`; offline mode additionally denies `socket`. Anonymous
-`socketpair()` remains available because Bun uses it when spawning a child. The
+`socketpair()` in `none` and `local` permits only connected Unix stream pairs,
+which Bun uses when spawning a child. Datagram pairs and named Unix sockets
+remain blocked in these modes. The
 executor streams the compiled filter to Bubblewrap on a dedicated inherited
 file descriptor and rejects unsupported architectures before execution.
 
@@ -395,12 +399,28 @@ Malformed inputs, process startup failure, excessive output, timeout, and
 cancellation fail closed. Bash is the only operation that deliberately invokes a
 shell, and its complete approved command is passed as one argument.
 
-On cancellation or timeout, the selected executor terminates the command process group,
-escalates after a bounded grace period, and kills every remaining command
-process visible in its private PID namespace before starting another request.
-This prevents background descendants from becoming persistent even though the
-mount namespace remains alive. Closing the executor terminates active work and,
-in Bubblewrap mode, the worker and complete Bubblewrap process tree.
+Bubblewrap `execution.process_lifetime` defaults to `command`, removing remaining
+command processes after every operation. `sandbox` preserves them after ordinary
+foreground exit, including nonzero status. The process-owned worker and its
+ordinary serial scheduling remain unchanged, so background processes also
+survive logical Pi session changes. Scheduling does not exclude background
+writers, including during managed host `git_clone`; see the accepted clone race
+in [security.md](security.md).
+
+In `sandbox` mode, match pinned Pi 1.1.0's post-exit idle-drain behavior: complete
+when streams close or output has been idle for 100 ms, restarting that timer on
+each chunk. Continued output defers completion under the existing command
+timeout and output limits; there is no separate absolute drain deadline. At
+completion, close the operation's streams and stop its output callbacks before
+publishing the terminal response. Background programs should redirect output to
+files to avoid broken pipes after the originating call completes.
+
+On active cancellation, timeout, output overflow or execution failure, the
+worker retains sandbox-wide cleanup before processing another request. This can
+terminate previously started servers. A queued cancellation only removes that
+queued request. Closing the executor terminates the worker and complete
+Bubblewrap process tree. Direct execution remains command-scoped and requires
+`process_lifetime = "command"`.
 
 There is never a direct-host fallback. Direct built-in execution occurs only
 when `execution.backend = "direct"` was admitted at startup. Managed host

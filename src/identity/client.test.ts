@@ -62,6 +62,32 @@ describe("managed identity", () => {
 });
 
 describe("broker response", () => {
+  it("accepts partial execution patches without defaulting omitted fields", () => {
+    const response = (execution: unknown) =>
+      JSON.stringify({
+        version: 6,
+        status: "ok",
+        environment: { pi: {}, sandbox: {}, extensions: {} },
+        overrides: { execution, network: { mode: "local" } },
+      });
+    expect(parseBrokerResponse(response({ process_lifetime: "sandbox" }))).toMatchObject({
+      overrides: { execution: { processLifetime: "sandbox" }, network: { mode: "local" } },
+    });
+    expect(parseBrokerResponse(response({ backend: "bubblewrap" }))).toMatchObject({
+      overrides: { execution: { backend: "bubblewrap" } },
+    });
+    for (const execution of [
+      {},
+      { process_lifetime: "session" },
+      { process_lifetime: null },
+      { backend: null },
+      { processLifetime: "sandbox" },
+    ]) {
+      expect(() => parseBrokerResponse(response(execution))).toThrow(
+        "identity_broker_response_invalid",
+      );
+    }
+  });
   it("accepts strict success and error responses", () => {
     expect(
       parseBrokerResponse(
@@ -306,7 +332,7 @@ describe("identity overrides", () => {
       filesystem: { cwdWritable: true, hiddenPaths: ["/srv/runs"] },
       audit: { enabled: false, facility: "local0" },
       modelsFile: "/etc/pi-sandbox/models.json",
-      execution: { backend: "bubblewrap" },
+      execution: { backend: "bubblewrap", processLifetime: "command" },
       identity: { mode: "broker" },
       network: { mode: "none" },
       environment: { pi: {}, sandbox: {}, extensions: {} },
@@ -335,7 +361,7 @@ describe("identity overrides", () => {
       },
     });
     expect(effective.modelsFile).toBe("/etc/pi-sandbox/models/alice.json");
-    expect(effective.execution).toEqual({ backend: "direct" });
+    expect(effective.execution).toEqual({ backend: "direct", processLifetime: "command" });
     expect(effective.network).toEqual({ mode: "host" });
     expect(effective.tools.write).toEqual({ mode: "disabled", sessionGrant: "never", audit: true });
     expect(effective.tools.git_clone).toEqual({
@@ -357,7 +383,21 @@ describe("identity overrides", () => {
       tools: {},
     });
     expect(restricted.filesystem).toEqual({ cwdWritable: false, hiddenPaths: ["/srv/runs"] });
-    expect(restricted.execution).toBe(base.execution);
+    expect(restricted.execution).toEqual(base.execution);
+    const persistent = applyIdentityOverrides(base, {
+      execution: { processLifetime: "sandbox" },
+      network: { mode: "local" },
+      tools: {},
+    });
+    expect(persistent.execution).toEqual({ backend: "bubblewrap", processLifetime: "sandbox" });
+    expect(
+      applyIdentityOverrides(persistent, { execution: { backend: "bubblewrap" }, tools: {} })
+        .execution,
+    ).toEqual(persistent.execution);
+    expect(
+      applyIdentityOverrides(persistent, { execution: { processLifetime: "command" }, tools: {} })
+        .execution,
+    ).toEqual(base.execution);
     const direct = applyIdentityOverrides(restricted, {
       execution: { backend: "direct" },
       network: { mode: "host" },
@@ -365,7 +405,7 @@ describe("identity overrides", () => {
       tools: {},
     });
     expect(direct.filesystem).toEqual({ cwdWritable: true, hiddenPaths: ["/srv/runs"] });
-    expect(direct.execution).toEqual({ backend: "direct" });
+    expect(direct.execution).toEqual({ backend: "direct", processLifetime: "command" });
     expect(effective.identity).toBe(base.identity);
     expect(effective.extensions).toBe(base.extensions);
     expect(() =>

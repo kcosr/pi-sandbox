@@ -229,6 +229,7 @@ async function createProbedExecutor(
         cwd,
         bubblewrapPath: bubblewrap.path,
         networkMode: config.network.mode,
+        processLifetime: config.execution.processLifetime,
         cwdWritable: config.filesystem.cwdWritable,
         hiddenPaths: config.filesystem.hiddenPaths,
         environment,
@@ -278,6 +279,9 @@ export function assertExecutionPlatform(
   }
   if (config.execution.backend === "direct" && config.network.mode !== "host") {
     throw new Error("Direct execution requires network.mode = host");
+  }
+  if (config.execution.backend === "direct" && config.execution.processLifetime !== "command") {
+    throw new Error("Direct execution requires execution.process_lifetime = command");
   }
   if (config.execution.backend === "direct" && !config.filesystem.cwdWritable) {
     throw new Error("Direct execution requires filesystem.cwd_writable = true");

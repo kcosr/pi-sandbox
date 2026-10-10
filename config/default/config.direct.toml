@@ -19,6 +19,7 @@ hidden_paths = []
 
 [execution]
 backend = "direct"
+process_lifetime = "command"
 
 [identity]
 mode = "disabled"

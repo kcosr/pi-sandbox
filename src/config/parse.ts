@@ -6,6 +6,7 @@ import {
   POLICY_MODES,
   EXECUTION_BACKENDS,
   NETWORK_MODES,
+  PROCESS_LIFETIMES,
   SESSION_GRANT_POLICIES,
   TOOL_NAMES,
   type IdentityConfig,
@@ -342,14 +343,24 @@ function parseExecution(value: unknown, issues: string[]): ExecutionConfig | und
     return undefined;
   }
 
-  inspectKeys(value, ["backend"], "config.execution", issues);
+  inspectAllowedKeys(value, ["backend", "process_lifetime"], "config.execution", issues);
   const backend = enumValue(
     own(value, "backend"),
     EXECUTION_BACKENDS,
     "config.execution.backend",
     issues,
   );
-  return backend === undefined ? undefined : Object.freeze({ backend });
+  const processLifetime = Object.hasOwn(value, "process_lifetime")
+    ? enumValue(
+        value.process_lifetime,
+        PROCESS_LIFETIMES,
+        "config.execution.process_lifetime",
+        issues,
+      )
+    : "command";
+  return backend === undefined || processLifetime === undefined
+    ? undefined
+    : Object.freeze({ backend, processLifetime });
 }
 
 export function parseConfig(
@@ -415,6 +426,11 @@ export function parseConfig(
   }
   if (execution?.backend === "direct" && network?.mode !== "host") {
     issues.push('config.network.mode must be "host" when config.execution.backend is "direct"');
+  }
+  if (execution?.backend === "direct" && execution.processLifetime !== "command") {
+    issues.push(
+      'config.execution.process_lifetime must be "command" when config.execution.backend is "direct"',
+    );
   }
   if (execution?.backend === "direct" && filesystem?.cwdWritable === false) {
     issues.push(

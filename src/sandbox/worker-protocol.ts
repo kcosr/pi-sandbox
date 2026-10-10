@@ -1,8 +1,9 @@
 import { constants as osConstants } from "node:os";
 
+import { PROCESS_LIFETIMES, type ProcessLifetime } from "../domain/index.js";
 import type { SandboxExecutionErrorCode } from "./contracts.js";
 
-export const SANDBOX_WORKER_PROTOCOL_VERSION = 1;
+export const SANDBOX_WORKER_PROTOCOL_VERSION = 2;
 export const INTERNAL_SANDBOX_WORKER_ARGUMENT = "--pi-sandbox-internal-worker";
 export const MAXIMUM_WORKER_REQUEST_FRAME_BYTES = 96 * 1_048_576;
 export const MAXIMUM_WORKER_RESPONSE_FRAME_BYTES = 1 * 1_048_576;
@@ -14,6 +15,7 @@ export interface WorkerExecuteRequest {
   readonly stdin: string;
   readonly timeoutMs: number;
   readonly maxOutputBytes: number;
+  readonly processLifetime: ProcessLifetime;
 }
 
 export interface WorkerCancelRequest {
@@ -97,7 +99,15 @@ export function isWorkerRequest(value: unknown): value is WorkerRequest {
   if (value.type === "cancel") return hasExactKeys(value, ["type", "id"]) && isRequestId(value.id);
   if (value.type !== "execute") return false;
   return (
-    hasExactKeys(value, ["type", "id", "argv", "stdin", "timeoutMs", "maxOutputBytes"]) &&
+    hasExactKeys(value, [
+      "type",
+      "id",
+      "argv",
+      "stdin",
+      "timeoutMs",
+      "maxOutputBytes",
+      "processLifetime",
+    ]) &&
     isRequestId(value.id) &&
     Array.isArray(value.argv) &&
     value.argv.length > 0 &&
@@ -106,7 +116,8 @@ export function isWorkerRequest(value: unknown): value is WorkerRequest {
     Number.isSafeInteger(value.timeoutMs) &&
     (value.timeoutMs as number) > 0 &&
     Number.isSafeInteger(value.maxOutputBytes) &&
-    (value.maxOutputBytes as number) > 0
+    (value.maxOutputBytes as number) > 0 &&
+    PROCESS_LIFETIMES.includes(value.processLifetime as ProcessLifetime)
   );
 }
 
