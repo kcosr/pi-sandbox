@@ -8,6 +8,6 @@
     "rootDir": ".",
     "types": ["node"]
   },
-  "include": ["src/**/*.ts", "packages/sandbox-extension/src/**/*.ts"],
-  "exclude": ["src/**/*.test.ts", "packages/**/*.test.ts"]
+  "include": ["src/**/*.ts", "packages/*/src/**/*.ts"],
+  "exclude": ["src/**/*.test.ts", "packages/**/*.test.ts", "packages/**/src/test-support/**"]
 }

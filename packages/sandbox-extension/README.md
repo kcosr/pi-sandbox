@@ -15,7 +15,7 @@ admitted MCP connections and audit logging.
 From a Pi Sandbox source checkout with Node 24 and dependencies installed:
 
 ```sh
-npm run build:extension
+npm run build:extensions
 npm pack ./packages/sandbox-extension
 ```
 
@@ -28,7 +28,7 @@ executables:
 
 ```json
 {
-  "version": 2,
+  "version": 4,
   "mode": "owned",
   "backend": {
     "kind": "bubblewrap",
@@ -39,15 +39,6 @@ executables:
     "cwdWritable": true,
     "hiddenPaths": [],
     "environment": {}
-  },
-  "tools": {
-    "read": { "mode": "allow", "sessionGrant": "never" },
-    "grep": { "mode": "allow", "sessionGrant": "never" },
-    "find": { "mode": "allow", "sessionGrant": "never" },
-    "ls": { "mode": "allow", "sessionGrant": "never" },
-    "write": { "mode": "ask", "sessionGrant": "offer" },
-    "edit": { "mode": "ask", "sessionGrant": "offer" },
-    "bash": { "mode": "ask", "sessionGrant": "offer" }
   },
   "userBash": true
 }
@@ -61,12 +52,17 @@ pi --no-extensions --no-builtin-tools \
   --sandbox-config /absolute/path/to/sandbox.json
 ```
 
-Use ordinary Pi provider/model/reasoning arguments as usual. Missing tool policy
-entries are disabled. `allow`, `ask`, `deny` and `disabled` control invocation;
-Pi's `--tools` controls presentation and cannot expand configuration permissions.
-`ask` without an available approval UI denies execution. `userBash` explicitly
-allows the user's `!` shell independently of model-tool approval; false blocks it
-without falling back to host execution.
+Use ordinary Pi provider/model/reasoning arguments as usual. All seven replacement
+tools are available subject to Pi's tool selection, without approval prompts.
+`userBash` explicitly allows the user's `!` shell; false blocks it without falling
+back to host execution. Among competing extension tool names or user-shell
+handlers, pinned Pi uses the first applicable extension in runner order; load
+sandbox before competing replacements. Other extension JavaScript remains host code.
+
+Standalone configuration version 4 contains execution settings only. To update a
+version-2 configuration, remove `tools` and set `version` to `4`. Old versions and
+unknown fields are rejected. Approvals are part of managed Pi Sandbox; its TOML
+configuration and mandatory policy remain unchanged.
 
 Bubblewrap requires Linux user namespaces and the GNU command prerequisites
 listed in the repository's installation guide. `network: "local"` enables only
@@ -80,7 +76,7 @@ sandbox lifetime this interrupts other active calls; queued work starts only
 after cleanup finishes. Cancelling queued work affects only that request.
 
 The extension owns one backend per Pi process. Conversation switching keeps that
-backend while clearing conversation approval grants. Quit closes it; extension
+backend. Quit closes it; extension
 reload closes it before a replacement starts. Changing the configured workspace
 or backend requires an explicit reload/restart. Startup failure disables these
 tools instead of falling back to host execution. The worker is the existing
@@ -179,10 +175,9 @@ A trusted orchestrator writes this private configuration for ordinary Pi:
 
 ```js
 const config = {
-  version: 2,
+  version: 4,
   mode: "attached",
   attachment: family.attachment(machineId),
-  tools: selectedToolPolicies,
   userBash: false,
 };
 ```
@@ -207,9 +202,17 @@ Evaluator application adoption is a separate milestone.
   executor, with required authorization of the exact normalized request.
 - `./runtime`: bounded executor contracts and explicit backend constructors.
 - `./controller`: OCI family creation, branching, attachment and cold reopening.
-- `./policy`: pure authorization engine plus optional Pi approval UI adapter.
 - `./config`: strict standalone JSON validation and bounded private-file reading.
 - `./identity`: artifact version, source commit and source digest.
+
+- `./invocation`: built-in names, neutral immutable requests and pure JSON snapshot helpers.
+
+The factory requires an explicit authorization callback. It normalizes and freezes
+arguments before calling it, passes the actual tool-call signal, and executes the
+same snapshot only after success. The standalone entry deliberately supplies a
+no-op callback. Managed Pi Sandbox supplies its internal policy/audit callback;
+an evaluator can supply its own authorization with an immutable tool ceiling.
+No permissions package is installed or discovered.
 
 Importing these modules does not create a sandbox. The default extension initializes its owned backend or borrowed attachment
 at session initialization. The embedding application owns any

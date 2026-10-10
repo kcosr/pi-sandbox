@@ -1,20 +1,17 @@
-import {
-  TOOL_NAMES,
-  type SubjectPolicy,
-} from "../../packages/sandbox-extension/src/policy/contracts.js";
+import { TOOL_NAMES } from "../../packages/sandbox-extension/src/invocation.js";
+import type { SubjectPolicy } from "../permissions/contracts.js";
 export {
   TOOL_NAMES,
-  POLICY_MODES,
-  SESSION_GRANT_POLICIES,
-} from "../../packages/sandbox-extension/src/policy/contracts.js";
+  type BuiltInToolName,
+} from "../../packages/sandbox-extension/src/invocation.js";
+export { POLICY_MODES, SESSION_GRANT_POLICIES } from "../permissions/contracts.js";
 export type {
-  BuiltInToolName,
   ToolName,
   ApprovalSubject,
   PolicyMode,
   SessionGrantPolicy,
   SubjectPolicy,
-} from "../../packages/sandbox-extension/src/policy/contracts.js";
+} from "../permissions/contracts.js";
 import type { CodeModeConfig, McpConfig } from "./mcp.js";
 
 import { buildLayout } from "../build-layout/index.js";

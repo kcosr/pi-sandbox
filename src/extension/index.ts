@@ -21,7 +21,7 @@ import {
   type JsonObject,
   type ApprovalRequest,
   TOOL_NAMES,
-} from "../../packages/sandbox-extension/src/policy/index.js";
+} from "../permissions/index.js";
 import { SandboxExecutionError } from "../../packages/sandbox-extension/src/runtime/index.js";
 import {
   formatSandboxMounts,
@@ -32,10 +32,7 @@ import {
 } from "./diagnostics.js";
 import { createSandboxExtension } from "../../packages/sandbox-extension/src/factory.js";
 import type { ExtensionDependencies, SandboxExecutor } from "./types.js";
-import {
-  approvalUi,
-  approvalPreview,
-} from "../../packages/sandbox-extension/src/policy/approval.js";
+import { approvalUi, approvalPreview } from "../permissions/index.js";
 import { ManagedMcpRuntime } from "../mcp/runtime.js";
 import { createManagedCodemodeExtension } from "../codemode/index.js";
 import { isManagedToolSelected, selectManagedActiveTools } from "../runtime/arguments.js";
@@ -354,7 +351,9 @@ export function createPiSandboxExtension(dependencies: ExtensionDependencies): E
         return state.executor;
       },
       tools: TOOL_NAMES,
-      authorize: (request, ctx, signal) => authorizeRequest(state, request, ctx, signal),
+      async authorize(request, ctx, signal) {
+        await authorize(state, request.subject, request.arguments, ctx, signal);
+      },
       userBash: true,
       executionScope:
         dependencies.executor.backend === "bubblewrap"

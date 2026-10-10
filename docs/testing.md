@@ -3,12 +3,18 @@
 ## Reusable extension acceptance
 
 Shared package unit tests run with `npm run test:unit`. `npm run test:extension`
-builds and inspects an npm-format tarball, imports its public entries and starts
-ordinary Pi 1.1.0 against the extracted artifact. On Linux this requires genuine
-Bubblewrap, Node 24 and Bun 1.3.14+; it exercises both worker runtimes and verifies
-that conversation replacement retains a single namespace and background job in
-sandbox-lifetime mode. No model service is contacted. Managed release checks
-continue to cover forced composition, permissions, MCP, Code Mode and packaging.
+builds and inspects both tarballs, checks their emitted JS/declaration imports,
+and starts stock Pi 1.1.0 against independently extracted artifacts. Sandbox is
+installed without Git or permissions; Git is installed alone and with sandbox.
+No workspace package links are admitted. Provenance includes Git's bundled runner.
+
+Linux sandbox acceptance requires Bubblewrap, Node 24 and Bun 1.3.14+ and checks
+both worker runtimes, conversation replacement and persistent background jobs.
+Git acceptance uses local HTTP repositories and scripted local model responses
+for ordinary/nested Code Mode cloning, restrictions, exclusions and repeated
+sessions. Managed tests cover mandatory approvals, exact canonical snapshots,
+per-call cancellation, audit failure, MCP and nested Code Mode. No live provider
+is contacted. Required native smolvm checks exercise owned and attached paths.
 
 Pi Sandbox tests are offline. They never invoke a live model provider and never
 depend on provider credentials.

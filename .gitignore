@@ -15,4 +15,4 @@ release/
 *.tar.gz
 *.zip
 
-/packages/sandbox-extension/provenance.json
+/packages/*/provenance.json

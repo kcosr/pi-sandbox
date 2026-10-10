@@ -590,14 +590,17 @@ System libraries and Bun's internal third-party dependencies are outside the
 inventory's stated coverage. Supply the SBOM alongside the matching release
 when using dependency scanners.
 
-## Ordinary Pi extension package
+## Ordinary Pi extension packages
 
-The release build also creates `kcosr-pi-sandbox-extension-0.2.0.tgz` and its
-SHA256 sidecar. This is a standard extension for ordinary Pi 1.1.0. It contains
-its runtime and Bubblewrap worker; no private repository or separate source
-checkout is required. See [package configuration and usage](../packages/sandbox-extension/README.md).
-The managed executable continues to embed the same implementation and enforce
-its administrator-selected configuration.
+The release build creates `kcosr-pi-sandbox-extension-0.3.0.tgz` and
+`kcosr-pi-git-extension-0.1.0.tgz`, each with a SHA256 sidecar. They are independent
+standard extensions for ordinary Pi 1.1.0. Sandbox includes its runtime and
+Bubblewrap worker; Git includes its bounded host runner. Neither needs a permissions
+package, the other extension package or an adjacent source checkout. See
+[sandbox configuration and usage](../packages/sandbox-extension/README.md) and
+[Git configuration and usage](../packages/git-extension/README.md).
+The managed executable embeds the reusable implementations through its own
+adapters and preserves administrator-selected permissions and audit controls.
 
 ## Optional external smolvm runtime
 

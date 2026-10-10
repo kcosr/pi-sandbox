@@ -2,14 +2,15 @@ import assert from "node:assert/strict";
 import { Buffer } from "node:buffer";
 import { execFileSync, spawn } from "node:child_process";
 import { createHash } from "node:crypto";
-import { mkdtemp, mkdir, readFile, readdir, rm, symlink, writeFile } from "node:fs/promises";
+import { mkdtemp, mkdir, readFile, readdir, rm, writeFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { setTimeout as delay } from "node:timers/promises";
 import { testParallelTools } from "./parallel-tools-smoke.mjs";
+import { installExtensionArtifacts } from "./extension-artifacts.mjs";
 
 const root = dirname(dirname(dirname(fileURLToPath(import.meta.url))));
-execFileSync(process.execPath, [join(root, "scripts/build-sandbox-extension.mjs")], {
+execFileSync(process.execPath, [join(root, "scripts/build-extensions.mjs")], {
   stdio: "inherit",
 });
 const temp = await mkdtemp("/var/tmp/pie-");
@@ -17,45 +18,9 @@ const children = new Set();
 const vmStates = [];
 const families = [];
 try {
-  const packed = JSON.parse(
-    execFileSync(
-      "npm",
-      ["pack", join(root, "packages/sandbox-extension"), "--pack-destination", temp, "--json"],
-      { encoding: "utf8" },
-    ),
-  )[0];
-  const archive = join(temp, packed.filename);
-  const entries = execFileSync("tar", ["-tzf", archive], { encoding: "utf8" }).trim().split("\n");
-  for (const required of [
-    "package/dist/index.js",
-    "package/dist/factory.js",
-    "package/dist/runtime/worker-entry.js",
-    "package/LICENSE",
-    "package/provenance.json",
-  ])
-    assert(entries.includes(required), required);
-  assert(
-    entries.every(
-      (name) =>
-        name.startsWith("package/") &&
-        !name.includes("../") &&
-        !name.includes("node_modules/") &&
-        !name.endsWith(".test.js"),
-    ),
-  );
-  execFileSync("tar", ["-xzf", archive, "-C", temp]);
-  // Only the public peer dependency installation is shared with this fixture.
-  await symlink(join(root, "node_modules"), join(temp, "node_modules"), "dir");
-  const metadata = JSON.parse(await readFile(join(temp, "package/package.json"), "utf8"));
-  assert.equal(metadata.peerDependencies["@earendil-works/pi-coding-agent"], "1.1.0");
-  for (const entry of Object.values(metadata.exports))
-    await import(pathToFileURL(join(temp, "package", entry)).href);
-  const provenance = JSON.parse(await readFile(join(temp, "package/provenance.json"), "utf8"));
-  assert.equal(
-    provenance.sourceCommit,
-    execFileSync("git", ["rev-parse", "HEAD"], { cwd: root, encoding: "utf8" }).trim(),
-  );
-  assert.equal(provenance.piVersion, "1.1.0");
+  const artifacts = await installExtensionArtifacts(root, temp, ["sandbox-extension"]);
+  const packed = artifacts["sandbox-extension"];
+  const archive = packed.archive;
   if (process.platform !== "linux")
     throw new Error("This package acceptance requires Linux Bubblewrap");
   const runtimes = [process.execPath, execFileSync("which", ["bun"], { encoding: "utf8" }).trim()];
@@ -77,7 +42,7 @@ try {
   else if (process.env.PI_SANDBOX_REQUIRE_SMOLVM === "1")
     throw new Error("Required package attachment fixture needs OCI image and digest");
   const { createSmolvmOciFamily } = await import(
-    pathToFileURL(join(temp, "package/dist/controller.js")).href
+    pathToFileURL(join(packed.directory, "dist/controller.js")).href
   );
   for (const [index, selected] of cases.entries()) {
     const { runtime } = selected;
@@ -127,16 +92,10 @@ try {
     await writeFile(
       config,
       JSON.stringify({
-        version: 2,
+        version: 4,
         ...(family
           ? { mode: "attached", attachment: family.attachment(family.sourceId) }
           : { mode: "owned", backend }),
-        tools: {
-          read: { mode: "allow", sessionGrant: "never" },
-          bash: { mode: "allow", sessionGrant: "never" },
-          write: { mode: "allow", sessionGrant: "never" },
-          edit: { mode: "allow", sessionGrant: "never" },
-        },
         userBash: true,
       }),
       { mode: 0o600 },
@@ -155,7 +114,7 @@ try {
           "--no-context-files",
           "--no-themes",
           "-e",
-          join(temp, "package/dist/index.js"),
+          join(packed.directory, "dist/index.js"),
           "--sandbox-config",
           config,
           ...args,

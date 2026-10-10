@@ -7,7 +7,7 @@ import type {
 } from "@earendil-works/pi-coding-agent";
 import { describe, expect, it, vi } from "vitest";
 import { createSandboxExtension, type SandboxExtensionOptions } from "./factory.js";
-import type { ApprovalRequest, BuiltInToolName } from "./policy/index.js";
+import type { SandboxToolRequest, BuiltInToolName } from "./invocation.js";
 import { LINUX_TOOL_COMMANDS, type SandboxExecutor } from "./runtime/index.js";
 
 type Handler = (event: never, context: ExtensionContext) => unknown;
@@ -51,6 +51,16 @@ function fixture() {
 }
 
 describe("reusable sandbox factory", () => {
+  it.each([undefined, null, false, {}])(
+    "rejects a missing or invalid authorization callback (%s)",
+    (authorize) => {
+      const f = fixture();
+      expect(() =>
+        createSandboxExtension({ ...f.options, authorize } as unknown as SandboxExtensionOptions),
+      ).toThrow("authorization callback");
+    },
+  );
+
   it("registers eagerly without obtaining an executor or assuming managed Pi APIs", async () => {
     const f = fixture();
     const getExecutor = vi.fn(() => {
@@ -79,7 +89,7 @@ describe("reusable sandbox factory", () => {
 
   it("authorizes the canonical immutable arguments that actually reach the executor", async () => {
     const f = fixture();
-    let request: ApprovalRequest | undefined;
+    let request: SandboxToolRequest | undefined;
     let allow: (() => void) | undefined;
     await createSandboxExtension({
       ...f.options,
@@ -94,6 +104,7 @@ describe("reusable sandbox factory", () => {
     const pending = f.invoke("write", args);
     await vi.waitFor(() => expect(request).toBeDefined());
     expect(request?.arguments.path).toBe("/canonical/project/notes.txt");
+    expect(Object.isFrozen(request)).toBe(true);
     expect(Object.isFrozen(request?.arguments)).toBe(true);
     args.path = "/outside/replacement";
     args.content = "changed";
@@ -116,6 +127,17 @@ describe("reusable sandbox factory", () => {
     expect(authorize).toHaveBeenCalledTimes(2);
     expect(f.execute).toHaveBeenCalledTimes(1);
     expect(authorize.mock.calls[0]?.[0].arguments.cwd).toBe("/canonical/project");
+  });
+
+  it("passes the actual invocation signal and context to authorization and execution", async () => {
+    const f = fixture();
+    const controller = new AbortController();
+    const authorize = vi.fn<SandboxExtensionOptions["authorize"]>().mockResolvedValue(undefined);
+    await createSandboxExtension({ ...f.options, authorize })(f.pi);
+    await f.invoke("bash", { command: "printf approved" }, controller.signal);
+    expect(authorize.mock.calls[0]?.[1]).toBe(f.context);
+    expect(authorize.mock.calls[0]?.[2]).toBe(controller.signal);
+    expect(f.execute.mock.calls[0]?.[1]?.signal).toBe(controller.signal);
   });
 
   it("does not execute when cancellation arrives while authorization is pending", async () => {

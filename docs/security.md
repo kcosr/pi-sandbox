@@ -460,3 +460,20 @@ or daemon is added by Pi Sandbox. Do not infer successful cleanup from a missing
 Pi process, and do not recursively delete state while its VM might still run.
 Failed startup can conservatively preserve even a never-started machine's state
 directory for manual cleanup when the recorded state does not confirm termination.
+
+## Ordinary Pi extensions
+
+The standalone sandbox provides its configured execution boundary; standalone Git
+provides repository/argument restrictions and bounded host execution. Neither
+provides managed approval prompts. Other Pi extensions remain trusted host code;
+sandboxing the built-in tools does not contain extension-internal filesystem or
+process access. Competing tool replacements or user-shell handlers can affect
+which implementation Pi selects.
+
+Managed Pi Sandbox never loads the standalone entries or reads their JSON files.
+It supplies mandatory authorization to the sandbox factory and wraps Git with
+its internal permission engine, approval UI, audit and readiness checks. Arguments
+are normalized and copied through canonical JSON before approval, then frozen;
+execution uses the same values. Missing callbacks, denied/cancelled approvals and
+required audit failures prevent execution, including nested Code Mode operations.
+There is no optional permission-provider fallback in managed mode.

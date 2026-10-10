@@ -84,7 +84,7 @@ describe("built-in Git clone managed extension", () => {
     ).toThrow();
   });
   it("declares one narrow tool and a hardened host environment", () => {
-    expect(gitCloneExtension).toMatchObject({ id: "git", version: "1.1.0", apiVersion: 3 });
+    expect(gitCloneExtension).toMatchObject({ id: "git", version: "1.2.0", apiVersion: 3 });
     expect(gitCloneExtension.hostEnvironment).toEqual({
       variables: [],
       removeInherited: ["SSH_ASKPASS"],

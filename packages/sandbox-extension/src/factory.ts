@@ -18,13 +18,12 @@ import {
 import { Text } from "@earendil-works/pi-tui";
 import { SandboxExecutionError, type SandboxExecutor } from "./runtime/index.js";
 import {
-  prepareApprovalRequest,
-  approvalPreview,
-  type ApprovalRequest,
+  prepareSandboxToolRequest,
+  type SandboxToolRequest,
   type BuiltInToolName,
   type JsonObject,
   TOOL_NAMES,
-} from "./policy/index.js";
+} from "./invocation.js";
 import {
   executeEdit,
   executeFind,
@@ -43,7 +42,7 @@ export interface SandboxExtensionOptions {
   /** Immutable registration ceiling. Authorization is checked on every invocation. */
   readonly tools: readonly BuiltInToolName[];
   readonly authorize: (
-    request: ApprovalRequest,
+    request: SandboxToolRequest,
     context: ExtensionContext,
     signal?: AbortSignal,
   ) => Promise<void>;
@@ -176,11 +175,7 @@ async function authorize<T extends JsonObject>(
   ctx: ExtensionContext,
   signal?: AbortSignal,
 ): Promise<T> {
-  const request = prepareApprovalRequest({
-    subject,
-    display: approvalPreview(subject, rawArguments),
-    arguments: rawArguments,
-  });
+  const request = prepareSandboxToolRequest(subject, rawArguments);
   await options.authorize(request, ctx, signal);
   if (signal?.aborted === true) throw new SandboxExecutionError("sandbox_aborted");
   return request.arguments as T;
@@ -433,6 +428,9 @@ function failedUserShell(
 
 /** Compose seven sandbox-backed tools without taking ownership of their executor. */
 export function createSandboxExtension(input: SandboxExtensionOptions): ExtensionFactory {
+  if (typeof input.authorize !== "function") {
+    throw new Error("Sandbox requires an authorization callback");
+  }
   const tools = Object.freeze([...input.tools]);
   if (tools.some((tool) => !TOOL_NAMES.includes(tool)) || new Set(tools).size !== tools.length) {
     throw new Error("Sandbox tool ceiling contains an unknown or duplicate tool");

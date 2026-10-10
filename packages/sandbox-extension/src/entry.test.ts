@@ -1,16 +1,47 @@
-import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
+import type {
+  ExtensionAPI,
+  ExtensionContext,
+  ExtensionToolContext,
+  ToolDefinition,
+} from "@earendil-works/pi-coding-agent";
 import { describe, expect, it, vi } from "vitest";
+import { TOOL_NAMES } from "./invocation.js";
 import { createConfiguredSandboxExtension, type EntryDependencies } from "./entry.js";
 import { parseSandboxConfig } from "./config.js";
 import { LINUX_TOOL_COMMANDS, type SandboxExecutor } from "./runtime/index.js";
 
 type Handler = (event: { reason?: string }, ctx: ExtensionContext) => unknown;
+function directConfig() {
+  return parseSandboxConfig({
+    version: 4,
+    mode: "owned",
+    backend: { kind: "direct", environment: {} },
+    userBash: false,
+  });
+}
+function executorFixture() {
+  return {
+    backend: "direct" as const,
+    cwd: "/workspace",
+    home: "/home",
+    commands: LINUX_TOOL_COMMANDS,
+    probe: vi.fn<SandboxExecutor["probe"]>().mockResolvedValue(undefined),
+    execute: vi.fn<SandboxExecutor["execute"]>().mockResolvedValue({
+      exitCode: 0,
+      signal: null,
+      stdout: Buffer.from("done"),
+      stderr: Buffer.alloc(0),
+    }),
+    close: vi.fn<SandboxExecutor["close"]>().mockResolvedValue(undefined),
+  };
+}
 async function fixture(
   slot: object,
   create: () => Promise<SandboxExecutor>,
   dependencies: EntryDependencies = {},
 ) {
   const handlers = new Map<string, Handler[]>();
+  const tools = new Map<string, ToolDefinition>();
   const notify = vi.fn(),
     setStatus = vi.fn(),
     shutdown = vi.fn(),
@@ -22,7 +53,7 @@ async function fixture(
   } as unknown as ExtensionContext;
   const pi = {
     registerFlag: vi.fn(),
-    registerTool: vi.fn(),
+    registerTool: (tool: ToolDefinition) => tools.set(tool.name, tool),
     registerToolRenderer: vi.fn(),
     on(name: string, handler: Handler) {
       handlers.set(name, [...(handlers.get(name) ?? []), handler]);
@@ -35,16 +66,7 @@ async function fixture(
     {
       create,
       canonical: (path) => Promise.resolve(path),
-      readConfig: () =>
-        Promise.resolve(
-          parseSandboxConfig({
-            version: 2,
-            mode: "owned",
-            backend: { kind: "direct", environment: {} },
-            tools: { read: { mode: "allow", sessionGrant: "never" } },
-            userBash: false,
-          }),
-        ),
+      readConfig: () => Promise.resolve(directConfig()),
       ...dependencies,
     },
     slot,
@@ -56,6 +78,12 @@ async function fixture(
     setStatus,
     shutdown,
     setActiveTools,
+    tools,
+    invoke(name: string, args: Record<string, unknown>, signal?: AbortSignal) {
+      const tool = tools.get(name);
+      if (!tool) throw Error(`Missing tool ${name}`);
+      return tool.execute("call", args, signal, undefined, ctx as ExtensionToolContext);
+    },
     async emit(name: string, reason?: string) {
       for (const handler of handlers.get(name) ?? []) await handler(reason ? { reason } : {}, ctx);
     },
@@ -72,7 +100,7 @@ describe("owned backend lifecycle", () => {
       readConfig: () =>
         Promise.resolve(
           parseSandboxConfig({
-            version: 2,
+            version: 4,
             mode: "owned",
             backend: {
               kind: "smolvm",
@@ -84,7 +112,6 @@ describe("owned backend lifecycle", () => {
               cwdWritable: true,
               environment: {},
             },
-            tools: { read: { mode: "allow", sessionGrant: "never" } },
             userBash: false,
           }),
         ),
@@ -175,5 +202,39 @@ describe("owned backend lifecycle", () => {
     await Promise.all([started, stopped]);
     expect(close).toHaveBeenCalledOnce();
     expect(current.setStatus).not.toHaveBeenCalled();
+  });
+});
+
+describe("standalone execution", () => {
+  it("runs without a permissions provider and preserves Pi's tool selection", async () => {
+    const executor = executorFixture();
+    const current = await fixture({}, () => Promise.resolve(executor));
+    await expect(current.invoke("bash", { command: "true" })).rejects.toThrow("unavailable");
+    await current.emit("session_start");
+    expect(current.shutdown).not.toHaveBeenCalled();
+    expect([...current.tools.keys()].sort()).toEqual([...TOOL_NAMES].sort());
+    expect(current.setActiveTools).not.toHaveBeenCalled();
+    await current.invoke("bash", { command: "printf allowed" });
+    expect(executor.execute).toHaveBeenCalledOnce();
+    await current.emit("session_shutdown", "quit");
+    await expect(current.invoke("bash", { command: "true" })).rejects.toThrow("unavailable");
+  });
+
+  it("closes a backend whose readiness probe fails and permits a fresh owner", async () => {
+    const executor = executorFixture();
+    executor.probe.mockRejectedValue(new Error("probe failed"));
+    const slot = {};
+    const failed = await fixture(slot, () => Promise.resolve(executor));
+    await failed.emit("session_start");
+    expect(failed.shutdown).toHaveBeenCalledOnce();
+    expect(executor.close).toHaveBeenCalledOnce();
+    expect(executor.execute).not.toHaveBeenCalled();
+    await failed.emit("session_shutdown", "quit");
+    const nextExecutor = executorFixture();
+    const next = await fixture(slot, () => Promise.resolve(nextExecutor));
+    await next.emit("session_start");
+    await next.invoke("bash", { command: "true" });
+    expect(nextExecutor.execute).toHaveBeenCalledOnce();
+    await next.emit("session_shutdown", "quit");
   });
 });

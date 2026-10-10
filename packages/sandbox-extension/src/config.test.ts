@@ -5,25 +5,28 @@ import { join } from "node:path";
 import { readSandboxConfig, parseSandboxConfig } from "./config.js";
 
 const config = {
-  version: 2,
+  version: 4,
   mode: "owned",
   backend: { kind: "direct", environment: {} },
-  tools: { read: { mode: "allow", sessionGrant: "never" } },
   userBash: false,
 };
 describe("standalone sandbox configuration", () => {
-  it("keeps an explicit empty tool set and freezes policy", () => {
-    expect(parseSandboxConfig({ ...config, tools: {} }).tools).toEqual({});
+  it("freezes the explicit execution configuration", () => {
     const parsed = parseSandboxConfig(config);
-    expect(Object.isFrozen(parsed.tools.read)).toBe(true);
+    expect(Object.isFrozen(parsed)).toBe(true);
+    if (parsed.mode !== "owned") throw Error("Expected owned sandbox");
+    expect(Object.isFrozen(parsed.backend)).toBe(true);
   });
-  it("rejects legacy/unknown keys, backend fallback and malformed policies", () => {
+  it("rejects old versions, permissions fields and backend fallback", () => {
     for (const input of [
       { ...config, attachment: {} },
-      { ...config, version: 1 },
+      { ...config, version: 2 },
+      { ...config, version: 3 },
+      { ...config, requirePermissions: undefined },
+      { ...config, requirePermissions: "true" },
       { ...config, backend: { kind: "automatic", environment: {} } },
-      { ...config, tools: { read: { mode: "allow" } } },
-      { ...config, tools: { unknown: { mode: "allow", sessionGrant: "never" } } },
+      { ...config, tools: {} },
+      { ...config, tools: { read: { mode: "allow", sessionGrant: "never" } } },
       { ...config, backend: { kind: "direct", environment: { SECRET: 42 } } },
     ])
       expect(() => parseSandboxConfig(input)).toThrow();
@@ -48,7 +51,12 @@ describe("standalone sandbox configuration", () => {
       cwd: "/workspace",
       home: "/root",
     };
-    const attached = { version: 2, mode: "attached", attachment, tools: {}, userBash: false };
+    const attached = {
+      version: 4,
+      mode: "attached",
+      attachment,
+      userBash: false,
+    };
     expect(parseSandboxConfig(attached).mode).toBe("attached");
     expect(() => parseSandboxConfig({ ...attached, backend })).toThrow();
     expect(() =>
