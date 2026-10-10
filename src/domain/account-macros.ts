@@ -1,4 +1,4 @@
-import { isNormalizedAbsoluteFilePath } from "./paths.js";
+import { isNormalizedAbsoluteFilePath } from "../../packages/sandbox-extension/src/runtime/paths.js";
 
 export interface AccountIdentity {
   readonly username: string;

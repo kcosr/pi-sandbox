@@ -2,11 +2,15 @@ import { AsyncLocalStorage } from "node:async_hooks";
 
 import type { ExtensionContext, ToolDefinition } from "@earendil-works/pi-coding-agent";
 
-import { prepareApprovalRequest, type ApprovalDecision, type JsonObject } from "../policy/index.js";
-import { SandboxExecutionError } from "../sandbox/index.js";
+import {
+  prepareApprovalRequest,
+  type ApprovalDecision,
+  type JsonObject,
+} from "../../packages/sandbox-extension/src/policy/index.js";
+import { SandboxExecutionError } from "../../packages/sandbox-extension/src/runtime/index.js";
 import { ManagedToolExecutionError } from "../runtime/tool-error.js";
-import { HostCommandExecutionError } from "../host/index.js";
-import { normalizeSandboxPath } from "../extension/executor-operations.js";
+import { HostCommandExecutionError } from "../../packages/sandbox-extension/src/runtime/host-command/index.js";
+import { normalizeSandboxPath } from "../../packages/sandbox-extension/src/tools/executor-operations.js";
 import { auditCommand, validAuditText, type AuditClient, type AuditEvent } from "./client.js";
 
 interface Invocation {

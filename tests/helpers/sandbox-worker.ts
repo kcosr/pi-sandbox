@@ -2,7 +2,7 @@ import { constants as fsConstants } from "node:fs";
 import { accessSync, realpathSync } from "node:fs";
 import path from "node:path";
 
-import { INTERNAL_SANDBOX_WORKER_ARGUMENT } from "../../src/sandbox/worker-protocol.js";
+import { INTERNAL_SANDBOX_WORKER_ARGUMENT } from "../../packages/sandbox-extension/src/runtime/worker-protocol.js";
 
 export function testSandboxWorkerCommand(): readonly [string, ...string[]] {
   const configured = process.env.PI_SANDBOX_BUN_PATH;

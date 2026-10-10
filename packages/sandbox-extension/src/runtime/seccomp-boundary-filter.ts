@@ -1,6 +1,6 @@
 import { constants as osConstants } from "node:os";
 
-import type { NetworkMode } from "../domain/index.js";
+import type { NetworkMode } from "./contracts.js";
 
 const BPF_LD_W_ABS = 0x20;
 const BPF_JMP_JEQ_K = 0x15;

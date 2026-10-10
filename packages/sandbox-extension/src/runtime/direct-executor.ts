@@ -7,7 +7,7 @@ import {
   createHostCommandExecutor,
   HostCommandExecutionError,
   type HostCommandExecutor,
-} from "../host/index.js";
+} from "./host-command/index.js";
 import {
   SandboxExecutionError,
   TOOL_COMMAND_NAMES,
@@ -20,7 +20,7 @@ import {
   type ToolCommandName,
   type ToolCommandPaths,
 } from "./contracts.js";
-import { LINUX_TOOL_COMMANDS } from "./bubblewrap-executor.js";
+import { LINUX_TOOL_COMMANDS } from "./tool-commands.js";
 
 export interface CreateDirectExecutorOptions {
   readonly cwd: string;

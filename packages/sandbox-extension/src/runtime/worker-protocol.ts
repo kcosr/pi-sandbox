@@ -1,6 +1,6 @@
 import { constants as osConstants } from "node:os";
 
-import { PROCESS_LIFETIMES, type ProcessLifetime } from "../domain/index.js";
+import { PROCESS_LIFETIMES, type ProcessLifetime } from "./contracts.js";
 import type { SandboxExecutionErrorCode } from "./contracts.js";
 
 export const SANDBOX_WORKER_PROTOCOL_VERSION = 2;

@@ -10,13 +10,13 @@ import {
   createBubblewrapExecutor,
   SandboxExecutionError,
   type SandboxExecutor,
-} from "../../src/sandbox/index.js";
+} from "../../packages/sandbox-extension/src/runtime/index.js";
 import {
   executeFind,
   executeGrep,
   executeLs,
   executeRead,
-} from "../../src/extension/executor-operations.js";
+} from "../../packages/sandbox-extension/src/tools/executor-operations.js";
 import { testSandboxWorkerCommand } from "../helpers/sandbox-worker.js";
 
 const BWRAP_PATH = process.env.PI_SANDBOX_BWRAP_PATH ?? "/usr/bin/bwrap";

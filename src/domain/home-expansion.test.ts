@@ -6,7 +6,7 @@ import {
   parseManagedEnvironment,
 } from "./environment.js";
 import { expandManagedHomePaths } from "./home-expansion.js";
-import { MAXIMUM_ADMINISTRATIVE_PATH_BYTES } from "./paths.js";
+import { MAXIMUM_ADMINISTRATIVE_PATH_BYTES } from "../../packages/sandbox-extension/src/runtime/paths.js";
 
 const account = (homeDirectory: string) => ({ username: "alice", uid: 1001, homeDirectory });
 

@@ -1,9 +1,9 @@
 import type { ResolvedMcpServer } from "../mcp/resolve.js";
 import type { ManagedMcpPreferences } from "../mcp/preferences.js";
 import type { SandboxConfig } from "../domain/index.js";
-import type { HostCommandExecutor } from "../host/index.js";
+import type { HostCommandExecutor } from "../../packages/sandbox-extension/src/runtime/host-command/index.js";
 import type { ManagedExtensionInstance, PiToolExtension } from "../managed-extensions/sdk.js";
-import type { SandboxExecutor } from "../sandbox/index.js";
+import type { SandboxExecutor } from "../../packages/sandbox-extension/src/runtime/index.js";
 import type { AuditClient } from "../audit/client.js";
 
 export interface ExtensionDependencies {
@@ -26,4 +26,4 @@ export interface ExtensionDependencies {
   readonly hostExecutors?: Readonly<Record<string, HostCommandExecutor>>;
 }
 
-export type { SandboxExecutor } from "../sandbox/index.js";
+export type { SandboxExecutor } from "../../packages/sandbox-extension/src/runtime/index.js";

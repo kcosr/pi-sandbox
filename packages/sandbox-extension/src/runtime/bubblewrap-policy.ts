@@ -1,11 +1,12 @@
 import path from "node:path";
 
+import type { NetworkMode } from "./contracts.js";
+
 import {
   PRIVATE_SANDBOX_SYSTEM_PATHS,
   isNormalizedAbsoluteFilePath,
   isReservedHiddenDirectoryPath,
-  type NetworkMode,
-} from "../domain/index.js";
+} from "./paths.js";
 
 const SAFE_ENVIRONMENT = Object.freeze({
   HOME: "/run/pi-sandbox/home",

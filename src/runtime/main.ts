@@ -24,7 +24,10 @@ import { expandManagedHomePaths, overlayManagedEnvironment } from "../domain/ind
 import { createPiSandboxExtension } from "../extension/index.js";
 import { resolveMcpServers } from "../mcp/resolve.js";
 import { loadMcpPreferences } from "../mcp/preferences.js";
-import { createHostCommandExecutor, type HostCommandExecutor } from "../host/index.js";
+import {
+  createHostCommandExecutor,
+  type HostCommandExecutor,
+} from "../../packages/sandbox-extension/src/runtime/host-command/index.js";
 import {
   applyIdentityOverrides,
   type BrokerIdentityResolver,
@@ -42,7 +45,7 @@ import {
   createBubblewrapExecutor,
   createDirectExecutor,
   type SandboxExecutor,
-} from "../sandbox/index.js";
+} from "../../packages/sandbox-extension/src/runtime/index.js";
 import {
   createManagedPiArguments,
   isManagedMcpSelected,

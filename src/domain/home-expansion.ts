@@ -1,6 +1,9 @@
 import { expandAccountValue, type AccountIdentity } from "./account-macros.js";
 import { parseManagedEnvironment } from "./environment.js";
-import { isNormalizedAbsoluteFilePath, isReservedHiddenDirectoryPath } from "./paths.js";
+import {
+  isNormalizedAbsoluteFilePath,
+  isReservedHiddenDirectoryPath,
+} from "../../packages/sandbox-extension/src/runtime/paths.js";
 import type { EnvironmentVariables, FilesystemConfig, ManagedEnvironment } from "./policy.js";
 
 /** Resolve the effective policy once, after broker overlays and before applying its environment. */

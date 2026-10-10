@@ -12,7 +12,10 @@ import { SettingsManager } from "@earendil-works/pi-coding-agent";
 import { isManagedToolSelected } from "../runtime/arguments.js";
 
 import { TOOL_NAMES, type SandboxConfig, type ToolName } from "../domain/index.js";
-import type { HostCommandExecutor, HostCommandRequest } from "../host/index.js";
+import type {
+  HostCommandExecutor,
+  HostCommandRequest,
+} from "../../packages/sandbox-extension/src/runtime/host-command/index.js";
 import {
   freezeExtensionConfig,
   type JsonObject,
@@ -20,9 +23,9 @@ import {
   type ManagedToolExecutionContext,
   type PiToolExtension,
 } from "../managed-extensions/sdk.js";
-import { SandboxExecutionError } from "../sandbox/index.js";
+import { SandboxExecutionError } from "../../packages/sandbox-extension/src/runtime/index.js";
 import { createPiSandboxExtension } from "./index.js";
-import { LINUX_TOOL_COMMANDS } from "../sandbox/index.js";
+import { LINUX_TOOL_COMMANDS } from "../../packages/sandbox-extension/src/runtime/index.js";
 import type { AuditClient, AuditEvent } from "../audit/client.js";
 import type { SandboxExecutor } from "./types.js";
 

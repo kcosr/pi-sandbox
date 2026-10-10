@@ -6,7 +6,10 @@ import { promisify } from "node:util";
 import { afterEach, describe, expect, it } from "vitest";
 
 import { expandManagedHomePaths } from "../../src/domain/index.js";
-import { createBubblewrapExecutor, type SandboxExecutor } from "../../src/sandbox/index.js";
+import {
+  createBubblewrapExecutor,
+  type SandboxExecutor,
+} from "../../packages/sandbox-extension/src/runtime/index.js";
 import { testSandboxWorkerCommand } from "../helpers/sandbox-worker.js";
 
 const bubblewrapPath = process.env.PI_SANDBOX_BWRAP_PATH ?? "/usr/bin/bwrap";
@@ -288,7 +291,7 @@ describe.skipIf(!available)("hidden paths through real Bubblewrap", () => {
     const hiddenPaths = [path.join(root, "visible.txt"), path.join(cwd, "secret.txt")];
     const workerCommand = testSandboxWorkerCommand();
     const source = `
-      import { createBubblewrapExecutor } from ${JSON.stringify(path.resolve("src/sandbox/bubblewrap-executor.ts"))};
+      import { createBubblewrapExecutor } from ${JSON.stringify(path.resolve("packages/sandbox-extension/src/runtime/bubblewrap-executor.ts"))};
       const executor = await createBubblewrapExecutor(${JSON.stringify({ cwd, bubblewrapPath, hiddenPaths, workerCommand })});
       try {
         const result = await executor.execute({ argv: ["/bin/cat", ${hiddenPaths.map((target) => JSON.stringify(target)).join(", ")}] });

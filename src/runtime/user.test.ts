@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { INTERNAL_SANDBOX_WORKER_ARGUMENT } from "../sandbox/worker-protocol.js";
+import { INTERNAL_SANDBOX_WORKER_ARGUMENT } from "../../packages/sandbox-extension/src/runtime/worker-protocol.js";
 import { assertRuntimeUser } from "./user.js";
 
 describe("runtime user admission", () => {

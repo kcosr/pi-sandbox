@@ -8,7 +8,10 @@ import {
   type SubjectPolicy,
   type ToolName,
 } from "../domain/index.js";
-import { describeBubblewrapMounts, safeSandboxEnvironment } from "../sandbox/bubblewrap-policy.js";
+import {
+  describeBubblewrapMounts,
+  safeSandboxEnvironment,
+} from "../../packages/sandbox-extension/src/runtime/bubblewrap-policy.js";
 
 export type SandboxDiagnosticSubject = string;
 

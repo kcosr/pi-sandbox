@@ -1,20 +1,8 @@
-import {
-  createBashToolDefinition,
-  createEditToolDefinition,
-  createFindToolDefinition,
-  createGrepToolDefinition,
-  createLsToolDefinition,
-  createReadToolDefinition,
-  createWriteToolDefinition,
-  truncateTail,
-  type ExtensionAPI,
-  type ExtensionFactory,
-  type ExtensionContext,
-  type ExtensionHandler,
-  type ToolDefinition,
-  type ToolRenderers,
-  type UserBashEvent,
-  type UserBashEventResult,
+import type {
+  ExtensionAPI,
+  ExtensionFactory,
+  ExtensionContext,
+  ToolDefinition,
 } from "@earendil-works/pi-coding-agent";
 import { Text } from "@earendil-works/pi-tui";
 import { ToolAuditor } from "../audit/tools.js";
@@ -29,20 +17,12 @@ import type {
 import type { PiToolExtension } from "../managed-extensions/sdk.js";
 import {
   PolicyEngine,
-  createApprovalPolicies,
   prepareApprovalRequest,
   type JsonObject,
-} from "../policy/index.js";
-import { SandboxExecutionError } from "../sandbox/index.js";
-import {
-  executeEdit,
-  executeFind,
-  executeGrep,
-  executeLs,
-  executeRead,
-  executeWrite,
-  normalizeSandboxPath,
-} from "./executor-operations.js";
+  type ApprovalRequest,
+  TOOL_NAMES,
+} from "../../packages/sandbox-extension/src/policy/index.js";
+import { SandboxExecutionError } from "../../packages/sandbox-extension/src/runtime/index.js";
 import {
   formatSandboxMounts,
   formatSandboxPolicy,
@@ -50,8 +30,12 @@ import {
   diagnosticSubjects,
   sandboxCommandArguments,
 } from "./diagnostics.js";
+import { createSandboxExtension } from "../../packages/sandbox-extension/src/factory.js";
 import type { ExtensionDependencies, SandboxExecutor } from "./types.js";
-import { approvalUi, approvalPreview } from "./approval.js";
+import {
+  approvalUi,
+  approvalPreview,
+} from "../../packages/sandbox-extension/src/policy/approval.js";
 import { ManagedMcpRuntime } from "../mcp/runtime.js";
 import { createManagedCodemodeExtension } from "../codemode/index.js";
 import { isManagedToolSelected, selectManagedActiveTools } from "../runtime/arguments.js";
@@ -148,126 +132,10 @@ function policyWrappedPiTool(definition: ToolDefinition, state: ExtensionState):
   } as ToolDefinition;
 }
 
-const SHELL_OUTPUT_LIMIT = 8 * 1024 * 1024;
-const SHELL_UPDATE_THROTTLE_MS = 100;
 const MANAGED_TOOL_CALL_SUMMARY_MAX_BYTES = 1024;
 function sandboxCommandUsage(config?: SandboxConfig): string {
   const subjects = config === undefined ? "<tool>" : diagnosticSubjects(config).join("|");
   return `Usage: /sandbox [mounts | policy [${subjects}] | mcp [server]]`;
-}
-
-interface ShellSnapshot {
-  readonly output: string;
-  readonly truncated: boolean;
-  readonly details: { readonly truncation?: ReturnType<typeof truncateTail> } | undefined;
-}
-
-class ShellOutputCollector {
-  private readonly chunks: Buffer[] = [];
-  private timer: NodeJS.Timeout | undefined;
-  private dirty = false;
-  private lastUpdateAt = 0;
-
-  public constructor(private readonly update?: (snapshot: ShellSnapshot) => void) {}
-
-  public append(chunk: Buffer): void {
-    this.chunks.push(Buffer.from(chunk));
-    this.scheduleUpdate();
-  }
-
-  public hasOutput(): boolean {
-    return this.chunks.length > 0;
-  }
-
-  public appendFallback(stdout: Buffer, stderr: Buffer): void {
-    if (this.hasOutput()) return;
-    if (stdout.length > 0) this.chunks.push(Buffer.from(stdout));
-    if (stderr.length > 0) this.chunks.push(Buffer.from(stderr));
-  }
-
-  public finish(): ShellSnapshot {
-    if (this.timer !== undefined) clearTimeout(this.timer);
-    this.timer = undefined;
-    const snapshot = this.snapshot();
-    if (this.dirty) this.update?.(snapshot);
-    this.dirty = false;
-    return snapshot;
-  }
-
-  private snapshot(): ShellSnapshot {
-    const truncation = truncateTail(
-      sanitizeShellOutput(Buffer.concat(this.chunks).toString("utf8")),
-    );
-    const notice = truncation.truncated
-      ? `\n\n[Showing the bounded tail of command output; earlier output was discarded.]`
-      : "";
-    return {
-      output: `${truncation.content}${notice}`,
-      truncated: truncation.truncated,
-      details: truncation.truncated ? { truncation } : undefined,
-    };
-  }
-
-  private scheduleUpdate(): void {
-    if (this.update === undefined) return;
-    this.dirty = true;
-    const delay = SHELL_UPDATE_THROTTLE_MS - (Date.now() - this.lastUpdateAt);
-    if (delay <= 0) {
-      this.emitUpdate();
-      return;
-    }
-    this.timer ??= setTimeout(() => {
-      this.timer = undefined;
-      this.emitUpdate();
-    }, delay);
-  }
-
-  private emitUpdate(): void {
-    if (!this.dirty) return;
-    this.dirty = false;
-    this.lastUpdateAt = Date.now();
-    this.update?.(this.snapshot());
-  }
-}
-
-function sanitizeShellOutput(value: string): string {
-  let output = "";
-  for (let index = 0; index < value.length; index += 1) {
-    const code = value.codePointAt(index);
-    if (code === undefined) continue;
-    if (code > 0xffff) index += 1;
-    if (code === 0x1b || code === 0x9b) {
-      const next = code === 0x1b ? value.codePointAt(index + 1) : 0x5b;
-      if (next === 0x5d) {
-        if (code === 0x1b) index += 1;
-        while (index + 1 < value.length) {
-          index += 1;
-          const current = value.codePointAt(index);
-          if (current === 0x07 || current === 0x9c) break;
-          if (current === 0x1b && value.codePointAt(index + 1) === 0x5c) {
-            index += 1;
-            break;
-          }
-        }
-        continue;
-      }
-      if (next === 0x5b) {
-        if (code === 0x1b) index += 1;
-        while (index + 1 < value.length) {
-          index += 1;
-          const current = value.codePointAt(index) ?? 0;
-          if (current >= 0x40 && current <= 0x7e) break;
-        }
-        continue;
-      }
-      continue;
-    }
-    if (code === 0x0d) continue;
-    if (code === 0x09 || code === 0x0a) output += String.fromCodePoint(code);
-    else if (code > 0x1f && !(code >= 0x7f && code <= 0x9f) && !(code >= 0xfff9 && code <= 0xfffb))
-      output += String.fromCodePoint(code);
-  }
-  return output;
 }
 
 async function authorize<T extends JsonObject>(
@@ -285,15 +153,28 @@ async function authorize<T extends JsonObject>(
     display: approvalPreview(subject, rawArguments),
     arguments: rawArguments,
   });
+  await authorizeRequest(state, request, ctx, signal);
+  return request.arguments as T;
+}
+
+async function authorizeRequest(
+  state: ExtensionState,
+  request: ApprovalRequest,
+  ctx: ExtensionContext,
+  signal?: AbortSignal,
+): Promise<void> {
+  if (state.policy === undefined || state.stopped) {
+    throw new Error("Pi Sandbox is not available");
+  }
   const ui = approvalUi(ctx);
   const decision = await state.policy.evaluate(request, {
     ...(ui === undefined ? {} : { ui }),
     ...(signal === undefined ? {} : { signal }),
   });
-  await state.auditor?.decision(decision, subject);
-  if (!decision.allowed) throw new Error(`Pi Sandbox denied ${subject}: ${decision.reason}`);
+  await state.auditor?.decision(decision, request.subject);
+  if (!decision.allowed)
+    throw new Error(`Pi Sandbox denied ${request.subject}: ${decision.reason}`);
   if (signal?.aborted === true) throw new SandboxExecutionError("sandbox_aborted");
-  return request.arguments as T;
 }
 
 function registerManagedTools(
@@ -395,245 +276,6 @@ function hasControlCharacter(value: string): boolean {
   return false;
 }
 
-// Pi's stock edit call renderer reads the target file in this host process to preview a diff,
-// before approval and outside the sandbox. Draw every edit call with the path only, including
-// calls Pi renders while the edit tool is disabled and therefore unregistered.
-const renderEditCall: NonNullable<ToolRenderers["renderCall"]> = (args, theme, context) => {
-  const component =
-    context.lastComponent instanceof Text ? context.lastComponent : new Text("", 0, 0);
-  const path =
-    typeof args === "object" && args !== null && "path" in args && typeof args.path === "string"
-      ? args.path
-      : "[invalid path]";
-  component.setText(`${theme.fg("toolTitle", theme.bold("edit"))} ${theme.fg("accent", path)}`);
-  return component;
-};
-
-function registerTools(
-  pi: ExtensionAPI,
-  state: ExtensionState,
-  enabled: ReadonlySet<ToolName>,
-  cwd: string,
-): void {
-  const executor = state.executor;
-  if (executor === undefined) throw new Error("Pi Sandbox executor is not initialized");
-  const executionScope =
-    executor.backend === "bubblewrap"
-      ? "inside the Bubblewrap sandbox"
-      : "directly on the host as the current user";
-
-  if (enabled.has("read")) {
-    const base = withoutToolFields(createReadToolDefinition(cwd), "execute");
-    pi.registerTool({
-      ...base,
-      async execute(_id, params, signal, _onUpdate, ctx) {
-        const args = await authorize(
-          state,
-          "read",
-          { ...params, path: normalizeSandboxPath(cwd, params.path, executor.home) },
-          ctx,
-          signal,
-        );
-        return executeRead(executor, args, cwd, signal);
-      },
-    });
-  }
-  if (enabled.has("write")) {
-    const base = withoutToolFields(createWriteToolDefinition(cwd), "execute");
-    pi.registerTool({
-      ...base,
-      async execute(_id, params, signal, _onUpdate, ctx) {
-        const args = await authorize(
-          state,
-          "write",
-          { ...params, path: normalizeSandboxPath(cwd, params.path, executor.home) },
-          ctx,
-          signal,
-        );
-        return executeWrite(executor, args, cwd, signal);
-      },
-    });
-  }
-  if (enabled.has("edit")) {
-    // Keep every other Pi 1.0 definition field, including prepareArguments and the settled-result
-    // renderer.
-    const base = withoutToolFields(createEditToolDefinition(cwd), "execute", "renderCall");
-    pi.registerTool({
-      ...base,
-      renderCall: renderEditCall,
-      async execute(_id, params, signal, _onUpdate, ctx) {
-        const args = await authorize(
-          state,
-          "edit",
-          { ...params, path: normalizeSandboxPath(cwd, params.path, executor.home) },
-          ctx,
-          signal,
-        );
-        return executeEdit(executor, args, cwd, signal);
-      },
-    });
-  }
-  if (enabled.has("ls")) {
-    const base = withoutToolFields(createLsToolDefinition(cwd), "execute");
-    pi.registerTool({
-      ...base,
-      async execute(_id, params, signal, _onUpdate, ctx) {
-        const args = await authorize(
-          state,
-          "ls",
-          { ...params, path: normalizeSandboxPath(cwd, params.path ?? ".", executor.home) },
-          ctx,
-          signal,
-        );
-        return executeLs(executor, args, cwd, signal);
-      },
-    });
-  }
-  if (enabled.has("find")) {
-    const base = withoutToolFields(createFindToolDefinition(cwd), "execute");
-    pi.registerTool({
-      ...base,
-      description: `Search for files ${executionScope} using GNU find glob semantics: patterns without a slash match basenames (-name); patterns with a slash match paths relative to the search root (-path). Returns relative paths and skips .git and node_modules.`,
-      promptSnippet: `Find files with GNU find glob patterns ${executionScope}`,
-      async execute(_id, params, signal, _onUpdate, ctx) {
-        const args = await authorize(
-          state,
-          "find",
-          { ...params, path: normalizeSandboxPath(cwd, params.path ?? ".", executor.home) },
-          ctx,
-          signal,
-        );
-        return executeFind(executor, args, cwd, signal);
-      },
-    });
-  }
-  if (enabled.has("grep")) {
-    const base = withoutToolFields(createGrepToolDefinition(cwd), "execute");
-    pi.registerTool({
-      ...base,
-      description: `Search file contents ${executionScope}. Returns matching lines with file paths and line numbers and skips .git directories.`,
-      promptSnippet: `Search file contents ${executionScope}`,
-      async execute(_id, params, signal, _onUpdate, ctx) {
-        const args = await authorize(
-          state,
-          "grep",
-          { ...params, path: normalizeSandboxPath(cwd, params.path ?? ".", executor.home) },
-          ctx,
-          signal,
-        );
-        return executeGrep(executor, args, cwd, signal);
-      },
-    });
-  }
-  if (enabled.has("bash")) {
-    // Keep Pi's schema and renderers, but not its host-side OutputAccumulator, which writes
-    // truncated command output to the host /tmp outside the sandbox boundary.
-    const base = withoutToolFields(createBashToolDefinition(cwd), "execute");
-    pi.registerTool({
-      ...base,
-      description: `Execute a Bash command ${executionScope}. Output is a bounded tail; earlier output is discarded rather than written to a host temporary file. Timeout defaults to 120 seconds and may be set from greater than 0 through 600 seconds.`,
-      promptGuidelines: [],
-      parameters: {
-        ...base.parameters,
-        properties: {
-          ...base.parameters.properties,
-          timeout: {
-            ...base.parameters.properties.timeout,
-            description: "Timeout in seconds (default 120, maximum 600)",
-            exclusiveMinimum: 0,
-            maximum: 600,
-          },
-        },
-      },
-      async execute(_id, params, signal, onUpdate, ctx) {
-        const args = await authorize(state, "bash", { ...params, cwd }, ctx, signal);
-        const output = new ShellOutputCollector((snapshot) => {
-          onUpdate?.({
-            content: [{ type: "text", text: snapshot.output }],
-            details: snapshot.details,
-          });
-        });
-        let result;
-        try {
-          result = await executor.execute(
-            {
-              argv: [executor.commands.bash, "-c", args.command],
-              ...(args.timeout === undefined
-                ? {}
-                : { timeoutMs: bashTimeoutMilliseconds(args.timeout) }),
-              maxOutputBytes: SHELL_OUTPUT_LIMIT,
-            },
-            {
-              ...(signal === undefined ? {} : { signal }),
-              onStdout: (chunk) => output.append(chunk),
-              onStderr: (chunk) => output.append(chunk),
-            },
-          );
-        } catch (error) {
-          const snapshot = output.finish();
-          if (signal?.aborted === true || isSandboxAbort(error))
-            throw new Error(withShellStatus(snapshot.output, "Command aborted"), { cause: error });
-          throw new Error(
-            withShellStatus(
-              snapshot.output,
-              error instanceof Error ? error.message : "Sandbox command failed",
-            ),
-            { cause: error },
-          );
-        }
-        output.appendFallback(result.stdout, result.stderr);
-        const snapshot = output.finish();
-        if (result.exitCode !== 0)
-          throw new Error(
-            withShellStatus(snapshot.output, `Command exited with code ${String(result.exitCode)}`),
-          );
-        return {
-          content: [{ type: "text", text: snapshot.output || "(no output)" }],
-          details: snapshot.details,
-        };
-      },
-    });
-  }
-}
-
-function withoutToolFields<T extends object, K extends keyof T>(
-  source: T,
-  ...keys: K[]
-): Omit<T, K> {
-  const copy = { ...source };
-  for (const key of keys) Reflect.deleteProperty(copy, key);
-  return copy;
-}
-
-function withShellStatus(output: string, status: string): string {
-  return output.length > 0 ? `${output}\n\n${status}` : status;
-}
-
-function isSandboxAbort(error: unknown): boolean {
-  return error instanceof SandboxExecutionError && error.code === "sandbox_aborted";
-}
-
-function bashTimeoutMilliseconds(seconds: number): number {
-  if (!Number.isFinite(seconds) || seconds <= 0 || seconds > 600) {
-    throw new Error("Bash timeout must be greater than 0 and at most 600 seconds");
-  }
-  return Math.ceil(seconds * 1_000);
-}
-
-function failedUserShell(
-  reason: string,
-  options: { readonly cancelled?: boolean; readonly truncated?: boolean } = {},
-): UserBashEventResult {
-  return {
-    result: {
-      output: reason,
-      exitCode: options.cancelled === true ? undefined : 1,
-      cancelled: options.cancelled ?? false,
-      truncated: options.truncated ?? false,
-    },
-  };
-}
-
 export function createPiSandboxExtension(dependencies: ExtensionDependencies): ExtensionFactory {
   return async (pi) => {
     const state: ExtensionState = {
@@ -703,8 +345,29 @@ export function createPiSandboxExtension(dependencies: ExtensionDependencies): E
       },
     });
 
-    pi.registerToolRenderer((toolName, next) =>
-      toolName === "edit" ? { ...next(), renderCall: renderEditCall } : next(),
+    const sandboxTools = new Map<string, ToolDefinition>();
+    await createSandboxExtension({
+      cwd: dependencies.cwd,
+      getExecutor: () => {
+        if (state.executor === undefined || state.stopped)
+          throw new Error("Pi Sandbox is not available");
+        return state.executor;
+      },
+      tools: TOOL_NAMES,
+      authorize: (request, ctx, signal) => authorizeRequest(state, request, ctx, signal),
+      userBash: true,
+      executionScope:
+        dependencies.executor.backend === "bubblewrap"
+          ? "inside the Bubblewrap sandbox"
+          : "directly on the host as the current user",
+    })(
+      new Proxy(pi, {
+        get(target, property): unknown {
+          if (property === "registerTool")
+            return (definition: ToolDefinition) => sandboxTools.set(definition.name, definition);
+          return Reflect.get(target, property);
+        },
+      }),
     );
 
     pi.registerCommand("sandbox", {
@@ -797,7 +460,7 @@ export function createPiSandboxExtension(dependencies: ExtensionDependencies): E
       state.started = true;
       const config = await dependencies.loadConfig();
       state.config = config;
-      state.policy = new PolicyEngine(createApprovalPolicies(config), mcp?.resolveSubject);
+      state.policy = new PolicyEngine(config.tools, mcp?.resolveSubject);
       await dependencies.onSessionStart?.(ctx.sessionManager.getSessionFile());
       try {
         state.executor = dependencies.executor;
@@ -845,7 +508,9 @@ export function createPiSandboxExtension(dependencies: ExtensionDependencies): E
               isManagedToolSelected(dependencies.toolArguments ?? [], name),
           ),
         );
-        registerTools(registrationApi, state, enabled, dependencies.cwd);
+        for (const definition of sandboxTools.values()) {
+          if (enabled.has(definition.name)) registrationApi.registerTool(definition);
+        }
         registerManagedTools(registrationApi, state, enabled, dependencies.cwd);
         await registerPiToolExtensions(registrationApi, state, enabled);
         if (config.codemode.enabled && features?.selected("codemode") === true)
@@ -878,70 +543,6 @@ export function createPiSandboxExtension(dependencies: ExtensionDependencies): E
         throw new Error("Managed tool shutdown failed");
     });
 
-    const userBashHandler: ExtensionHandler<UserBashEvent, UserBashEventResult> = async (
-      event,
-      ctx,
-    ) => {
-      let signal: AbortSignal | undefined;
-      try {
-        signal = ctx.signal;
-      } catch (error) {
-        return failedUserShell(
-          error instanceof Error ? error.message : "Pi Sandbox user shell failed",
-          { cancelled: true },
-        );
-      }
-      try {
-        const executor = state.executor;
-        if (executor === undefined) throw new Error("Pi Sandbox executor is not initialized");
-        const output = new ShellOutputCollector();
-        let result;
-        try {
-          result = await executor.execute(
-            {
-              argv: [executor.commands.bash, "-c", event.command],
-              maxOutputBytes: SHELL_OUTPUT_LIMIT,
-            },
-            {
-              ...(signal === undefined ? {} : { signal }),
-              onStdout: (chunk) => output.append(chunk),
-              onStderr: (chunk) => output.append(chunk),
-            },
-          );
-        } catch (error) {
-          const snapshot = output.finish();
-          if (signal?.aborted === true || isSandboxAbort(error)) {
-            return failedUserShell(withShellStatus(snapshot.output, "Command aborted"), {
-              cancelled: true,
-              truncated: snapshot.truncated,
-            });
-          }
-          return failedUserShell(
-            withShellStatus(
-              snapshot.output,
-              error instanceof Error ? error.message : "Pi Sandbox user shell failed",
-            ),
-            { truncated: snapshot.truncated },
-          );
-        }
-        output.appendFallback(result.stdout, result.stderr);
-        const snapshot = output.finish();
-        return {
-          result: {
-            output: snapshot.output,
-            exitCode: result.exitCode ?? undefined,
-            cancelled: false,
-            truncated: snapshot.truncated,
-          },
-        };
-      } catch (error) {
-        return failedUserShell(
-          error instanceof Error ? error.message : "Pi Sandbox user shell failed",
-          signal?.aborted === true ? { cancelled: true } : {},
-        );
-      }
-    };
-    pi.on("user_bash", userBashHandler);
     const factories =
       features === undefined
         ? []

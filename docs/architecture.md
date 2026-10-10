@@ -1,5 +1,27 @@
 # Architecture
 
+## Reusable package and managed composition
+
+`packages/sandbox-extension` contains the filesystem/shell tool adapters,
+authorization engine, Bubblewrap/direct executors and required worker assets.
+The managed application imports this source directly and bundles it into its
+executable. Administrative configuration, identity resolution, admitted host
+extensions/MCP, model restrictions and audit submission stay in the managed layer.
+The same normalized immutable request is authorized and executed; extracting
+modules does not replace this boundary with extension hook ordering.
+
+The package also supplies a standard ordinary-Pi entry. That entry owns one
+backend per Pi process with explicit standalone configuration. Conversation
+replacement preserves the backend and clears session grants; quit or explicit
+extension reload closes it. There is no per-conversation sandbox pool. Background
+process survival still follows the selected process lifetime. The standalone
+entry imposes no restrictions on other user-installed extensions.
+
+Ordinary Pi starts the existing Bubblewrap worker through a packaged JavaScript
+entry and an explicitly configured Node/Bun runtime. Managed Pi continues to use
+its compiled internal-worker entry. These are two launch forms for the same
+implementation, not separate executors or a new monitoring service.
+
 ## Boundary placement
 
 Pi Sandbox deliberately keeps the stock Pi process on the host. Pi owns the

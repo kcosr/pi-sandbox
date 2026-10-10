@@ -8,7 +8,7 @@ import {
   createBubblewrapExecutor,
   type SandboxExecutionError,
   type SandboxExecutor,
-} from "../../src/sandbox/index.js";
+} from "../../packages/sandbox-extension/src/runtime/index.js";
 import { testSandboxWorkerCommand } from "../helpers/sandbox-worker.js";
 
 const REQUIRE_REAL_BWRAP = process.env.PI_SANDBOX_REQUIRE_BWRAP === "1";

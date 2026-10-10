@@ -1,5 +1,5 @@
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
-import type { ApprovalUi, JsonObject } from "../policy/index.js";
+import type { ApprovalUi, JsonObject } from "./policy-engine.js";
 
 /** Nested tools have no independent TUI card: the prompt must identify the operation. */
 export function approvalPreview(label: string, args: JsonObject): string {

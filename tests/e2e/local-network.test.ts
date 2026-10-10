@@ -4,7 +4,10 @@ import { mkdir, mkdtemp, readlink, rm } from "node:fs/promises";
 import { createServer, type Server } from "node:net";
 import path from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import { createBubblewrapExecutor, type SandboxExecutor } from "../../src/sandbox/index.js";
+import {
+  createBubblewrapExecutor,
+  type SandboxExecutor,
+} from "../../packages/sandbox-extension/src/runtime/index.js";
 import { testSandboxWorkerCommand } from "../helpers/sandbox-worker.js";
 
 const REQUIRE_REAL_BWRAP = process.env.PI_SANDBOX_REQUIRE_BWRAP === "1";

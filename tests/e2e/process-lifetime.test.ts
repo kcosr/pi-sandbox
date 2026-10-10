@@ -6,7 +6,10 @@ import { setTimeout as delay } from "node:timers/promises";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import type { ProcessLifetime } from "../../src/domain/index.js";
-import { createBubblewrapExecutor, type SandboxExecutor } from "../../src/sandbox/index.js";
+import {
+  createBubblewrapExecutor,
+  type SandboxExecutor,
+} from "../../packages/sandbox-extension/src/runtime/index.js";
 import { testSandboxWorkerCommand } from "../helpers/sandbox-worker.js";
 
 const BWRAP_PATH = process.env.PI_SANDBOX_BWRAP_PATH ?? "/usr/bin/bwrap";
@@ -230,7 +233,7 @@ describe.skipIf(!AVAILABLE)("Bubblewrap background process lifetime", () => {
       await writeFile(
         worker,
         `import { existsSync, unlinkSync, writeFileSync } from "node:fs";
-import { runSandboxWorker } from ${JSON.stringify(path.resolve("src/sandbox/worker.ts"))};
+import { runSandboxWorker } from ${JSON.stringify(path.resolve("packages/sandbox-extension/src/runtime/worker.ts"))};
 const write = process.stdout.write.bind(process.stdout);
 let held;
 process.stdout.write = (frame, callback) => {

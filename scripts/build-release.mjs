@@ -872,6 +872,11 @@ async function main() {
       mode: 0o644,
     });
     process.stdout.write(`Created and inspected ${archive}\nSHA-256 ${archiveSha256}\n`);
+    await run(
+      process.execPath,
+      [join(repositoryRoot, "scripts/pack-sandbox-extension.mjs"), options.out],
+      { env: cleanEnvironment },
+    );
   } finally {
     await rm(temporaryDirectory, { recursive: true, force: true });
   }

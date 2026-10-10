@@ -1,0 +1,38 @@
+{
+  "name": "@kcosr/pi-sandbox-extension",
+  "version": "0.1.0",
+  "description": "Reusable sandbox tools and execution backends for Pi",
+  "license": "MIT",
+  "type": "module",
+  "engines": {
+    "node": ">=24"
+  },
+  "peerDependencies": {
+    "@earendil-works/pi-coding-agent": "1.1.0",
+    "@earendil-works/pi-tui": "1.1.0"
+  },
+  "pi": {
+    "extensions": [
+      "./dist/index.js"
+    ]
+  },
+  "exports": {
+    ".": "./dist/index.js",
+    "./factory": "./dist/factory.js",
+    "./runtime": "./dist/runtime.js",
+    "./config": "./dist/config.js",
+    "./policy": "./dist/policy/index.js",
+    "./identity": "./dist/identity.js"
+  },
+  "files": [
+    "dist",
+    "README.md",
+    "LICENSE",
+    "provenance.json"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/kcosr/pi-sandbox.git",
+    "directory": "packages/sandbox-extension"
+  }
+}
