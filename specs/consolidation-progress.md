@@ -18,6 +18,7 @@ explicitly deferred until the Pi Sandbox milestones have been reviewed.
    in-process lifecycle handling. Native acceptance and another iterative Keel
    review are required. Implemented on `feat/linux-smolvm-extension`; integrated
    verification has passed; both Claude default and Claude Fable reviews are complete.
+   Draft PR [#17](https://github.com/kcosr/pi-sandbox/pull/17), based on #16.
 
 No macOS/Seatbelt or OpenCode work is included. The host Git clone race remains
 an accepted documented limitation; no clone-specific staging, cleanup, guardian
@@ -75,5 +76,9 @@ finished with no findings after its corrections. Its feedback added coverage
 for PID reuse, cleanup-error preservation, slow attachment readers, many small
 writes, and cross-stream output ordering. Final source passed 803 unit tests,
 including native OCI tests, and repeated the real ordinary-Pi package checks.
-Development archives are verification artifacts, not a published release.
+The clean rebuild from implementation commit `2e18eee` repeated all 352
+patched-Pi tests and passed the packaged managed Bubblewrap/smolvm checks. Both
+application and extension archives passed layout, version, provenance and
+checksum inspection. These archives are verification artifacts, not a published
+release.
 Evaluator adoption remains paused.
