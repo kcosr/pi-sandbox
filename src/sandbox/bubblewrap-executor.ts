@@ -510,8 +510,19 @@ class PersistentBubblewrapExecutor implements SandboxExecutor {
     const signal = response.signal;
     const pendingFailure = pending.failure;
     if (pendingFailure !== undefined) {
+      // Sandbox results are offered before the worker releases its queue. A
+      // cancellation already sent by failPending must be acknowledged by the
+      // post-cleanup failure response before the caller may observe rejection.
+      if (this.processLifetime === "sandbox") return;
       this.settlePending(pending, () => pending.reject(pendingFailure));
     } else {
+      if (this.processLifetime === "sandbox") {
+        void this.send({ type: "accept", id: pending.id }).catch((cause: unknown) =>
+          this.workerFailed(cause),
+        );
+      }
+      // Accept and remove cancellation synchronously; awaiting the pipe write
+      // here would permit cancellation after acceptance was already enqueued.
       this.settlePending(pending, () =>
         pending.resolve({
           exitCode: response.exitCode,

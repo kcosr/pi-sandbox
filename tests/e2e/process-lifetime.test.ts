@@ -51,13 +51,16 @@ describe.skipIf(!AVAILABLE)("Bubblewrap background process lifetime", () => {
     await rm(directory, { recursive: true, force: true });
   });
 
-  async function create(processLifetime?: ProcessLifetime): Promise<SandboxExecutor> {
+  async function create(
+    processLifetime?: ProcessLifetime,
+    workerCommand = testSandboxWorkerCommand(),
+  ): Promise<SandboxExecutor> {
     const executor = await createBubblewrapExecutor({
       cwd,
       bubblewrapPath: BWRAP_PATH,
       networkMode: "local",
       ...(processLifetime === undefined ? {} : { processLifetime }),
-      workerCommand: testSandboxWorkerCommand(),
+      workerCommand,
     });
     executors.push(executor);
     return executor;
@@ -214,6 +217,86 @@ describe.skipIf(!AVAILABLE)("Bubblewrap background process lifetime", () => {
           spawn: "sandbox_process_failed",
         }[failure],
       });
+      await expectServerStopped(executor, port);
+    },
+  );
+
+  it.each(["abort", "timeout", "shutdown"] as const)(
+    "cleans up when %s wins while a completed result is in transit",
+    async (failure) => {
+      const worker = path.join(directory, "delayed-result-worker.mjs");
+      // Simulate a fully written result still buffered in the transport. Acknowledge
+      // writes immediately, but preserve frame ordering until the test releases them.
+      await writeFile(
+        worker,
+        `import { existsSync, unlinkSync, writeFileSync } from "node:fs";
+import { runSandboxWorker } from ${JSON.stringify(path.resolve("src/sandbox/worker.ts"))};
+const write = process.stdout.write.bind(process.stdout);
+let held;
+process.stdout.write = (frame, callback) => {
+  const response = JSON.parse(frame.subarray(4).toString());
+  if (!held && response.type === "result" && existsSync("hold-result")) {
+    unlinkSync("hold-result");
+    held = [];
+    setImmediate(() => writeFileSync("result-held", "ready"));
+    const timer = setInterval(() => {
+      if (!existsSync("release-result")) return;
+      clearInterval(timer);
+      const frames = held;
+      held = undefined;
+      for (const buffered of frames) write(buffered);
+    }, 5);
+  }
+  if (held) {
+    held.push(Buffer.from(frame));
+    queueMicrotask(() => callback?.());
+    return true;
+  }
+  return write(frame, callback);
+};
+await runSandboxWorker();
+`,
+      );
+      const executor = await create("sandbox", [testSandboxWorkerCommand()[0], worker]);
+      const port = await startServer(executor);
+      await writeFile(path.join(cwd, "hold-result"), "");
+      const controller = new AbortController();
+      const running = executor.execute(
+        { argv: ["/bin/true"], timeoutMs: failure === "timeout" ? 1_000 : 5_000 },
+        { signal: controller.signal },
+      );
+      const failed = expect(running).rejects.toMatchObject({
+        code: {
+          abort: "sandbox_aborted",
+          timeout: "sandbox_timeout",
+          shutdown: "sandbox_closed",
+        }[failure],
+      });
+      await expect.poll(() => existsSync(path.join(cwd, "result-held"))).toBe(true);
+      if (failure === "shutdown") {
+        const closed = executor.close();
+        await writeFile(path.join(cwd, "release-result"), "");
+        await failed;
+        await closed;
+        const heartbeat = await readFile(path.join(cwd, "server.heartbeat"), "utf8");
+        await delay(100);
+        expect(await readFile(path.join(cwd, "server.heartbeat"), "utf8")).toBe(heartbeat);
+        return;
+      }
+      const next = executor.execute({
+        argv: ["/bin/bash", "-c", "touch next-started; sleep 0.1; printf next"],
+      });
+      const nextSucceeded = expect(next).resolves.toMatchObject({
+        exitCode: 0,
+        stdout: Buffer.from("next"),
+      });
+      await delay(100);
+      expect(existsSync(path.join(cwd, "next-started"))).toBe(false);
+      if (failure === "abort") controller.abort();
+      else await delay(1_000);
+      await writeFile(path.join(cwd, "release-result"), "");
+      await failed;
+      await nextSucceeded;
       await expectServerStopped(executor, port);
     },
   );

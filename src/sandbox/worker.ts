@@ -27,6 +27,7 @@ interface ActiveExecution extends QueuedExecution {
   child: ChildProcess | undefined;
   failure: WorkerFailureResponse | undefined;
   forceKillTimer: NodeJS.Timeout | undefined;
+  completion: { accepted: boolean; readonly resolve: () => void } | undefined;
 }
 
 export async function runSandboxWorker(): Promise<void> {
@@ -80,6 +81,21 @@ class SandboxWorker {
       this.cancel(request.id);
       return;
     }
+    if (request.type === "accept") {
+      const active = this.#active;
+      if (
+        active?.request.id !== request.id ||
+        active.completion === undefined ||
+        active.completion.accepted ||
+        active.failure !== undefined
+      ) {
+        this.fatal(new Error("sandbox_worker_accept_invalid"));
+        return;
+      }
+      active.completion.accepted = true;
+      active.completion.resolve();
+      return;
+    }
     if (this.#ids.has(request.id)) {
       this.fatal(new Error("sandbox_worker_request_id_reused"));
       return;
@@ -127,6 +143,7 @@ class SandboxWorker {
       child: undefined,
       failure: undefined,
       forceKillTimer: undefined,
+      completion: undefined,
     };
     this.#active = active;
     let timeout: NodeJS.Timeout | undefined;
@@ -193,8 +210,31 @@ class SandboxWorker {
       if (queued.request.processLifetime === "command" || active.failure !== undefined) {
         await this.killOtherSandboxProcesses();
       }
-      if (active.failure !== undefined) await this.send(active.failure);
-      else await this.send({ type: "result", id: queued.request.id, ...result });
+      if (active.failure !== undefined) {
+        await this.send(active.failure);
+      } else if (queued.request.processLifetime === "sandbox") {
+        // Publishing a result is not completion until the parent accepts it.
+        // Its timeout/abort can still win while this frame travels through the
+        // pipe. Hold the queue so that cancellation cleanup cannot kill a later
+        // command, and let the parent's deadline govern this final decision.
+        if (timeout !== undefined) clearTimeout(timeout);
+        timeout = undefined;
+        let resolveCompletion!: () => void;
+        const accepted = new Promise<void>((resolve) => {
+          resolveCompletion = resolve;
+        });
+        const completion = { accepted: false, resolve: resolveCompletion };
+        active.completion = completion;
+        await this.send({ type: "result", id: queued.request.id, ...result });
+        await accepted;
+        if (!completion.accepted) {
+          await this.killOtherSandboxProcesses();
+          if (active.failure === undefined) throw new Error("sandbox_worker_completion_invalid");
+          await this.send(active.failure);
+        }
+      } else {
+        await this.send({ type: "result", id: queued.request.id, ...result });
+      }
     } catch (cause) {
       await this.killOtherSandboxProcesses();
       await this.send(failure(queued.request.id, "sandbox_process_failed", cause));
@@ -215,6 +255,7 @@ class SandboxWorker {
     const active = this.#active;
     if (active === undefined || active.failure !== undefined) return;
     active.failure = { type: "failure", id: active.request.id, code };
+    active.completion?.resolve();
     const child = active.child;
     if (child?.pid !== undefined) signalProcessGroup(child.pid, "SIGTERM");
     active.forceKillTimer = setTimeout(() => {

@@ -69,6 +69,9 @@ describe("sandbox worker protocol", () => {
     ).toBe(true);
     expect(isWorkerRequest({ type: "execute", id: 0, argv: [] })).toBe(false);
     expect(isWorkerRequest({ type: "cancel", id: 2, extra: true })).toBe(false);
+    expect(isWorkerRequest({ type: "accept", id: 2 })).toBe(true);
+    expect(isWorkerRequest({ type: "accept", id: 0 })).toBe(false);
+    expect(isWorkerRequest({ type: "accept", id: 2, extra: true })).toBe(false);
     expect(isWorkerResponse({ type: "ready", protocolVersion: 2 })).toBe(true);
     expect(isWorkerResponse({ type: "result", id: 2, exitCode: 0, signal: "SIGTERM" })).toBe(false);
     expect(isWorkerResponse({ type: "failure", id: 2, code: "not_a_code" })).toBe(false);

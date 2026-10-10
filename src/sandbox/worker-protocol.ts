@@ -23,11 +23,18 @@ export interface WorkerCancelRequest {
   readonly id: number;
 }
 
+/** Commit a sandbox-lifetime result before the worker may start another command. */
+export interface WorkerAcceptRequest {
+  readonly type: "accept";
+  readonly id: number;
+}
+
 export interface WorkerShutdownRequest {
   readonly type: "shutdown";
 }
 
-export type WorkerRequest = WorkerExecuteRequest | WorkerCancelRequest | WorkerShutdownRequest;
+export type WorkerRequest =
+  WorkerExecuteRequest | WorkerCancelRequest | WorkerAcceptRequest | WorkerShutdownRequest;
 
 export interface WorkerReadyResponse {
   readonly type: "ready";
@@ -96,7 +103,9 @@ export class WorkerFrameDecoder {
 export function isWorkerRequest(value: unknown): value is WorkerRequest {
   if (!isRecord(value) || typeof value.type !== "string") return false;
   if (value.type === "shutdown") return hasExactKeys(value, ["type"]);
-  if (value.type === "cancel") return hasExactKeys(value, ["type", "id"]) && isRequestId(value.id);
+  if (value.type === "cancel" || value.type === "accept") {
+    return hasExactKeys(value, ["type", "id"]) && isRequestId(value.id);
+  }
   if (value.type !== "execute") return false;
   return (
     hasExactKeys(value, [

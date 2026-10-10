@@ -304,6 +304,9 @@ using length-prefixed, versioned JSON frames. There is no socket, listening
 port, or filesystem control endpoint. Requests carry an identifier, direct
 argument vector, bounded input, duration, and output ceiling. The worker
 serializes requests and returns framed output and results.
+In `sandbox` process lifetime, the parent acknowledges a successful result before
+the worker starts the next request. If cancellation wins before acknowledgement,
+the worker cleans up the sandbox processes and returns a failure instead.
 
 The mount view is:
 
