@@ -14,9 +14,16 @@ import {
 import { buildLayout } from "../build-layout/index.js";
 import { connectAuditClient, type AuditClient } from "../audit/client.js";
 import { loadConfig } from "../config/index.js";
-import type { EnvironmentVariables, ManagedEnvironment, SandboxConfig } from "../domain/index.js";
+import type {
+  AccountIdentity,
+  EnvironmentVariables,
+  ManagedEnvironment,
+  SandboxConfig,
+} from "../domain/index.js";
 import { expandManagedHomePaths, overlayManagedEnvironment } from "../domain/index.js";
 import { createPiSandboxExtension } from "../extension/index.js";
+import { resolveMcpServers } from "../mcp/resolve.js";
+import { loadMcpPreferences } from "../mcp/preferences.js";
 import { createHostCommandExecutor, type HostCommandExecutor } from "../host/index.js";
 import {
   applyIdentityOverrides,
@@ -36,11 +43,11 @@ import {
   createDirectExecutor,
   type SandboxExecutor,
 } from "../sandbox/index.js";
-import { createManagedPiArguments, selectManagedActiveTools } from "./arguments.js";
+import { createManagedPiArguments, isManagedToolSelected } from "./arguments.js";
 import { applyManagedEnvironment } from "./environment.js";
 import { assertHostPrerequisites } from "./prerequisites.js";
 import { createWorkspaceBoundary } from "./workspace.js";
-import { readAccountHomeDirectory } from "./account-home.js";
+import { readAccountIdentity } from "./account-home.js";
 import type { SandboxArguments } from "./config-arguments.js";
 import {
   createSessionMaintenance,
@@ -50,20 +57,22 @@ import {
 
 export const SYSTEM_CONFIG_PATH = buildLayout.configPath;
 
-interface ManagedModelRuntimeOptions extends CreateModelRuntimeOptions {
+export interface ManagedModelRuntimeOptions extends CreateModelRuntimeOptions {
   readonly includeBuiltinCatalog: false;
 }
 
-type ManagedModelRuntimeFactory = (options?: CreateModelRuntimeOptions) => Promise<ModelRuntime>;
+export type ManagedModelRuntimeFactory = (
+  options?: CreateModelRuntimeOptions,
+) => Promise<ModelRuntime>;
 
-interface ManagedMainOptions {
+export interface ManagedMainOptions {
   readonly extensionFactories: Array<{ readonly name: string; readonly factory: ExtensionFactory }>;
   readonly createModelRuntime: ManagedModelRuntimeFactory;
   readonly validateSessionCwd: (cwd: string) => void;
   readonly beforeRun: (context: SessionMaintenanceContext) => Promise<void>;
 }
 
-type ManagedMain = (args: string[], options: ManagedMainOptions) => Promise<void>;
+export type ManagedMain = (args: string[], options: ManagedMainOptions) => Promise<void>;
 
 function pathUnderRoot(root: string, absolutePath: string): string {
   if (!isAbsolute(root)) throw new Error("validation root must be absolute");
@@ -161,7 +170,7 @@ export async function resolveEffectiveAdministrativeConfiguration(
   environment: NodeJS.ProcessEnv = process.env,
   resolveIdentity?: BrokerIdentityResolver,
   configPath = SYSTEM_CONFIG_PATH,
-  getHomeDirectory: () => string = readAccountHomeDirectory,
+  getAccountIdentity: () => AccountIdentity = readAccountIdentity,
 ): Promise<{
   readonly config: SandboxConfig;
   readonly modelsPath: string;
@@ -181,7 +190,7 @@ export async function resolveEffectiveAdministrativeConfiguration(
   const expanded = expandManagedHomePaths(
     overridden.filesystem,
     combinedEnvironment,
-    getHomeDirectory,
+    getAccountIdentity,
   );
   const effectiveEnvironment = expanded.environment;
   const config = Object.freeze({
@@ -406,8 +415,16 @@ export async function runPiSandbox({ piArgs: args, configPath }: SandboxArgument
   }
 
   const ambientHostEnvironment = { ...process.env };
+  let accountIdentity: AccountIdentity | undefined;
+  const getAccountIdentity = () => (accountIdentity ??= readAccountIdentity());
   const { config, modelsPath, identityEnvironment } =
-    await resolveEffectiveAdministrativeConfiguration("/", process.env, undefined, configPath);
+    await resolveEffectiveAdministrativeConfiguration(
+      "/",
+      process.env,
+      undefined,
+      configPath,
+      getAccountIdentity,
+    );
   const { cwd, validateSessionCwd } = createWorkspaceBoundary(process.cwd());
   const managedExtensions = instantiateConfiguredManagedExtensions(config);
   const piToolExtensions = selectConfiguredPiToolExtensions(config);
@@ -448,15 +465,22 @@ export async function runPiSandbox({ piArgs: args, configPath }: SandboxArgument
     const lease = applyManagedEnvironment(identityEnvironment.pi);
     try {
       const userStateDir = getAgentDir();
-      const enabledTools = new Set(
-        Object.keys(config.tools).filter((toolName) => config.tools[toolName]?.mode !== "disabled"),
-      );
+      const servers = await resolveMcpServers(config.mcp, process.env, getAccountIdentity);
+      const mcpPreferences = servers.some((server) => server.status === "ready")
+        ? await loadMcpPreferences(userStateDir)
+        : undefined;
       const extension = createPiSandboxExtension({
+        features: {
+          config,
+          servers,
+          ...(mcpPreferences === undefined ? {} : { mcpPreferences }),
+          selected: (name) => isManagedToolSelected(args, name),
+        },
         cwd,
         configPath,
         userStateDir,
         ...(config.sessions.retentionDays === 0 ? {} : { onSessionStart: touchSessionFile }),
-        activeTools: selectManagedActiveTools(args, enabledTools),
+        toolArguments: args,
         loadConfig: () => Promise.resolve(config),
         executor,
         ...(auditClient === undefined ? {} : { auditClient }),

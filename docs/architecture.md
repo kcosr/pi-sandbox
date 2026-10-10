@@ -32,6 +32,40 @@ managed-extension tools may instead declare host execution. Those tools still us
 approval machinery, but run only their fixed executable and argument shape as
 the invoking user outside Bubblewrap.
 
+## Managed MCP and code mode
+
+The forced extension composes Pi's patched MCP and code-mode factories only from
+administrator policy. Code mode executes bounded JavaScript in Pi's QuickJS WASM
+worker with tool bridges and session store; it has no Node, filesystem, process,
+network or provider-model API. Every nested tool uses the same wrapped execution
+and approval path as a direct invocation. Code mode has a feature switch, not an
+additional approval subject. It controls availability; normal Pi settings and CLI
+selection control activation, including automatic activation from MCP exposure.
+
+MCP servers use Pi's existing Streamable HTTP and stdio transports on the host.
+The main TOML owns endpoints, commands, credential mappings, default exposure, and ordered
+per-server wildcard policies. The stock MCP menu can change enabled/exposure
+preferences for admitted servers, persisted in the user's `mcp.json`; arbitrary
+user/project server definitions, extension-registered servers, OAuth, resources
+and prompts are disabled. HTTP
+headers and stdio environment values are explicit projections of a startup
+snapshot; stdio does not inherit the complete host environment. Account macros
+can personalize configured paths and environment values. MCP URLs remain literal.
+
+Each logical session owns its MCP connections and admitted catalog. Whole-catalog
+validation precedes publication. Wrappers retain typed original server/tool
+identity and a revision; changed catalogs and disconnects revoke pending
+approvals and affected grants. Static and dynamic subjects share one policy
+engine, prompt mutex and grant store. Hidden/withdrawn tool references cannot
+execute. User tool selections also apply to late registrations.
+
+Code mode and MCP have bounded source, output, catalog, concurrency and duration
+limits. Tool calls are never automatically replayed after transport failures.
+Shutdown closes admission, cancels scripts and calls, reaps owned stdio process
+groups, and awaits local cleanup before ending audit identity. The process-owned
+Bubblewrap worker remains available for the next logical session. Results stay
+inline; no host temporary output files are presented as sandbox-readable paths.
+
 ## RPC and session lifecycle
 
 The same managed executable accepts Pi's `--mode rpc`. A supervisor selects its
@@ -137,8 +171,8 @@ settings, skills, themes, and logs, but cannot redirect administrative policy,
 broker selection, or models. Missing or invalid effective inputs abort startup.
 
 Before applying the effective environment or starting executors, operational
-startup expands bare `~` and leading `~/` in configured scoped environment
-values and hidden paths using the invoking effective user's OS account home.
+startup expands bare `~`, leading `~/`, and account macros in configured scoped
+environment values and hidden paths using the invoking effective OS account.
 Expansion follows the broker merge and is independent of `$HOME` and CWD.
 Expanded values retain the existing environment bounds and filesystem checks.
 Installation validation checks syntax without expanding the installer's home.

@@ -166,7 +166,9 @@ export function applyIdentityOverrides(
     ]),
   ) as Record<string, ToolPolicy>;
   return Object.freeze({
-    configVersion: 9,
+    configVersion: 10,
+    codemode: base.codemode,
+    mcp: base.mcp,
     audit: base.audit,
     sessions: base.sessions,
     modelsFile: overrides.modelsFile ?? base.modelsFile,

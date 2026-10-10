@@ -78,7 +78,8 @@ The three scopes are intentionally separate:
 
 - `pi` is applied to the trusted host-side Pi process for model configuration,
   provider requests, and other Pi runtime use. It does not enter Bubblewrap or
-  a managed extension's host command.
+  a managed extension's host command. An MCP server receives only the values
+  explicitly mapped by its `headers_from_env` or `env_from_env` configuration.
 - `sandbox` is added to the otherwise fixed, cleared Bubblewrap environment or
   overlaid on the inherited environment of direct built-in commands. The model
   can read these values, so this scope must not contain secrets.
@@ -95,8 +96,11 @@ three scopes, including values overlaid from matching user/group rules. The
 broker returns unexpanded values; conflict checks compare the configured
 strings before expansion. The application expands the merged environment once,
 independently of `$HOME`, the broker's root account, and the launch directory,
-then rechecks its bounds. Other values remain literal. See
-[home-directory expansion](configuration.md#home-directory-expansion).
+then rechecks its bounds. `{{username}}` and `{{uid}}` expand in these configured
+values using the same effective OS account; `$USER`, `$LOGNAME`, and `SUDO_USER`
+are ignored. Expansion is single-pass; `{{{{` and `}}}}` escape literal braces.
+Unknown macro syntax is an error. Other values remain literal. See
+[home-directory and account expansion](configuration.md#home-directory-and-account-expansion).
 
 ## User and group rules
 
@@ -157,6 +161,11 @@ file; `overrides.execution.backend` accepts `bubblewrap` or `direct`;
 `overrides.filesystem.cwd_writable` is boolean. Each named entry in
 `overrides.tools` requires both `mode` and `session_grant`. Tool names must
 belong to the exact active base policy, including selected compiled tools.
+MCP server definitions, their per-server tool policies, and the code-mode switch
+are main-policy-only; neither rule files nor broker responses accept overrides
+for them. Per-user MCP credentials can use `environment.pi` values, explicitly
+referenced by an administrator's server mappings; these values do not select
+servers or grant tool calls.
 
 ### Combining matching rules
 

@@ -2,15 +2,14 @@ import { execFileSync } from "node:child_process";
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-import { readAccountHomeDirectory } from "./account-home.js";
+import { readAccountIdentity } from "./account-home.js";
 
 vi.mock("node:child_process", () => ({ execFileSync: vi.fn() }));
 
 const originalPlatform = Object.getOwnPropertyDescriptor(process, "platform")!;
 const originalGeteuid = Object.getOwnPropertyDescriptor(process, "geteuid")!;
 const execute = vi.mocked(execFileSync);
-const errorMessage =
-  "Unable to resolve the invoking account's home directory from the operating system";
+const errorMessage = "Unable to resolve the invoking account's identity from the operating system";
 
 function platform(value: NodeJS.Platform): void {
   Object.defineProperty(process, "platform", { value });
@@ -39,13 +38,20 @@ afterEach(() => {
 describe("account home lookup", () => {
   it("uses the effective UID with fixed executable, clean environment, and bounded I/O", () => {
     vi.stubEnv("HOME", "/attacker/home");
+    vi.stubEnv("USER", "attacker");
+    vi.stubEnv("LOGNAME", "attacker");
+    vi.stubEnv("SUDO_USER", "attacker");
     vi.stubEnv("PATH", "/attacker/bin");
     vi.stubEnv("LD_PRELOAD", "/attacker/inject.so");
     vi.stubEnv("DYLD_INSERT_LIBRARIES", "/attacker/inject.dylib");
     vi.stubEnv("MODEL_TOKEN", "secret");
     output("alice:x:1001:20:Alice Example:/home/alice:/bin/bash\n");
 
-    expect(readAccountHomeDirectory()).toBe("/home/alice");
+    expect(readAccountIdentity()).toEqual({
+      username: "alice",
+      uid: 1001,
+      homeDirectory: "/home/alice",
+    });
     expect(execute).toHaveBeenCalledExactlyOnceWith("/usr/bin/getent", ["--", "passwd", "1001"], {
       cwd: "/",
       env: { PATH: "/usr/bin:/bin", LANG: "C", LC_ALL: "C" },
@@ -59,7 +65,7 @@ describe("account home lookup", () => {
   it("queries the macOS account database by UID and preserves spaces and colons in home paths", () => {
     platform("darwin");
     output(macAccount("/Users/Alice Example:Projects"));
-    expect(readAccountHomeDirectory()).toBe("/Users/Alice Example:Projects");
+    expect(readAccountIdentity().homeDirectory).toBe("/Users/Alice Example:Projects");
     expect(execute).toHaveBeenCalledWith(
       "/usr/bin/dscacheutil",
       ["-q", "user", "-a", "uid", "1001"],
@@ -71,7 +77,7 @@ describe("account home lookup", () => {
     "accepts the OS-provided normalized home %s",
     (home) => {
       output(`alice:x:1001:20::${home}:/bin/sh`);
-      expect(readAccountHomeDirectory()).toBe(home);
+      expect(readAccountIdentity().homeDirectory).toBe(home);
     },
   );
 
@@ -88,7 +94,7 @@ describe("account home lookup", () => {
     "alice:x:1001:20::/home/alice:/bin/sh\r\n",
   ])("rejects missing, malformed, or ambiguous Linux account records", (value) => {
     output(value);
-    expect(readAccountHomeDirectory).toThrow(errorMessage);
+    expect(readAccountIdentity).toThrow(errorMessage);
   });
 
   it.each([
@@ -105,7 +111,7 @@ describe("account home lookup", () => {
   ])("rejects missing, malformed, or ambiguous macOS account records", (value) => {
     platform("darwin");
     output(value);
-    expect(readAccountHomeDirectory).toThrow(errorMessage);
+    expect(readAccountIdentity).toThrow(errorMessage);
   });
 
   it.each([
@@ -118,17 +124,17 @@ describe("account home lookup", () => {
     "/home/a\0b",
   ])("rejects invalid home paths on either platform", (home) => {
     output(`alice:x:1001:20::${home}:/bin/sh\n`);
-    expect(readAccountHomeDirectory).toThrow(errorMessage);
+    expect(readAccountIdentity).toThrow(errorMessage);
     platform("darwin");
     output(macAccount(home));
-    expect(readAccountHomeDirectory).toThrow(errorMessage);
+    expect(readAccountIdentity).toThrow(errorMessage);
   });
 
   it("rejects invalid UTF-8 and oversized output", () => {
     execute.mockReturnValue(Buffer.from([0xc0, 0xaf]));
-    expect(readAccountHomeDirectory).toThrow(errorMessage);
+    expect(readAccountIdentity).toThrow(errorMessage);
     execute.mockReturnValue(Buffer.alloc(65_537, "x"));
-    expect(readAccountHomeDirectory).toThrow(errorMessage);
+    expect(readAccountIdentity).toThrow(errorMessage);
   });
 
   it.each(["ENOENT", "ETIMEDOUT", "ENOBUFS", "EACCES"])(
@@ -143,7 +149,7 @@ describe("account home lookup", () => {
         });
       });
       try {
-        readAccountHomeDirectory();
+        readAccountIdentity();
         expect.fail("lookup should fail");
       } catch (error) {
         expect(error).toBeInstanceOf(Error);
@@ -155,12 +161,12 @@ describe("account home lookup", () => {
 
   it("does not start a command without a supported platform and effective UID", () => {
     platform("win32");
-    expect(readAccountHomeDirectory).toThrow(errorMessage);
+    expect(readAccountIdentity).toThrow(errorMessage);
     platform("linux");
     Object.defineProperty(process, "geteuid", { value: undefined });
-    expect(readAccountHomeDirectory).toThrow(errorMessage);
+    expect(readAccountIdentity).toThrow(errorMessage);
     Object.defineProperty(process, "geteuid", { value: () => -1 });
-    expect(readAccountHomeDirectory).toThrow(errorMessage);
+    expect(readAccountIdentity).toThrow(errorMessage);
     expect(execute).not.toHaveBeenCalled();
   });
 });

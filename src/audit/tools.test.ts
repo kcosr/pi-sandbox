@@ -1,5 +1,6 @@
 import type { ExtensionToolContext, ToolDefinition } from "@earendil-works/pi-coding-agent";
 import { describe, expect, it, vi } from "vitest";
+import { ManagedToolExecutionError } from "../runtime/tool-error.js";
 import { SandboxExecutionError } from "../sandbox/index.js";
 import type { AuditClient, AuditEvent } from "./client.js";
 import { ToolAuditor, toolAuditMetadata } from "./tools.js";
@@ -22,7 +23,7 @@ function fixture(submit?: (event: AuditEvent) => Promise<void>) {
     executeTool: () => Promise.reject(new Error("Unexpected nested tool execution in fixture")),
   } as unknown as ExtensionToolContext;
   const definition = (execute: ToolDefinition["execute"], name = "write") =>
-    auditor.wrap({ name, execute } as ToolDefinition, "bubblewrap");
+    auditor.wrap({ name, execute } as unknown as ToolDefinition, "bubblewrap");
   const invoke = (tool: ToolDefinition, args = {}, signal?: AbortSignal) =>
     tool.execute("call-1", args, signal, undefined, ctx);
   return {
@@ -118,6 +119,183 @@ describe("ToolAuditor", () => {
       expect(f.events.at(-1)).toMatchObject({ command: "pwd", command_truncated: false });
     },
   );
+
+  it("correlates parallel nested MCP calls without logging scripts, parameters, or results", async () => {
+    const f = fixture();
+    const mcp = f.auditor.wrap(
+      {
+        name: "mcp__docs__search",
+        execute: async () => {
+          await Promise.resolve();
+          await f.auditor.decision(
+            { allowed: true, source: "prompt", reason: "user_allowed" },
+            "mcp__docs__search",
+          );
+          return { content: [{ type: "text", text: "result-secret" }], details: {} };
+        },
+      } as unknown as ToolDefinition,
+      "host",
+      undefined,
+      undefined,
+      { mcp_server: "docs", mcp_tool: "search/raw", mcp_transport: "http" },
+    );
+    const code = f.auditor.wrap(
+      {
+        name: "codemode",
+        execute: async () => {
+          await Promise.all(
+            ["nested-1", "nested-2"].map((id) =>
+              mcp.execute(
+                id,
+                {
+                  token: "credential-secret",
+                  path: "path-secret",
+                  command: "command-secret",
+                  parent_invocation_id: "forged-parent",
+                  mcp_server: "forged-server",
+                },
+                undefined,
+                undefined,
+                f.ctx,
+              ),
+            ),
+          );
+          return success;
+        },
+      } as unknown as ToolDefinition,
+      "host",
+      undefined,
+      undefined,
+      undefined,
+      true,
+    );
+    await code.execute("script-1", { code: "script-secret" }, undefined, undefined, f.ctx);
+    const outer = f.events.filter((event) => event.tool === "codemode");
+    expect(outer.map((event) => event.event)).toEqual([
+      "tool_requested",
+      "tool_execution_intent",
+      "tool_completed",
+    ]);
+    expect(outer.every((event) => event.parent_invocation_id === undefined)).toBe(true);
+    for (const id of ["nested-1", "nested-2"]) {
+      const events = f.events.filter((event) => event.invocation_id === id);
+      expect(events.map((event) => event.event)).toEqual([
+        "tool_requested",
+        "tool_execution_intent",
+        "tool_completed",
+      ]);
+      expect(
+        events.every(
+          (event) =>
+            event.parent_invocation_id === "script-1" &&
+            event.mcp_server === "docs" &&
+            event.mcp_tool === "search/raw" &&
+            event.mcp_transport === "http",
+        ),
+      ).toBe(true);
+    }
+    const serialized = JSON.stringify(f.events);
+    for (const text of [
+      "script-secret",
+      "credential-secret",
+      "result-secret",
+      "path-secret",
+      "command-secret",
+      "forged-parent",
+      "forged-server",
+    ])
+      expect(serialized).not.toContain(text);
+    await mcp.execute("direct-1", {}, undefined, undefined, f.ctx);
+    expect(
+      f.events
+        .filter((event) => event.invocation_id === "direct-1")
+        .every((event) => event.parent_invocation_id === undefined),
+    ).toBe(true);
+  });
+
+  it("does not attribute unaudited nested decisions to the code-mode invocation", async () => {
+    const f = fixture();
+    const code = f.auditor.wrap(
+      {
+        name: "codemode",
+        execute: async () => {
+          await f.auditor.decision(
+            { allowed: false, source: "prompt", reason: "user_denied" },
+            "write",
+          );
+          await f.auditor.decision(
+            { allowed: true, source: "session_grant", reason: "session_granted" },
+            "read",
+          );
+          await f.auditor.decision(
+            { allowed: false, source: "policy", reason: "policy_denied" },
+            "mcp__docs__delete",
+          );
+          return success;
+        },
+      } as unknown as ToolDefinition,
+      "host",
+      undefined,
+      undefined,
+      undefined,
+      true,
+    );
+    await code.execute("script-1", { code: "script-secret" }, undefined, undefined, f.ctx);
+    expect(f.events.map((event) => event.event)).toEqual([
+      "session_started",
+      "tool_requested",
+      "tool_execution_intent",
+      "tool_completed",
+    ]);
+    expect(f.events.at(-1)).toMatchObject({
+      tool: "codemode",
+      outcome: "success",
+      approval_source: "policy",
+    });
+  });
+
+  it("keeps an audited nested denial separate from a script which handles it", async () => {
+    const f = fixture();
+    const denied = f.definition(async () => {
+      await f.auditor.decision(
+        { allowed: false, source: "prompt", reason: "user_denied" },
+        "write",
+      );
+      throw new Error("denied");
+    });
+    const code = f.auditor.wrap(
+      {
+        name: "codemode",
+        execute: async () => {
+          await expect(
+            denied.execute(
+              "write-1",
+              { path: "target", content: "content-secret" },
+              undefined,
+              undefined,
+              f.ctx,
+            ),
+          ).rejects.toThrow("denied");
+          return success;
+        },
+      } as unknown as ToolDefinition,
+      "host",
+      undefined,
+      undefined,
+      undefined,
+      true,
+    );
+    await code.execute("script-1", {}, undefined, undefined, f.ctx);
+    expect(
+      f.events.filter((event) => event.invocation_id === "write-1").map((event) => event.event),
+    ).toEqual(["tool_requested", "tool_denied"]);
+    expect(f.events.find((event) => event.event === "tool_denied")).toMatchObject({
+      tool: "write",
+      parent_invocation_id: "script-1",
+    });
+    expect(f.events.at(-1)).toMatchObject({ invocation_id: "script-1", outcome: "success" });
+    expect(JSON.stringify(f.events)).not.toContain("content-secret");
+  });
 
   it("emits only one start for concurrent callers and tracks Pi session transitions", async () => {
     const f = fixture();
@@ -227,6 +405,82 @@ describe("ToolAuditor", () => {
     await expect(f.invoke(f.definition(() => Promise.reject(error)))).rejects.toBe(error);
     expect(f.events.at(-1)?.outcome).toBe("timeout");
     expect(JSON.stringify(f.events)).not.toContain("secret payload");
+  });
+
+  it.each(["timeout", "cancelled", "error"] as const)(
+    "records trusted managed %s outcomes through nested causes",
+    async (code) => {
+      const f = fixture();
+      const failure = new Error("unlogged transport payload", {
+        cause: new ManagedToolExecutionError(code),
+      });
+      const tool = f.auditor.wrap(
+        {
+          name: "mcp__docs__search",
+          execute: () => Promise.reject(failure),
+        } as unknown as ToolDefinition,
+        "host",
+        undefined,
+        undefined,
+        { mcp_server: "docs", mcp_tool: "search", mcp_transport: "stdio" },
+      );
+      await expect(f.invoke(tool)).rejects.toBe(failure);
+      expect(f.events.at(-1)).toMatchObject({ outcome: code, mcp_transport: "stdio" });
+      expect(JSON.stringify(f.events)).not.toContain("unlogged transport payload");
+    },
+  );
+
+  it.each([
+    ["timeout", "timeout"],
+    ["aborted", "cancelled"],
+    ["script", "error"],
+    ["sandbox", "error"],
+  ])(
+    "records trusted code-mode %s result as %s while preserving partial output",
+    async (failureKind, outcome) => {
+      const f = fixture();
+      const result = {
+        content: [{ type: "text" as const, text: "partial-output-secret" }],
+        details: { failureKind },
+        isError: true,
+      };
+      const tool = f.auditor.wrap(
+        { name: "codemode", execute: () => Promise.resolve(result) } as unknown as ToolDefinition,
+        "host",
+        undefined,
+        undefined,
+        undefined,
+        true,
+      );
+      expect(await f.invoke(tool)).toBe(result);
+      expect(f.events.at(-1)).toMatchObject({ tool: "codemode", outcome });
+      expect(JSON.stringify(f.events)).not.toContain("partial-output-secret");
+    },
+  );
+
+  it("does not trust MCP result metadata to select timeout or cancellation audit outcomes", async () => {
+    const f = fixture();
+    for (const failureKind of ["timeout", "aborted"]) {
+      const tool = f.auditor.wrap(
+        {
+          name: "mcp__docs__search",
+          execute: () => Promise.resolve({ ...success, isError: true, details: { failureKind } }),
+        } as unknown as ToolDefinition,
+        "host",
+        undefined,
+        undefined,
+        { mcp_server: "docs", mcp_tool: "search", mcp_transport: "http" },
+      );
+      await f.invoke(tool);
+      expect(f.events.at(-1)).toMatchObject({ tool: "mcp__docs__search", outcome: "error" });
+    }
+  });
+
+  it("does not infer managed outcomes from server-controlled error strings or properties", async () => {
+    const f = fixture();
+    const failure = Object.assign(new Error("timeout cancelled"), { code: "timeout" });
+    await expect(f.invoke(f.definition(() => Promise.reject(failure)))).rejects.toBe(failure);
+    expect(f.events.at(-1)).toMatchObject({ outcome: "error" });
   });
 
   it("recognizes cancellation", async () => {

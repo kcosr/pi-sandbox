@@ -800,7 +800,9 @@ fn valid_overrides(overrides: &IdentityOverrides) -> bool {
 
 fn valid_tool_name(value: &str) -> bool {
     let bytes = value.as_bytes();
-    !bytes.is_empty()
+    value != "codemode"
+        && !value.starts_with("mcp__")
+        && !bytes.is_empty()
         && bytes.len() <= 64
         && bytes[0].is_ascii_lowercase()
         && bytes[1..]
@@ -866,7 +868,29 @@ fn valid_environment_scope(variables: &EnvironmentVariables, scope: EnvironmentS
                     || !fixed_sandbox_environment_name(name))
                 && value.len() <= MAX_ENVIRONMENT_VALUE_BYTES
                 && !value.contains('\0')
+                && valid_account_template(value)
         })
+}
+
+// Validate only: the application resolves the effective account after merging rules.
+fn valid_account_template(value: &str) -> bool {
+    let bytes = value.as_bytes();
+    let mut offset = 0;
+    while offset < bytes.len() {
+        let remaining = &bytes[offset..];
+        if remaining.starts_with(b"{{{{") || remaining.starts_with(b"}}}}") {
+            offset += 4;
+        } else if remaining.starts_with(b"{{username}}") {
+            offset += 12;
+        } else if remaining.starts_with(b"{{uid}}") {
+            offset += 7;
+        } else if remaining.starts_with(b"{{") || remaining.starts_with(b"}}") {
+            return false;
+        } else {
+            offset += 1;
+        }
+    }
+    true
 }
 
 fn environment_bytes(variables: &EnvironmentVariables) -> usize {
@@ -1084,6 +1108,55 @@ session_grant = "offer"
                     Err(LookupError::InvalidFile)
                 ));
             }
+        }
+    }
+
+    #[test]
+    fn validates_account_templates_without_resolving_the_broker_account() {
+        for value in [
+            "~/{{username}}/{{uid}}",
+            "{{{{username}}}}",
+            "é/{{uid}}",
+            "{literal}",
+            "{{uid}}}",
+        ] {
+            for scope in ["pi", "sandbox", "extensions.service"] {
+                let source =
+                    format!("version = 7\nuid = 7\n[environment.{scope}]\nACCOUNT = {value:?}\n");
+                assert!(parse_user_for_test(source.as_bytes(), 7).is_ok());
+            }
+        }
+        for value in [
+            "{{unknown}}",
+            "{{username",
+            "{{ username }}",
+            "value}}",
+            "{{{username}}}",
+        ] {
+            for scope in ["pi", "sandbox", "extensions.service"] {
+                let source =
+                    format!("version = 7\nuid = 7\n[environment.{scope}]\nACCOUNT = {value:?}\n");
+                assert_eq!(
+                    parse_user_for_test(source.as_bytes(), 7),
+                    Err(LookupError::InvalidFile)
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn rejects_managed_mcp_and_codemode_overrides() {
+        for body in [
+            "[overrides.codemode]\nenabled = true",
+            "[overrides.mcp.servers]",
+            "[overrides.tools.codemode]\nmode = \"allow\"\nsession_grant = \"never\"",
+            "[overrides.tools.mcp__docs__search]\nmode = \"allow\"\nsession_grant = \"never\"",
+        ] {
+            let source = format!("version = 7\nuid = 7\n{body}\n");
+            assert_eq!(
+                parse_user_for_test(source.as_bytes(), 7),
+                Err(LookupError::InvalidFile)
+            );
         }
     }
 

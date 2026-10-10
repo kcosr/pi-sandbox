@@ -1,5 +1,10 @@
-config_version = 9
+config_version = 10
 models_file = "/etc/pi-sandbox/models.json"
+
+[codemode]
+enabled = false
+
+[mcp.servers]
 
 [sessions]
 retention_days = 365

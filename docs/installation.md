@@ -126,7 +126,9 @@ root-owned mode-0600 drop-ins are deliberately absent from the release and are
 never created, replaced, backed up, or removed by the installer or uninstaller.
 
 The executable embeds Pi's image-resize and codemode workers and its QuickJS
-runtime data. Codemode remains disabled by the managed extension policy. The
+runtime data. Code mode is disabled in packaged defaults and enabled only by
+main-policy `[codemode].enabled`. MCP servers and their dependencies are installed
+by the administrator; the application performs no package downloads. The
 adjacent native helper matches the release platform and architecture.
 
 Only assets actually required by the pinned Pi build need to be present. The
@@ -325,8 +327,8 @@ There is no implicit configuration replacement. This supports both complete
 archive deployments and systems where Salt or another configuration manager
 owns `/etc/pi-sandbox`.
 
-The installed configuration uses `config_version = 9` and must include the
-`[audit]`, `[sessions]`, `[execution]`, `[filesystem]`, and `[extensions]` tables, an `audit` boolean on every
+The installed configuration uses `config_version = 10` and must include the
+`[audit]`, `[sessions]`, `[codemode]`, `[mcp.servers]`, `[execution]`, `[filesystem]`, and `[extensions]` tables, an `audit` boolean on every
 base tool policy, explicit `filesystem.hidden_paths` (empty by default), and explicit `[environment.pi]`,
 `[environment.sandbox]`, and `[environment.extensions]` tables, even when the
 environment tables are empty. Set `execution.backend = "bubblewrap"` on Linux

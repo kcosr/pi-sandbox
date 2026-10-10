@@ -43,8 +43,9 @@ Sandbox factory through the inline extension-factory option. It must:
 - omit Pi's built-in extension factories;
 - disable and reject user/project extension discovery and explicit extension
   arguments;
-- disable Pi's built-in MCP, codemode, tool-search, and llama extensions and
-  reject the MCP management command;
+- disable automatic built-in MCP, codemode, tool-search, and llama factories and
+  reject the MCP management CLI; only the forced factory may compose the
+  exported MCP/code-mode factories under administrator policy;
 - disable Pi's built-in tools and reject any option that restores them;
 - reject Pi package install, remove, update, and configuration commands that
   could introduce executable code;
@@ -128,7 +129,7 @@ not the upstream Pi patch series; it does not extend to model/configuration/
 installation paths, arbitrary extension settings, inherited environment, or
 compiled fixed extension values.
 
-The main schema-9 configuration requires `[sessions].retention_days`, an integer
+The main schema-10 configuration requires `[sessions].retention_days`, an integer
 from `0` through `36500`, defaulted to `365` in packaged TOML. User/group rules
 cannot override it. Zero disables both cleanup and last-use timestamp updates.
 Otherwise, use session-file modification time as the retention clock, refreshing
@@ -264,7 +265,10 @@ To upgrade Pi:
 3. Apply the existing patch series. If it does not apply cleanly, inspect the
    new upstream implementation and reimplement this specification rather than
    preserving obsolete code structure.
-4. Run the focused Pi patch tests and relevant upstream tests offline.
+4. Build Pi and check the production adapter types against its patched declarations,
+   including option-key coverage, nested options, and callback compatibility.
+   Negative controls must reject removed options and incompatible signatures.
+   Run the focused Pi patch tests and relevant upstream tests offline.
 5. Build the private Bun entry point together with Pi and the Pi Sandbox
    extension.
 6. Run Pi Sandbox unit, integration, direct-executor, real-Bubblewrap, package,
@@ -328,3 +332,68 @@ storage remains writable. Read-only CWD exactly `/tmp` is rejected because its
 bind would mask private `/tmp`. Existing root and private-system-path overlap
 rejections remain enforced. The setting applies to built-ins and user shell;
 managed host tools retain their declared host authority.
+
+## Managed MCP and code-mode seams
+
+Patch `0005-managed-mcp-and-codemode.patch` extends the exported factories with
+policy-neutral composition options. The main configuration, account macros,
+credentials, tool policy, grants, audit records, and invocation concurrency stay
+in Pi Sandbox.
+
+The MCP factory accepts an injected connection configuration and transport factory,
+a synchronous whole-catalog adapter with original server/tool provenance, and
+connection-state callbacks. It adapts every complete catalog before publishing
+any definitions, and withdraws definitions before reconnect or shutdown. Pi
+Sandbox validates the catalog and installs its wrappers before publication.
+Managed connections prepare discovery before approval and never silently
+reconnect or replay `tools/call` after approval, including HTTP session-expired
+responses. Disconnected servers may reconnect on a subsequent prompt. A catalog
+refresh failure withdraws the server instead of preserving an unverified catalog.
+
+A restricted management option reuses the stock MCP menu for admitted servers.
+An awaited callback validates and saves enabled/exposure preferences before runtime
+changes; failures and late callbacks cannot mutate a replacement session. It offers
+only approved exposure choices and omits connection details, raw errors, project
+overrides, and authentication actions. The managed adapter persists only presentation
+preferences from user `mcp.json`; unknown servers and connection fields are inert.
+
+Explicit options disable extension-registered servers,
+automatic OAuth and provider authentication, raw server logs, resources and
+resource templates, roots, and other non-tool protocol capabilities. HTTP query
+parameters survive every POST, GET, and DELETE. JSON/error bodies are bounded as
+they are consumed, matching SSE message bounds. Managed setup/catalog refresh
+have an absolute 30-second deadline; lists have at most 64 pages, 1024 tools, and
+8 MiB. Progress does not extend invocation deadlines. Stdio process-group
+ownership outlives the group leader, and its remaining descendants are killed
+when the leader exits or the transport closes.
+
+The code-mode factory accepts generic execution limits, registers one active
+script per managed instance, and aborts/awaits that script on session shutdown.
+Pi Sandbox keeps code mode inactive by default, honors Pi's merged `defaultTools`
+and `codemode.mode` settings, and applies CLI inclusion/exclusion ceilings to
+initial activation and later MCP autoactivation. The administrator flag controls
+registration. Preserve stock `model-only` exposure to prevent recursive code-mode
+calls. A fixed 3000-token declaration budget and omitted `models` bridge remain
+managed constraints. The runtime caps source bytes, deadline, total and
+concurrent bridge calls (including discovery helpers), and accumulated UTF-8
+output bytes. Each serialized nested reply (including errors) and store-write
+journal has the same byte ceiling, independently of aggregate visible output.
+A source pragma may only shorten the administrator deadline.
+Normalized tool-name collisions are rejected. Nested calls still use
+`ctx.executeTool`, including the normal permission pipeline; the VM provides no
+host JavaScript APIs. Script completion waits for canceled nested operations to
+finish their local cleanup. MCP and code-mode output can be kept inline without
+writing host temporary files inaccessible to sandbox tools.
+
+Offline patch tests exercise factory composition, raw provenance and atomic
+catalog rejection, tools-only initialization, no implicit authentication or
+request replay, HTTP URL/query preservation and bounded body reads, VM limits,
+absence of host APIs, nested cleanup ordering, and inline-only result handling.
+These tests run during the release build alongside the existing integration
+seams. Keep the QuickJS WASM asset and worker entry in the compiled release.
+The private Bun build must resolve compiled package exports rather than the
+upstream development tsconfig's source aliases. Runtime setup and the managed
+factory must share one compiled Pi configuration module so the registered
+embedded-WASM path is visible to code mode. Check the bundle metadata for that
+single runtime and its embedded QuickJS asset; the packaged smoke test must
+execute a real script.

@@ -8,6 +8,8 @@ import {
 import { expandManagedHomePaths } from "./home-expansion.js";
 import { MAXIMUM_ADMINISTRATIVE_PATH_BYTES } from "./paths.js";
 
+const account = (homeDirectory: string) => ({ username: "alice", uid: 1001, homeDirectory });
+
 describe("expandManagedHomePaths", () => {
   it("expands exclusions and every configured environment scope using one account lookup", () => {
     const filesystem = Object.freeze({
@@ -19,7 +21,7 @@ describe("expandManagedHomePaths", () => {
       sandbox: { CACHE: "~/cache/" },
       extensions: { git: { GIT_CREDENTIALS: "~/.git-credentials", HOME: "~" } },
     });
-    const getHomeDirectory = vi.fn(() => "/accounts/alice");
+    const getHomeDirectory = vi.fn(() => account("/accounts/alice"));
 
     const result = expandManagedHomePaths(filesystem, environment, getHomeDirectory);
 
@@ -84,7 +86,7 @@ describe("expandManagedHomePaths", () => {
         sandbox: {},
         extensions: {},
       }),
-      () => "/home/alice",
+      () => account("/home/alice"),
     );
     expect(result.environment.pi).toEqual({
       A: "/home/alice/",
@@ -98,7 +100,7 @@ describe("expandManagedHomePaths", () => {
     const result = expandManagedHomePaths(
       { cwdWritable: true, hiddenPaths: ["~/.ssh"] },
       parseManagedEnvironment({ pi: { ROOT: "~", CHILD: "~/cache" }, sandbox: {}, extensions: {} }),
-      () => "/",
+      () => account("/"),
     );
     expect(result.filesystem.hiddenPaths).toEqual(["/.ssh"]);
     expect(result.environment.pi).toEqual({ ROOT: "/", CHILD: "/cache" });
@@ -106,7 +108,7 @@ describe("expandManagedHomePaths", () => {
       expandManagedHomePaths(
         { cwdWritable: true, hiddenPaths: ["~"] },
         emptyManagedEnvironment(),
-        () => "/",
+        () => account("/"),
       ),
     ).toThrow("filesystem.hidden_paths");
   });
@@ -124,7 +126,7 @@ describe("expandManagedHomePaths", () => {
       expandManagedHomePaths(
         { cwdWritable: true, hiddenPaths: [] },
         parseManagedEnvironment({ pi: { VALUE: "~" }, sandbox: {}, extensions: {} }),
-        () => home,
+        () => account(home),
       ),
     ).toThrow("account home directory must be a normalized absolute path");
   });
@@ -146,7 +148,7 @@ describe("expandManagedHomePaths", () => {
       expandManagedHomePaths(
         { cwdWritable: true, hiddenPaths: ["~/.ssh", "/home/alice/.ssh"] },
         emptyManagedEnvironment(),
-        () => "/home/alice",
+        () => account("/home/alice"),
       ),
     ).toThrow("unique normalized absolute paths");
   });
@@ -158,7 +160,7 @@ describe("expandManagedHomePaths", () => {
         expandManagedHomePaths(
           { cwdWritable: true, hiddenPaths: ["~"] },
           emptyManagedEnvironment(),
-          () => home,
+          () => account(home),
         ),
       ).toThrow("must not overlap private system paths or hide /tmp");
     },
@@ -169,7 +171,7 @@ describe("expandManagedHomePaths", () => {
       expandManagedHomePaths(
         { cwdWritable: true, hiddenPaths: ["~/" + "é".repeat(2040)] },
         emptyManagedEnvironment(),
-        () => "/home/alice/account",
+        () => account("/home/alice/account"),
       ),
     ).toThrow("unique normalized absolute paths");
   });
@@ -179,7 +181,7 @@ describe("expandManagedHomePaths", () => {
       expandManagedHomePaths(
         { cwdWritable: true, hiddenPaths: [] },
         parseManagedEnvironment({ pi: { VALUE: "~" }, sandbox: {}, extensions: {} }),
-        () => "/" + "a".repeat(MAXIMUM_ADMINISTRATIVE_PATH_BYTES),
+        () => account("/" + "a".repeat(MAXIMUM_ADMINISTRATIVE_PATH_BYTES)),
       ),
     ).toThrow("account home directory must be a normalized absolute path");
   });
@@ -191,10 +193,8 @@ describe("expandManagedHomePaths", () => {
       extensions: {},
     });
     expect(() =>
-      expandManagedHomePaths(
-        { cwdWritable: true, hiddenPaths: [] },
-        environment,
-        () => "/home/alice",
+      expandManagedHomePaths({ cwdWritable: true, hiddenPaths: [] }, environment, () =>
+        account("/home/alice"),
       ),
     ).toThrow("managed_environment_invalid");
   });
@@ -208,10 +208,8 @@ describe("expandManagedHomePaths", () => {
       extensions: {},
     });
     expect(() =>
-      expandManagedHomePaths(
-        { cwdWritable: true, hiddenPaths: [] },
-        environment,
-        () => "/" + "a".repeat(512),
+      expandManagedHomePaths({ cwdWritable: true, hiddenPaths: [] }, environment, () =>
+        account("/" + "a".repeat(512)),
       ),
     ).toThrow("managed_environment_invalid");
   });

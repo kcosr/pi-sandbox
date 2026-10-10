@@ -61,11 +61,14 @@ function commaSeparatedTools(value: string): Set<string> {
   );
 }
 
-/** Mirror Pi's tool-selection flags so tools registered at session_start honor the caller's choice. */
-export function selectManagedActiveTools<T extends string>(
-  args: readonly string[],
-  enabledTools: ReadonlySet<T>,
-): T[] {
+interface ManagedToolSelection {
+  readonly noTools: boolean;
+  readonly allowlist: ReadonlySet<string> | undefined;
+  readonly denylist: ReadonlySet<string> | undefined;
+}
+
+/** Match the tool flags accepted by the pinned Pi argument parser. */
+function managedToolSelection(args: readonly string[]): ManagedToolSelection {
   let noTools = false;
   let allowlist: Set<string> | undefined;
   let denylist: Set<string> | undefined;
@@ -82,8 +85,45 @@ export function selectManagedActiveTools<T extends string>(
       denylist = commaSeparatedTools(args[++index] ?? "");
     }
   }
-  if (noTools) return [];
-  return [...enabledTools].filter(
-    (name) => (allowlist === undefined || allowlist.has(name)) && denylist?.has(name) !== true,
+  return { noTools, allowlist, denylist };
+}
+
+function permitsTool(selection: ManagedToolSelection, name: string): boolean {
+  return (
+    !selection.noTools &&
+    (selection.allowlist === undefined || selection.allowlist.has(name)) &&
+    selection.denylist?.has(name) !== true
   );
+}
+
+/** CLI selection is an availability ceiling, independent of the user's initial tool defaults. */
+export function isManagedToolSelected(args: readonly string[], name: string): boolean {
+  return permitsTool(managedToolSelection(args), name);
+}
+
+/** Resolve Pi's already-merged defaultTools setting, retaining the managed tool defaults. */
+export function selectManagedActiveTools<T extends string>(
+  args: readonly string[],
+  enabledTools: ReadonlySet<T>,
+  defaultTools?: unknown,
+): T[] {
+  const selection = managedToolSelection(args);
+  const defaults = [...enabledTools].filter((name) => name !== "codemode");
+  let active = new Set<string>(defaults);
+  if (defaultTools !== undefined) {
+    // Pi tolerates malformed settings as an empty list and ignores non-string entries.
+    const entries: string[] = Array.isArray(defaultTools)
+      ? defaultTools.filter((entry): entry is string => typeof entry === "string")
+      : [];
+    const plain = entries.filter((entry) => !entry.startsWith("+") && !entry.startsWith("-"));
+    active = new Set(plain.length > 0 || entries.length === 0 ? plain : defaults);
+    for (const entry of entries) {
+      const name = entry.slice(1);
+      if (entry.startsWith("+") && name.length > 0) active.add(name);
+      else if (entry.startsWith("-")) active.delete(name);
+    }
+  }
+  // An explicit CLI allowlist replaces defaults; exclusions still apply to every activation.
+  if (selection.allowlist !== undefined) active = new Set(selection.allowlist);
+  return [...enabledTools].filter((name) => active.has(name) && permitsTool(selection, name));
 }

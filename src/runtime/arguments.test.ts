@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 
 import {
   createManagedPiArguments,
+  isManagedToolSelected,
   selectManagedActiveTools,
   UnsafeManagedArgumentError,
   validateManagedArguments,
@@ -63,6 +64,48 @@ describe("managed Pi arguments", () => {
       "--no-extensions",
       "--no-builtin-tools",
     ]);
+  });
+
+  it("keeps CLI availability separate from initial activation", () => {
+    const available = new Set(["read", "write", "bash", "codemode"]);
+    expect(isManagedToolSelected([], "codemode")).toBe(true);
+    expect(selectManagedActiveTools([], available)).toEqual(["read", "write", "bash"]);
+    expect(isManagedToolSelected(["--tools", "read,bash"], "codemode")).toBe(false);
+    expect(isManagedToolSelected(["--exclude-tools", "codemode"], "codemode")).toBe(false);
+    expect(isManagedToolSelected(["--no-tools"], "codemode")).toBe(false);
+  });
+
+  it.each([
+    { defaults: ["+codemode"], expected: ["read", "write", "bash", "codemode"] },
+    { defaults: ["+codemode", "-codemode", "-write"], expected: ["read", "bash"] },
+    { defaults: ["codemode", "read"], expected: ["read", "codemode"] },
+    { defaults: ["read", "+write", "-read", "+codemode"], expected: ["write", "codemode"] },
+    { defaults: ["unknown", "+codemode"], expected: ["codemode"] },
+    { defaults: [], expected: [] },
+    { defaults: "codemode", expected: [] },
+    { defaults: [false, "read"], expected: ["read"] },
+  ])("resolves merged defaultTools $defaults", ({ defaults, expected }) => {
+    expect(
+      selectManagedActiveTools([], new Set(["read", "write", "bash", "codemode"]), defaults),
+    ).toEqual(expected);
+  });
+
+  it("lets CLI selection replace defaults while keeping exclusions and policy authoritative", () => {
+    const available = new Set(["read", "bash", "codemode"]);
+    expect(selectManagedActiveTools(["--tools", "codemode,write"], available, ["read"])).toEqual([
+      "codemode",
+    ]);
+    expect(selectManagedActiveTools(["--tools", "read,bash"], available, ["+codemode"])).toEqual([
+      "read",
+      "bash",
+    ]);
+    expect(selectManagedActiveTools(["-xt", "codemode,bash"], available, ["+codemode"])).toEqual([
+      "read",
+    ]);
+    expect(selectManagedActiveTools(["-nt", "-t", "codemode"], available, ["+codemode"])).toEqual(
+      [],
+    );
+    expect(selectManagedActiveTools([], new Set(["read"]), ["+codemode"])).toEqual(["read"]);
   });
 
   it("mirrors Pi's user-controlled tool selection for session-start registration", () => {

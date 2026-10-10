@@ -60,6 +60,37 @@ binary is trusted installation code. A bundled binary is digest-checked at
 build and by the release inventory, installed non-setuid beneath the root-owned
 libexec directory, and never selected by runtime configuration.
 
+## MCP and code-mode authority
+
+Administrator-enabled HTTP MCP clients and stdio MCP servers run outside the
+Bubblewrap boundary. Stdio servers are trusted installed host code with the
+invoking account's authority, including startup and background activity before
+any tool approval. HTTP tools exercise the server's authority. Sandbox network
+and hidden-path settings do not constrain either transport. Enabling a server
+authorizes connection and tool discovery even if every tool policy is disabled.
+
+Code mode isolates model-authored JavaScript in the embedded QuickJS runtime,
+with bounded computation and selected bridges. It exposes no general host API;
+its nested tools still use ordinary permissions and executors. This is language
+isolation, not operating-system containment. A runtime or bridge defect remains
+a host-side risk. Concurrent nested approvals are serialized, and a later denial
+or cancellation does not undo effects already completed.
+
+MCP connections and permissions come only from administrative policy. User MCP
+preferences can disable or change presentation for admitted servers, never add
+connections or alter permissions. Menu changes revoke affected approvals/grants.
+Code-mode availability is an administrator ceiling, not forced activation. Catalog
+metadata never grants authority. Original server/tool identities bind permission
+and grants; refreshed definitions invalidate stale approvals. HTTP redirects are
+rejected, credentials are explicitly projected, and tool requests are never
+transparently replayed. MCP server-side cancellation is best effort. Stdio
+shutdown reaps owned process groups; trusted servers that deliberately daemonize
+remain outside the containment guarantee.
+
+Account macros in configured paths and environment values use the invoking
+effective OS identity, not ambient environment variables. MCP URLs remain
+literal. Account identifiers do not authenticate a user to a remote service.
+
 ## Fail-closed guarantees
 
 The supported executable does not load user or project extensions, permit Pi
@@ -215,6 +246,21 @@ The read-only CWD setting is a Bubblewrap filesystem restriction. It applies to
 model Bash and human shell commands as well as typed tools; an approval cannot
 bypass it. Direct mode rejects the setting, and managed host tools retain their
 explicit host authority. Writable private runtime/temp storage remains available.
+
+## Audit correlation
+
+The application and collector use strict audit wire version 2; the collector emits
+record schema version 3 and requires configuration version 10. They must be
+installed from the same release. MCP records carry the configured server ID,
+original tool name, and `http` or `stdio` transport. Nested audited calls carry
+`parent_invocation_id` from trusted execution context, never from script arguments.
+An unaudited nested tool does not produce decision records for its parent.
+
+When global auditing is enabled, code mode records outer lifecycle metadata
+without script source; nested built-in and MCP tools follow their own audit
+settings. MCP arguments, results, headers, environment values, and server error
+payloads are excluded. This correlation describes application requests and
+outcomes, not the server's internal actions or rollback of remote effects.
 
 ## Session retention
 

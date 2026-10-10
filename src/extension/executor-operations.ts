@@ -293,7 +293,7 @@ export async function executeWrite(
         [
           "/bin/sh",
           "-c",
-          '/bin/mkdir -p -- "$1"; trap \'/bin/rm -f -- "$3"\' EXIT HUP INT TERM; (set -C; : > "$3") || exit 74; /bin/cat > "$3" || exit; if [ -e "$2" ]; then /bin/chmod --reference="$2" -- "$3" || exit; fi; /bin/mv -fT -- "$3" "$2"; trap - EXIT HUP INT TERM',
+          '/bin/mkdir -p -- "$1"; trap \'/bin/rm -f -- "$3"\' EXIT HUP INT TERM; (set -C; : > "$3") || exit 74; /bin/cat > "$3" || exit; if [ -e "$2" ]; then /bin/chmod --reference="$2" -- "$3" || exit; fi; /bin/mv -fT -- "$3" "$2" || exit; trap - EXIT HUP INT TERM',
           "pi-sandbox-write",
           dirname(path),
           path,
@@ -378,7 +378,7 @@ export async function executeEdit(
         [
           "/bin/sh",
           "-c",
-          'trap \'/bin/rm -f -- "$3"\' EXIT HUP INT TERM; (set -C; : > "$3") || exit 74; /bin/cat > "$3" || exit; /bin/chmod --reference="$1" -- "$3" || exit; actual=$(/usr/bin/sha256sum -- "$1"); actual=${actual%% *}; [ "$actual" = "$2" ] || { echo "file changed during edit" >&2; exit 73; }; /bin/mv -fT -- "$3" "$1"; trap - EXIT HUP INT TERM',
+          'trap \'/bin/rm -f -- "$3"\' EXIT HUP INT TERM; (set -C; : > "$3") || exit 74; /bin/cat > "$3" || exit; /bin/chmod --reference="$1" -- "$3" || exit; actual=$(/usr/bin/sha256sum -- "$1"); actual=${actual%% *}; [ "$actual" = "$2" ] || { echo "file changed during edit" >&2; exit 73; }; /bin/mv -fT -- "$3" "$1" || exit; trap - EXIT HUP INT TERM',
           "pi-sandbox-edit",
           path,
           expectedHash,

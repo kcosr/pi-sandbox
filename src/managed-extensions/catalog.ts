@@ -15,7 +15,7 @@ const DIAGNOSTIC_SCOPE_PATTERN = /^[a-z][a-z0-9_.-]{0,127}$/u;
 const SHA256_PATTERN = /^[a-f0-9]{64}$/u;
 const SEMVER_PATTERN =
   /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(?:-([0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*))?(?:\+([0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*))?$/u;
-const RESERVED_TOOL_NAMES = new Set<string>([...TOOL_NAMES, "user_shell"]);
+const RESERVED_TOOL_NAMES = new Set<string>([...TOOL_NAMES, "user_shell", "codemode"]);
 const RECORD_KEYS = new Set(["manifest", "extension"]);
 const MANIFEST_KEYS = new Set(["kind", "apiVersion", "id", "version", "toolNames", "digests"]);
 const DIGEST_KEYS = new Set(["manifestSha256", "moduleSha256"]);
@@ -76,7 +76,7 @@ export function createManagedExtensionCatalog(
         const path = `extension ${extension.id} tools[${toolIndex}]`;
         validateTool(definition, path);
         const name = definition.name;
-        if (RESERVED_TOOL_NAMES.has(name)) {
+        if (RESERVED_TOOL_NAMES.has(name) || name.startsWith("mcp__")) {
           throw new Error(`extension tool collides with reserved tool: ${name}`);
         }
         if (tools.has(name)) throw new Error(`duplicate extension tool name: ${name}`);
@@ -95,7 +95,7 @@ export function createManagedExtensionCatalog(
       if (typeof name !== "string" || !TOOL_NAME_PATTERN.test(name)) {
         throw new Error(`${path} is invalid`);
       }
-      if (RESERVED_TOOL_NAMES.has(name)) {
+      if (RESERVED_TOOL_NAMES.has(name) || name.startsWith("mcp__")) {
         throw new Error(`extension tool collides with reserved tool: ${name}`);
       }
       if (tools.has(name)) throw new Error(`duplicate extension tool name: ${name}`);

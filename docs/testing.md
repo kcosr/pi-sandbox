@@ -36,7 +36,7 @@ unavailable namespaces.
 - strict offline and host network modes;
 - required CWD write-access configuration, parent inheritance and user/group overrides,
   with direct/read-only rejection before and after override application;
-- schema-9 required hidden paths, strict path syntax and uniqueness, immutable
+- required hidden paths, strict path syntax and uniqueness, immutable
   main-policy inheritance, direct-mode rejection, and mount ordering around CWD;
 - account-home expansion for configured hidden paths and all scoped environment
   values after broker merge, independence from ambient `HOME` and CWD, literal
@@ -200,8 +200,13 @@ the absence of runtime extension loading, bundled Bubblewrap input digest,
 architecture, version, required options, license packaging, installer mode, and
 release-manifest consistency.
 They verify the `pi-source.lock.json` source-archive checksum, apply
-the patch series to a clean temporary Pi 1.0.2 tree, run relevant upstream Pi
-tests, prove the configured-only catalog across model types and refreshes, build and inspect the static
+the patch series to a clean temporary Pi 1.0.2 tree, check production adapter types
+against the resulting declarations, and run relevant upstream Pi tests. The contract
+check verifies option keys and callback compatibility, including nested settings;
+negative controls remove or alter declarations in disposable copies to prove it
+fails on API drift. Behavioral guarantees remain covered by the Pi integration
+tests. Release checks also prove the configured-only catalog across model types
+and refreshes, build and inspect the static
 Rust broker, and inspect the final Bun application and release archive. The
 packaged executable diagnostic also proves that only the administrative model
 catalog is exposed. Its offline RPC lifecycle checks create new sessions, resume
@@ -218,8 +223,8 @@ including with `--no-session`, and omission of maintenance for metadata and
 authentication exits.
 The exact version-probe test requires no policy or working-directory access.
 The packaged diagnostic also proves that the forced Pi Sandbox extension is the only Pi
-extension while built-in MCP, codemode, tool-search, and llama factories remain
-disabled. For configurable builds it selects a temporary policy with `--config`
+extension. Automatic built-in factories remain disabled; managed MCP and code mode
+are composed inside the forced extension only when configured. For configurable builds it selects a temporary policy with `--config`
 and an invalid compiled default, proving the chosen TOML and model path appear
 in diagnostics. Managed builds must reject `--config` before reading policy.
 Both build modes should be exercised when changing configuration selection. A local source archive may replace the download so the entire
@@ -254,3 +259,17 @@ that disables session sharing and test that the share operation is not invoked.
 SBOM tests check component discovery against bundle inputs and copied assets;
 release archive inspection verifies the generated inventory is checksummed and
 shipped with the matching application.
+
+## Managed MCP and code mode
+
+Offline fixtures verify administrator-only configuration, credential projection,
+path/environment account macros and literal URL query preservation, original-name wildcard policies, bounded
+approvals, exact grants, stale-catalog revocation, tool narrowing and session
+cleanup. Activation tests cover merged Pi settings, CLI ceilings, admin disablement,
+MCP autoactivation, and stock `on`/`only` presentation. Preference/menu fixtures
+verify persistence, immutable managed connections, unavailable servers, save failures,
+and revocation on disable/exposure changes. HTTP and stdio transports share policy tests. Patched-source tests cover
+bounded HTTP JSON/error/SSE reads, stdio process-group cleanup, inline results,
+code VM source/call/output limits, deadlines and awaited nested cancellation.
+The packaged fixture exercises the compiled application with a local scripted
+provider and local MCP servers; it never contacts a live model provider.

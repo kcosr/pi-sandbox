@@ -10,6 +10,12 @@ export interface JsonObject {
 
 export type ApprovalPolicies = Readonly<Record<ApprovalSubject, SubjectPolicy>>;
 
+export interface ResolvedSubjectPolicy {
+  readonly policy: SubjectPolicy;
+  readonly revision: string;
+}
+export type SubjectPolicyResolver = (subject: ApprovalSubject) => ResolvedSubjectPolicy | undefined;
+
 const approvalRequestBrand: unique symbol = Symbol("ApprovalRequest");
 
 export interface ApprovalRequest {
@@ -164,22 +170,52 @@ export function prepareApprovalRequest(input: {
 }
 
 export class PolicyEngine {
-  private readonly policies: ApprovalPolicies;
+  private readonly resolveSubject: SubjectPolicyResolver;
   private readonly promptMutex = new AsyncMutex();
-  private readonly sessionGrants = new Set<ApprovalSubject>();
+  private readonly sessionGrants = new Map<ApprovalSubject, string>();
+  private readonly subjectEpochs = new Map<ApprovalSubject, number>();
   private grantEpoch = 0;
 
-  public constructor(policies: ApprovalPolicies) {
-    this.policies = freezePolicies(policies);
+  public constructor(policies: ApprovalPolicies, resolveDynamic?: SubjectPolicyResolver) {
+    const fixed = freezePolicies(policies);
+    this.resolveSubject = (subject) =>
+      Object.hasOwn(fixed, subject)
+        ? { policy: fixed[subject]!, revision: "static" }
+        : resolveDynamic?.(subject);
+  }
+
+  public invalidateSubject(subject: ApprovalSubject): void {
+    this.sessionGrants.delete(subject);
+    this.subjectEpochs.set(subject, (this.subjectEpochs.get(subject) ?? 0) + 1);
+  }
+
+  private revision(subject: ApprovalSubject, resolved: ResolvedSubjectPolicy): string {
+    return JSON.stringify([
+      resolved.revision,
+      this.grantEpoch,
+      this.subjectEpochs.get(subject) ?? 0,
+      resolved.policy.mode,
+      resolved.policy.sessionGrant,
+    ]);
+  }
+
+  private isCurrent(subject: ApprovalSubject, revision: string): boolean {
+    const current = this.resolveSubject(subject);
+    return current !== undefined && this.revision(subject, current) === revision;
   }
 
   public isEnabled(subject: ApprovalSubject): boolean {
-    const policy = this.policies[subject];
+    const policy = this.resolveSubject(subject)?.policy;
     return policy !== undefined && policy.mode !== "disabled";
   }
 
   public hasSessionGrant(subject: ApprovalSubject): boolean {
-    return this.sessionGrants.has(subject);
+    const current = this.resolveSubject(subject);
+    return (
+      current !== undefined &&
+      current.policy.mode === "ask" &&
+      this.sessionGrants.get(subject) === this.revision(subject, current)
+    );
   }
 
   public clearSessionGrants(): void {
@@ -197,10 +233,12 @@ export class PolicyEngine {
       return denied("policy", "cancelled");
     }
 
-    const policy = this.policies[request.subject];
-    if (policy === undefined) {
+    const resolved = this.resolveSubject(request.subject);
+    if (resolved === undefined) {
       return denied("policy", "policy_denied");
     }
+    const policy = resolved.policy;
+    const revision = this.revision(request.subject, resolved);
     switch (policy.mode) {
       case "allow":
         return { allowed: true, source: "policy", reason: "policy_allowed" };
@@ -209,16 +247,17 @@ export class PolicyEngine {
       case "disabled":
         return denied("policy", "disabled");
       case "ask":
-        return this.evaluatePrompt(request, policy, options);
+        return this.evaluatePrompt(request, policy, revision, options);
     }
   }
 
   private async evaluatePrompt(
     request: ApprovalRequest,
     policy: SubjectPolicy,
+    revision: string,
     options: EvaluateApprovalOptions,
   ): Promise<ApprovalDecision> {
-    if (this.sessionGrants.has(request.subject)) {
+    if (this.hasSessionGrant(request.subject)) {
       return { allowed: true, source: "session_grant", reason: "session_granted" };
     }
     const ui = options.ui;
@@ -240,12 +279,14 @@ export class PolicyEngine {
       release();
       return denied("prompt", "cancelled");
     }
-    if (this.sessionGrants.has(request.subject)) {
+    if (!this.isCurrent(request.subject, revision)) {
+      release();
+      return denied("policy", "policy_denied");
+    }
+    if (this.hasSessionGrant(request.subject)) {
       release();
       return { allowed: true, source: "session_grant", reason: "session_granted" };
     }
-
-    const epoch = this.grantEpoch;
     const promptPromise = Promise.resolve().then(() =>
       ui.prompt(
         Object.freeze({
@@ -271,6 +312,8 @@ export class PolicyEngine {
       release?.();
     }
 
+    if (isCancelled(options.signal)) return denied("policy", "cancelled");
+    if (!this.isCurrent(request.subject, revision)) return denied("policy", "policy_denied");
     switch (promptResult) {
       case "allow_once":
         return { allowed: true, source: "prompt", reason: "user_allowed" };
@@ -280,9 +323,7 @@ export class PolicyEngine {
         if (policy.sessionGrant !== "offer") {
           return denied("prompt", "invalid_prompt_decision");
         }
-        if (epoch === this.grantEpoch) {
-          this.sessionGrants.add(request.subject);
-        }
+        this.sessionGrants.set(request.subject, revision);
         return { allowed: true, source: "prompt", reason: "user_allowed" };
       default:
         return denied("prompt", "invalid_prompt_decision");
@@ -390,4 +431,8 @@ async function raceCancellation<T>(promise: Promise<T>, signal?: AbortSignal): P
     signal.addEventListener("abort", onAbort, { once: true });
     void promise.then(resolve, reject).finally(() => signal.removeEventListener("abort", onAbort));
   });
+}
+
+function isCancelled(signal?: AbortSignal): boolean {
+  return signal?.aborted === true;
 }

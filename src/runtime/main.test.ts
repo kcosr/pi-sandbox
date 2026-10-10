@@ -75,7 +75,9 @@ describe("administrative configuration", () => {
 
   it("enforces the execution backend's platform contract", () => {
     const config = {
-      configVersion: 9,
+      configVersion: 10,
+      codemode: { enabled: false, timeoutMs: 300000 },
+      mcp: { servers: {} },
       sessions: { retentionDays: 0 },
       filesystem: { cwdWritable: true, hiddenPaths: [] },
       audit: { enabled: false, facility: "local0" },
@@ -265,7 +267,9 @@ describe("administrative configuration", () => {
     ]);
     const allow = { audit: false, mode: "allow", sessionGrant: "never" } as const;
     const config = {
-      configVersion: 9,
+      configVersion: 10,
+      codemode: { enabled: false, timeoutMs: 300000 },
+      mcp: { servers: {} },
       sessions: { retentionDays: 0 },
       filesystem: { cwdWritable: true, hiddenPaths: [] },
       audit: { enabled: false, facility: "local0" },
@@ -363,7 +367,7 @@ describe("administrative configuration", () => {
     expect(callerEnvironment).toEqual({ HOME: "/caller-home", INHERITED: "~/literal" });
   });
 
-  it("expands the merged broker environment once before applying it", async () => {
+  it("expands home and account macros after merging every broker environment scope", async () => {
     const root = await createRoot();
     const configPath = rooted(root, SYSTEM_CONFIG_PATH);
     const source = await readFile(configPath, "utf8");
@@ -374,14 +378,14 @@ describe("administrative configuration", () => {
         .replace("hidden_paths = []", 'hidden_paths = ["~/private"]')
         .replace(
           "[environment.pi]",
-          '[environment.pi]\nHOME = "/policy-home"\nFROM_BASE = "~/base"\nREPLACED = "~/unused"',
+          '[environment.pi]\nHOME = "/policy-home"\nFROM_BASE = "~/base/{{username}}/{{uid}}"\nREPLACED = "{{username}}"',
         ),
     );
     await writeFile(rooted(root, "/etc/pi-sandbox/models.json"), '{"providers":{}}');
-    const callerEnvironment = { HOME: "/caller-home" };
+    const callerEnvironment = { HOME: "/caller-home", INHERITED: "{{username}}/{{uid}}" };
     const getHome = vi.fn(() => {
       expect(callerEnvironment.HOME).toBe("/caller-home");
-      return "/accounts/alice";
+      return { username: "alice", uid: 1001, homeDirectory: "/accounts/alice" };
     });
     const effective = await resolveEffectiveAdministrativeConfiguration(
       root,
@@ -389,9 +393,9 @@ describe("administrative configuration", () => {
       () =>
         Promise.resolve({
           environment: {
-            pi: { REPLACED: "broker-literal", FROM_BROKER: "~/broker" },
-            sandbox: { CACHE: "~/cache" },
-            extensions: { service: { CACHE: "~/service" } },
+            pi: { REPLACED: "{{{{username}}}}", FROM_BROKER: "{{username}}/{{uid}}" },
+            sandbox: { CACHE: "~/cache/{{uid}}" },
+            extensions: { service: { CACHE: "~/service/{{username}}" } },
           },
           overrides: { filesystem: { cwdWritable: false }, tools: {} },
         }),
@@ -406,14 +410,14 @@ describe("administrative configuration", () => {
     expect(effective.identityEnvironment).toEqual({
       pi: {
         HOME: "/policy-home",
-        FROM_BASE: "/accounts/alice/base",
-        REPLACED: "broker-literal",
-        FROM_BROKER: "/accounts/alice/broker",
+        FROM_BASE: "/accounts/alice/base/alice/1001",
+        REPLACED: "{{username}}",
+        FROM_BROKER: "alice/1001",
       },
-      sandbox: { CACHE: "/accounts/alice/cache" },
-      extensions: { service: { CACHE: "/accounts/alice/service" } },
+      sandbox: { CACHE: "/accounts/alice/cache/1001" },
+      extensions: { service: { CACHE: "/accounts/alice/service/alice" } },
     });
-    expect(callerEnvironment).toEqual({ HOME: "/caller-home" });
+    expect(callerEnvironment).toEqual({ HOME: "/caller-home", INHERITED: "{{username}}/{{uid}}" });
   });
 
   it("does not resolve account home when broker overrides remove the last expansion", async () => {
@@ -427,7 +431,7 @@ describe("administrative configuration", () => {
         .replace("[environment.pi]", '[environment.pi]\nCACHE = "~/unused"'),
     );
     await writeFile(rooted(root, "/etc/pi-sandbox/models.json"), '{"providers":{}}');
-    const getHome = vi.fn((): string => {
+    const getHome = vi.fn((): never => {
       throw new Error("account unavailable");
     });
     const effective = await resolveEffectiveAdministrativeConfiguration(
@@ -473,7 +477,7 @@ describe("administrative configuration", () => {
         callerEnvironment,
         undefined,
         SYSTEM_CONFIG_PATH,
-        () => "/run/account-home",
+        () => ({ username: "alice", uid: 1001, homeDirectory: "/run/account-home" }),
       ),
     ).rejects.toThrow("private system paths");
     expect(callerEnvironment).toEqual({ KEEP: "original" });

@@ -8,6 +8,7 @@ import {
   createWriteToolDefinition,
   truncateTail,
   type ExtensionAPI,
+  type ExtensionFactory,
   type ExtensionContext,
   type ExtensionHandler,
   type ToolDefinition,
@@ -30,8 +31,6 @@ import {
   PolicyEngine,
   createApprovalPolicies,
   prepareApprovalRequest,
-  type ApprovalPromptDecision,
-  type ApprovalUi,
   type JsonObject,
 } from "../policy/index.js";
 import { SandboxExecutionError } from "../sandbox/index.js";
@@ -52,6 +51,10 @@ import {
   sandboxCommandArguments,
 } from "./diagnostics.js";
 import type { ExtensionDependencies, SandboxExecutor } from "./types.js";
+import { approvalUi, approvalPreview } from "./approval.js";
+import { ManagedMcpRuntime } from "../mcp/runtime.js";
+import { createManagedCodemodeExtension } from "../codemode/index.js";
+import { selectManagedActiveTools } from "../runtime/arguments.js";
 
 interface ExtensionState {
   executor: SandboxExecutor | undefined;
@@ -150,7 +153,7 @@ const SHELL_UPDATE_THROTTLE_MS = 100;
 const MANAGED_TOOL_CALL_SUMMARY_MAX_BYTES = 1024;
 function sandboxCommandUsage(config?: SandboxConfig): string {
   const subjects = config === undefined ? "<tool>" : diagnosticSubjects(config).join("|");
-  return `Usage: /sandbox [mounts | policy [${subjects}]]`;
+  return `Usage: /sandbox [mounts | policy [${subjects}] | mcp [server]]`;
 }
 
 interface ShellSnapshot {
@@ -267,21 +270,6 @@ function sanitizeShellOutput(value: string): string {
   return output;
 }
 
-function approvalUi(ctx: ExtensionContext): ApprovalUi | undefined {
-  if (!ctx.hasUI) return undefined;
-  return {
-    async prompt(prompt, signal): Promise<ApprovalPromptDecision> {
-      const choices = prompt.allowForSession
-        ? ["Allow once", "Allow for session", "Deny"]
-        : ["Allow once", "Deny"];
-      const selected = await ctx.ui.select(`Allow ${prompt.request.subject}?`, choices, { signal });
-      if (selected === "Allow once") return "allow_once";
-      if (selected === "Allow for session") return "allow_session";
-      return "deny";
-    },
-  };
-}
-
 async function authorize<T extends JsonObject>(
   state: ExtensionState,
   subject: ToolName,
@@ -294,7 +282,7 @@ async function authorize<T extends JsonObject>(
   }
   const request = prepareApprovalRequest({
     subject,
-    display: subject,
+    display: approvalPreview(subject, rawArguments),
     arguments: rawArguments,
   });
   const ui = approvalUi(ctx);
@@ -302,7 +290,7 @@ async function authorize<T extends JsonObject>(
     ...(ui === undefined ? {} : { ui }),
     ...(signal === undefined ? {} : { signal }),
   });
-  await state.auditor?.decision(decision);
+  await state.auditor?.decision(decision, subject);
   if (!decision.allowed) throw new Error(`Pi Sandbox denied ${subject}: ${decision.reason}`);
   if (signal?.aborted === true) throw new SandboxExecutionError("sandbox_aborted");
   return request.arguments as T;
@@ -646,10 +634,8 @@ function failedUserShell(
   };
 }
 
-export function createPiSandboxExtension(
-  dependencies: ExtensionDependencies,
-): (pi: ExtensionAPI) => void {
-  return (pi) => {
+export function createPiSandboxExtension(dependencies: ExtensionDependencies): ExtensionFactory {
+  return async (pi) => {
     const state: ExtensionState = {
       executor: undefined,
       policy: undefined,
@@ -668,6 +654,54 @@ export function createPiSandboxExtension(
       stopped: false,
       auditor: undefined,
     };
+
+    const starts: Array<(event: unknown, ctx: ExtensionContext) => unknown> = [];
+    const stops: Array<(event: unknown, ctx: ExtensionContext) => unknown> = [];
+    const features = dependencies.features;
+    const mcp =
+      features === undefined
+        ? undefined
+        : new ManagedMcpRuntime({
+            cwd: dependencies.cwd,
+            servers: features.servers,
+            selected: features.selected,
+            autoEnableCodemode: features.config.codemode.enabled && features.selected("codemode"),
+            ...(features.mcpPreferences === undefined
+              ? {}
+              : { preferences: features.mcpPreferences }),
+            getPolicy: () => state.policy,
+            getAuditor: () => state.auditor,
+          });
+    const childApi = new Proxy(pi, {
+      get(target, property): unknown {
+        if (property === "on")
+          return (name: string, handler: (event: unknown, ctx: ExtensionContext) => unknown) => {
+            if (name === "session_start") starts.push(handler);
+            else if (name === "session_shutdown") stops.push(handler);
+            else (target.on as (name: string, handler: unknown) => void)(name, handler);
+          };
+        if (property === "registerTool")
+          return (definition: ToolDefinition) => {
+            if (definition.name !== "codemode") {
+              target.registerTool(definition);
+              return;
+            }
+            target.registerTool({
+              ...definition,
+              exposure: features?.selected("codemode") === true ? "model-only" : "hidden",
+              async execute(...args) {
+                if (!state.started || state.stopped || features?.selected("codemode") !== true)
+                  throw new Error("Code mode unavailable");
+                const audited =
+                  state.auditor?.wrap(definition, "host", undefined, undefined, undefined, true) ??
+                  definition;
+                return audited.execute(...args);
+              },
+            });
+          };
+        return Reflect.get(target, property);
+      },
+    });
 
     pi.registerToolRenderer((toolName, next) =>
       toolName === "edit" ? { ...next(), renderCall: renderEditCall } : next(),
@@ -697,10 +731,14 @@ export function createPiSandboxExtension(
           .trim()
           .split(/\s+/u)
           .filter((value) => value.length > 0);
+        if (argumentsList[0] === "mcp" && argumentsList.length <= 2)
+          return notify(mcp?.diagnostics(argumentsList[1]) ?? "MCP servers (host execution)\nnone");
         if (argumentsList.length === 0) {
           return notify(
             formatSandboxSummary({
               initialized: state.executor !== undefined && !state.stopped,
+              codemodeEnabled: config.codemode.enabled,
+              mcpServerCount: Object.keys(config.mcp.servers).length,
               cwd: dependencies.cwd,
               configPath: dependencies.configPath,
               modelsFile: config.modelsFile,
@@ -759,7 +797,7 @@ export function createPiSandboxExtension(
       state.started = true;
       const config = await dependencies.loadConfig();
       state.config = config;
-      state.policy = new PolicyEngine(createApprovalPolicies(config));
+      state.policy = new PolicyEngine(createApprovalPolicies(config), mcp?.resolveSubject);
       await dependencies.onSessionStart?.(ctx.sessionManager.getSessionFile());
       try {
         state.executor = dependencies.executor;
@@ -806,7 +844,16 @@ export function createPiSandboxExtension(
         registerTools(registrationApi, state, enabled, dependencies.cwd);
         registerManagedTools(registrationApi, state, enabled, dependencies.cwd);
         await registerPiToolExtensions(registrationApi, state, enabled);
-        pi.setActiveTools([...(dependencies.activeTools ?? enabled)]);
+        if (config.codemode.enabled && features?.selected("codemode") === true)
+          enabled.add("codemode");
+        pi.setActiveTools(
+          selectManagedActiveTools(
+            dependencies.toolArguments ?? [],
+            enabled,
+            pi.getSettings().defaultTools,
+          ),
+        );
+        for (const start of starts) await start(_event, ctx);
       } catch (error) {
         state.executor = undefined;
         state.stopped = true;
@@ -814,11 +861,17 @@ export function createPiSandboxExtension(
       }
     });
 
-    pi.on("session_shutdown", async () => {
+    pi.on("session_shutdown", async (event, ctx) => {
       state.stopped = true;
+      const cleanup = await Promise.allSettled([
+        mcp?.close() ?? Promise.resolve(),
+        ...stops.map((stop) => Promise.resolve().then(() => stop(event, ctx))),
+      ]);
       state.policy?.clearSessionGrants();
       state.executor = undefined;
       await state.auditor?.end();
+      if (cleanup.some((result) => result.status === "rejected"))
+        throw new Error("Managed tool shutdown failed");
     });
 
     const userBashHandler: ExtensionHandler<UserBashEvent, UserBashEventResult> = async (
@@ -885,6 +938,29 @@ export function createPiSandboxExtension(
       }
     };
     pi.on("user_bash", userBashHandler);
+    const factories =
+      features === undefined
+        ? []
+        : [
+            createManagedCodemodeExtension(features.config.codemode),
+            ...(features.servers.some((server) => server.status === "ready")
+              ? [mcp!.extension()]
+              : []),
+          ].filter((factory): factory is ExtensionFactory => factory !== undefined);
+    for (const factory of factories) await factory(childApi);
+
+    // Run after MCP's startup hook so autoactivation is reflected in the prompt.
+    pi.on("before_agent_start", (event) => {
+      const active = new Set(pi.getActiveTools());
+      const sections = event.systemPromptOptions.sections;
+      delete sections.pi_sandbox_tool_guidance;
+      if (!active.has("codemode")) return;
+      sections.pi_sandbox_tool_guidance =
+        "Prefer dedicated tools for file operations and code mode for coordinating tool calls or processing results." +
+        (active.has("bash")
+          ? " Use Bash for running programs, builds, tests, and operations without a suitable dedicated tool."
+          : "");
+    });
   };
 }
 

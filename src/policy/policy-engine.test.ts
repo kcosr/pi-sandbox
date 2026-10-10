@@ -274,7 +274,9 @@ describe("PolicyEngine", () => {
 
   it("creates policies from the configured model tools", () => {
     const config: SandboxConfig = {
-      configVersion: 9,
+      configVersion: 10,
+      codemode: { enabled: false, timeoutMs: 300000 },
+      mcp: { servers: {} },
       sessions: { retentionDays: 0 },
       filesystem: { cwdWritable: true, hiddenPaths: [] },
       audit: { enabled: false, facility: "local0" },

@@ -299,7 +299,9 @@ describe("identity overrides", () => {
   it("atomically replaces selected tools and inherits all omitted values", () => {
     const basePolicy = { audit: true, mode: "allow", sessionGrant: "never" } as const;
     const base = {
-      configVersion: 9,
+      configVersion: 10,
+      codemode: { enabled: false, timeoutMs: 300000 },
+      mcp: { servers: {} },
       sessions: { retentionDays: 365 },
       filesystem: { cwdWritable: true, hiddenPaths: ["/srv/runs"] },
       audit: { enabled: false, facility: "local0" },
