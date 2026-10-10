@@ -94,30 +94,58 @@ export function encodeWorkerFrame(value: WorkerRequest | WorkerResponse): Buffer
 }
 
 export class WorkerFrameDecoder {
-  #buffer = Buffer.alloc(0);
+  readonly #header = Buffer.allocUnsafe(4);
+  #headerBytes = 0;
+  #payload: Buffer | undefined;
+  #payloadBytes = 0;
 
   public constructor(private readonly maximumFrameBytes: number) {}
 
   public push(value: Buffer | string): unknown[] {
     const chunk = Buffer.isBuffer(value) ? value : Buffer.from(value);
-    this.#buffer =
-      this.#buffer.byteLength === 0 ? Buffer.from(chunk) : Buffer.concat([this.#buffer, chunk]);
     const frames: unknown[] = [];
-    while (this.#buffer.byteLength >= 4) {
-      const length = this.#buffer.readUInt32BE(0);
-      if (length === 0 || length > this.maximumFrameBytes) {
-        throw new Error("sandbox_worker_frame_invalid");
+    let offset = 0;
+    while (offset < chunk.byteLength) {
+      if (this.#payload === undefined) {
+        const copied = chunk.copy(
+          this.#header,
+          this.#headerBytes,
+          offset,
+          offset + 4 - this.#headerBytes,
+        );
+        this.#headerBytes += copied;
+        offset += copied;
+        if (this.#headerBytes < 4) break;
+        const length = this.#header.readUInt32BE(0);
+        if (length === 0 || length > this.maximumFrameBytes) {
+          throw new Error("sandbox_worker_frame_invalid");
+        }
+        // Allocate once after validating the length; copy each arriving byte
+        // once even when a large frame is fragmented across many pipe reads.
+        this.#payload = Buffer.allocUnsafe(length);
+        this.#payloadBytes = 0;
+        this.#headerBytes = 0;
       }
-      if (this.#buffer.byteLength < length + 4) break;
-      const payload = this.#buffer.subarray(4, length + 4);
-      this.#buffer = Buffer.from(this.#buffer.subarray(length + 4));
+      const payload = this.#payload;
+      const copied = chunk.copy(
+        payload,
+        this.#payloadBytes,
+        offset,
+        offset + payload.byteLength - this.#payloadBytes,
+      );
+      this.#payloadBytes += copied;
+      offset += copied;
+      if (this.#payloadBytes < payload.byteLength) break;
+      this.#payload = undefined;
+      this.#payloadBytes = 0;
       frames.push(JSON.parse(payload.toString("utf8")) as unknown);
     }
     return frames;
   }
 
   public finish(): void {
-    if (this.#buffer.byteLength !== 0) throw new Error("sandbox_worker_frame_truncated");
+    if (this.#headerBytes !== 0 || this.#payload !== undefined)
+      throw new Error("sandbox_worker_frame_truncated");
   }
 }
 

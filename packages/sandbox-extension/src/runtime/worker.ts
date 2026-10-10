@@ -17,9 +17,9 @@ import {
   type WorkerRequest,
   type WorkerResponse,
 } from "./worker-protocol.js";
+import { WORKER_TRANSPORT_IDLE_TIMEOUT_MS, writeWorkerFrame } from "./worker-transport.js";
 
 const TERMINATE_GRACE_MS = 750;
-const TERMINAL_ACK_TIMEOUT_MS = 10_000;
 
 type ExecutionState = "queued" | "running" | "offered" | "terminal";
 
@@ -67,6 +67,9 @@ class SandboxWorker {
 
   private receive(chunk: Buffer): void {
     if (this.#failed) return;
+    if (chunk.byteLength > 0) {
+      for (const execution of this.#executions.values()) execution.retirementTimeout?.refresh();
+    }
     let frames: unknown[];
     try {
       frames = this.#decoder.push(chunk);
@@ -321,12 +324,17 @@ class SandboxWorker {
   private terminal(execution: Execution, response: WorkerResponse): void {
     this.clearTimeout(execution);
     execution.state = "terminal";
-    execution.retirementTimeout = setTimeout(
-      () => this.fatal(new Error("sandbox_worker_retirement_timeout")),
-      TERMINAL_ACK_TIMEOUT_MS,
-    );
-    execution.retirementTimeout.unref();
-    void this.send(response);
+    void this.send(response)
+      .then(() => {
+        // The parent may retire before the write callback's continuation runs.
+        if (this.#executions.get(execution.request.id) !== execution) return;
+        execution.retirementTimeout = setTimeout(
+          () => this.fatal(new Error("sandbox_worker_retirement_timeout")),
+          WORKER_TRANSPORT_IDLE_TIMEOUT_MS,
+        );
+        execution.retirementTimeout.unref();
+      })
+      .catch((cause: unknown) => this.fatal(cause));
   }
 
   private clearTimeout(execution: Execution): void {
@@ -382,12 +390,7 @@ class SandboxWorker {
 
   private send(response: WorkerResponse): Promise<void> {
     const frame = encodeWorkerFrame(response);
-    this.#writeChain = this.#writeChain.then(
-      () =>
-        new Promise<void>((resolve, reject) => {
-          process.stdout.write(frame, (cause) => (cause ? reject(cause) : resolve()));
-        }),
-    );
+    this.#writeChain = this.#writeChain.then(() => writeWorkerFrame(process.stdout, frame));
     this.#writeChain.catch((cause: unknown) => this.fatal(cause));
     return this.#writeChain;
   }

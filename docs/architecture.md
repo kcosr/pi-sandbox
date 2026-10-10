@@ -335,8 +335,9 @@ In `sandbox` lifetime, a result is offered to the parent before it is committed.
 The parent accepts it, and the worker confirms success or reports a concurrent
 cleanup failure before the caller settles. Terminal requests are retained until
 the parent acknowledges retirement, so delayed cancellation or acceptance cannot
-affect newly admitted commands. Transport acknowledgement waits are bounded and
-fail closed; they do not add an absolute deadline to the post-exit output drain.
+affect newly admitted commands. Transport watchdogs fail closed on inactivity;
+ongoing transfer keeps acknowledgements alive behind large queued inputs. They
+do not add an absolute deadline to the post-exit output drain.
 
 The mount view is:
 

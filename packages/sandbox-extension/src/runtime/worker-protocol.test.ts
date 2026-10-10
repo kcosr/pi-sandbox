@@ -55,6 +55,34 @@ describe("sandbox worker protocol", () => {
     expect(() => decoder.finish()).toThrow("sandbox_worker_frame_truncated");
   });
 
+  it("assembles a large fragmented frame and preserves adjacent frame boundaries", () => {
+    const response = { type: "stdout", id: 1, data: "x".repeat(1_048_576) } as const;
+    const frame = Buffer.concat([
+      encodeWorkerFrame(response),
+      encodeWorkerFrame({ type: "completed", id: 1 }),
+    ]);
+    const decoder = new WorkerFrameDecoder(2 * 1_048_576);
+    const decoded: unknown[] = [];
+    for (let offset = 0; offset < frame.byteLength; offset += 127) {
+      decoded.push(...decoder.push(frame.subarray(offset, offset + 127)));
+    }
+    expect(decoded).toEqual([response, { type: "completed", id: 1 }]);
+    expect(() => decoder.finish()).not.toThrow();
+  });
+
+  it("owns partial header and payload bytes independently of the input buffer", () => {
+    const frame = encodeWorkerFrame({ type: "cancel", id: 42 });
+    const decoder = new WorkerFrameDecoder(1_024);
+    const header = Buffer.from(frame.subarray(0, 2));
+    expect(decoder.push(header)).toEqual([]);
+    header.fill(0xff);
+    const payload = Buffer.from(frame.subarray(2, 10));
+    expect(decoder.push(payload)).toEqual([]);
+    payload.fill(0xff);
+    expect(decoder.push(frame.subarray(10))).toEqual([{ type: "cancel", id: 42 }]);
+    expect(() => decoder.finish()).not.toThrow();
+  });
+
   it("validates the request and response message shapes", () => {
     expect(
       isWorkerRequest({
