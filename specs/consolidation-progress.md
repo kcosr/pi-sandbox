@@ -10,7 +10,8 @@ explicitly deferred until the Pi Sandbox milestones have been reviewed.
    based on main. Move implementation once, keep managed controls, add a stock-Pi
    entry and self-contained artifact. Implemented. Subagent implementation,
    integrated verification and iterative Keel `claude-default` review are complete;
-   the review returned no actionable findings.
+   the review returned no actionable findings. Draft PR:
+   [#16](https://github.com/kcosr/pi-sandbox/pull/16).
 2. **Linux smolvm:** a subsequent branch and separate draft PR stacked on the
    extraction checkpoint. Add owned host-project execution and reusable OCI
    controller/attachment support, replacing custom guardian supervision with

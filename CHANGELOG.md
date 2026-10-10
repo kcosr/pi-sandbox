@@ -2,8 +2,7 @@
 
 ## Unreleased
 
-- Extract reusable sandbox tools, permissions and execution into a standard Pi extension package, shared with the managed build.
-
+- Extract reusable sandbox tools, permissions and execution into a standard Pi extension package, shared with the managed build. ([#16](https://github.com/kcosr/pi-sandbox/pull/16))
 - Add Bubblewrap-local networking and configurable background-process lifetime; close a Unix datagram socket-pair bypass. ([#15](https://github.com/kcosr/pi-sandbox/pull/15))
 - Upgrade Pi to 1.1.0; support additive tool selection within TOML policy and disable project `.env` autoload. ([#14](https://github.com/kcosr/pi-sandbox/pull/14))
 - Report failed write/edit replacements and clean up temporary files. ([#13](https://github.com/kcosr/pi-sandbox/pull/13))
