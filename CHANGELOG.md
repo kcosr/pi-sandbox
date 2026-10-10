@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+### Added
+
+- Run Bubblewrap tools concurrently with sandbox process lifetime, preserving coordinated cancellation and cleanup. ([#19](https://github.com/kcosr/pi-sandbox/pull/19))
+
 ## 0.6.0 - 2026-10-10
 
 ### Breaking changes

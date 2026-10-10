@@ -5,6 +5,7 @@ import { mkdtemp, mkdir, readFile, readdir, rm, symlink, writeFile } from "node:
 import { dirname, join } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { setTimeout as delay } from "node:timers/promises";
+import { testParallelTools } from "./parallel-tools-smoke.mjs";
 
 const root = dirname(dirname(dirname(fileURLToPath(import.meta.url))));
 execFileSync(process.execPath, [join(root, "scripts/build-sandbox-extension.mjs")], {
@@ -132,39 +133,44 @@ try {
         tools: {
           read: { mode: "allow", sessionGrant: "never" },
           bash: { mode: "allow", sessionGrant: "never" },
+          write: { mode: "allow", sessionGrant: "never" },
+          edit: { mode: "allow", sessionGrant: "never" },
         },
         userBash: true,
       }),
       { mode: 0o600 },
     );
-    const child = spawn(
-      process.execPath,
-      [
-        join(root, "node_modules/@earendil-works/pi-coding-agent/dist/cli.js"),
-        "--mode",
-        "rpc",
-        "--no-builtin-tools",
-        "--no-extensions",
-        "--no-skills",
-        "--no-prompt-templates",
-        "--no-context-files",
-        "--no-themes",
-        "-e",
-        join(temp, "package/dist/index.js"),
-        "--sandbox-config",
-        config,
-      ],
-      {
-        cwd: workspace,
-        env: {
-          PATH: process.env.PATH,
-          HOME: home,
-          PI_CODING_AGENT_DIR: join(home, "agent"),
-          NO_COLOR: "1",
+    const launch = (args = []) =>
+      spawn(
+        process.execPath,
+        [
+          join(root, "node_modules/@earendil-works/pi-coding-agent/dist/cli.js"),
+          "--mode",
+          "rpc",
+          "--no-builtin-tools",
+          "--no-extensions",
+          "--no-skills",
+          "--no-prompt-templates",
+          "--no-context-files",
+          "--no-themes",
+          "-e",
+          join(temp, "package/dist/index.js"),
+          "--sandbox-config",
+          config,
+          ...args,
+        ],
+        {
+          cwd: workspace,
+          env: {
+            PATH: process.env.PATH,
+            HOME: home,
+            PI_CODING_AGENT_DIR: join(home, "agent"),
+            NO_COLOR: "1",
+          },
+          stdio: ["pipe", "pipe", "pipe"],
         },
-        stdio: ["pipe", "pipe", "pipe"],
-      },
-    );
+      );
+    const child = launch();
     children.add(child);
     let output = "",
       errors = "",
@@ -237,6 +243,13 @@ try {
       JSON.stringify(messages),
     );
     children.delete(child);
+    if (selected.kind === "bubblewrap") {
+      await testParallelTools({
+        launch: (args) => launch(["-e", "builtin:codemode", ...args]),
+        modelsPath: join(home, "agent/models.json"),
+        workspace,
+      });
+    }
     if (family) {
       const alive = await family.execute(family.sourceId, {
         argv: ["/bin/cat", "/workspace/result.txt"],

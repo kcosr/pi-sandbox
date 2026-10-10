@@ -154,7 +154,12 @@ prove kernel-observable properties:
   executor establishes multiple file masks without waiting on empty JS pipes;
 - `/tmp` is writable, private from host `/tmp`, and persistent between calls in
   one Pi process;
-- commands are serialized through one stable sandbox namespace;
+- command lifetime stays serial; sandbox lifetime permits four overlapping
+  commands in one stable namespace with separate input, output and results;
+- outstanding requests are bounded; queue overflow and queued cancellation do
+  not interrupt active work, and cleanup finishes before queued work starts;
+- result acceptance and retirement tolerate concurrent failures without stale
+  messages affecting subsequent commands;
 - host pseudo-filesystems and privileged sockets are not exposed;
 - TCP and pathname Unix-socket attempts inside and outside the writable CWD
   fail in offline mode;

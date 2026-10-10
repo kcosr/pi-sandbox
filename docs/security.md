@@ -182,6 +182,12 @@ staging, publication helper, or guardian is used. This decision does not establi
 arbitrary existing-file overwrite capability; future fetch/pull tools require
 their own assessment.
 
+`git_clone` retains Pi's sequential-tool declaration. An ordinary Pi batch that
+includes it runs sequentially. Pi 1.1.0's nested Code Mode runner serializes it
+against other sequential nested tools, but can overlap it with nested Bash or
+file tools. That existing scheduling behavior is unchanged; the declaration is
+not a global lock against all project writers.
+
 Standard `pi-tool` extensions receive the same invocation policy but are
 trusted host code. Their factory is limited to `registerTool` and `exec` during
 startup, but imported code and tool implementations are not sandboxed. Use the
@@ -355,12 +361,14 @@ requests inside the tool sandbox. Separately, optional user resolution occurs
 before sandbox startup through a root systemd Unix socket. That broker derives
 the caller's UID from `SO_PEERCRED`, returns only the matching user/group patch,
 and never enters the Bubblewrap boundary. The worker
-processes one command at a time. Default `command` lifetime removes descendants
-between requests. Optional `sandbox` lifetime preserves background processes
+processes one command at a time in default `command` lifetime, removing descendants
+between requests. Optional `sandbox` lifetime admits up to four concurrent commands
+and preserves background processes
 between calls and logical sessions; those processes can continue acting with
 their existing sandbox authority without a new approval for each action.
 Active cancellation, timeout, output overflow and execution failure can terminate
-previously started servers as part of sandbox-wide cleanup. Shutdown terminates
+other active calls and previously started servers as part of sandbox-wide cleanup.
+No queued work starts until that cleanup finishes. Shutdown terminates
 the sandbox. Ordinary scheduling is not exclusion against background processes.
 
 The filesystem may still contain credentials because broad host read access is
@@ -429,8 +437,9 @@ read-only host view or hidden-path masks.
 Pi, provider credentials, MCP servers, audit logging and managed host tools stay
 outside the guest. Their existing policies apply. Host Git clone remains
 available and retains the documented background-writer destination race:
-serialization prevents new tool calls during clone but does not stop a process
-left running in the VM from changing the shared project directory. No staging,
+ordinary batch serialization does not stop a process left running in the VM
+from changing the shared project directory, and nested Code Mode has the
+scheduling limitation described above. No staging,
 publication helper, clone-specific process termination or guardian is added.
 
 The owner stops its VM during normal shutdown. Cancellation or a lifecycle

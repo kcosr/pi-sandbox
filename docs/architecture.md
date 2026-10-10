@@ -327,11 +327,17 @@ as `HOME`, `PATH`, or `TMPDIR`.
 The host and worker communicate over the worker's anonymous stdin/stdout pipes
 using length-prefixed, versioned JSON frames. There is no socket, listening
 port, or filesystem control endpoint. Requests carry an identifier, direct
-argument vector, bounded input, duration, and output ceiling. The worker
-serializes requests and returns framed output and results.
-In `sandbox` process lifetime, the parent acknowledges a successful result before
-the worker starts the next request. If cancellation wins before acknowledgement,
-the worker cleans up the sandbox processes and returns a failure instead.
+argument vector, bounded input, duration, and output ceiling. The worker runs one
+command at a time in `command` lifetime and up to four in `sandbox` lifetime,
+with separate output and completion state per request. At most 64 requests may
+be outstanding; additional calls fail with `sandbox_queue_full` without executing.
+In `sandbox` lifetime, a result is offered to the parent before it is committed.
+The parent accepts it, and the worker confirms success or reports a concurrent
+cleanup failure before the caller settles. Terminal requests are retained until
+the parent acknowledges retirement, so delayed cancellation or acceptance cannot
+affect newly admitted commands. Transport watchdogs fail closed on inactivity;
+ongoing transfer keeps acknowledgements alive behind large queued inputs. They
+do not add an absolute deadline to the post-exit output drain.
 
 The mount view is:
 
@@ -429,9 +435,11 @@ shell, and its complete approved command is passed as one argument.
 
 Bubblewrap `execution.process_lifetime` defaults to `command`, removing remaining
 command processes after every operation. `sandbox` preserves them after ordinary
-foreground exit, including nonzero status. The process-owned worker and its
-ordinary serial scheduling remain unchanged, so background processes also
-survive logical Pi session changes. Scheduling does not exclude background
+foreground exit, including nonzero status. The process-owned worker permits
+bounded parallel execution in this mode, and background processes also
+survive logical Pi session changes. Same-path write/edit queues still cover whole
+multi-step mutations; ordinary Pi tool batches retain their sequencing rules.
+Scheduling does not exclude background
 writers, including during managed host `git_clone`; see the accepted clone race
 in [security.md](security.md).
 
@@ -444,8 +452,9 @@ publishing the terminal response. Background programs should redirect output to
 files to avoid broken pipes after the originating call completes.
 
 On active cancellation, timeout, output overflow or execution failure, the
-worker retains sandbox-wide cleanup before processing another request. This can
-terminate previously started servers. A queued cancellation only removes that
+worker stops admission, interrupts all affected active calls, and completes
+sandbox-wide cleanup before starting queued work. This also terminates
+previously started servers. A queued cancellation only removes that
 queued request. Closing the executor terminates the worker and complete
 Bubblewrap process tree. Direct execution remains command-scoped and requires
 `process_lifetime = "command"`.

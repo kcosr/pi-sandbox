@@ -3,7 +3,9 @@ import { constants as osConstants } from "node:os";
 import { PROCESS_LIFETIMES, type ProcessLifetime } from "./contracts.js";
 import type { SandboxExecutionErrorCode } from "./contracts.js";
 
-export const SANDBOX_WORKER_PROTOCOL_VERSION = 2;
+export const SANDBOX_WORKER_PROTOCOL_VERSION = 3;
+export const MAXIMUM_SANDBOX_ACTIVE_COMMANDS = 4;
+export const MAXIMUM_WORKER_PENDING_COMMANDS = 64;
 export const INTERNAL_SANDBOX_WORKER_ARGUMENT = "--pi-sandbox-internal-worker";
 export const MAXIMUM_WORKER_REQUEST_FRAME_BYTES = 96 * 1_048_576;
 export const MAXIMUM_WORKER_RESPONSE_FRAME_BYTES = 1 * 1_048_576;
@@ -23,9 +25,15 @@ export interface WorkerCancelRequest {
   readonly id: number;
 }
 
-/** Commit a sandbox-lifetime result before the worker may start another command. */
+/** Accept an offered sandbox-lifetime result; completion still needs worker confirmation. */
 export interface WorkerAcceptRequest {
   readonly type: "accept";
+  readonly id: number;
+}
+
+/** Retire a terminal response after disabling all parent cancellation callbacks. */
+export interface WorkerRetireRequest {
+  readonly type: "retire";
   readonly id: number;
 }
 
@@ -34,7 +42,11 @@ export interface WorkerShutdownRequest {
 }
 
 export type WorkerRequest =
-  WorkerExecuteRequest | WorkerCancelRequest | WorkerAcceptRequest | WorkerShutdownRequest;
+  | WorkerExecuteRequest
+  | WorkerCancelRequest
+  | WorkerAcceptRequest
+  | WorkerRetireRequest
+  | WorkerShutdownRequest;
 
 export interface WorkerReadyResponse {
   readonly type: "ready";
@@ -61,8 +73,17 @@ export interface WorkerFailureResponse {
   readonly message?: string;
 }
 
+export interface WorkerCompletedResponse {
+  readonly type: "completed";
+  readonly id: number;
+}
+
 export type WorkerResponse =
-  WorkerReadyResponse | WorkerOutputResponse | WorkerResultResponse | WorkerFailureResponse;
+  | WorkerReadyResponse
+  | WorkerOutputResponse
+  | WorkerResultResponse
+  | WorkerFailureResponse
+  | WorkerCompletedResponse;
 
 export function encodeWorkerFrame(value: WorkerRequest | WorkerResponse): Buffer {
   const payload = Buffer.from(JSON.stringify(value), "utf8");
@@ -73,37 +94,65 @@ export function encodeWorkerFrame(value: WorkerRequest | WorkerResponse): Buffer
 }
 
 export class WorkerFrameDecoder {
-  #buffer = Buffer.alloc(0);
+  readonly #header = Buffer.allocUnsafe(4);
+  #headerBytes = 0;
+  #payload: Buffer | undefined;
+  #payloadBytes = 0;
 
   public constructor(private readonly maximumFrameBytes: number) {}
 
   public push(value: Buffer | string): unknown[] {
     const chunk = Buffer.isBuffer(value) ? value : Buffer.from(value);
-    this.#buffer =
-      this.#buffer.byteLength === 0 ? Buffer.from(chunk) : Buffer.concat([this.#buffer, chunk]);
     const frames: unknown[] = [];
-    while (this.#buffer.byteLength >= 4) {
-      const length = this.#buffer.readUInt32BE(0);
-      if (length === 0 || length > this.maximumFrameBytes) {
-        throw new Error("sandbox_worker_frame_invalid");
+    let offset = 0;
+    while (offset < chunk.byteLength) {
+      if (this.#payload === undefined) {
+        const copied = chunk.copy(
+          this.#header,
+          this.#headerBytes,
+          offset,
+          offset + 4 - this.#headerBytes,
+        );
+        this.#headerBytes += copied;
+        offset += copied;
+        if (this.#headerBytes < 4) break;
+        const length = this.#header.readUInt32BE(0);
+        if (length === 0 || length > this.maximumFrameBytes) {
+          throw new Error("sandbox_worker_frame_invalid");
+        }
+        // Allocate once after validating the length; copy each arriving byte
+        // once even when a large frame is fragmented across many pipe reads.
+        this.#payload = Buffer.allocUnsafe(length);
+        this.#payloadBytes = 0;
+        this.#headerBytes = 0;
       }
-      if (this.#buffer.byteLength < length + 4) break;
-      const payload = this.#buffer.subarray(4, length + 4);
-      this.#buffer = Buffer.from(this.#buffer.subarray(length + 4));
+      const payload = this.#payload;
+      const copied = chunk.copy(
+        payload,
+        this.#payloadBytes,
+        offset,
+        offset + payload.byteLength - this.#payloadBytes,
+      );
+      this.#payloadBytes += copied;
+      offset += copied;
+      if (this.#payloadBytes < payload.byteLength) break;
+      this.#payload = undefined;
+      this.#payloadBytes = 0;
       frames.push(JSON.parse(payload.toString("utf8")) as unknown);
     }
     return frames;
   }
 
   public finish(): void {
-    if (this.#buffer.byteLength !== 0) throw new Error("sandbox_worker_frame_truncated");
+    if (this.#headerBytes !== 0 || this.#payload !== undefined)
+      throw new Error("sandbox_worker_frame_truncated");
   }
 }
 
 export function isWorkerRequest(value: unknown): value is WorkerRequest {
   if (!isRecord(value) || typeof value.type !== "string") return false;
   if (value.type === "shutdown") return hasExactKeys(value, ["type"]);
-  if (value.type === "cancel" || value.type === "accept") {
+  if (value.type === "cancel" || value.type === "accept" || value.type === "retire") {
     return hasExactKeys(value, ["type", "id"]) && isRequestId(value.id);
   }
   if (value.type !== "execute") return false;
@@ -139,6 +188,7 @@ export function isWorkerResponse(value: unknown): value is WorkerResponse {
     );
   }
   if (!isRequestId(value.id)) return false;
+  if (value.type === "completed") return hasExactKeys(value, ["type", "id"]);
   if (value.type === "stdout" || value.type === "stderr") {
     return hasExactKeys(value, ["type", "id", "data"]) && typeof value.data === "string";
   }
@@ -189,6 +239,8 @@ function isSandboxExecutionErrorCode(value: unknown): value is SandboxExecutionE
       "sandbox_invalid_request",
       "sandbox_output_limit_exceeded",
       "sandbox_process_failed",
+      "sandbox_queue_full",
+      "sandbox_admission_timeout",
       "sandbox_start_failed",
       "sandbox_timeout",
     ].includes(value)
