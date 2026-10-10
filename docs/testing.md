@@ -16,6 +16,17 @@ sessions. Managed tests cover mandatory approvals, exact canonical snapshots,
 per-call cancellation, audit failure, MCP and nested Code Mode. No live provider
 is contacted. Required native smolvm checks exercise owned and attached paths.
 
+The OCI interactive controller test also requires Bun 1.3.14 or newer (optionally
+selected with `PI_SANDBOX_TEST_BUN`). Run
+`packages/sandbox-extension/src/runtime/smolvm/oci/terminal.native.test.ts` with
+`PI_SANDBOX_SMOLVM_BIN`, `PI_SANDBOX_SMOLVM_OCI_IMAGE` and
+`PI_SANDBOX_SMOLVM_OCI_SHA256` set to a verified 1.25.4 distribution and provisioned
+Linux x86-64 tool image. It checks actual guest PTY startup, resize, Ctrl-C,
+streaming beyond 1 MiB, simultaneous tools and independent shells, exact reviewer
+branch access, scoped closure and repeated writable-original cold retention.
+The fixture sends bounded small inputs; application-level slow-consumer and
+transport-buffer qualification belongs to the application's PTY adapter.
+
 Pi Sandbox tests are offline. They never invoke a live model provider and never
 depend on provider credentials.
 

@@ -51,6 +51,7 @@ describe("OCI attachment capability", () => {
           producing = false;
           return { exitCode: 0, signal: null, stdout: Buffer.alloc(0), stderr: Buffer.alloc(0) };
         },
+        openTerminal: () => Promise.reject(Error("not used")),
         branch: () => Promise.reject(Error("not used")),
         removeMachine: () => Promise.reject(Error("not used")),
         retainForColdReopen: () => Promise.reject(Error("not used")),
@@ -179,6 +180,7 @@ describe("OCI attachment capability", () => {
           );
           started.resolve();
         }),
+      openTerminal: () => Promise.reject(Error("not used")),
       branch: () => Promise.reject(Error("not used")),
       removeMachine: () => Promise.reject(Error("not used")),
       retainForColdReopen: () => Promise.reject(Error("not used")),
@@ -264,6 +266,7 @@ describe("OCI attachment capability", () => {
           options?.onStdout?.(ready);
           return { exitCode: 0, signal: null, stdout: ready, stderr: Buffer.alloc(0) };
         },
+        openTerminal: () => Promise.reject(Error("not used")),
         branch: () => Promise.reject(Error("not used")),
         removeMachine: () => Promise.reject(Error("not used")),
         retainForColdReopen: () => Promise.reject(Error("not used")),
@@ -387,6 +390,7 @@ describe("OCI attachment capability", () => {
           stderr: errors,
         });
       },
+      openTerminal: () => Promise.reject(Error("not used")),
       branch: () => Promise.reject(Error("not reachable")),
       removeMachine: () => Promise.reject(Error("not reachable")),
       retainForColdReopen: () => Promise.reject(Error("not exposed by transport")),

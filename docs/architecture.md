@@ -528,3 +528,18 @@ interrupts peers and retires the owned VM or family before active calls settle.
 Unlike Bubblewrap's reusable cleanup, smolvm has no supported whole-workload reset
 that also removes previously detached guest processes while keeping the VM alive.
 Normal nonzero command exits do not retire it.
+
+The host-only OCI controller also supports scoped interactive terminals through
+a trusted runtime-neutral PTY launcher. Up to 16 terminal leases are separate
+from the four ordinary execution slots. Each terminal has its own fixed smolvm
+exec client and closes independently; no watcher or additional daemon is
+introduced. Branch/removal waits for terminals on the affected machine, and
+retention waits for all terminals. The orchestrator closes them before those
+exclusive transitions. Family shutdown actively closes every terminal before
+stopping VMs. The launch handshake consumes a guest marker after smolvm enters
+raw mode, avoiding input loss from its startup terminal flush.
+
+A child-free original can be cleanly retained whether frozen or writable, so
+administrative edits made after cold reopening persist on the next cold boot.
+Terminal-client cleanup failure preserves forensic state and prevents publishing
+a clean cold receipt. Terminal exit does not prove all guest descendants exited.

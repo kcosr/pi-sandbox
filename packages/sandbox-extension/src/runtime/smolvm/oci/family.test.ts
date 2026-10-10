@@ -10,7 +10,12 @@ import {
 } from "../../contracts.js";
 import { createHash } from "node:crypto";
 import { mkdir, mkdtemp, readFile, realpath, rm, stat, symlink, writeFile } from "node:fs/promises";
-import type { SmolvmOciFamilyOptions } from "./types.js";
+import type {
+  SmolvmOciFamilyOptions,
+  SmolvmOciTerminalExit,
+  SmolvmOciTerminalLauncher,
+} from "./types.js";
+import { SmolvmOciTerminalCleanupError } from "./types.js";
 import { attachSmolvmOciMachine } from "./transport.js";
 import { createConnection } from "node:net";
 import { once } from "node:events";
@@ -228,7 +233,255 @@ function deferred<T>() {
   });
   return { promise, resolve };
 }
+function terminalFixture() {
+  const exit = deferred<SmolvmOciTerminalExit>();
+  const write = vi.fn<(bytes: Uint8Array) => Promise<void>>(() => Promise.resolve());
+  const resize = vi.fn();
+  const close = vi.fn(() => {
+    exit.resolve({ exitCode: null, signal: "SIGTERM" });
+    return Promise.resolve();
+  });
+  const launch: SmolvmOciTerminalLauncher = vi.fn(() => ({
+    completion: exit.promise,
+    write,
+    resize,
+    close,
+  }));
+  return {
+    exit,
+    write,
+    resize,
+    close,
+    launch,
+    options: { terminalType: "xterm-256color", columns: 120, rows: 30, launch },
+  };
+}
 suite("OCI family controller policy with a simulated CLI", () => {
+  it("keeps sixteen terminals outside ordinary tool capacity and closes only the selected terminal", async () => {
+    const family = await fixture();
+    const terminals = Array.from({ length: 16 }, terminalFixture);
+    try {
+      const handles = await Promise.all(
+        terminals.map((terminal) => family.openTerminal(family.sourceId, terminal.options)),
+      );
+      await expect(
+        family.openTerminal(family.sourceId, terminalFixture().options),
+      ).rejects.toMatchObject({ code: "sandbox_queue_full" });
+      const ready = deferred<void>();
+      const finish = deferred<string>();
+      let count = 0;
+      mocks.exec = () => {
+        if (++count === 4) ready.resolve();
+        return finish.promise;
+      };
+      const tools = Array.from({ length: 4 }, () =>
+        family.execute(family.sourceId, { argv: ["/bin/true"] }),
+      );
+      await ready.promise;
+      await handles[0]!.write(new Uint8Array([3]));
+      handles[0]!.resize(80, 24);
+      expect(terminals[0]!.write).toHaveBeenCalledWith(new Uint8Array([3]));
+      expect(terminals[0]!.resize).toHaveBeenCalledWith(80, 24);
+      await handles[0]!.close();
+      expect(terminals[1]!.close).not.toHaveBeenCalled();
+      expect(mocks.events).toEqual([]);
+      expect(() => family.attachment(family.sourceId)).not.toThrow();
+      finish.resolve("tool");
+      expect((await Promise.all(tools)).every((r) => r.stdout.toString() === "tool")).toBe(true);
+    } finally {
+      await family.close();
+    }
+    expect(terminals.every((terminal) => terminal.close.mock.calls.length === 1)).toBe(true);
+  });
+  it("launches only the fixed scoped guest shell and validates terminal and machine input", async () => {
+    const family = await fixture();
+    const terminal = terminalFixture();
+    try {
+      await expect(family.openTerminal("other", terminal.options)).rejects.toMatchObject({
+        code: "sandbox_closed",
+      });
+      for (const patch of [
+        { columns: 0 },
+        { rows: 1001 },
+        { terminalType: "xterm\nBAD=1" },
+        { command: "/bin/sh" },
+      ])
+        await expect(
+          family.openTerminal(family.sourceId, { ...terminal.options, ...patch }),
+        ).rejects.toMatchObject({ code: "sandbox_invalid_request" });
+      const handle = await family.openTerminal(family.sourceId, terminal.options);
+      const launched = vi.mocked(terminal.launch).mock.calls[0]![0];
+      const prefix = "\u001b]777;smolvm-terminal-ready;";
+      expect(launched.readyMarker.startsWith(prefix)).toBe(true);
+      expect(launched.readyMarker.endsWith("\u0007")).toBe(true);
+      expect(launched.readyMarker.slice(prefix.length, -1)).toMatch(/^[a-f0-9]{48}$/u);
+      expect(terminal.launch).toHaveBeenCalledWith({
+        argv: [
+          await realpath("/usr/bin/true"),
+          "machine",
+          "exec",
+          "--name",
+          "candidate",
+          "--interactive",
+          "--tty",
+          "--workdir",
+          "/workspace",
+          "--user",
+          "0",
+          "--env",
+          "TERM=xterm-256color",
+          "--",
+          "/bin/bash",
+          "--noprofile",
+          "--norc",
+          "-c",
+          'printf %s "$1"; exec /bin/bash -i',
+          "terminal",
+          launched.readyMarker,
+        ],
+        cwd: family.statePath,
+        environment: expect.objectContaining({
+          HOME: path.join(family.statePath, "h"),
+          TERM: "xterm-256color",
+        }) as unknown,
+        columns: 120,
+        rows: 30,
+        readyMarker: launched.readyMarker,
+        signal: expect.any(AbortSignal) as unknown,
+      });
+      expect(() => handle.resize(0, 24)).toThrow();
+      await handle.close();
+      const child = await family.branch(family.sourceId, { branchable: false });
+      await expect(family.openTerminal(family.sourceId, terminal.options)).rejects.toMatchObject({
+        code: "sandbox_closed",
+      });
+      const childHandle = await family.openTerminal(child, terminalFixture().options);
+      await childHandle.close();
+    } finally {
+      await family.close();
+    }
+  });
+  it("waits for a source terminal before freezing and blocks later terminal admission", async () => {
+    const family = await fixture();
+    const terminal = await family.openTerminal(family.sourceId, terminalFixture().options);
+    try {
+      const branching = family.branch(family.sourceId, { branchable: false });
+      const later = family.openTerminal(family.sourceId, terminalFixture().options);
+      const rejected = expect(later).rejects.toMatchObject({ code: "sandbox_closed" });
+      await new Promise((r) => setTimeout(r, 10));
+      expect(mocks.events).toEqual([]);
+      await terminal.close();
+      const child = await branching;
+      await rejected;
+      const leafTerminal = await family.openTerminal(child, terminalFixture().options);
+      const removal = family.removeMachine(child);
+      await new Promise((r) => setTimeout(r, 10));
+      expect(mocks.events).toEqual(["branch:candidate"]);
+      await leafTerminal.close();
+      await removal;
+      expect(mocks.events).toEqual(["branch:candidate", `stop:${child}`]);
+    } finally {
+      await family.close();
+    }
+  });
+  it("aborts a pending terminal startup during family close without a queue deadlock", async () => {
+    const family = await fixture();
+    const entered = deferred<void>();
+    const terminal = terminalFixture();
+    const opening = family.openTerminal(family.sourceId, {
+      ...terminal.options,
+      launch: async ({ signal }) => {
+        entered.resolve();
+        await new Promise<void>((resolve) =>
+          signal.addEventListener("abort", () => resolve(), { once: true }),
+        );
+        throw new Error("launch aborted after cleanup");
+      },
+    });
+    const rejected = expect(opening).rejects.toThrow("launch aborted");
+    await entered.promise;
+    await family.close();
+    await rejected;
+    expect(mocks.events).toEqual(["stop:candidate"]);
+  });
+  it("closes a family while a branch waits for a terminal without starting the branch", async () => {
+    const family = await fixture();
+    await family.openTerminal(family.sourceId, terminalFixture().options);
+    const branch = family.branch(family.sourceId, { branchable: false });
+    const rejected = expect(branch).rejects.toMatchObject({ code: "sandbox_closed" });
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    await family.close();
+    await rejected;
+    expect(mocks.events).toEqual(["stop:candidate"]);
+  });
+  it("isolates an active terminal abort and a failed launch from ordinary execution", async () => {
+    const family = await fixture();
+    const controller = new AbortController();
+    const first = terminalFixture();
+    const peer = terminalFixture();
+    try {
+      const terminal = await family.openTerminal(family.sourceId, {
+        ...first.options,
+        signal: controller.signal,
+      });
+      await family.openTerminal(family.sourceId, peer.options);
+      controller.abort();
+      await terminal.completion;
+      expect(first.close).toHaveBeenCalledTimes(1);
+      expect(peer.close).not.toHaveBeenCalled();
+      await expect(
+        family.openTerminal(family.sourceId, {
+          ...first.options,
+          launch: () => Promise.reject(new Error("cleaned failed startup")),
+        }),
+      ).rejects.toThrow("cleaned failed startup");
+      expect((await family.execute(family.sourceId, { argv: ["/bin/true"] })).exitCode).toBe(0);
+      expect(mocks.events).toEqual([]);
+    } finally {
+      await family.close();
+    }
+  });
+  it("retains state and reports a terminal cleanup failure without blocking family teardown", async () => {
+    const family = await fixture();
+    const terminal = terminalFixture();
+    const handle = await family.openTerminal(family.sourceId, {
+      ...terminal.options,
+      launch: () => ({
+        completion: terminal.exit.promise,
+        write: terminal.write,
+        resize: terminal.resize,
+        close: () => Promise.reject(new Error("exec reap unconfirmed")),
+      }),
+    });
+    const branching = family.branch(family.sourceId, { branchable: false });
+    const rejected = expect(branching).rejects.toThrow("cleanup_unconfirmed");
+    await expect(handle.close()).rejects.toThrow("exec reap unconfirmed");
+    await rejected;
+    expect(mocks.events).toEqual(["stop:candidate"]);
+    expect((await stat(family.statePath)).isDirectory()).toBe(true);
+    terminal.exit.resolve({ exitCode: null, signal: "SIGKILL" });
+  });
+  it("retains recovery state after a launcher reports unconfirmed startup cleanup", async () => {
+    const family = await fixture();
+    const uncertain = new SmolvmOciTerminalCleanupError("unreaped startup client");
+    await expect(
+      family.openTerminal(family.sourceId, {
+        ...terminalFixture().options,
+        launch: () => Promise.reject(uncertain),
+      }),
+    ).rejects.toBe(uncertain);
+    await expect(
+      family.openTerminal(family.sourceId, terminalFixture().options),
+    ).rejects.toMatchObject({ code: "sandbox_process_failed" });
+    expect((await family.execute(family.sourceId, { argv: ["/bin/true"] })).exitCode).toBe(0);
+    await expect(family.retainForColdReopen()).rejects.toThrow("cleanup_unconfirmed");
+    await expect(family.close()).rejects.toThrow("cleanup_unconfirmed");
+    expect(mocks.events).toEqual(["stop:candidate"]);
+    expect((await stat(family.statePath)).isDirectory()).toBe(true);
+    await expect(stat(path.join(family.statePath, "cold-ready.json"))).rejects.toMatchObject({
+      code: "ENOENT",
+    });
+  });
   it.each(["abort", "timeout"])(
     "retires the family on %s during an admitted request's initial identity check before guest execution",
     async (mode) => {
@@ -463,12 +716,9 @@ suite("OCI family controller policy with a simulated CLI", () => {
     const reopened = await reopenSmolvmOciFamily({ statePath: family.statePath });
     await reopened.close();
   });
-  it("only seals a frozen child-free source, atomically claims it and revokes old tokens", async () => {
+  it("only seals a child-free source, atomically claims it and revokes old tokens", async () => {
     const family = await fixture();
     const old = family.attachment(family.sourceId);
-    await expect(family.retainForColdReopen()).rejects.toMatchObject({
-      code: "sandbox_invalid_request",
-    });
     const child = await family.branch(family.sourceId, { branchable: false });
     await expect(family.retainForColdReopen()).rejects.toMatchObject({
       code: "sandbox_invalid_request",
@@ -493,6 +743,19 @@ suite("OCI family controller policy with a simulated CLI", () => {
       await reopened.value.close();
     }
     await expect(stat(retained.statePath)).rejects.toMatchObject({ code: "ENOENT" });
+  });
+  it("retains and repeatedly reopens a writable child-free original", async () => {
+    let family = await fixture();
+    const originalPath = family.statePath;
+    for (let index = 0; index < 2; index++) {
+      const terminal = await family.openTerminal(family.sourceId, terminalFixture().options);
+      const retention = family.retainForColdReopen();
+      await terminal.close();
+      expect((await retention).statePath).toBe(originalPath);
+      family = await reopenSmolvmOciFamily({ statePath: originalPath });
+      expect((await family.execute(family.sourceId, { argv: ["/bin/true"] })).exitCode).toBe(0);
+    }
+    await family.close();
   });
   it("does not mark unacknowledged or ordinary forensic retention reopenable", async () => {
     const family = await fixture();
