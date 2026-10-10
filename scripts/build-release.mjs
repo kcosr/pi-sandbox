@@ -26,6 +26,10 @@ import { loadExtensionManifests } from "./build/extension-composition.mjs";
 import { createSbom } from "./build/sbom.mjs";
 import { loadDistribution } from "./build/distribution.mjs";
 import { renderLayoutText } from "./build/layout-render.mjs";
+import {
+  SMOLVM_SOURCE_COMMIT,
+  SMOLVM_RELEASE_SHA256,
+} from "../packages/sandbox-extension/src/runtime/smolvm/release-pin.ts";
 
 const repositoryRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const defaultDistribution = join(repositoryRoot, "config/default/distribution.toml");
@@ -449,6 +453,7 @@ async function inspectReleaseArchive(
     executionBackends: expectedRelease.executionBackends,
     identityBroker: expectedRelease.identityBroker,
     bubblewrap: expectedRelease.bubblewrap,
+    smolvm: expectedRelease.smolvm,
     pi: expectedRelease.pi,
     extensions: expectedRelease.extensions,
     layout: expectedRelease.layout,
@@ -463,6 +468,7 @@ async function inspectReleaseArchive(
     executionBackends: manifest.executionBackends,
     identityBroker: manifest.identityBroker,
     bubblewrap: manifest.bubblewrap,
+    smolvm: manifest.smolvm,
     pi: manifest.pi,
     extensions: manifest.extensions,
     layout: manifest.layout,
@@ -515,6 +521,14 @@ async function main() {
     );
   }
   const composedExtensions = await loadExtensionManifests(distribution.extensionManifests);
+  const smolvmRelease =
+    distribution.smolvm === undefined
+      ? null
+      : {
+          ...distribution.smolvm,
+          sourceCommit: SMOLVM_SOURCE_COMMIT,
+          releaseArchiveSha256: SMOLVM_RELEASE_SHA256,
+        };
   if (target.os === "linux") {
     await validateBundledBubblewrap(distribution.bubblewrap, process.arch);
   }
@@ -610,6 +624,7 @@ async function main() {
         "packages/coding-agent/test/managed-session-sharing.test.ts",
         "packages/coding-agent/test/managed-session-cwd.test.ts",
         "packages/coding-agent/test/managed-session-maintenance.test.ts",
+        "packages/coding-agent/test/managed-shutdown-status.test.ts",
         "packages/coding-agent/test/managed-mcp-codemode.test.ts",
         "packages/mcp/test/managed-transport.test.ts",
         "packages/codemode/test/managed-limits.test.ts",
@@ -772,6 +787,7 @@ async function main() {
       sourceCommit: (await capture("git", ["rev-parse", "HEAD"])).trim(),
       sourceDirty: (await capture("git", ["status", "--porcelain"])).trim().length > 0,
       bubblewrap: os === "linux" ? distribution.bubblewrap.release : null,
+      smolvm: smolvmRelease,
       payload,
     });
     await writeFile(join(payload, "sbom.cdx.json"), `${JSON.stringify(sbom, null, 2)}\n`, {
@@ -785,9 +801,13 @@ async function main() {
       version: packageJson.version,
       platform,
       architecture: process.arch,
-      executionBackends: os === "linux" ? ["bubblewrap", "direct"] : ["direct"],
+      executionBackends:
+        os === "linux"
+          ? ["bubblewrap", "direct", ...(distribution.smolvm === undefined ? [] : ["smolvm"])]
+          : ["direct"],
       identityBroker: os === "linux",
       bubblewrap: os === "linux" ? distribution.bubblewrap.release : null,
+      smolvm: smolvmRelease,
       pi: {
         version: lock.version,
         tag: lock.tag,
@@ -839,9 +859,13 @@ async function main() {
         version: packageJson.version,
         platform,
         architecture: process.arch,
-        executionBackends: os === "linux" ? ["bubblewrap", "direct"] : ["direct"],
+        executionBackends:
+          os === "linux"
+            ? ["bubblewrap", "direct", ...(distribution.smolvm === undefined ? [] : ["smolvm"])]
+            : ["direct"],
         identityBroker: os === "linux",
         bubblewrap: os === "linux" ? distribution.bubblewrap.release : null,
+        smolvm: smolvmRelease,
         pi: {
           version: lock.version,
           tag: lock.tag,
@@ -866,6 +890,23 @@ async function main() {
         ],
         { env: cleanEnvironment },
       );
+      if (
+        distribution.smolvm !== undefined &&
+        distribution.layout.allowConfigOverride &&
+        (cleanEnvironment.PI_SANDBOX_SMOLVM_IMAGE ||
+          cleanEnvironment.PI_SANDBOX_REQUIRE_SMOLVM === "1")
+      ) {
+        process.stdout.write("Testing managed smolvm through the packaged executable\n");
+        await run(
+          process.execPath,
+          [
+            join(repositoryRoot, "scripts/test/smolvm-managed-smoke.mjs"),
+            join(extractedRelease, "payload/pi-sandbox/pi-sandbox"),
+            join(extractedRelease, "payload/pi-sandbox/defaults"),
+          ],
+          { env: cleanEnvironment },
+        );
+      }
     }
     const archiveSha256 = await sha256(archive);
     await writeFile(join(options.out, "SHA256SUMS"), `${archiveSha256}  ${archiveName}\n`, {

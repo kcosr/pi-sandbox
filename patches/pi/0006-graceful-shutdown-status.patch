@@ -1,0 +1,118 @@
+diff --git a/packages/coding-agent/src/modes/interactive/interactive-mode.ts b/packages/coding-agent/src/modes/interactive/interactive-mode.ts
+index ddbcc5a..9d0caf3 100644
+--- a/packages/coding-agent/src/modes/interactive/interactive-mode.ts
++++ b/packages/coding-agent/src/modes/interactive/interactive-mode.ts
+@@ -4325,7 +4325,7 @@ export class InteractiveMode {
+ 			process.stdout.write(`${chalk.dim("To resume this session:")} ${resumeCommand}\n`);
+ 		}
+ 
+-		process.exit(0);
++		process.exit(process.exitCode ?? 0);
+ 	}
+ 
+ 	private emergencyTerminalExit(): never {
+diff --git a/packages/coding-agent/src/modes/rpc/rpc-mode.ts b/packages/coding-agent/src/modes/rpc/rpc-mode.ts
+index 262a55b..8978ecc 100644
+--- a/packages/coding-agent/src/modes/rpc/rpc-mode.ts
++++ b/packages/coding-agent/src/modes/rpc/rpc-mode.ts
+@@ -713,7 +713,7 @@ export async function runRpcMode(runtimeHost: AgentSessionRuntime): Promise<neve
+ 
+ 	async function shutdown(exitCode = 0, signal?: NodeJS.Signals): Promise<never> {
+ 		if (shuttingDown) {
+-			process.exit(exitCode);
++			process.exit(exitCode === 0 ? (process.exitCode ?? 0) : exitCode);
+ 		}
+ 		shuttingDown = true;
+ 		for (const cleanup of signalCleanupHandlers) {
+@@ -727,7 +727,7 @@ export async function runRpcMode(runtimeHost: AgentSessionRuntime): Promise<neve
+ 		if (signal !== "SIGTERM") {
+ 			await flushRawStdout();
+ 		}
+-		process.exit(exitCode);
++		process.exit(exitCode === 0 ? (process.exitCode ?? 0) : exitCode);
+ 	}
+ 
+ 	async function checkShutdownRequested(): Promise<void> {
+diff --git a/packages/coding-agent/test/managed-shutdown-status.test.ts b/packages/coding-agent/test/managed-shutdown-status.test.ts
+new file mode 100644
+--- /dev/null
++++ b/packages/coding-agent/test/managed-shutdown-status.test.ts
+@@ -0,0 +1,78 @@
++import { afterEach, describe, expect, test, vi } from "vitest";
++import type { AgentSessionRuntime } from "../src/core/agent-session-runtime.ts";
++import { InteractiveMode } from "../src/modes/interactive/interactive-mode.ts";
++import { runRpcMode } from "../src/modes/rpc/rpc-mode.ts";
++
++vi.mock("../src/core/output-guard.ts", () => ({
++	flushRawStdout: vi.fn(async () => {}),
++	takeOverStdout: vi.fn(),
++	waitForRawStdoutBackpressure: vi.fn(async () => {}),
++	writeRawStdout: vi.fn(),
++}));
++vi.mock("../src/modes/rpc/jsonl.ts", () => ({
++	attachJsonlLineReader: () => () => {},
++	serializeJsonLine: (value: unknown) => JSON.stringify(value),
++}));
++
++const originalExitCode = process.exitCode;
++afterEach(() => {
++	process.exitCode = originalExitCode;
++	vi.restoreAllMocks();
++});
++
++describe("graceful shutdown status", () => {
++	test.each([
++		{ code: 0, signal: undefined, expected: 0 },
++		{ code: 1, signal: undefined, expected: 1 },
++		{ code: 1, signal: "SIGTERM" as const, expected: 143 },
++	])("RPC retains cleanup status $code and signal $signal", async ({ code, signal, expected }) => {
++		process.exitCode = undefined;
++		const exit = vi.spyOn(process, "exit").mockImplementation(() => undefined as never);
++		vi.spyOn(process.stdin, "pause").mockReturnValue(process.stdin);
++		const existingInput = new Set(process.stdin.listeners("end"));
++		const existingSignals = new Set(process.listeners("SIGTERM"));
++		const disposed = vi.fn(async () => {
++			process.exitCode = code;
++		});
++		const runtime = {
++			session: {
++				bindExtensions: async () => {},
++				subscribe: () => () => {},
++				agent: { subscribe: () => () => {} },
++			},
++			setRebindSession: () => {},
++			dispose: disposed,
++		} as unknown as AgentSessionRuntime;
++		void runRpcMode(runtime);
++		await vi.waitFor(() =>
++			expect(process.stdin.listeners("end").some((listener) => !existingInput.has(listener))).toBe(true),
++		);
++		const listeners = signal ? process.listeners(signal) : process.stdin.listeners("end");
++		const before = signal ? existingSignals : existingInput;
++		const handler = listeners.find((listener) => !before.has(listener));
++		expect(handler).toBeDefined();
++		handler!();
++		await vi.waitFor(() => expect(exit).toHaveBeenCalledWith(expected));
++		expect(disposed).toHaveBeenCalledOnce();
++	});
++
++	test.each([0, 1])("interactive quit retains cleanup status %s", async (code) => {
++		process.exitCode = undefined;
++		const exit = vi.spyOn(process, "exit").mockImplementation(() => undefined as never);
++		const disposed = vi.fn(async () => {
++			process.exitCode = code;
++		});
++		const instance = {
++			isShuttingDown: false,
++			runtimeHost: { dispose: disposed },
++			themeController: { disableAutoSync: () => {} },
++			ui: { terminal: { drainInput: async () => {} } },
++			stop: () => {},
++			sessionManager: { isPersisted: () => false },
++		};
++		const prototype = InteractiveMode.prototype as unknown as { shutdown(): Promise<void> };
++		await prototype.shutdown.call(instance);
++		expect(exit).toHaveBeenCalledWith(code);
++		expect(disposed).toHaveBeenCalledOnce();
++	});
++});

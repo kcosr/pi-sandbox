@@ -2,6 +2,10 @@ import { constants } from "node:fs";
 import { open } from "node:fs/promises";
 import { isAbsolute, normalize } from "node:path";
 import { TOOL_NAMES, type BuiltInToolName, type SubjectPolicy } from "./policy/contracts.js";
+import { validateSmolvmResources, type SmolvmResources } from "./runtime/smolvm/options.js";
+import { smolvmEnvironment } from "./runtime/smolvm/request.js";
+import { validateOciAttachment } from "./runtime/smolvm/oci/transport.js";
+import type { SmolvmOciAttachment } from "./runtime/smolvm/oci/types.js";
 import {
   NETWORK_MODES,
   PROCESS_LIFETIMES,
@@ -23,14 +27,30 @@ export interface DirectBackendConfig {
   readonly kind: "direct";
   readonly environment: Readonly<Record<string, string>>;
 }
-export interface SandboxExtensionConfig {
-  readonly version: 1;
-  readonly mode: "owned";
-  readonly backend: BubblewrapBackendConfig | DirectBackendConfig;
-  /** Missing names are disabled. CLI visibility cannot expand this ceiling. */
+export interface SmolvmBackendConfig {
+  readonly kind: "smolvm";
+  readonly executable: string;
+  readonly image: string;
+  readonly imageSha256: string;
+  readonly stateDirectory: string;
+  readonly resources: SmolvmResources;
+  readonly cwdWritable: boolean;
+  readonly environment: Readonly<Record<string, string>>;
+}
+interface CommonConfig {
+  readonly version: 2;
   readonly tools: Readonly<Partial<Record<BuiltInToolName, SubjectPolicy>>>;
   readonly userBash: boolean;
 }
+export interface OwnedSandboxConfig extends CommonConfig {
+  readonly mode: "owned";
+  readonly backend: BubblewrapBackendConfig | DirectBackendConfig | SmolvmBackendConfig;
+}
+export interface AttachedSandboxConfig extends CommonConfig {
+  readonly mode: "attached";
+  readonly attachment: SmolvmOciAttachment;
+}
+export type SandboxExtensionConfig = OwnedSandboxConfig | AttachedSandboxConfig;
 
 function record(value: unknown): asserts value is Record<string, unknown> {
   if (value === null || typeof value !== "object" || Array.isArray(value))
@@ -63,8 +83,18 @@ function environment(value: unknown): Readonly<Record<string, string>> {
 }
 export function parseSandboxConfig(value: unknown): SandboxExtensionConfig {
   record(value);
-  keys(value, ["version", "mode", "backend", "tools", "userBash"]);
-  if (value.version !== 1 || value.mode !== "owned" || typeof value.userBash !== "boolean")
+  keys(value, [
+    "version",
+    "mode",
+    value.mode === "attached" ? "attachment" : "backend",
+    "tools",
+    "userBash",
+  ]);
+  if (
+    value.version !== 2 ||
+    !["owned", "attached"].includes(value.mode as string) ||
+    typeof value.userBash !== "boolean"
+  )
     throw new Error("Unsupported sandbox configuration");
   record(value.tools);
   const tools: Partial<Record<BuiltInToolName, SubjectPolicy>> = {};
@@ -79,9 +109,19 @@ export function parseSandboxConfig(value: unknown): SandboxExtensionConfig {
       throw new Error("Invalid tool policy");
     tools[name as BuiltInToolName] = Object.freeze({ ...policy } as unknown as SubjectPolicy);
   }
+  if (value.mode === "attached") {
+    validateOciAttachment(value.attachment);
+    return Object.freeze({
+      version: 2,
+      mode: "attached",
+      attachment: Object.freeze({ ...value.attachment }),
+      tools: Object.freeze(tools),
+      userBash: value.userBash,
+    });
+  }
   record(value.backend);
   const input = value.backend;
-  let backend: SandboxExtensionConfig["backend"];
+  let backend: OwnedSandboxConfig["backend"];
   if (input.kind === "direct") {
     keys(input, ["kind", "environment"]);
     backend = { kind: "direct", environment: environment(input.environment) };
@@ -117,9 +157,42 @@ export function parseSandboxConfig(value: unknown): SandboxExtensionConfig {
       hiddenPaths: Object.freeze([...hiddenPaths] as string[]),
       environment: environment(input.environment),
     };
+  } else if (input.kind === "smolvm") {
+    keys(input, [
+      "kind",
+      "executable",
+      "image",
+      "imageSha256",
+      "stateDirectory",
+      "resources",
+      "cwdWritable",
+      "environment",
+    ]);
+    for (const field of [input.executable, input.image, input.stateDirectory]) absolute(field);
+    record(input.resources);
+    if (
+      typeof input.cwdWritable !== "boolean" ||
+      typeof input.imageSha256 !== "string" ||
+      !/^[a-f0-9]{64}$/u.test(input.imageSha256)
+    )
+      throw new Error("Invalid smolvm options");
+    const resources = Object.freeze({ ...input.resources }) as unknown as SmolvmResources;
+    const env = environment(input.environment);
+    validateSmolvmResources(resources);
+    smolvmEnvironment(env);
+    backend = {
+      kind: "smolvm",
+      executable: input.executable as string,
+      image: input.image as string,
+      imageSha256: input.imageSha256,
+      stateDirectory: input.stateDirectory as string,
+      resources,
+      cwdWritable: input.cwdWritable,
+      environment: env,
+    };
   } else throw new Error("Unsupported sandbox backend");
   return Object.freeze({
-    version: 1,
+    version: 2,
     mode: "owned",
     backend: Object.freeze(backend),
     tools: Object.freeze(tools),

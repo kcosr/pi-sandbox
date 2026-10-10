@@ -260,7 +260,7 @@ explicit host authority. Writable private runtime/temp storage remains available
 ## Audit correlation
 
 The application and collector use strict audit wire version 2; the collector emits
-record schema version 3 and requires configuration version 10. They must be
+record schema version 3 and requires configuration version 11. They must be
 installed from the same release. MCP records carry the configured server ID,
 original tool name, and `http` or `stdio` transport. Nested audited calls carry
 `parent_invocation_id` from trusted execution context, never from script arguments.
@@ -416,3 +416,28 @@ under their own UID.
 Records exclude file contents, edit diffs, and tool output. Target paths, the
 launch CWD, and bounded Bash commands are intentional identifying fields and
 may contain sensitive information. Bash commands are truncated, not redacted.
+
+## smolvm boundary and lifecycle
+
+The optional Linux x86-64 smolvm backend uses the fixed 1.25.4 runtime and a
+SHA-256-selected trusted image. Only the launch project is host-mounted, at the
+same absolute path and with the configured write access. The rest of the guest
+filesystem is private and writable. The VM has no host/external networking;
+guest loopback is available. This mode does not reproduce Bubblewrap's broad
+read-only host view or hidden-path masks.
+
+Pi, provider credentials, MCP servers, audit logging and managed host tools stay
+outside the guest. Their existing policies apply. Host Git clone remains
+available and retains the documented background-writer destination race:
+serialization prevents new tool calls during clone but does not stop a process
+left running in the VM from changing the shared project directory. No staging,
+publication helper, clone-specific process termination or guardian is added.
+
+The owner stops its VM during normal shutdown. Cancellation or a lifecycle
+failure may retire the entire VM, including background services. Abrupt owner
+death can leave the VM running with its original mount grants. Manual smolvm
+cleanup is part of the accepted crash-recovery contract; no independent watcher
+or daemon is added by Pi Sandbox. Do not infer successful cleanup from a missing
+Pi process, and do not recursively delete state while its VM might still run.
+Failed startup can conservatively preserve even a never-started machine's state
+directory for manual cleanup when the recorded state does not confirm termination.

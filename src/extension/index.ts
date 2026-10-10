@@ -359,7 +359,9 @@ export function createPiSandboxExtension(dependencies: ExtensionDependencies): E
       executionScope:
         dependencies.executor.backend === "bubblewrap"
           ? "inside the Bubblewrap sandbox"
-          : "directly on the host as the current user",
+          : dependencies.executor.backend === "smolvm"
+            ? "inside the smolvm Linux virtual machine"
+            : "directly on the host as the current user",
     })(
       new Proxy(pi, {
         get(target, property): unknown {
@@ -463,6 +465,7 @@ export function createPiSandboxExtension(dependencies: ExtensionDependencies): E
       state.policy = new PolicyEngine(config.tools, mcp?.resolveSubject);
       await dependencies.onSessionStart?.(ctx.sessionManager.getSessionFile());
       try {
+        await dependencies.executor.probe();
         state.executor = dependencies.executor;
         if (config.audit.enabled) {
           if (dependencies.auditClient === undefined)
@@ -532,15 +535,19 @@ export function createPiSandboxExtension(dependencies: ExtensionDependencies): E
 
     pi.on("session_shutdown", async (event, ctx) => {
       state.stopped = true;
-      const cleanup = await Promise.allSettled([
-        mcp?.close() ?? Promise.resolve(),
-        ...stops.map((stop) => Promise.resolve().then(() => stop(event, ctx))),
-      ]);
-      state.policy?.clearSessionGrants();
-      state.executor = undefined;
-      await state.auditor?.end();
-      if (cleanup.some((result) => result.status === "rejected"))
-        throw new Error("Managed tool shutdown failed");
+      try {
+        const cleanup = await Promise.allSettled([
+          mcp?.close() ?? Promise.resolve(),
+          ...stops.map((stop) => Promise.resolve().then(() => stop(event, ctx))),
+        ]);
+        state.policy?.clearSessionGrants();
+        state.executor = undefined;
+        await state.auditor?.end();
+        if (cleanup.some((result) => result.status === "rejected"))
+          throw new Error("Managed tool shutdown failed");
+      } finally {
+        if (event?.reason === "quit") await dependencies.onProcessShutdown?.();
+      }
     });
 
     const factories =

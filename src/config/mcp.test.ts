@@ -25,15 +25,15 @@ const parse = (server: Record<string, unknown>) =>
   parseMcpConfig({ servers: { docs: server } }, code).servers.docs!;
 
 describe("MCP administrative configuration", () => {
-  it("requires new top-level sections and schema 10, with packaged features disabled", () => {
+  it("requires new top-level sections and schema 11, with packaged features disabled", () => {
     const fixture = readFileSync("config/default/config.toml", "utf8");
     const catalog = createManagedExtensionCatalog([]);
     const config = parseConfig(fixture, "fixture", catalog);
     expect(config.codemode).toEqual({ enabled: false, timeoutMs: 300000 });
     expect(config.mcp.servers).toEqual({});
     expect(() =>
-      parseConfig(fixture.replace("config_version = 10", "config_version = 9"), "fixture", catalog),
-    ).toThrow("integer 10");
+      parseConfig(fixture.replace("config_version = 11", "config_version = 9"), "fixture", catalog),
+    ).toThrow("integer 11");
     expect(() =>
       parseConfig(fixture.replace("[mcp.servers]", "[mcp]"), "fixture", catalog),
     ).toThrow("servers is required");

@@ -1,6 +1,8 @@
 import { execFileSync } from "node:child_process";
 import { realpath } from "node:fs/promises";
 import { fileURLToPath } from "node:url";
+import { isWithin } from "./runtime/smolvm/options.js";
+import { attachSmolvmOciMachine } from "./runtime/smolvm/oci/transport.js";
 import type {
   ExtensionAPI,
   ExtensionContext,
@@ -14,6 +16,7 @@ import { TOOL_NAMES } from "./policy/contracts.js";
 import {
   createBubblewrapExecutor,
   createDirectExecutor,
+  createSmolvmExecutor,
   type SandboxExecutor,
 } from "./runtime/index.js";
 
@@ -28,7 +31,7 @@ interface OwnerSlot {
 const slotKey = Symbol.for("pi-sandbox-extension.owned.v1");
 const processSlots = globalThis as typeof globalThis & { [slotKey]?: OwnerSlot };
 
-export interface OwnedEntryDependencies {
+export interface EntryDependencies {
   readonly readConfig?: typeof readSandboxConfig;
   readonly create?: (config: SandboxExtensionConfig, cwd: string) => Promise<SandboxExecutor>;
   readonly canonical?: (path: string) => Promise<string>;
@@ -38,9 +41,21 @@ async function createExecutor(
   config: SandboxExtensionConfig,
   cwd: string,
 ): Promise<SandboxExecutor> {
+  if (config.mode === "attached") return attachSmolvmOciMachine(config.attachment);
   const backend = config.backend;
   if (backend.kind === "direct")
     return createDirectExecutor({ cwd, environment: backend.environment });
+  if (backend.kind === "smolvm")
+    return createSmolvmExecutor({
+      cwd,
+      cwdWritable: backend.cwdWritable,
+      environment: backend.environment,
+      smolvmPath: backend.executable,
+      imagePath: backend.image,
+      imageSha256: backend.imageSha256,
+      stateDirectory: backend.stateDirectory,
+      resources: backend.resources,
+    });
   const runtime = await realpath(backend.runtime);
   const version = execFileSync(runtime, ["--version"], {
     encoding: "utf8",
@@ -69,8 +84,8 @@ async function createExecutor(
 }
 
 /** The slot is process-owned, not tied to any one conversation's extension instance. */
-export function createOwnedSandboxExtension(
-  dependencies: OwnedEntryDependencies = {},
+export function createConfiguredSandboxExtension(
+  dependencies: EntryDependencies = {},
   slot: OwnerSlot = (processSlots[slotKey] ??= {}),
 ): ExtensionFactory {
   return async (pi: ExtensionAPI) => {
@@ -122,7 +137,16 @@ export function createOwnedSandboxExtension(
           const file = pi.getFlag("sandbox-config");
           if (typeof file !== "string" || !file) throw new Error("--sandbox-config is required");
           config = await (dependencies.readConfig ?? readSandboxConfig)(file);
-          const cwd = await (dependencies.canonical ?? realpath)(ctx.cwd);
+          const cwd =
+            config.mode === "attached"
+              ? config.attachment.cwd
+              : await (dependencies.canonical ?? realpath)(ctx.cwd);
+          if (
+            config.mode === "owned" &&
+            config.backend.kind === "smolvm" &&
+            isWithin(cwd, await (dependencies.canonical ?? realpath)(file))
+          )
+            throw new Error("Sandbox configuration must stay outside the mounted project");
           const identity = JSON.stringify({ cwd, config });
           if (!slot.pending) {
             const pending = (async () => {

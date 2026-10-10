@@ -223,6 +223,12 @@ provides these seams:
    new/resume/fork/clone. They must not bind a replacement twice. Every genuine
    runtime gets a fresh forced extension instance; shutdown ends audit state and
    clears approval grants, while the process-owned executor stays available.
+   The managed executor starts and probes through `beforeInterface`; each
+   session-start hook also awaits its readiness before any managed tools become
+   available. Metadata and invalid-CLI exits do not start a sandbox. Normal quit awaits the
+   process-owned executor, managed host runners, and audit client cleanup from
+   the session-shutdown hook, before Pi calls `process.exit`. The outer entry
+   point uses that same idempotent cleanup if Pi returns or throws.
 6. `main()` exposes a generic asynchronous `beforeRun` hook. After session
    selection and metadata/authentication exits, it passes the resolved mode,
    session manager, and optional resolved custom session directory and awaits
@@ -231,6 +237,18 @@ provides these seams:
    settings even with `--no-session`. Patch
    `0004-session-startup-maintenance.patch` supplies this seam; retention policy,
    scanning, scheduling, and progress output remain in Pi Sandbox.
+7. The same patch supplies `beforeInterface`, an awaited final initialization
+   hook after diagnostics, missing-model and invalid-benchmark exits and before
+   catalog refresh or interface dispatch. Pi Sandbox starts and probes its lazy
+   process-owned executor here. Rejection propagates to the entry point for
+   cleanup; no interface or model request starts with an unavailable backend.
+   Help, version, model listing, authentication and invalid CLI paths do not
+   invoke this hook.
+8. `0006-graceful-shutdown-status.patch` preserves a nonzero `process.exitCode`
+   on normal RPC or interactive quit. Explicit signal status is unchanged.
+   Managed cleanup sets failure status and reports underlying errors, including
+   the retained VM-state path, before Pi reports an extension shutdown error.
+   Cleanup still attempts and awaits every owned resource.
 
 Pi 1.0's resource loader separates built-in factories from ordinary inline
 factories. The forced `--no-extensions` flag disables the built-in factories and

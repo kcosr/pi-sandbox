@@ -85,6 +85,42 @@ test("release inventory ties source and executable identity to selected shipped 
       ),
     );
     assert.deepEqual(sbom.components.map((c) => c.name).sort(), ["bun", "chosen", "pi"]);
+    const externalRuntime = await createSbom({
+      ...args,
+      smolvm: {
+        path: "/opt/smolvm/smolvm",
+        version: "1.25.4",
+        sourceCommit: "e".repeat(40),
+        releaseArchiveSha256: "f".repeat(64),
+      },
+    });
+    assert.ok(
+      externalRuntime.metadata.component.properties.some(
+        (property) =>
+          property.name.endsWith("external-smolvm-version") && property.value === "1.25.4",
+      ),
+    );
+    assert.ok(
+      externalRuntime.metadata.component.properties.some(
+        (property) =>
+          property.name.endsWith("external-smolvm-path") && property.value === "/opt/smolvm/smolvm",
+      ),
+    );
+    assert.deepEqual(
+      externalRuntime.components,
+      sbom.components,
+      "external runtime is not presented as shipped code",
+    );
+    for (const [name, value] of [
+      ["external-smolvm-source-commit", "e".repeat(40)],
+      ["external-smolvm-release-archive-sha256", "f".repeat(64)],
+    ]) {
+      assert.ok(
+        externalRuntime.metadata.component.properties.some(
+          (property) => property.name.endsWith(name) && property.value === value,
+        ),
+      );
+    }
     await mkdir(join(root, "broker"));
     await mkdir(join(root, "audit-collector"));
     for (const crate of ["broker", "audit-collector"])

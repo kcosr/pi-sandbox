@@ -664,6 +664,9 @@ class PersistentBubblewrapExecutor implements SandboxExecutor {
 }
 
 function validateRequest(request: SandboxCommandRequest, limits: ResolvedLimits): ValidatedRequest {
+  if (request.cwd !== undefined || request.environment !== undefined) {
+    throw new SandboxExecutionError("sandbox_invalid_request");
+  }
   if (!Array.isArray(request.argv) || request.argv.length === 0) {
     throw new SandboxExecutionError("sandbox_invalid_request");
   }

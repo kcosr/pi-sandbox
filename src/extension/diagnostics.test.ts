@@ -5,7 +5,7 @@ import { formatSandboxMounts, formatSandboxPolicy, formatSandboxSummary } from "
 
 function diagnosticConfig(): SandboxConfig {
   return {
-    configVersion: 10,
+    configVersion: 11,
     codemode: { enabled: false, timeoutMs: 300000 },
     mcp: { servers: {} },
     sessions: { retentionDays: 0 },
@@ -31,6 +31,25 @@ function diagnosticConfig(): SandboxConfig {
 }
 
 describe("sandbox diagnostics", () => {
+  it("describes the VM mount and network without claiming the host filesystem is visible", () => {
+    const config: SandboxConfig = {
+      ...diagnosticConfig(),
+      execution: { backend: "smolvm", processLifetime: "sandbox" },
+    };
+    const mounts = formatSandboxMounts("/work/project", config.execution, config.filesystem);
+    expect(mounts).toContain("/work/project");
+    expect(mounts).toContain("The rest of the host filesystem is not mounted");
+    expect(mounts).toContain("manually stopped");
+    const policy = formatSandboxPolicy(
+      { config, hasSessionGrant: () => false, isToolActive: () => true },
+      "bash",
+    );
+    expect(policy).toContain("smolvm");
+    expect(policy).toContain("other host paths are not visible");
+    expect(policy).toContain("guest-local services");
+    expect(policy).not.toContain("May read visible host paths");
+  });
+
   it("formats the concise process summary without reading configuration again", () => {
     expect(
       formatSandboxSummary({
@@ -123,7 +142,9 @@ Use /sandbox mounts or /sandbox policy for details.`);
       },
       "write",
     );
-    expect(host).toContain("Is not restricted by the Bubblewrap boundary, its filesystem setting");
+    expect(host).toContain(
+      "Is not restricted by the selected sandbox boundary, its filesystem setting",
+    );
   });
 
   it("reports configured masks as conditional on presence at startup", () => {
@@ -283,7 +304,7 @@ Use /sandbox mounts or /sandbox policy for details.`);
     const detail = formatSandboxPolicy(input, "host_echo");
     expect(detail).toContain("Execution:       host");
     expect(detail).toContain("operation example.echo directly on the host");
-    expect(detail).toContain("not restricted by the Bubblewrap boundary");
+    expect(detail).toContain("not restricted by the selected sandbox boundary");
     expect(detail).not.toContain("Has no network access");
   });
 });

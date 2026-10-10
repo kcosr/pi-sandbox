@@ -239,6 +239,7 @@ enum ProcessLifetime {
 enum ExecutionBackend {
     Bubblewrap,
     Direct,
+    Smolvm,
 }
 
 #[derive(Debug, Deserialize, Serialize, PartialEq, Eq)]
@@ -812,7 +813,9 @@ fn valid_overrides(overrides: &IdentityOverrides) -> bool {
         .as_deref()
         .is_none_or(valid_models_file)
         && overrides.execution.as_ref().is_none_or(|execution| {
-            execution.backend.is_some() || execution.process_lifetime.is_some()
+            (execution.backend.is_some() || execution.process_lifetime.is_some())
+                && !(execution.backend == Some(ExecutionBackend::Smolvm)
+                    && execution.process_lifetime.is_some())
         })
         && overrides.tools.len() <= MAX_TOOL_OVERRIDES
         && overrides.tools.iter().all(|(name, policy)| {
@@ -1049,6 +1052,34 @@ session_grant = "offer"
                 session_grant: SessionGrantPolicy::Offer,
             })
         );
+    }
+
+    #[test]
+    fn smolvm_backend_keeps_image_authority_outside_identity_overrides() {
+        let source = b"version = 7\nuid = 7\n[overrides.execution]\nbackend = \"smolvm\"\n";
+        let parsed = parse_user_for_test(source, 7).unwrap();
+        assert_eq!(
+            parsed.overrides.execution.unwrap().backend,
+            Some(ExecutionBackend::Smolvm)
+        );
+        for fields in [
+            "[overrides.execution]\nbackend = \"smolvm\"\nprocess_lifetime = \"sandbox\"",
+            "[overrides.smolvm]\nimage = \"/tmp/tools.smolmachine\"",
+        ] {
+            let value = format!("version = 7\nuid = 7\n{fields}\n");
+            assert!(parse_user_for_test(value.as_bytes(), 7).is_err());
+        }
+        for lifetime in ["command", "sandbox"] {
+            let selection = || record("uid = 1000", "[overrides.execution]\nbackend = \"smolvm\"");
+            let duration = || {
+                record(
+                    "gid = 20",
+                    &format!("[overrides.execution]\nprocess_lifetime = {lifetime:?}"),
+                )
+            };
+            assert!(resolve(vec![selection(), duration()]).is_err());
+            assert!(resolve(vec![duration(), selection()]).is_err());
+        }
     }
 
     #[test]

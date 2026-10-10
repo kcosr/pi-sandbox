@@ -5,7 +5,7 @@ import { join } from "node:path";
 import { readSandboxConfig, parseSandboxConfig } from "./config.js";
 
 const config = {
-  version: 1,
+  version: 2,
   mode: "owned",
   backend: { kind: "direct", environment: {} },
   tools: { read: { mode: "allow", sessionGrant: "never" } },
@@ -20,13 +20,43 @@ describe("standalone sandbox configuration", () => {
   it("rejects legacy/unknown keys, backend fallback and malformed policies", () => {
     for (const input of [
       { ...config, attachment: {} },
-      { ...config, version: 2 },
+      { ...config, version: 1 },
       { ...config, backend: { kind: "automatic", environment: {} } },
       { ...config, tools: { read: { mode: "allow" } } },
       { ...config, tools: { unknown: { mode: "allow", sessionGrant: "never" } } },
       { ...config, backend: { kind: "direct", environment: { SECRET: 42 } } },
     ])
       expect(() => parseSandboxConfig(input)).toThrow();
+  });
+  it("accepts explicit VM ownership or a scoped attachment, never both", () => {
+    const backend = {
+      kind: "smolvm",
+      executable: "/opt/smolvm/smolvm",
+      image: "/images/tools.smolmachine",
+      imageSha256: "a".repeat(64),
+      stateDirectory: "/state",
+      resources: { cpus: 1, memoryMiB: 512, storageGiB: 1, overlayGiB: 1 },
+      cwdWritable: true,
+      environment: {},
+    };
+    expect(parseSandboxConfig({ ...config, backend }).mode).toBe("owned");
+    const attachment = {
+      version: 1,
+      socketPath: "/private/control.sock",
+      token: "b".repeat(64),
+      machineId: "candidate",
+      cwd: "/workspace",
+      home: "/root",
+    };
+    const attached = { version: 2, mode: "attached", attachment, tools: {}, userBash: false };
+    expect(parseSandboxConfig(attached).mode).toBe("attached");
+    expect(() => parseSandboxConfig({ ...attached, backend })).toThrow();
+    expect(() =>
+      parseSandboxConfig({ ...config, backend: { ...backend, network: "host" } }),
+    ).toThrow();
+    expect(() =>
+      parseSandboxConfig({ ...config, backend: { ...backend, imageSha256: "unverified" } }),
+    ).toThrow();
   });
   it.skipIf(process.platform === "win32")(
     "rejects a FIFO config without waiting for a writer",

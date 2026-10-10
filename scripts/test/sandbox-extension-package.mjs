@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { execFileSync, spawn } from "node:child_process";
 import { createHash } from "node:crypto";
-import { mkdtemp, mkdir, readFile, rm, symlink, writeFile } from "node:fs/promises";
+import { mkdtemp, mkdir, readFile, readdir, rm, symlink, writeFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { setTimeout as delay } from "node:timers/promises";
@@ -10,8 +10,10 @@ const root = dirname(dirname(dirname(fileURLToPath(import.meta.url))));
 execFileSync(process.execPath, [join(root, "scripts/build-sandbox-extension.mjs")], {
   stdio: "inherit",
 });
-const temp = await mkdtemp("/var/tmp/pi-extension-package-");
+const temp = await mkdtemp("/var/tmp/pie-");
 const children = new Set();
+const vmStates = [];
+const families = [];
 try {
   const packed = JSON.parse(
     execFileSync(
@@ -55,27 +57,78 @@ try {
   if (process.platform !== "linux")
     throw new Error("This package acceptance requires Linux Bubblewrap");
   const runtimes = [process.execPath, execFileSync("which", ["bun"], { encoding: "utf8" }).trim()];
-  for (const [index, runtime] of runtimes.entries()) {
+  const cases = runtimes.map((runtime) => ({ kind: "bubblewrap", runtime }));
+  if (
+    process.env.PI_SANDBOX_SMOLVM_BIN &&
+    process.env.PI_SANDBOX_SMOLVM_IMAGE &&
+    process.env.PI_SANDBOX_SMOLVM_IMAGE_SHA256
+  )
+    cases.push({ kind: "smolvm", runtime: process.env.PI_SANDBOX_SMOLVM_BIN });
+  else if (process.env.PI_SANDBOX_REQUIRE_SMOLVM === "1")
+    throw new Error("Required package VM fixture needs runtime, image and digest");
+  if (
+    process.env.PI_SANDBOX_SMOLVM_BIN &&
+    process.env.PI_SANDBOX_SMOLVM_OCI_IMAGE &&
+    process.env.PI_SANDBOX_SMOLVM_OCI_SHA256
+  )
+    cases.push({ kind: "attached", runtime: process.env.PI_SANDBOX_SMOLVM_BIN });
+  else if (process.env.PI_SANDBOX_REQUIRE_SMOLVM === "1")
+    throw new Error("Required package attachment fixture needs OCI image and digest");
+  const { createSmolvmOciFamily } = await import(
+    pathToFileURL(join(temp, "package/dist/controller.js")).href
+  );
+  for (const [index, selected] of cases.entries()) {
+    const { runtime } = selected;
     const workspace = join(temp, `workspace-${index}`);
     const home = join(temp, `home-${index}`);
     await mkdir(workspace);
     await mkdir(home);
     const config = join(temp, `config-${index}.json`);
+    const stateDirectory = join(temp, `state-${index}`);
+    await mkdir(stateDirectory, { mode: 0o700 });
+    if (selected.kind !== "bubblewrap") vmStates.push(stateDirectory);
+    let family;
+    if (selected.kind === "attached") {
+      family = await createSmolvmOciFamily({
+        smolvmPath: runtime,
+        imageArchive: process.env.PI_SANDBOX_SMOLVM_OCI_IMAGE,
+        imageSha256: process.env.PI_SANDBOX_SMOLVM_OCI_SHA256,
+        stateDirectory,
+        cwd: "/workspace",
+        networkMode: "none",
+        resources: { cpus: 1, memoryMiB: 512, storageGiB: 1, overlayGiB: 1 },
+      });
+      families.push(family);
+    }
+    const backend =
+      selected.kind === "smolvm"
+        ? {
+            kind: "smolvm",
+            executable: runtime,
+            image: process.env.PI_SANDBOX_SMOLVM_IMAGE,
+            imageSha256: process.env.PI_SANDBOX_SMOLVM_IMAGE_SHA256,
+            stateDirectory,
+            resources: { cpus: 1, memoryMiB: 512, storageGiB: 1, overlayGiB: 1 },
+            cwdWritable: true,
+            environment: {},
+          }
+        : {
+            kind: "bubblewrap",
+            executable: "/usr/bin/bwrap",
+            runtime,
+            network: "local",
+            processLifetime: "sandbox",
+            cwdWritable: true,
+            hiddenPaths: [home],
+            environment: {},
+          };
     await writeFile(
       config,
       JSON.stringify({
-        version: 1,
-        mode: "owned",
-        backend: {
-          kind: "bubblewrap",
-          executable: "/usr/bin/bwrap",
-          runtime,
-          network: "local",
-          processLifetime: "sandbox",
-          cwdWritable: true,
-          hiddenPaths: [home],
-          environment: {},
-        },
+        version: 2,
+        ...(family
+          ? { mode: "attached", attachment: family.attachment(family.sourceId) }
+          : { mode: "owned", backend }),
         tools: {
           read: { mode: "allow", sessionGrant: "never" },
           bash: { mode: "allow", sessionGrant: "never" },
@@ -139,7 +192,7 @@ try {
     async function request(type, fields = {}) {
       const id = `package-${++sequence}`;
       child.stdin.write(`${JSON.stringify({ id, type, ...fields })}\n`);
-      for (let count = 0; count < 400; count++) {
+      for (let count = 0; count < 1200; count++) {
         const response = messages.find((message) => message.id === id);
         if (response) {
           assert.equal(response.success, true, JSON.stringify(response));
@@ -166,15 +219,36 @@ try {
     );
     const write = await request("bash", { command: "printf package-ok > result.txt" });
     assert.equal(write.data.exitCode, 0);
-    assert.equal(await readFile(join(workspace, "result.txt"), "utf8"), "package-ok");
+    if (family) {
+      const result = await family.execute(family.sourceId, {
+        argv: ["/bin/cat", "/workspace/result.txt"],
+      });
+      assert.equal(result.stdout.toString(), "package-ok");
+      assert(
+        !(await readdir(workspace)).includes("result.txt"),
+        "attached workspace must stay in the guest",
+      );
+    } else assert.equal(await readFile(join(workspace, "result.txt"), "utf8"), "package-ok");
     child.stdin.end();
-    for (let count = 0; child.exitCode === null && count < 400; count++) await delay(25);
+    for (let count = 0; child.exitCode === null && count < 1200; count++) await delay(25);
     assert.equal(child.exitCode, 0, errors);
     assert(
       !messages.some((message) => message.type === "extension_error"),
       JSON.stringify(messages),
     );
     children.delete(child);
+    if (family) {
+      const alive = await family.execute(family.sourceId, {
+        argv: ["/bin/cat", "/workspace/result.txt"],
+      });
+      assert.equal(
+        alive.stdout.toString(),
+        "package-ok",
+        "Pi EOF must only detach from an orchestrator-owned machine",
+      );
+      await family.close();
+    }
+    if (selected.kind !== "bubblewrap") assert.deepEqual(await readdir(stateDirectory), []);
   }
   console.log(
     `Inspected and exercised ${packed.filename}; SHA256 ${createHash("sha256")
@@ -186,5 +260,16 @@ try {
     child.stdin.destroy();
     child.kill("SIGKILL");
   }
-  await rm(temp, { recursive: true, force: true });
+  for (const family of families) {
+    try {
+      await family.close();
+    } catch (error) {
+      console.error("Family cleanup uncertain", String(error));
+    }
+  }
+  const retained = [];
+  for (const state of vmStates) if ((await readdir(state)).length) retained.push(state);
+  if (retained.length)
+    console.error(`Preserving failed VM fixture state for scoped recovery: ${retained.join(", ")}`);
+  else await rm(temp, { recursive: true, force: true });
 }

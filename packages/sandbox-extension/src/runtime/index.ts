@@ -1,5 +1,17 @@
 export { buildBubblewrapArguments, safeSandboxEnvironment } from "./bubblewrap-policy.js";
 export { createBubblewrapExecutor } from "./bubblewrap-executor.js";
+export { createSmolvmExecutor } from "./smolvm/packed.js";
+export {
+  validateSmolvmOptions,
+  type CreateSmolvmExecutorOptions,
+  type SmolvmResources,
+} from "./smolvm/options.js";
+export {
+  SMOLVM_VERSION,
+  SMOLVM_RELEASE_SHA256,
+  SMOLVM_SOURCE_COMMIT,
+  verifySmolvmRuntime,
+} from "./smolvm/runtime-release.js";
 export { LINUX_TOOL_COMMANDS, REQUIRED_SANDBOX_EXECUTABLES } from "./tool-commands.js";
 export {
   createDirectExecutor,

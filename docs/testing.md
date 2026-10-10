@@ -302,3 +302,52 @@ code VM source/call/output limits, deadlines and awaited nested cancellation.
 The packaged fixture exercises the compiled application with a local scripted
 provider and local MCP servers; it never contacts a live model provider. Project
 `.env` files must not redirect session storage through Bun environment autoload.
+
+## smolvm qualification
+
+Managed unit checks cover schema 11 image/resource validation, fixed VM lifetime,
+identity backend transitions, refusal of identity image overrides, VM-aware
+mount/policy diagnostics and the `smolvm` audit boundary. Distribution checks
+cover the optional fixed external 1.25.4 provider without requiring an installed
+runtime during cross-build/staged validation. Real VM tests must additionally
+use a verified full runtime and trusted tools image on Linux x86-64 with KVM;
+ordinary host-only tests are not evidence of VM confinement or cleanup.
+
+Set `PI_SANDBOX_SMOLVM_BIN` to the official distribution's wrapper,
+`PI_SANDBOX_SMOLVM_IMAGE` and `PI_SANDBOX_SMOLVM_IMAGE_SHA256` to a trusted packed
+tools image, and `PI_SANDBOX_SMOLVM_OCI_IMAGE` and `PI_SANDBOX_SMOLVM_OCI_SHA256`
+to a local OCI tools archive. `PI_SANDBOX_REQUIRE_SMOLVM=1` makes missing native
+prerequisites fail instead of skipping. The release verifier uses these inputs
+for owned project execution, OCI families and the standard Pi package.
+
+The native cases cover RW/RO project access, binary streaming, persistent guest
+processes, cancellation, timeout, output overflow and close; frozen OCI sources,
+independently writable siblings, branchable implementers, authenticated borrowed
+attachments and repeated cold reopening. Package tests launch ordinary Pi from
+the extracted tarball and check that borrowed shutdown leaves ownership with the
+controller. No live provider is used. Abrupt owner death remains a documented
+manual-recovery case, not a tested automatic-cleanup guarantee.
+
+For the compiled managed application, run the following against an extracted
+Linux x86-64 review build with `allow_config_override = true`, the Git extension
+included, and its build-selected external smolvm distribution available:
+
+```sh
+PI_SANDBOX_SMOLVM_IMAGE=/absolute/path/tools.smolmachine \
+PI_SANDBOX_SMOLVM_IMAGE_SHA256=REPLACE_WITH_IMAGE_SHA256 \
+node scripts/test/smolvm-managed-smoke.mjs \
+  /absolute/path/pi-sandbox /absolute/path/defaults
+```
+
+`build:release` also runs this fixture automatically for such a review build
+when `PI_SANDBOX_SMOLVM_IMAGE` is set or `PI_SANDBOX_REQUIRE_SMOLVM=1`.
+
+This fixture exercises RPC conversation replacement, persistent guest processes,
+host-project writeback, unmounted host-file isolation and VMM death on normal
+EOF. It also checks approved host `git_clone` over loopback HTTP followed by
+guest readback, then reuses the full managed MCP/Code Mode smoke suite with
+scripted loopback providers. No live model is called. VM state and project files
+use short private `/var/tmp` paths; one disposable Pi state directory under the
+invoking account's home lets the existing stdio account-identity checks run
+without changing host account records. The fixture removes its directories on
+confirmed cleanup and preserves them with reported paths after uncertain cleanup.

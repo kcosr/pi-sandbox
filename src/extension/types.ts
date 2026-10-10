@@ -19,6 +19,8 @@ export interface ExtensionDependencies {
   readonly toolArguments?: readonly string[];
   readonly loadConfig: () => Promise<SandboxConfig>;
   readonly onSessionStart?: (file: string | undefined) => Promise<void>;
+  /** Await process-owned cleanup before Pi's normal quit path can call process.exit. */
+  readonly onProcessShutdown?: () => Promise<void>;
   readonly executor: SandboxExecutor;
   readonly auditClient?: AuditClient;
   readonly managedExtensions?: readonly ManagedExtensionInstance[];

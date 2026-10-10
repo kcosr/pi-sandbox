@@ -95,7 +95,7 @@ fn facility(config: &str) -> io::Result<Option<u32>> {
     if value
         .get("config_version")
         .and_then(toml::Value::as_integer)
-        != Some(10)
+        != Some(11)
     {
         return Err(invalid());
     }
@@ -304,7 +304,7 @@ fn valid_event(e: &Event) -> bool {
     if e.command.is_some() && e.tool.as_deref() != Some("bash") {
         return false;
     }
-    one_of(&e.boundary, &["bubblewrap", "direct", "host"])
+    one_of(&e.boundary, &["bubblewrap", "direct", "smolvm", "host"])
         && one_of(&e.approval_source, &["policy", "prompt", "session_grant"])
         && one_of(
             &e.reason,
@@ -485,6 +485,16 @@ mod tests {
     fn tool() -> serde_json::Value {
         serde_json::json!({"version":2,"event":{"event":"tool_execution_intent","pi_session_id":"pi-1","tool":"bash","invocation_id":"call-1","boundary":"bubblewrap","approval_source":"prompt","command":"printf 'hello\\n'","command_truncated":false}})
     }
+    #[test]
+    fn accepts_smolvm_tool_boundary_without_allowing_guest_mcp() {
+        let mut request = tool();
+        request["event"]["boundary"] = serde_json::json!("smolvm");
+        assert!(read_frame(&mut Cursor::new(lines(&[request]))).is_ok());
+        let mut request = mcp("stdio");
+        request["event"]["boundary"] = serde_json::json!("smolvm");
+        assert!(read_frame(&mut Cursor::new(lines(&[request]))).is_err());
+    }
+
     fn mcp(transport: &str) -> serde_json::Value {
         serde_json::json!({"version":2,"event":{
             "event":"tool_execution_intent","pi_session_id":"pi-1",
@@ -832,17 +842,17 @@ mod tests {
     #[test]
     fn configuration_owns_facility_and_requires_current_schema() {
         assert_eq!(
-            facility("config_version=10\n[audit]\nenabled=true\nfacility='local7'").unwrap(),
+            facility("config_version=11\n[audit]\nenabled=true\nfacility='local7'").unwrap(),
             Some(23)
         );
         assert_eq!(
-            facility("config_version=10\n[audit]\nenabled=false\nfacility='local0'").unwrap(),
+            facility("config_version=11\n[audit]\nenabled=false\nfacility='local0'").unwrap(),
             None
         );
         for text in [
-            "config_version=9\n[audit]\nenabled=true\nfacility='local0'",
-            "config_version=10\n[audit]\nenabled=true\nfacility='auth'",
-            "config_version=10\n[audit]\nenabled=true\nfacility='local0'\npath='/tmp/log'",
+            "config_version=10\n[audit]\nenabled=true\nfacility='local0'",
+            "config_version=11\n[audit]\nenabled=true\nfacility='auth'",
+            "config_version=11\n[audit]\nenabled=true\nfacility='local0'\npath='/tmp/log'",
         ] {
             assert!(facility(text).is_err());
         }

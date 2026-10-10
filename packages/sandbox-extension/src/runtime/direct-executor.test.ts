@@ -69,4 +69,17 @@ describe("direct executor", () => {
       code: "sandbox_start_failed",
     });
   });
+
+  it("rejects per-command context overrides", async () => {
+    const executor = await createDirectExecutor({ cwd: await temporaryCwd() });
+    try {
+      for (const context of [{ cwd: "/" }, { environment: { VALUE: "override" } }]) {
+        await expect(
+          executor.execute({ argv: [executor.commands.sh, "-c", "exit 0"], ...context }),
+        ).rejects.toMatchObject({ code: "sandbox_invalid_request" });
+      }
+    } finally {
+      await executor.close();
+    }
+  });
 });

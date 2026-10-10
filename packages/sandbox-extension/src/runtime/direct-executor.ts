@@ -154,6 +154,9 @@ class DirectExecutor implements SandboxExecutor {
     request: SandboxCommandRequest,
     options?: SandboxExecutionOptions,
   ): Promise<SandboxCommandResult> {
+    if (request.cwd !== undefined || request.environment !== undefined) {
+      return Promise.reject(new SandboxExecutionError("sandbox_invalid_request"));
+    }
     return this.host.execute(request, options).catch((error: unknown) => {
       throw translateHostError(error);
     });
