@@ -134,4 +134,17 @@ describe("reusable Git core", () => {
     expect(gitCloneCallSummary(null)).toBeUndefined();
     expect(gitCloneCallSummary({})).toBeUndefined();
   });
+
+  it("rejects raw and encoded C1 controls before displaying names or starting Git", async () => {
+    const runtime = await fixture();
+    for (const control of ["\u0080", "\u009b", "\u009d", "\u009f"]) {
+      const repository = `https://github.com/org/repo${control}31m.git`;
+      expect(gitCloneCallSummary({ repository })).toBeUndefined();
+      for (const name of [control, encodeURIComponent(control)])
+        await expect(
+          executeGitClone({ repository: `https://github.com/org/repo${name}31m.git` }, runtime),
+        ).rejects.toThrow();
+    }
+    expect(runtime.execute).not.toHaveBeenCalled();
+  });
 });

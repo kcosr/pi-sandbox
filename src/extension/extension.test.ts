@@ -772,6 +772,8 @@ describe("Pi Sandbox extension", () => {
         ?.trimEnd();
     expect(renderCall("visible summary")).toBe("host_echo visible summary");
     expect(renderCall("hidden\nsummary")).toBe("host_echo");
+    expect(renderCall("hidden\u009b31msummary")).toBe("host_echo");
+    expect(renderCall("hidden\u009dsummary")).toBe("host_echo");
     expect(renderCall("x".repeat(1_025))).toBe("host_echo");
 
     const input = { value: "approved" };
