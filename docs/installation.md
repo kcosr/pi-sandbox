@@ -500,9 +500,19 @@ their separate host authority.
 
 The packaged `network.mode = "none"` intentionally disables networking for tools
 and shell commands. Provider traffic still works because Pi itself remains
-host-side. An administrator may select `network.mode = "host"` for unrestricted
-host loopback, LAN, and Internet access; restart `pi-sandbox` after changing the
-effective configuration.
+host-side. `network.mode = "local"` allows only sandbox-loopback TCP/UDP, so a
+host browser cannot connect to a sandbox server. An administrator may select
+`network.mode = "host"` for unrestricted host loopback, LAN, and Internet access;
+restart `pi-sandbox` after changing the effective configuration.
+
+### Background server stops after a call
+
+The default `execution.process_lifetime = "command"` removes background command
+processes after every operation. Select `sandbox` with Bubblewrap to retain
+servers and watchers across calls, and redirect their output to files. Active
+cancellation, timeout, output overflow or execution failure can still stop all
+sandbox command processes. Closing Pi always ends the sandbox. Direct execution
+does not support persistent background processes.
 
 ### Sandbox execution failure
 

@@ -281,7 +281,7 @@ describe("PolicyEngine", () => {
       filesystem: { cwdWritable: true, hiddenPaths: [] },
       audit: { enabled: false, facility: "local0" },
       modelsFile: "/etc/pi-sandbox/models.json",
-      execution: { backend: "bubblewrap" },
+      execution: { backend: "bubblewrap", processLifetime: "command" },
       identity: { mode: "disabled" },
       network: { mode: "none" },
       environment: { pi: {}, sandbox: {}, extensions: {} },

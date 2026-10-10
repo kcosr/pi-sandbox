@@ -1,8 +1,9 @@
 import { constants as osConstants } from "node:os";
 
+import { PROCESS_LIFETIMES, type ProcessLifetime } from "../domain/index.js";
 import type { SandboxExecutionErrorCode } from "./contracts.js";
 
-export const SANDBOX_WORKER_PROTOCOL_VERSION = 1;
+export const SANDBOX_WORKER_PROTOCOL_VERSION = 2;
 export const INTERNAL_SANDBOX_WORKER_ARGUMENT = "--pi-sandbox-internal-worker";
 export const MAXIMUM_WORKER_REQUEST_FRAME_BYTES = 96 * 1_048_576;
 export const MAXIMUM_WORKER_RESPONSE_FRAME_BYTES = 1 * 1_048_576;
@@ -14,6 +15,7 @@ export interface WorkerExecuteRequest {
   readonly stdin: string;
   readonly timeoutMs: number;
   readonly maxOutputBytes: number;
+  readonly processLifetime: ProcessLifetime;
 }
 
 export interface WorkerCancelRequest {
@@ -21,11 +23,18 @@ export interface WorkerCancelRequest {
   readonly id: number;
 }
 
+/** Commit a sandbox-lifetime result before the worker may start another command. */
+export interface WorkerAcceptRequest {
+  readonly type: "accept";
+  readonly id: number;
+}
+
 export interface WorkerShutdownRequest {
   readonly type: "shutdown";
 }
 
-export type WorkerRequest = WorkerExecuteRequest | WorkerCancelRequest | WorkerShutdownRequest;
+export type WorkerRequest =
+  WorkerExecuteRequest | WorkerCancelRequest | WorkerAcceptRequest | WorkerShutdownRequest;
 
 export interface WorkerReadyResponse {
   readonly type: "ready";
@@ -94,10 +103,20 @@ export class WorkerFrameDecoder {
 export function isWorkerRequest(value: unknown): value is WorkerRequest {
   if (!isRecord(value) || typeof value.type !== "string") return false;
   if (value.type === "shutdown") return hasExactKeys(value, ["type"]);
-  if (value.type === "cancel") return hasExactKeys(value, ["type", "id"]) && isRequestId(value.id);
+  if (value.type === "cancel" || value.type === "accept") {
+    return hasExactKeys(value, ["type", "id"]) && isRequestId(value.id);
+  }
   if (value.type !== "execute") return false;
   return (
-    hasExactKeys(value, ["type", "id", "argv", "stdin", "timeoutMs", "maxOutputBytes"]) &&
+    hasExactKeys(value, [
+      "type",
+      "id",
+      "argv",
+      "stdin",
+      "timeoutMs",
+      "maxOutputBytes",
+      "processLifetime",
+    ]) &&
     isRequestId(value.id) &&
     Array.isArray(value.argv) &&
     value.argv.length > 0 &&
@@ -106,7 +125,8 @@ export function isWorkerRequest(value: unknown): value is WorkerRequest {
     Number.isSafeInteger(value.timeoutMs) &&
     (value.timeoutMs as number) > 0 &&
     Number.isSafeInteger(value.maxOutputBytes) &&
-    (value.maxOutputBytes as number) > 0
+    (value.maxOutputBytes as number) > 0 &&
+    PROCESS_LIFETIMES.includes(value.processLifetime as ProcessLifetime)
   );
 }
 

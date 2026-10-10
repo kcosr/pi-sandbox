@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- Add Bubblewrap-local networking and configurable background-process lifetime; close a Unix datagram socket-pair bypass. ([#15](https://github.com/kcosr/pi-sandbox/pull/15))
 - Upgrade Pi to 1.1.0; support additive tool selection within TOML policy and disable project `.env` autoload. ([#14](https://github.com/kcosr/pi-sandbox/pull/14))
 - Report failed write/edit replacements and clean up temporary files. ([#13](https://github.com/kcosr/pi-sandbox/pull/13))
 - Add managed HTTP/stdio MCP and optional code mode with nested tool permissions and tool-selection guidance; require config schema 10. ([#13](https://github.com/kcosr/pi-sandbox/pull/13))

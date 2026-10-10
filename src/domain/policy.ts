@@ -29,7 +29,7 @@ export const SESSION_GRANT_POLICIES = Object.freeze(["never", "offer"] as const)
 
 export type SessionGrantPolicy = (typeof SESSION_GRANT_POLICIES)[number];
 
-export const NETWORK_MODES = Object.freeze(["none", "host"] as const);
+export const NETWORK_MODES = Object.freeze(["none", "local", "host"] as const);
 
 export type NetworkMode = (typeof NETWORK_MODES)[number];
 
@@ -41,6 +41,10 @@ export const EXECUTION_BACKENDS = Object.freeze(["bubblewrap", "direct"] as cons
 
 export type ExecutionBackend = (typeof EXECUTION_BACKENDS)[number];
 
+export const PROCESS_LIFETIMES = Object.freeze(["command", "sandbox"] as const);
+
+export type ProcessLifetime = (typeof PROCESS_LIFETIMES)[number];
+
 export interface FilesystemConfig {
   readonly cwdWritable: boolean;
   readonly hiddenPaths: readonly string[];
@@ -48,6 +52,7 @@ export interface FilesystemConfig {
 
 export interface ExecutionConfig {
   readonly backend: ExecutionBackend;
+  readonly processLifetime: ProcessLifetime;
 }
 
 export interface SubjectPolicy {
@@ -99,7 +104,7 @@ export type IdentityConfig = DisabledIdentityConfig | BrokerIdentityConfig;
 
 export interface IdentityOverrides {
   readonly modelsFile?: string;
-  readonly execution?: ExecutionConfig;
+  readonly execution?: Partial<ExecutionConfig>;
   readonly network?: NetworkConfig;
   readonly filesystem?: Pick<FilesystemConfig, "cwdWritable">;
   readonly tools: Readonly<Partial<Record<string, SubjectPolicy>>>;

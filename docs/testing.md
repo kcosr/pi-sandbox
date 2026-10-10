@@ -25,6 +25,10 @@ packaged executable diagnostic checks as distinct observable steps. A supported 
 host must execute the Bubblewrap suites rather than accepting a skip caused by
 unavailable namespaces.
 
+Linux real-Bubblewrap tests also require Python 3 for offline socket-family and
+namespace probes. This is a test-host dependency, not an application runtime
+dependency.
+
 ## Test layers
 
 ### Unit
@@ -33,7 +37,9 @@ unavailable namespaces.
 - compiled extension catalog, manifest, schema, identifier, and collision
   validation;
 - required extension selection and exact dynamic model-tool policy sets;
-- strict offline and host network modes;
+- strict `none`, `local`, and `host` network modes, and optional process lifetime;
+- fieldwise execution overrides, `none < local < host` and `command < sandbox`
+  joins, omission inheritance, and rejection of effective direct persistence;
 - required CWD write-access configuration, parent inheritance and user/group overrides,
   with direct/read-only rejection before and after override application;
 - required hidden paths, strict path syntax and uniqueness, immutable
@@ -143,6 +149,17 @@ prove kernel-observable properties:
 - TCP and pathname Unix-socket attempts inside and outside the writable CWD
   fail in offline mode;
 - host mode reaches a host-loopback listener;
+- local mode permits IPv4/IPv6 TCP/UDP loopback while host listeners, named Unix
+  sockets and external routes remain unavailable;
+- datagram socket pairs cannot reconnect to host sockets in `none` or `local`,
+  with a host-mode positive control; Bun stream-pair child spawning still works;
+- a server started in one call is reachable with curl from another under local
+  networking and sandbox process lifetime, while default command lifetime kills it;
+- post-exit output restarts the 100 ms idle timer; silent inherited pipes release
+  the call, completed output cannot corrupt later calls, and timeout/output bounds
+  still apply to continuously arriving output;
+- cancellation, timeout, output overflow and shutdown also remove previously
+  started background servers, including detached processes;
 - `io_uring` cannot reopen socket authority on kernels where setup is otherwise
   permitted;
 - sandboxed `link` creation fails while pre-existing hard links remain the

@@ -305,6 +305,17 @@ broker socket.
 Pi Sandbox does not produce an RPM. Site administrators may wrap the release
 archive and these semantics in their own package-management system.
 
+## Sandbox process lifetime
+
+Bubblewrap process lifetime is configured independently of Pi tool selection.
+The managed worker defaults to per-command cleanup; optional `sandbox` lifetime
+preserves descendants across calls and logical Pi sessions. Match the pinned Pi
+version's post-exit idle-drain behavior, including allowing continued output to
+defer completion; do not introduce a separate absolute drain deadline. Pi 1.1.0
+uses a 100 ms idle timer restarted by each chunk. Existing command timeout,
+output limits, cancellation and sandbox shutdown remain authoritative. This
+behavior lives in the managed worker and requires no upstream Pi patch.
+
 ## CWD filesystem access
 
 Administrative configuration requires `[filesystem].cwd_writable`, with `true`

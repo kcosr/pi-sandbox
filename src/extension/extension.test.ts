@@ -86,7 +86,7 @@ function config(
     filesystem: { cwdWritable: true, hiddenPaths: [] },
     audit: { enabled: false, facility: "local0" },
     modelsFile: "/etc/pi-sandbox/models.json",
-    execution: { backend: "bubblewrap" },
+    execution: { backend: "bubblewrap", processLifetime: "command" },
     identity: { mode: "disabled" },
     network: { mode: "none" },
     environment: { pi: {}, sandbox: {}, extensions: {} },
@@ -969,7 +969,7 @@ describe("Pi Sandbox extension", () => {
     Object.assign(executor, { backend: "direct" as const });
     await start(pi, executor, {
       ...config(),
-      execution: { backend: "direct" },
+      execution: { backend: "direct", processLifetime: "command" },
       network: { mode: "host" },
     });
 

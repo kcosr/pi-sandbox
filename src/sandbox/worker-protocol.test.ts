@@ -16,6 +16,7 @@ describe("sandbox worker protocol", () => {
       stdin: "",
       timeoutMs: 1_000,
       maxOutputBytes: 1_024,
+      processLifetime: "command",
     });
     const second = encodeWorkerFrame({ type: "cancel", id: 1 });
     const combined = Buffer.concat([first, second]);
@@ -30,6 +31,7 @@ describe("sandbox worker protocol", () => {
         stdin: "",
         timeoutMs: 1_000,
         maxOutputBytes: 1_024,
+        processLifetime: "command",
       },
     ]);
     expect(decoder.push(combined.subarray(first.byteLength + 2))).toEqual([
@@ -62,12 +64,33 @@ describe("sandbox worker protocol", () => {
         stdin: "",
         timeoutMs: 1,
         maxOutputBytes: 1,
+        processLifetime: "sandbox",
       }),
     ).toBe(true);
     expect(isWorkerRequest({ type: "execute", id: 0, argv: [] })).toBe(false);
     expect(isWorkerRequest({ type: "cancel", id: 2, extra: true })).toBe(false);
-    expect(isWorkerResponse({ type: "ready", protocolVersion: 1 })).toBe(true);
+    expect(isWorkerRequest({ type: "accept", id: 2 })).toBe(true);
+    expect(isWorkerRequest({ type: "accept", id: 0 })).toBe(false);
+    expect(isWorkerRequest({ type: "accept", id: 2, extra: true })).toBe(false);
+    expect(isWorkerResponse({ type: "ready", protocolVersion: 2 })).toBe(true);
     expect(isWorkerResponse({ type: "result", id: 2, exitCode: 0, signal: "SIGTERM" })).toBe(false);
     expect(isWorkerResponse({ type: "failure", id: 2, code: "not_a_code" })).toBe(false);
   });
+
+  it.each([undefined, null, "session", true])(
+    "rejects invalid process lifetime %s",
+    (processLifetime) => {
+      expect(
+        isWorkerRequest({
+          type: "execute",
+          id: 2,
+          argv: ["/bin/true"],
+          stdin: "",
+          timeoutMs: 1,
+          maxOutputBytes: 1,
+          processLifetime,
+        }),
+      ).toBe(false);
+    },
+  );
 });

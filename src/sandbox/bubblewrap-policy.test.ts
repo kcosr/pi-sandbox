@@ -168,6 +168,14 @@ describe("Bubblewrap policy", () => {
     expect(args).toContain("--unshare-user");
   });
 
+  it("keeps local networking in the same private namespace as none mode", () => {
+    const local = buildBubblewrapArguments("/home/person/project", ["/bin/true"], "local");
+    expect(local).toEqual(buildBubblewrapArguments("/home/person/project", ["/bin/true"], "none"));
+    expect(local).toContain("--unshare-all");
+    expect(local).not.toContain("--share-net");
+    expect(hasSequence(local, ["--cap-drop", "ALL"])).toBe(true);
+  });
+
   it("constructs a fixed environment without ambient credentials", () => {
     const environment = safeSandboxEnvironment();
     expect(environment.HOME).toBe("/run/pi-sandbox/home");

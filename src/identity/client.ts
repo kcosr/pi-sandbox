@@ -4,6 +4,7 @@ import {
   EXECUTION_BACKENDS,
   POLICY_MODES,
   NETWORK_MODES,
+  PROCESS_LIFETIMES,
   SESSION_GRANT_POLICIES,
   IDENTITY_BROKER_SOCKET_PATH,
   emptyManagedEnvironment,
@@ -172,7 +173,7 @@ export function applyIdentityOverrides(
     audit: base.audit,
     sessions: base.sessions,
     modelsFile: overrides.modelsFile ?? base.modelsFile,
-    execution: overrides.execution ?? base.execution,
+    execution: Object.freeze({ ...base.execution, ...overrides.execution }),
     identity: base.identity,
     network: overrides.network ?? base.network,
     filesystem: Object.freeze({ ...base.filesystem, ...overrides.filesystem }),
@@ -190,17 +191,34 @@ function parseIdentityOverrides(value: unknown): IdentityOverrides {
     throw invalidResponse();
   }
 
-  let execution: ExecutionConfig | undefined;
+  let execution: Partial<ExecutionConfig> | undefined;
   if (Object.hasOwn(value, "execution")) {
     if (
       !isRecord(value.execution) ||
-      !hasExactKeys(value.execution, ["backend"]) ||
-      typeof value.execution.backend !== "string" ||
-      !EXECUTION_BACKENDS.includes(value.execution.backend as (typeof EXECUTION_BACKENDS)[number])
+      !hasAllowedKeys(value.execution, ["backend", "process_lifetime"]) ||
+      Object.keys(value.execution).length === 0
     ) {
       throw invalidResponse();
     }
-    execution = Object.freeze({ backend: value.execution.backend as ExecutionConfig["backend"] });
+    const fields = value.execution;
+    if (
+      Object.hasOwn(fields, "backend") &&
+      !EXECUTION_BACKENDS.includes(fields.backend as ExecutionConfig["backend"])
+    )
+      throw invalidResponse();
+    if (
+      Object.hasOwn(fields, "process_lifetime") &&
+      !PROCESS_LIFETIMES.includes(fields.process_lifetime as ExecutionConfig["processLifetime"])
+    )
+      throw invalidResponse();
+    execution = Object.freeze({
+      ...(Object.hasOwn(fields, "backend")
+        ? { backend: fields.backend as ExecutionConfig["backend"] }
+        : {}),
+      ...(Object.hasOwn(fields, "process_lifetime")
+        ? { processLifetime: fields.process_lifetime as ExecutionConfig["processLifetime"] }
+        : {}),
+    });
   }
   let filesystem: Pick<FilesystemConfig, "cwdWritable"> | undefined;
   if (Object.hasOwn(value, "filesystem")) {

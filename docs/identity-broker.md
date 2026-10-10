@@ -157,7 +157,8 @@ host account service.
 `environment` and `overrides` are optional patches. Environment scopes follow
 the main configuration's structure. `overrides.models_file` selects a model
 file; `overrides.execution.backend` accepts `bubblewrap` or `direct`;
-`overrides.network.mode` accepts `none` or `host`; and
+`overrides.execution.process_lifetime` accepts `command` or `sandbox`;
+`overrides.network.mode` accepts `none`, `local`, or `host`; and
 `overrides.filesystem.cwd_writable` is boolean. Each named entry in
 `overrides.tools` requires both `mode` and `session_grant`. Tool names must
 belong to the exact active base policy, including selected compiled tools.
@@ -176,7 +177,8 @@ not compete in this comparison, and user rules do not apply last.
 | Setting                         | Combination                                                                                                     |
 | ------------------------------- | --------------------------------------------------------------------------------------------------------------- |
 | Tool invocation policy          | Most permissive complete pair wins: `disabled/never` < `deny/never` < `ask/never` < `ask/offer` < `allow/never` |
-| Network mode                    | `host` wins over `none`                                                                                         |
+| Network mode                    | Most permissive wins: `none` < `local` < `host`                                                                 |
+| Process lifetime                | `sandbox` wins over `command`                                                                                   |
 | CWD writable                    | `true` wins over `false`                                                                                        |
 | Execution backend or model file | Different explicit values are a configuration error                                                             |
 | Scoped environment variable     | Different values for the same scope, extension, and variable are a configuration error                          |
@@ -186,13 +188,27 @@ Rules can replace a default restriction, but cannot revoke permission granted
 by another matching rule. For a common staff/admin setup, keep staff access in
 the default policy and use an admin rule for extra permissions.
 
+Execution overrides contain either or both of `backend` and `process_lifetime`;
+an empty execution table is rejected. Omitted fields do not contribute a default
+while rules are combined. For example, a rule may grant persistence without
+repeating the backend:
+
+```toml
+[overrides.execution]
+process_lifetime = "sandbox"
+
+[overrides.network]
+mode = "local"
+```
+
 Parent tool `audit` flags and the global `[audit]` settings remain unchanged.
 Rules cannot select extensions, change extension configuration, redirect the
 broker socket, change mount locations or host visibility, or change the fixed
 human-shell behavior. Environment values cannot enable tools or grant approval.
 
 The combined effective configuration is validated again: direct execution
-requires `network.mode = "host"`, `filesystem.cwd_writable = true`, and empty
+requires `network.mode = "host"`, `execution.process_lifetime = "command"`,
+`filesystem.cwd_writable = true`, and empty
 `filesystem.hidden_paths`. Hidden paths belong exclusively to the main configuration;
 user/group rules cannot replace or erase them.
 Unknown fields, invalid policy combinations, malformed environment names,

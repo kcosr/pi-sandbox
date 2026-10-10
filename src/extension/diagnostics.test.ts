@@ -12,7 +12,7 @@ function diagnosticConfig(): SandboxConfig {
     audit: { enabled: false, facility: "local0" },
     modelsFile: "/etc/pi-sandbox/models.json",
     filesystem: { cwdWritable: true, hiddenPaths: [] },
-    execution: { backend: "bubblewrap" },
+    execution: { backend: "bubblewrap", processLifetime: "command" },
     identity: { mode: "disabled" },
     network: { mode: "none" },
     environment: { pi: {}, sandbox: {}, extensions: {} },
@@ -39,7 +39,7 @@ describe("sandbox diagnostics", () => {
         configPath: "/etc/pi-sandbox/config.toml",
         modelsFile: "/etc/pi-sandbox/models.json",
         filesystem: { cwdWritable: true, hiddenPaths: [] },
-        execution: { backend: "bubblewrap" },
+        execution: { backend: "bubblewrap", processLifetime: "command" },
         identity: { mode: "disabled" },
         network: { mode: "none" },
         extensions: [],
@@ -51,6 +51,7 @@ Launch CWD:    /work/project
 Hidden paths:  none
 CWD access:    read/write
 Lifetime:      pi-sandbox process
+Processes:     cleaned up after each command
 Code mode:     disabled
 MCP servers:   0
 Execution:     Bubblewrap sandbox
@@ -71,7 +72,7 @@ Use /sandbox mounts or /sandbox policy for details.`);
       configPath: "/etc/pi-sandbox/config.toml",
       modelsFile: "/etc/pi-sandbox/models\u001b[31m.json",
       filesystem: { cwdWritable: true, hiddenPaths: [] },
-      execution: { backend: "bubblewrap" },
+      execution: { backend: "bubblewrap", processLifetime: "command" },
       identity: { mode: "broker" },
       network: { mode: "host" },
       extensions: ["git", "service-api"],
@@ -90,7 +91,7 @@ Use /sandbox mounts or /sandbox policy for details.`);
   it("formats the semantic mount policy instead of raw mountinfo", () => {
     const output = formatSandboxMounts(
       "/work/project",
-      { backend: "bubblewrap" },
+      { backend: "bubblewrap", processLifetime: "command" },
       { cwdWritable: true, hiddenPaths: [] },
     );
     expect(output).toContain("Sandbox mounts");
@@ -193,10 +194,38 @@ Use /sandbox mounts or /sandbox policy for details.`);
     expect(detail).toContain("host loopback, LAN, and Internet services");
   });
 
+  it("reports local networking and persistent sandbox processes", () => {
+    const config = {
+      ...diagnosticConfig(),
+      execution: { backend: "bubblewrap", processLifetime: "sandbox" },
+      network: { mode: "local" },
+    } satisfies SandboxConfig;
+    const summary = formatSandboxSummary({
+      initialized: true,
+      cwd: "/work/project",
+      configPath: "/etc/pi-sandbox/config.toml",
+      modelsFile: config.modelsFile,
+      execution: config.execution,
+      filesystem: config.filesystem,
+      identity: config.identity,
+      network: config.network,
+      extensions: [],
+      userStateDir: "/home/alice/.pi/agent",
+    });
+    expect(summary).toContain("local (sandbox loopback only)");
+    expect(summary).toContain("persist until sandbox shutdown or operation failure");
+    const detail = formatSandboxPolicy(
+      { config, hasSessionGrant: () => false, isToolActive: () => true },
+      "bash",
+    );
+    expect(detail).toContain("sandbox-local TCP/UDP");
+    expect(detail).not.toContain("Can access host loopback");
+  });
+
   it("makes the lack of containment explicit in direct mode", () => {
     const config = {
       ...diagnosticConfig(),
-      execution: { backend: "direct" },
+      execution: { backend: "direct", processLifetime: "command" },
       network: { mode: "host" },
     } satisfies SandboxConfig;
     const summary = formatSandboxSummary({

@@ -36,11 +36,11 @@ reimplemented rather than mechanically reapplied.
   runtime configuration cannot change that provider.
 - Preserve host absolute paths inside the sandbox.
 - Present the ordinary host filesystem read-only except main-policy `filesystem.hidden_paths`, which masks canonical existing directories with private read-only filesystems and regular files with private empty read-only data. Silently skip missing targets at worker startup while rejecting symlink components and other invalid targets; skipped paths created later on the host may remain visible until restart. Restore only the launch CWD through hidden ancestors at its identical path, read/write or read-only according to `filesystem.cwd_writable`, then honor explicit hidden descendants. User/group overrides cannot erase masks. Preserve private writable runtime/temp locations; reject hidden paths in direct mode and read-only CWD access with direct execution or CWD exactly `/tmp`.
-- Default Bubblewrap tool and shell networking to an isolated namespace with
-  socket creation denied. Permit only the explicit administrator-selected
-  `host` mode, which shares the complete host network namespace; provide no
-  filtered-network mode or fallback. Require `host` whenever `direct` is
-  selected.
+- Default Bubblewrap networking to `none`, denying connectable sockets. Permit
+  `local` TCP/UDP on private loopback only, with no external routes or host Unix
+  sockets. Restrict anonymous socket pairs to connected Unix stream pairs in
+  both isolated modes. Explicit `host` shares unrestricted host networking.
+  Require `host` whenever `direct` is selected.
 - Build one precompiled Bun `pi-sandbox` application from pinned Pi source and the separately maintained Pi Sandbox extension. Force that extension through Pi's inline factory API, disable Pi's built-in extension factories, and permit no user/project extensions or package-management commands. Package the optional user/group resolver as a separate static Rust broker; it is never a wrapper or sandbox backend.
 - Read base policy and global scoped environment through the build-selected `config_dir/config.toml` entry point, or an explicit leading `--config FILE` only when the distribution was built with `allow_config_override = true`. Managed distributions must compile that switch as false and reject the flag. Require its administrator-selected `models_file`, disable Pi's internal model catalog, and fail closed when any effective input is invalid. Optional broker mode resolves kernel-authenticated accounts and primary/supplementary membership through the host account service. Root-managed `config_dir/users.d/*.toml` and `config_dir/groups.d/*.toml` rules select names or numeric IDs. Combine matching explicit permissions using least restrictive wins before overlaying defaults; reject conflicting backend, model, or scoped environment values. Return one environment and model, execution, network, filesystem, and complete named-tool invocation-policy patch. Logging remains parent-only. No matching rules means the main configuration is inherited unchanged. Scoped environment never selects or enables tools.
 - Preserve `PI_CODING_AGENT_DIR` for user state such as credentials, sessions, settings, skills, themes, and logs. It must not redirect administrative configuration or the model catalog.
@@ -58,11 +58,14 @@ reimplemented rather than mechanically reapplied.
   scoped, and never persisted. User `!` shell is fixed-allow without a prompt
   and uses the selected execution backend.
 - Treat configuration as strict and versioned. Reject unknown fields and missing tool policy. Project-local content must not broaden system/user policy.
-- In Bubblewrap mode, start one worker for the `pi-sandbox` process and run each
-  approved operation inside it. In direct mode, start each operation directly
-  as the current user. In both modes use bounded direct argument vectors and
-  kill command descendants after every operation and on cancellation or
-  shutdown.
+- In Bubblewrap mode, start one worker for the `pi-sandbox` process. Default
+  `execution.process_lifetime = "command"` kills descendants after each operation;
+  `sandbox` preserves them across ordinary exits and logical Pi sessions. Match
+  pinned Pi's 100 ms post-exit idle drain, restarting on output, with no separate
+  absolute drain deadline. Retain sandbox-wide cleanup on active cancellation,
+  timeout, output overflow, execution failure and shutdown. Direct execution
+  remains command-scoped. Preserve ordinary scheduling and the accepted host
+  Git clone destination race; add no clone-specific termination or publication helper.
 
 ## Development
 

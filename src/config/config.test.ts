@@ -55,7 +55,7 @@ describe("parseConfig", () => {
       filesystem: { cwdWritable: true, hiddenPaths: [] },
       audit: { enabled: false, facility: "local0" },
       modelsFile: "/etc/pi-sandbox/models.json",
-      execution: { backend: "bubblewrap" },
+      execution: { backend: "bubblewrap", processLifetime: "command" },
       identity: { mode: "disabled" },
       network: { mode: "none" },
       environment: { pi: {}, sandbox: {}, extensions: {} },
@@ -469,11 +469,17 @@ describe("parseConfig", () => {
   });
 
   it("requires an explicit execution backend and host networking for direct execution", () => {
-    expect(parseConfig(completeConfig()).execution).toEqual({ backend: "bubblewrap" });
+    expect(parseConfig(completeConfig()).execution).toEqual({
+      backend: "bubblewrap",
+      processLifetime: "command",
+    });
     const direct = completeConfig()
       .replace('backend = "bubblewrap"', 'backend = "direct"')
       .replace('[network]\nmode = "none"', '[network]\nmode = "host"');
-    expect(parseConfig(direct).execution).toEqual({ backend: "direct" });
+    expect(parseConfig(direct).execution).toEqual({
+      backend: "direct",
+      processLifetime: "command",
+    });
     expect(() =>
       parseConfig(completeConfig().replace('backend = "bubblewrap"', 'backend = "direct"')),
     ).toThrow('config.network.mode must be "host" when config.execution.backend is "direct"');
@@ -488,6 +494,36 @@ describe("parseConfig", () => {
     expect(() =>
       parseConfig(completeConfig().replace('backend = "bubblewrap"', 'backend = "container"')),
     ).toThrow("config.execution.backend must be one of: bubblewrap, direct");
+  });
+
+  it("defaults process lifetime to command and restricts sandbox lifetime to Bubblewrap", () => {
+    const withLifetime = (value: string) =>
+      completeConfig().replace(
+        'backend = "bubblewrap"',
+        `backend = "bubblewrap"\nprocess_lifetime = ${value}`,
+      );
+    expect(parseConfig(withLifetime('"sandbox"')).execution.processLifetime).toBe("sandbox");
+    expect(parseConfig(withLifetime('"command"')).execution.processLifetime).toBe("command");
+    for (const invalid of ['"session"', '""', "false", "123"]) {
+      expect(() => parseConfig(withLifetime(invalid))).toThrow(
+        "config.execution.process_lifetime must be one of",
+      );
+    }
+    expect(() =>
+      parseConfig(
+        withLifetime('"sandbox"')
+          .replace('backend = "bubblewrap"', 'backend = "direct"')
+          .replace('[network]\nmode = "none"', '[network]\nmode = "host"'),
+      ),
+    ).toThrow('config.execution.process_lifetime must be "command"');
+    expect(() =>
+      parseConfig(
+        completeConfig().replace(
+          'backend = "bubblewrap"',
+          'backend = "bubblewrap"\nprocess_lifetimes = "sandbox"',
+        ),
+      ),
+    ).toThrow("config.execution.process_lifetimes is not a recognized field");
   });
 
   it("rejects incomplete or ambiguous identity configuration", () => {
@@ -507,8 +543,12 @@ describe("parseConfig", () => {
     ).toThrow("config.identity.socket_path is not a recognized field");
   });
 
-  it("parses only explicit none and host network modes", () => {
+  it("parses only explicit none, local and host network modes", () => {
     expect(parseConfig(completeConfig()).network).toEqual({ mode: "none" });
+    expect(
+      parseConfig(completeConfig().replace('[network]\nmode = "none"', '[network]\nmode = "local"'))
+        .network,
+    ).toEqual({ mode: "local" });
     expect(
       parseConfig(completeConfig().replace('[network]\nmode = "none"', '[network]\nmode = "host"'))
         .network,
@@ -518,7 +558,7 @@ describe("parseConfig", () => {
     );
     expect(() =>
       parseConfig(completeConfig().replace('mode = "none"', 'mode = "filtered"')),
-    ).toThrow("config.network.mode must be one of: none, host");
+    ).toThrow("config.network.mode must be one of: none, local, host");
     expect(() =>
       parseConfig(
         completeConfig().replace('mode = "none"', 'mode = "none"\nallow = ["127.0.0.1"]'),
