@@ -14,9 +14,9 @@ export function parseGitConfig(raw: unknown): GitExtensionConfig {
     throw new Error("Git configuration must be an object");
   const value = raw as Record<string, unknown>;
   const prototype: unknown = Object.getPrototypeOf(value);
+  if (!Object.hasOwn(value, "version")) throw new Error("Git configuration version is required");
   if ((prototype !== Object.prototype && prototype !== null) || value.version !== 1)
     throw new Error("Unsupported Git configuration version");
-  if (!Object.hasOwn(value, "version")) throw new Error("Git configuration version is required");
   const policy = { ...value };
   delete policy.version;
   return Object.freeze({ version: 1, ...parseGitCloneConfig(policy, "Git configuration") });
