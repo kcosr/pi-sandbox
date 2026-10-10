@@ -29,11 +29,13 @@ import {
   encodeWorkerFrame,
   INTERNAL_SANDBOX_WORKER_ARGUMENT,
   isWorkerResponse,
+  MAXIMUM_WORKER_PENDING_COMMANDS,
   MAXIMUM_WORKER_RESPONSE_FRAME_BYTES,
   SANDBOX_WORKER_PROTOCOL_VERSION,
   WorkerFrameDecoder,
   type WorkerRequest,
   type WorkerResponse,
+  type WorkerResultResponse,
 } from "./worker-protocol.js";
 
 const DEFAULT_MAXIMUM_TIMEOUT_MS = 600_000;
@@ -43,6 +45,7 @@ const DEFAULT_MAXIMUM_ARGUMENT_BYTES = 1_048_576;
 const STATUS_OUTPUT_LIMIT_BYTES = 65_536;
 const WORKER_DIAGNOSTIC_LIMIT_BYTES = 65_536;
 const WORKER_START_TIMEOUT_MS = 10_000;
+const WORKER_COMPLETION_TIMEOUT_MS = 10_000;
 const TERMINATE_GRACE_MS = 750;
 
 interface ResolvedLimits {
@@ -73,6 +76,7 @@ interface PendingExecution {
   timeout: NodeJS.Timeout;
   outputBytes: number;
   failure: SandboxExecutionError | undefined;
+  offeredResult: WorkerResultResponse | undefined;
 }
 
 export async function createBubblewrapExecutor(
@@ -363,6 +367,9 @@ class PersistentBubblewrapExecutor implements SandboxExecutor {
     if (this.#closed || !this.#started || this.#settled) {
       return Promise.reject(new SandboxExecutionError("sandbox_closed"));
     }
+    if (this.#pending.size >= MAXIMUM_WORKER_PENDING_COMMANDS) {
+      return Promise.reject(new SandboxExecutionError("sandbox_queue_full"));
+    }
     let validated: ValidatedRequest;
     try {
       validated = validateRequest(request, this.limits);
@@ -395,6 +402,7 @@ class PersistentBubblewrapExecutor implements SandboxExecutor {
         ),
         outputBytes: 0,
         failure: undefined,
+        offeredResult: undefined,
       };
       pending.timeout.unref();
       this.#pending.set(id, pending);
@@ -479,6 +487,24 @@ class PersistentBubblewrapExecutor implements SandboxExecutor {
           ...(response.message === undefined ? {} : { cause: new Error(response.message) }),
         });
       this.settlePending(pending, () => pending.reject(error));
+      this.retire(pending.id);
+      return;
+    }
+    if (response.type === "completed") {
+      const result = pending.offeredResult;
+      if (result === undefined || pending.failure !== undefined) {
+        this.workerFailed(new Error("sandbox_worker_completion_invalid"));
+        return;
+      }
+      this.settlePending(pending, () =>
+        pending.resolve({
+          exitCode: result.exitCode,
+          signal: result.signal,
+          stdout: Buffer.concat(pending.stdout),
+          stderr: Buffer.concat(pending.stderr),
+        }),
+      );
+      this.retire(pending.id);
       return;
     }
     if (response.type !== "result") {
@@ -493,14 +519,29 @@ class PersistentBubblewrapExecutor implements SandboxExecutor {
       // post-cleanup failure response before the caller may observe rejection.
       if (this.processLifetime === "sandbox") return;
       this.settlePending(pending, () => pending.reject(pendingFailure));
+      this.retire(pending.id);
     } else {
       if (this.processLifetime === "sandbox") {
+        if (pending.offeredResult !== undefined) {
+          this.workerFailed(new Error("sandbox_worker_result_repeated"));
+          return;
+        }
+        // Accept synchronously closes this request's cancellation window, but
+        // a peer's cleanup may already have invalidated the offered result.
+        // Keep it pending until the worker confirms completion or failure.
+        pending.offeredResult = response;
+        clearTimeout(pending.timeout);
+        pending.options.signal?.removeEventListener("abort", pending.abort);
+        pending.timeout = setTimeout(
+          () => this.workerFailed(new Error("sandbox_worker_completion_timeout")),
+          WORKER_COMPLETION_TIMEOUT_MS,
+        );
+        pending.timeout.unref();
         void this.send({ type: "accept", id: pending.id }).catch((cause: unknown) =>
           this.workerFailed(cause),
         );
+        return;
       }
-      // Accept and remove cancellation synchronously; awaiting the pipe write
-      // here would permit cancellation after acceptance was already enqueued.
       this.settlePending(pending, () =>
         pending.resolve({
           exitCode: response.exitCode,
@@ -509,6 +550,7 @@ class PersistentBubblewrapExecutor implements SandboxExecutor {
           stderr: Buffer.concat(pending.stderr),
         }),
       );
+      this.retire(pending.id);
     }
   }
 
@@ -547,7 +589,12 @@ class PersistentBubblewrapExecutor implements SandboxExecutor {
 
   private failPending(id: number, error: SandboxExecutionError): void {
     const pending = this.#pending.get(id);
-    if (pending === undefined || pending.failure !== undefined) return;
+    if (
+      pending === undefined ||
+      pending.failure !== undefined ||
+      pending.offeredResult !== undefined
+    )
+      return;
     pending.failure = error;
     void this.send({ type: "cancel", id }).catch((cause: unknown) => this.workerFailed(cause));
   }
@@ -557,6 +604,12 @@ class PersistentBubblewrapExecutor implements SandboxExecutor {
     pending.options.signal?.removeEventListener("abort", pending.abort);
     this.#pending.delete(pending.id);
     settle();
+  }
+
+  private retire(id: number): void {
+    // Parent writes preserve order: every older accept/cancel precedes retire,
+    // and calls admitted by the settled promise are enqueued afterward.
+    void this.send({ type: "retire", id }).catch((cause: unknown) => this.workerFailed(cause));
   }
 
   private send(request: WorkerRequest): Promise<void> {

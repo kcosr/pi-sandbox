@@ -72,9 +72,16 @@ describe("sandbox worker protocol", () => {
     expect(isWorkerRequest({ type: "accept", id: 2 })).toBe(true);
     expect(isWorkerRequest({ type: "accept", id: 0 })).toBe(false);
     expect(isWorkerRequest({ type: "accept", id: 2, extra: true })).toBe(false);
-    expect(isWorkerResponse({ type: "ready", protocolVersion: 2 })).toBe(true);
+    expect(isWorkerRequest({ type: "retire", id: 2 })).toBe(true);
+    expect(isWorkerRequest({ type: "retire", id: 0 })).toBe(false);
+    expect(isWorkerRequest({ type: "retire", id: 2, extra: true })).toBe(false);
+    expect(isWorkerResponse({ type: "ready", protocolVersion: 3 })).toBe(true);
+    expect(isWorkerResponse({ type: "completed", id: 2 })).toBe(true);
+    expect(isWorkerResponse({ type: "completed", id: 0 })).toBe(false);
+    expect(isWorkerResponse({ type: "completed", id: 2, exitCode: 0 })).toBe(false);
     expect(isWorkerResponse({ type: "result", id: 2, exitCode: 0, signal: "SIGTERM" })).toBe(false);
     expect(isWorkerResponse({ type: "failure", id: 2, code: "not_a_code" })).toBe(false);
+    expect(isWorkerResponse({ type: "failure", id: 2, code: "sandbox_queue_full" })).toBe(true);
   });
 
   it.each([undefined, null, "session", true])(

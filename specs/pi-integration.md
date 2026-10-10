@@ -342,8 +342,14 @@ archive and these semantics in their own package-management system.
 ## Sandbox process lifetime
 
 Bubblewrap process lifetime is configured independently of Pi tool selection.
-The managed worker defaults to per-command cleanup; optional `sandbox` lifetime
-preserves descendants across calls and logical Pi sessions. Match the pinned Pi
+The managed worker defaults to serial per-command cleanup; optional `sandbox` lifetime
+preserves descendants across calls and logical Pi sessions and admits up to four
+concurrent commands, with at most 64 outstanding requests. Keep same-path
+write/edit serialization across whole operations. An active failure interrupts
+affected peers and completes namespace cleanup before queued work starts;
+queued cancellation affects only that request. Result acceptance and terminal
+retirement must not let delayed frames invalidate newly admitted commands.
+Qualify both the managed application and ordinary Pi extension. Match the pinned Pi
 version's post-exit idle-drain behavior, including allowing continued output to
 defer completion; do not introduce a separate absolute drain deadline. Pi 1.1.0
 uses a 100 ms idle timer restarted by each chunk. Existing command timeout,

@@ -286,6 +286,17 @@ await runSandboxWorker();
         expect(await readFile(path.join(cwd, "server.heartbeat"), "utf8")).toBe(heartbeat);
         return;
       }
+      const peers = Array.from({ length: 3 }, (_, index) =>
+        executor.execute({
+          argv: ["/bin/bash", "-c", `touch peer-${index}; sleep 100`],
+        }),
+      );
+      const peersStopped = Promise.allSettled(peers);
+      await Promise.all(
+        [0, 1, 2].map(async (index) => {
+          await expect.poll(() => existsSync(path.join(cwd, `peer-${index}`))).toBe(true);
+        }),
+      );
       const next = executor.execute({
         argv: ["/bin/bash", "-c", "touch next-started; sleep 0.1; printf next"],
       });
@@ -299,6 +310,7 @@ await runSandboxWorker();
       else await delay(1_000);
       await writeFile(path.join(cwd, "release-result"), "");
       await failed;
+      expect((await peersStopped).every((result) => result.status === "rejected")).toBe(true);
       await nextSucceeded;
       await expectServerStopped(executor, port);
     },
@@ -311,11 +323,24 @@ await runSandboxWorker();
     const started = new Promise<void>((resolve) => {
       began = resolve;
     });
-    const active = executor.execute(
-      { argv: ["/bin/bash", "-c", "printf ready; sleep 0.2; printf done"] },
-      {
-        onStdout: () => began(),
-      },
+    let ready = 0;
+    const active = Promise.all(
+      Array.from({ length: 4 }, () =>
+        executor.execute(
+          {
+            argv: [
+              "/bin/bash",
+              "-c",
+              "printf ready; while ! test -e release-active; do sleep 0.01; done; printf done",
+            ],
+          },
+          {
+            onStdout: () => {
+              if (++ready === 4) began();
+            },
+          },
+        ),
+      ),
     );
     await started;
     const controller = new AbortController();
@@ -325,7 +350,8 @@ await runSandboxWorker();
     );
     controller.abort();
     await expect(queued).rejects.toMatchObject({ code: "sandbox_aborted" });
-    await expect(active).resolves.toMatchObject({ exitCode: 0 });
+    await writeFile(path.join(cwd, "release-active"), "");
+    expect((await active).every((result) => result.exitCode === 0)).toBe(true);
     expect(existsSync(path.join(cwd, "should-not-run"))).toBe(false);
     expect(await curl(executor, port)).toBe("sandbox-server\n");
   });

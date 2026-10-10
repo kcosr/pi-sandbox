@@ -71,9 +71,13 @@ without falling back to host execution.
 Bubblewrap requires Linux user namespaces and the GNU command prerequisites
 listed in the repository's installation guide. `network: "local"` enables only
 the sandbox's loopback TCP/UDP; `host` shares host networking. `processLifetime:
-"sandbox"` preserves background programs between completed operations. Default
+"sandbox"` preserves background programs between completed operations and runs
+up to four commands concurrently, with a maximum of 64 outstanding requests.
+Excess submissions fail with `sandbox_queue_full`. Default
 examples use command lifetime, which cleans up descendants after each operation.
-Cancellation and errors may clean up all sandbox programs in either mode.
+Cancellation and errors may clean up all sandbox programs in either mode. In
+sandbox lifetime this interrupts other active calls; queued work starts only
+after cleanup finishes. Cancelling queued work affects only that request.
 
 The extension owns one backend per Pi process. Conversation switching keeps that
 backend while clearing conversation approval grants. Quit closes it; extension

@@ -71,10 +71,12 @@ reimplemented rather than mechanically reapplied.
 - Treat configuration as strict and versioned. Reject unknown fields and missing tool policy. Project-local content must not broaden system/user policy.
 - In Bubblewrap mode, start one worker for the `pi-sandbox` process. Default
   `execution.process_lifetime = "command"` kills descendants after each operation;
-  `sandbox` preserves them across ordinary exits and logical Pi sessions. Match
+  `sandbox` preserves them across ordinary exits and logical Pi sessions, with
+  bounded parallel commands. Keep command lifetime serial. Match
   pinned Pi's 100 ms post-exit idle drain, restarting on output, with no separate
   absolute drain deadline. Retain sandbox-wide cleanup on active cancellation,
-  timeout, output overflow, execution failure and shutdown. Direct execution
+  timeout, output overflow, execution failure and shutdown; interrupt affected
+  active calls and finish cleanup before admitting queued work. Direct execution
   remains command-scoped. Preserve ordinary scheduling and the accepted host
   Git clone destination race; add no clone-specific termination or publication helper.
 

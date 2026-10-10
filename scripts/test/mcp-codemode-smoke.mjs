@@ -8,6 +8,7 @@ import { dirname, join } from "node:path";
 import { createInterface } from "node:readline";
 import { setTimeout as delay } from "node:timers/promises";
 import { parse as parseToml, stringify as stringifyToml } from "@iarna/toml";
+import { testParallelTools } from "./parallel-tools-smoke.mjs";
 
 const toolPolicy = (mode) => ({ mode, session_grant: "never", audit: false });
 const schema = { type: "object", properties: {}, additionalProperties: true };
@@ -563,6 +564,18 @@ text("MCP_REMOVAL_OK");`,
           "approved HTTP server must reconnect with remembered presentation",
         );
       if (serverFailure) throw serverFailure;
+    }
+
+    if (config.execution.backend === "bubblewrap") {
+      const parallelConfig = JSON.parse(JSON.stringify(config));
+      parallelConfig.execution.process_lifetime = "sandbox";
+      parallelConfig.filesystem.cwd_writable = true;
+      parallelConfig.mcp = { servers: {} };
+      for (const name of ["read", "write", "edit", "bash"])
+        parallelConfig.tools[name] = toolPolicy("allow");
+      await writeFile(configPath, stringifyToml(parallelConfig));
+      await writeFile(join(userState, "settings.json"), "{}");
+      await testParallelTools({ launch, modelsPath, workspace });
     }
 
     config.codemode.enabled = false;

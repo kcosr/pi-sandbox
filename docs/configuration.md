@@ -527,8 +527,12 @@ Optional `execution.process_lifetime` defaults to `command`, which removes all
 remaining sandbox command processes after every operation. With `sandbox`,
 background processes survive ordinary foreground completion, including nonzero
 exit codes, and remain available to subsequent calls. Lifetime covers the whole
-`pi-sandbox` process, including changes of logical Pi session. No new scheduler,
-watcher, or daemon is involved. This setting is independent of network mode.
+`pi-sandbox` process, including changes of logical Pi session. The existing worker
+runs up to four commands concurrently in this mode; `command` lifetime stays
+serial. At most 64 requests may be outstanding, including active calls and queued
+work. Further submissions fail with `sandbox_queue_full` without interrupting
+admitted work. These are fixed backend limits, not additional TOML settings.
+No watcher or daemon is involved. This setting is independent of network mode.
 
 For a server reachable by later sandbox calls:
 
@@ -551,8 +555,10 @@ deadline. Completion closes that call's streams, so an unredirected background
 writer may receive a broken-pipe error on a later write.
 
 Cancelling active work, exceeding its timeout/output limit, or an execution
-failure cleans up the sandbox's command processes, including previously started
-servers. Cancelling a queued request only removes that request. Closing Pi
+failure interrupts other active calls and cleans up the sandbox's command
+processes, including previously started servers, before queued work may start.
+Each interrupted call reports a failure. Cancelling a queued request only removes
+that request. Closing Pi
 terminates the entire sandbox. A completed call's timeout/output limits do not
 impose a duration or disk quota on its surviving background processes.
 
