@@ -1,7 +1,6 @@
 import { constants } from "node:fs";
 import { open } from "node:fs/promises";
 import { isAbsolute, normalize } from "node:path";
-import { TOOL_NAMES, type BuiltInToolName, type SubjectPolicy } from "./policy/contracts.js";
 import { validateSmolvmResources, type SmolvmResources } from "./runtime/smolvm/options.js";
 import { smolvmEnvironment } from "./runtime/smolvm/request.js";
 import { validateOciAttachment } from "./runtime/smolvm/oci/transport.js";
@@ -38,8 +37,7 @@ export interface SmolvmBackendConfig {
   readonly environment: Readonly<Record<string, string>>;
 }
 interface CommonConfig {
-  readonly version: 2;
-  readonly tools: Readonly<Partial<Record<BuiltInToolName, SubjectPolicy>>>;
+  readonly version: 4;
   readonly userBash: boolean;
 }
 export interface OwnedSandboxConfig extends CommonConfig {
@@ -87,35 +85,20 @@ export function parseSandboxConfig(value: unknown): SandboxExtensionConfig {
     "version",
     "mode",
     value.mode === "attached" ? "attachment" : "backend",
-    "tools",
     "userBash",
   ]);
   if (
-    value.version !== 2 ||
+    value.version !== 4 ||
     !["owned", "attached"].includes(value.mode as string) ||
     typeof value.userBash !== "boolean"
   )
     throw new Error("Unsupported sandbox configuration");
-  record(value.tools);
-  const tools: Partial<Record<BuiltInToolName, SubjectPolicy>> = {};
-  for (const [name, policy] of Object.entries(value.tools)) {
-    if (!TOOL_NAMES.includes(name as BuiltInToolName)) throw new Error("Unknown sandbox tool");
-    record(policy);
-    keys(policy, ["mode", "sessionGrant"]);
-    if (
-      !["allow", "ask", "deny", "disabled"].includes(policy.mode as string) ||
-      !["never", "offer"].includes(policy.sessionGrant as string)
-    )
-      throw new Error("Invalid tool policy");
-    tools[name as BuiltInToolName] = Object.freeze({ ...policy } as unknown as SubjectPolicy);
-  }
   if (value.mode === "attached") {
     validateOciAttachment(value.attachment);
     return Object.freeze({
-      version: 2,
+      version: 4,
       mode: "attached",
       attachment: Object.freeze({ ...value.attachment }),
-      tools: Object.freeze(tools),
       userBash: value.userBash,
     });
   }
@@ -192,10 +175,9 @@ export function parseSandboxConfig(value: unknown): SandboxExtensionConfig {
     };
   } else throw new Error("Unsupported sandbox backend");
   return Object.freeze({
-    version: 2,
+    version: 4,
     mode: "owned",
     backend: Object.freeze(backend),
-    tools: Object.freeze(tools),
     userBash: value.userBash,
   });
 }

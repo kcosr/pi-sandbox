@@ -2,8 +2,13 @@
 
 ## Unreleased
 
+### Breaking changes
+
+- Require standalone sandbox configuration version 4 without tool policies; approvals remain managed-only. ([#21](https://github.com/kcosr/pi-sandbox/pull/21))
+
 ### Added
 
+- Add standalone Git cloning and independently installable sandbox tools while preserving managed approvals and audit. ([#21](https://github.com/kcosr/pi-sandbox/pull/21))
 - Run smolvm tools concurrently with bounded admission, coordinated VM cleanup and Pi-compatible output draining. ([#20](https://github.com/kcosr/pi-sandbox/pull/20))
 - Run Bubblewrap tools concurrently with sandbox process lifetime, preserving coordinated cancellation and cleanup. ([#19](https://github.com/kcosr/pi-sandbox/pull/19))
 

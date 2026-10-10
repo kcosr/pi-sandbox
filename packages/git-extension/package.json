@@ -1,7 +1,7 @@
 {
-  "name": "@kcosr/pi-sandbox-extension",
-  "version": "0.3.0",
-  "description": "Reusable sandbox tools and execution backends for Pi",
+  "name": "@kcosr/pi-git-extension",
+  "version": "0.1.0",
+  "description": "Restricted host Git clone tool for Pi",
   "license": "MIT",
   "type": "module",
   "engines": {
@@ -19,11 +19,8 @@
   "exports": {
     ".": "./dist/index.js",
     "./factory": "./dist/factory.js",
-    "./runtime": "./dist/runtime.js",
-    "./config": "./dist/config.js",
-    "./identity": "./dist/identity.js",
-    "./controller": "./dist/controller.js",
-    "./invocation": "./dist/invocation.js"
+    "./core": "./dist/core.js",
+    "./config": "./dist/config.js"
   },
   "files": [
     "dist",
@@ -34,6 +31,6 @@
   "repository": {
     "type": "git",
     "url": "https://github.com/kcosr/pi-sandbox.git",
-    "directory": "packages/sandbox-extension"
+    "directory": "packages/git-extension"
   }
 }

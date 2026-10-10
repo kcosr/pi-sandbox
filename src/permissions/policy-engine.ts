@@ -2,11 +2,12 @@ import { createHash } from "node:crypto";
 
 import type { ApprovalSubject, SubjectPolicy } from "./contracts.js";
 
-export type JsonValue = null | boolean | number | string | readonly JsonValue[] | JsonObject;
-
-export interface JsonObject {
-  readonly [key: string]: JsonValue;
-}
+import {
+  canonicalizeJson,
+  snapshotJsonObject,
+  type JsonObject,
+} from "../../packages/sandbox-extension/src/invocation.js";
+export type { JsonObject, JsonValue } from "../../packages/sandbox-extension/src/invocation.js";
 
 export type ApprovalPolicies = Readonly<Record<ApprovalSubject, SubjectPolicy>>;
 
@@ -141,9 +142,7 @@ export function prepareApprovalRequest(input: {
     throw new Error("Approval request display must not be empty");
   }
 
-  const canonicalArguments = canonicalizeJson(input.arguments, "arguments");
-  const argumentsCopy = JSON.parse(canonicalArguments) as JsonObject;
-  deepFreeze(argumentsCopy);
+  const argumentsCopy = snapshotJsonObject(input.arguments);
 
   const fingerprintInput = canonicalizeJson(
     {
@@ -362,56 +361,6 @@ function verifyPreparedRequest(request: ApprovalRequest): void {
   if (request.fingerprint !== expected) {
     throw new Error("Approval request fingerprint does not match its contents");
   }
-}
-
-function canonicalizeJson(value: JsonValue, path: string, ancestors = new Set<object>()): string {
-  if (value === null || typeof value === "boolean" || typeof value === "string") {
-    return JSON.stringify(value);
-  }
-  if (typeof value === "number") {
-    if (!Number.isFinite(value)) {
-      throw new Error(`${path} contains a non-finite number`);
-    }
-    return JSON.stringify(value);
-  }
-  if (typeof value !== "object") {
-    throw new Error(`${path} contains a non-JSON value`);
-  }
-  if (ancestors.has(value)) {
-    throw new Error(`${path} contains a cycle`);
-  }
-
-  ancestors.add(value);
-  try {
-    if (Array.isArray(value)) {
-      const items = value as readonly JsonValue[];
-      return `[${items.map((item, index) => canonicalizeJson(item, `${path}[${index}]`, ancestors)).join(",")}]`;
-    }
-    const prototype = Object.getPrototypeOf(value) as object | null;
-    if (prototype !== Object.prototype && prototype !== null) {
-      throw new Error(`${path} must contain only plain JSON objects`);
-    }
-    const object = value as JsonObject;
-    return `{${Object.keys(object)
-      .sort()
-      .map(
-        (key) =>
-          `${JSON.stringify(key)}:${canonicalizeJson(object[key] as JsonValue, `${path}.${key}`, ancestors)}`,
-      )
-      .join(",")}}`;
-  } finally {
-    ancestors.delete(value);
-  }
-}
-
-function deepFreeze(value: JsonValue): void {
-  if (value === null || typeof value !== "object" || Object.isFrozen(value)) {
-    return;
-  }
-  for (const child of Object.values(value)) {
-    deepFreeze(child);
-  }
-  Object.freeze(value);
 }
 
 async function raceCancellation<T>(promise: Promise<T>, signal?: AbortSignal): Promise<T> {

@@ -10,9 +10,7 @@ import type {
 } from "@earendil-works/pi-coding-agent";
 import { readSandboxConfig, type SandboxExtensionConfig } from "./config.js";
 import { createSandboxExtension } from "./factory.js";
-import { PolicyEngine } from "./policy/policy-engine.js";
-import { approvalUi } from "./policy/approval.js";
-import { TOOL_NAMES } from "./policy/contracts.js";
+import { TOOL_NAMES } from "./invocation.js";
 import {
   createBubblewrapExecutor,
   createDirectExecutor,
@@ -91,7 +89,6 @@ export function createConfiguredSandboxExtension(
   return async (pi: ExtensionAPI) => {
     let owner: Owner | undefined;
     let config: SandboxExtensionConfig | undefined;
-    let policy: PolicyEngine | undefined;
     let active = false;
     let starting: Promise<void> | undefined;
     let ended = false;
@@ -103,7 +100,7 @@ export function createConfiguredSandboxExtension(
       active = false;
       pi.setActiveTools([]);
       ctx.ui.notify(
-        "Sandbox startup failed. Check the explicit sandbox configuration and prerequisites.",
+        "Sandbox startup failed. Check the sandbox configuration and prerequisites.",
         "error",
       );
       ctx.shutdown();
@@ -117,16 +114,7 @@ export function createConfiguredSandboxExtension(
       getExecutor,
       tools: TOOL_NAMES,
       userBash: () => config?.userBash === true,
-      async authorize(request, ctx, signal) {
-        getExecutor();
-        if (!policy) throw new Error("Sandbox policy is unavailable");
-        const ui = approvalUi(ctx);
-        const decision = await policy.evaluate(request, {
-          ...(ui ? { ui } : {}),
-          ...(signal ? { signal } : {}),
-        });
-        if (!decision.allowed) throw new Error(`Sandbox tool denied: ${decision.reason}`);
-      },
+      authorize: () => Promise.resolve(),
     })(pi);
     pi.on("session_start", (_event, ctx) => {
       // Pi may bind one replacement RPC session twice. Initialization is
@@ -168,20 +156,7 @@ export function createConfiguredSandboxExtension(
           if (owner.closed || owner.identity !== identity)
             throw new Error("Reload required to change sandbox configuration or workspace");
           if (ended) return;
-          policy = new PolicyEngine(config.tools);
           active = true;
-          // Visibility is narrowed only for our tools; policy remains the authority.
-          const admitted = config.tools;
-          pi.setActiveTools(
-            pi
-              .getActiveTools()
-              .filter(
-                (name) =>
-                  !TOOL_NAMES.includes(name as never) ||
-                  (admitted[name as keyof typeof admitted]?.mode !== undefined &&
-                    admitted[name as keyof typeof admitted]?.mode !== "disabled"),
-              ),
-          );
           ctx.ui.setStatus("sandbox", `${owner.executor.backend} · ${owner.executor.cwd}`);
         } catch {
           fail(ctx);
@@ -193,7 +168,6 @@ export function createConfiguredSandboxExtension(
       if (ended) return;
       ended = true;
       active = false;
-      policy?.clearSessionGrants();
       await starting;
       if (event.reason !== "quit" && event.reason !== "reload") return;
       // Startup may fail before this instance acquires a still-running owner

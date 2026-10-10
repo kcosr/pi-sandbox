@@ -3,19 +3,37 @@
 ## Reusable package and managed composition
 
 `packages/sandbox-extension` contains the filesystem/shell tool adapters,
-authorization engine, Bubblewrap/direct/smolvm executors and required worker assets.
-The managed application imports this source directly and bundles it into its
-executable. Administrative configuration, identity resolution, admitted host
-extensions/MCP, model restrictions and audit submission stay in the managed layer.
-The same normalized immutable request is authorized and executed; extracting
-modules does not replace this boundary with extension hook ordering.
+Bubblewrap/direct/smolvm executors and worker assets. `packages/git-extension`
+contains the reusable clone implementation and its standard Pi entry point.
+Each package installs independently. The managed application keeps its permission
+engine and approval UI in `src/permissions`, together with administrator TOML,
+identity resolution, admitted MCP connections, model restrictions and audit.
 
-The package also supplies a standard ordinary-Pi entry. That entry owns one
-backend per Pi process with explicit standalone configuration. Conversation
-replacement preserves the backend and clears session grants; quit or explicit
-extension reload closes it. There is no per-conversation sandbox pool. Background
-process survival still follows the selected process lifetime. The standalone
-entry imposes no restrictions on other user-installed extensions.
+The sandbox factory accepts a required authorization callback over neutral,
+normalized immutable arguments and the actual invocation signal. The managed
+adapter constructs its private approval request, evaluates policy and awaits audit
+before execution. The sandbox executes the same canonical JSON snapshot that was
+approved. Branding, fingerprints and approval UI remain internal; no event-bus
+permission provider or extension hook ordering is involved.
+
+Standalone sandbox configuration version 4 describes execution only. Its entry
+supplies an explicit no-op authorization callback; it does not supply managed
+approvals. It owns one backend per Pi process across conversation replacement;
+quit or explicit reload closes it. Background survival follows the configured
+process lifetime. User `!` shell retains the independent `userBash` choice.
+
+The Git package has one clone core. Its normal Pi entry reads explicit standalone
+JSON and owns a bounded host executor; its programmatic factory borrows an
+executor. The application-owned managed Git descriptor delegates to that core,
+while the existing managed wrapper authorizes immutable arguments and records
+audits. Managed TOML, scoped environment and host-executor lifecycle stay in the
+application. The standalone artifact bundles the existing host runner at build
+time and requires no installed sandbox package.
+
+Standard Pi registration remains subject to stock conflict rules: first extension
+in runner order providing a tool name wins, and user-shell dispatch stops at its
+first handler. Our sandbox and Git tools have disjoint names. Arbitrary managed
+extension loading is not added; the existing managed/`pi-tool` composition remains.
 
 Ordinary Pi starts the existing Bubblewrap worker through a packaged JavaScript
 entry and an explicitly configured Node/Bun runtime. Managed Pi continues to use

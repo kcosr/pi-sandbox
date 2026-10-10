@@ -25,6 +25,6 @@
     "tests/**/*.ts",
     "vitest.config.ts",
     "eslint.config.js",
-    "packages/sandbox-extension/src/**/*.ts"
+    "packages/*/src/**/*.ts"
   ]
 }

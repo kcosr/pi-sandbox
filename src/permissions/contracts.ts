@@ -1,14 +1,7 @@
-export const TOOL_NAMES = Object.freeze([
-  "read",
-  "grep",
-  "find",
-  "ls",
-  "write",
-  "edit",
-  "bash",
-] as const);
-
-export type BuiltInToolName = (typeof TOOL_NAMES)[number];
+export {
+  TOOL_NAMES,
+  type BuiltInToolName,
+} from "../../packages/sandbox-extension/src/invocation.js";
 
 /** Model-visible registered tool name, including build-selected extension tools. */
 export type ToolName = string;

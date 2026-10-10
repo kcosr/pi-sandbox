@@ -6,7 +6,7 @@ import {
   prepareApprovalRequest,
   type ApprovalDecision,
   type JsonObject,
-} from "../../packages/sandbox-extension/src/policy/index.js";
+} from "../permissions/index.js";
 import { SandboxExecutionError } from "../../packages/sandbox-extension/src/runtime/index.js";
 import { ManagedToolExecutionError } from "../runtime/tool-error.js";
 import { HostCommandExecutionError } from "../../packages/sandbox-extension/src/runtime/host-command/index.js";

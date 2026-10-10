@@ -1,6 +1,10 @@
 import type { ApprovalSubject, SubjectPolicy } from "./contracts.js";
 import { describe, expect, it, vi } from "vitest";
 import {
+  prepareSandboxToolRequest,
+  type JsonObject,
+} from "../../packages/sandbox-extension/src/invocation.js";
+import {
   PolicyEngine,
   prepareApprovalRequest,
   type ApprovalPrompt,
@@ -45,6 +49,21 @@ class RecordingUi implements ApprovalUi {
 }
 
 describe("prepareApprovalRequest", () => {
+  it("preserves the sandbox's approved JSON values in the private managed copy", async () => {
+    const sandbox = prepareSandboxToolRequest(
+      "write",
+      JSON.parse('{"__proto__":{"value":-0},"path":"/work/file","values":[-0,true]}') as JsonObject,
+    );
+    const managed = prepareApprovalRequest({ ...sandbox, display: "Write /work/file" });
+    expect(managed.arguments).toStrictEqual(sandbox.arguments);
+    expect(managed.arguments).not.toBe(sandbox.arguments);
+    expect(Object.hasOwn(managed.arguments, "__proto__")).toBe(true);
+    expect(Object.isFrozen(managed.arguments.__proto__)).toBe(true);
+    await expect(new PolicyEngine(policies()).evaluate(managed)).resolves.toMatchObject({
+      allowed: true,
+    });
+  });
+
   it("creates a deterministic fingerprint and an immutable argument snapshot", () => {
     const args = { b: 2, a: { value: "before" } };
     const prepared = prepareApprovalRequest({

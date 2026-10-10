@@ -20,12 +20,9 @@ import {
   type JsonObject,
   type PolicyEngine,
   type ResolvedSubjectPolicy,
-} from "../../packages/sandbox-extension/src/policy/index.js";
+} from "../permissions/index.js";
 import type { ToolAuditor } from "../audit/tools.js";
-import {
-  approvalPreview,
-  approvalUi,
-} from "../../packages/sandbox-extension/src/policy/approval.js";
+import { approvalPreview, approvalUi } from "../permissions/index.js";
 import { ManagedToolExecutionError } from "../runtime/tool-error.js";
 import type { ResolvedMcpServer } from "./resolve.js";
 import { mcpSubject, resolveMcpPolicy } from "./policy.js";

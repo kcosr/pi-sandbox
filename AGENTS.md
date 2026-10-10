@@ -51,7 +51,11 @@ reimplemented rather than mechanically reapplied.
   both isolated modes. Explicit `host` shares unrestricted host networking.
   Require `host` whenever `direct` is selected.
 - Build one precompiled Bun `pi-sandbox` application from pinned Pi source and the separately maintained Pi Sandbox extension. Force that extension through Pi's inline factory API, disable Pi's built-in extension factories, and permit no user/project extensions or package-management commands. Package the optional user/group resolver as a separate static Rust broker; it is never a wrapper or sandbox backend.
-- Keep reusable tools, policy and execution backends in `packages/sandbox-extension`.
+- Keep reusable tools and execution backends in `packages/sandbox-extension`,
+  and reusable Git clone in `packages/git-extension`. Keep permissions and approval
+  UI internal to the managed application in `src/permissions`; standard entries
+  provide no managed approvals. Preserve the application-owned managed/`pi-tool`
+  composition and mandatory authorization/audit adapters.
   The managed product composes those modules with its mandatory administration,
   MCP and audit controls. The ordinary Pi artifact must load without managed Pi
   patches, private repository dependencies or a sibling checkout. Qualify both

@@ -936,7 +936,7 @@ async function main() {
     process.stdout.write(`Created and inspected ${archive}\nSHA-256 ${archiveSha256}\n`);
     await run(
       process.execPath,
-      [join(repositoryRoot, "scripts/pack-sandbox-extension.mjs"), options.out],
+      [join(repositoryRoot, "scripts/pack-extensions.mjs"), options.out],
       { env: cleanEnvironment },
     );
   } finally {

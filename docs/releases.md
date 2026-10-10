@@ -1,13 +1,14 @@
 # Versions and releases
 
 Pi Sandbox uses its own semantic version, independent of the pinned Pi release
-and the reusable extension package:
+and the reusable extension packages:
 
 | Component                  | Version source                              | Current version |
 | -------------------------- | ------------------------------------------- | --------------- |
 | Pi Sandbox product         | Root `package.json` and `package-lock.json` | `0.6.0`         |
 | Upstream Pi                | `pi-source.lock.json`                       | `1.1.0`         |
-| Reusable sandbox extension | `packages/sandbox-extension/package.json`   | `0.2.0`         |
+| Reusable sandbox extension | `packages/sandbox-extension/package.json`   | `0.3.0`         |
+| Reusable Git extension     | `packages/git-extension/package.json`       | `0.1.0`         |
 
 Product tags use `v<product-version>`, for example `v0.6.0`. During the `0.x`
 series, new features and breaking changes increment the minor version; fixes

@@ -2,7 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 import type { StreamableHttpTransport } from "@earendil-works/pi-mcp";
 import type { ToolDefinition } from "@earendil-works/pi-coding-agent";
 import type { McpServerConfig } from "../domain/index.js";
-import { PolicyEngine } from "../../packages/sandbox-extension/src/policy/index.js";
+import { PolicyEngine } from "../permissions/index.js";
 import { ManagedMcpRuntime, type McpCatalogItem, type ManagedMcpOptions } from "./runtime.js";
 import type { ManagedMcpPreferences } from "./preferences.js";
 import { mcpSubject, matchesMcpPattern } from "./policy.js";
@@ -440,8 +440,7 @@ describe("MCP dispatch lifecycle", () => {
       { write: { mode: "ask", sessionGrant: "never" } },
       runtime.resolveSubject,
     );
-    const { prepareApprovalRequest } =
-      await import("../../packages/sandbox-extension/src/policy/index.js");
+    const { prepareApprovalRequest } = await import("../permissions/index.js");
     let finish!: (value: "allow_once") => void;
     const prompt = vi.fn(
       () =>
