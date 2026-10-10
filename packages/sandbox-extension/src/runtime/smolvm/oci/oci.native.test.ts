@@ -3,6 +3,7 @@ import path from "node:path";
 import { createServer } from "node:net";
 import { networkInterfaces } from "node:os";
 import { afterEach, beforeAll, describe, expect, it } from "vitest";
+import type { SandboxCommandRequest } from "../../contracts.js";
 import { createSmolvmOciFamily, reopenSmolvmOciFamily } from "./family.js";
 import { attachSmolvmOciMachine } from "./transport.js";
 import type { SmolvmOciFamily, SmolvmOciFamilyOptions } from "./types.js";
@@ -58,6 +59,44 @@ async function gone(pids: number[]) {
   }
   throw Error("fixture VM processes survived");
 }
+async function vmPids(dir: string): Promise<number[]> {
+  const found: number[] = [];
+  for (const entry of await readdir(dir, { withFileTypes: true })) {
+    const name = path.join(dir, entry.name);
+    if (entry.isDirectory()) found.push(...(await vmPids(name)));
+    else if (entry.name === "agent.pid")
+      found.push(Number((await readFile(name, "utf8")).split("\n")[0]));
+  }
+  return found;
+}
+function readyBarrier(count: number) {
+  let ready!: () => void;
+  const promise = new Promise<void>((resolve) => {
+    ready = resolve;
+  });
+  const seen = new Set<number>();
+  const output: string[] = [];
+  return {
+    promise,
+    onStdout(index: number) {
+      return (bytes: Buffer) => {
+        output[index] = (output[index] ?? "") + bytes.toString();
+        if (output[index].includes(`ready-${index}\n`)) seen.add(index);
+        if (seen.size === count) ready();
+      };
+    },
+  };
+}
+async function controlledFamily() {
+  const input = await mkdtemp("/var/tmp/oci-parallel-");
+  dirs.push(input);
+  const family = await createSmolvmOciFamily({
+    ...(await opts()),
+    mounts: [{ hostPath: input, guestPath: "/control", readOnly: true }],
+  });
+  families.push(family);
+  return { family, input };
+}
 async function diskFiles(
   root: string,
 ): Promise<{ name: string; bytes: number; allocated: number }[]> {
@@ -87,6 +126,178 @@ afterEach(async () => {
   else throw Error("Native fixture cleanup unconfirmed; state retained for inspection");
 });
 suite("Rocky OCI native family", () => {
+  it("overlaps four calls across direct and borrowed access with separate binary streams", async () => {
+    const { family: f, input } = await controlledFamily();
+    const client = await attachSmolvmOciMachine(f.attachment(f.sourceId));
+    try {
+      const ready = readyBarrier(4);
+      const results = Promise.all(
+        Array.from({ length: 4 }, (_, index) => {
+          const request: SandboxCommandRequest = {
+            argv: [
+              "/bin/bash",
+              "-c",
+              'printf "ready-%s\\n" "$1"; while test ! -e /control/release; do sleep .02; done; cat; printf "err-%s" "$1" >&2; exit "$1"',
+              "parallel",
+              String(index),
+            ],
+            stdin: Buffer.from([index, 255, 0]),
+            timeoutMs: 20000,
+          };
+          const execution = { onStdout: ready.onStdout(index) };
+          return index % 2
+            ? client.execute(request, execution)
+            : f.execute(f.sourceId, request, execution);
+        }),
+      );
+      await Promise.race([
+        ready.promise,
+        results.then(() => {
+          throw Error("parallel commands completed before their release barrier");
+        }),
+      ]);
+      await writeFile(path.join(input, "release"), "ready");
+      for (const [index, result] of (await results).entries()) {
+        expect(result.exitCode).toBe(index);
+        expect(result.stdout).toEqual(
+          Buffer.concat([Buffer.from(`ready-${index}\n`), Buffer.from([index, 255, 0])]),
+        );
+        expect(result.stderr.toString()).toBe(`err-${index}`);
+      }
+    } finally {
+      await client.close();
+    }
+    expect((await f.execute(f.sourceId, { argv: ["/bin/true"] })).exitCode).toBe(0);
+  }, 120000);
+
+  it("keeps branch exclusive while allowing sibling attachments to execute concurrently", async () => {
+    const { family: f, input } = await controlledFamily();
+    const ready = readyBarrier(1);
+    const active = f.execute(
+      f.sourceId,
+      {
+        argv: [
+          "/bin/bash",
+          "-c",
+          "echo ready-0; while test ! -e /control/branch; do sleep .02; done; echo committed >/workspace/pre-branch",
+        ],
+        timeoutMs: 20000,
+      },
+      { onStdout: ready.onStdout(0) },
+    );
+    await Promise.race([
+      ready.promise,
+      active.then(() => {
+        throw Error("active command completed before branch barrier");
+      }),
+    ]);
+    const branch = f.branch(f.sourceId, { branchable: false });
+    const afterBranch = expect(
+      f.execute(f.sourceId, {
+        argv: ["/bin/bash", "-c", "echo wrong >/workspace/post-branch"],
+      }),
+    ).rejects.toMatchObject({ code: "sandbox_closed" });
+    await writeFile(path.join(input, "branch"), "ready");
+    expect((await active).exitCode).toBe(0);
+    const left = await branch;
+    await afterBranch;
+    expect(
+      (
+        await f.execute(left, {
+          argv: ["/bin/bash", "-c", "test ! -e /workspace/post-branch; cat /workspace/pre-branch"],
+        })
+      ).stdout.toString(),
+    ).toBe("committed\n");
+    const right = await f.branch(f.sourceId, { branchable: false });
+    const clients = await Promise.all(
+      [left, right].map((id) => attachSmolvmOciMachine(f.attachment(id))),
+    );
+    try {
+      const siblings = readyBarrier(2);
+      const results = Promise.all(
+        clients.map((client, index) =>
+          client.execute(
+            {
+              argv: [
+                "/bin/bash",
+                "-c",
+                'printf "ready-%s\\n" "$1"; while test ! -e /control/siblings; do sleep .02; done; echo "$1" >/workspace/private; cat /workspace/private',
+                "sibling",
+                String(index),
+              ],
+              timeoutMs: 20000,
+            },
+            { onStdout: siblings.onStdout(index) },
+          ),
+        ),
+      );
+      await Promise.race([
+        siblings.promise,
+        results.then(() => {
+          throw Error("sibling calls completed before their release barrier");
+        }),
+      ]);
+      await writeFile(path.join(input, "siblings"), "ready");
+      for (const [index, result] of (await results).entries()) {
+        expect(result.exitCode).toBe(0);
+        expect(result.stdout.toString()).toBe(`ready-${index}\n${index}\n`);
+      }
+    } finally {
+      await Promise.all(clients.map((client) => client.close()));
+    }
+    await f.removeMachine(right);
+    await f.removeMachine(left);
+  }, 180000);
+
+  it("active cancellation interrupts parallel calls and queued work before retiring the VM", async () => {
+    const f = await make();
+    const pids = await vmPids(f.statePath);
+    expect(pids).toHaveLength(1);
+    const client = await attachSmolvmOciMachine(f.attachment(f.sourceId));
+    const controller = new AbortController();
+    const ready = readyBarrier(4);
+    const calls = Array.from({ length: 4 }, (_, index) => {
+      const request: SandboxCommandRequest = {
+        argv: ["/bin/bash", "-c", `echo ready-${index}; sleep 60`],
+        timeoutMs: 20000,
+      };
+      const execution = {
+        onStdout: ready.onStdout(index),
+        ...(index === 0 ? { signal: controller.signal } : {}),
+      };
+      return index % 2
+        ? client.execute(request, execution)
+        : f.execute(f.sourceId, request, execution);
+    });
+    const results = Promise.allSettled(calls);
+    try {
+      await Promise.race([
+        ready.promise,
+        results.then(() => {
+          throw Error("parallel calls failed to reach the cancellation barrier");
+        }),
+      ]);
+      const queued = expect(f.execute(f.sourceId, { argv: ["/bin/true"] })).rejects.toMatchObject({
+        code: "sandbox_closed",
+      });
+      controller.abort();
+      for (const result of await results) {
+        expect(result.status).toBe("rejected");
+        if (result.status === "rejected")
+          expect(result.reason).toMatchObject({
+            code: expect.stringMatching(/^sandbox_(?:aborted|closed)$/u) as unknown,
+          });
+      }
+      await queued;
+      await f.close();
+      await gone(pids);
+      expect((await stat(f.statePath)).isDirectory()).toBe(true);
+      expect(() => f.attachment(f.sourceId)).toThrow();
+    } finally {
+      await client.close();
+    }
+  }, 120000);
+
   it("permits explicit network-enabled access to a host TCP fixture", async () => {
     const hostAddress = Object.values(networkInterfaces())
       .flat()
@@ -186,17 +397,7 @@ suite("Rocky OCI native family", () => {
   }, 180000);
   it("classifies unexpected VMM death as infrastructure failure without restarting", async () => {
     const f = await make();
-    async function pids(dir: string): Promise<number[]> {
-      const found: number[] = [];
-      for (const entry of await readdir(dir, { withFileTypes: true })) {
-        const name = path.join(dir, entry.name);
-        if (entry.isDirectory()) found.push(...(await pids(name)));
-        else if (entry.name === "agent.pid")
-          found.push(Number((await readFile(name, "utf8")).split("\n")[0]));
-      }
-      return found;
-    }
-    const recorded = await pids(f.statePath);
+    const recorded = await vmPids(f.statePath);
     expect(recorded).toHaveLength(1);
     expect(await alive(recorded[0]!)).toBe(true);
     process.kill(recorded[0]!, "SIGKILL");

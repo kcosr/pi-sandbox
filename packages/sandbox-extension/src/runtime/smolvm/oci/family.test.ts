@@ -3,7 +3,11 @@ import type * as Lifecycle from "../lifecycle.js";
 import type * as Cli from "../cli.js";
 import type * as Transport from "./transport.js";
 import { SmolvmCli } from "../cli.js";
-import type { SandboxCommandRequest } from "../../contracts.js";
+import {
+  SandboxExecutionError,
+  type SandboxCommandRequest,
+  type SandboxExecutionOptions,
+} from "../../contracts.js";
 import { createHash } from "node:crypto";
 import { mkdir, mkdtemp, readFile, realpath, rm, stat, symlink, writeFile } from "node:fs/promises";
 import type { SmolvmOciFamilyOptions } from "./types.js";
@@ -23,6 +27,11 @@ const mocks = vi.hoisted(() => ({
   failCliDispose: false,
   cliDisposeCalls: 0,
   lastStatePath: "",
+  exec: undefined as
+    | ((request: SandboxCommandRequest, options: SandboxExecutionOptions) => Promise<string>)
+    | undefined,
+  events: [] as string[],
+  stop: undefined as (() => Promise<void>) | undefined,
 }));
 vi.mock("node:fs/promises", async (importActual) => {
   const actual = await importActual<typeof FsPromises>();
@@ -63,6 +72,8 @@ vi.mock("../lifecycle.js", async (importActual) => {
       }),
     assertMachineAlive: async () => {},
     stopMachine: async (cli: SmolvmCli, name: string) => {
+      mocks.events.push(`stop:${name}`);
+      await mocks.stop?.();
       if (mocks.failClose) throw Error("stop not confirmed");
       await actual.checkedCommand(cli, ["machine", "stop", "--name", name]);
     },
@@ -74,6 +85,7 @@ vi.mock("../cli.js", async (importOriginal) => {
   return {
     createStateEnvironment: actual.createStateEnvironment,
     SmolvmCli: class {
+      readonly active = new Set<{ controller: AbortController; done: Promise<void> }>();
       readonly names: Map<string, { state: string; parent: string | null }>;
       readonly stateDirectory: string;
       constructor(options: { stateDirectory: string }) {
@@ -84,7 +96,7 @@ vi.mock("../cli.js", async (importOriginal) => {
           new Map<string, { state: string; parent: string | null }>();
         families.set(this.stateDirectory, this.names);
       }
-      async run(request: SandboxCommandRequest, options?: { onStdout?: (b: Buffer) => void }) {
+      async run(request: SandboxCommandRequest, options: SandboxExecutionOptions = {}) {
         const argv = request.argv;
         const fs = await import("node:fs/promises");
         let out = "";
@@ -120,11 +132,35 @@ vi.mock("../cli.js", async (importOriginal) => {
             })),
           );
         else if (argv[1] === "branch") {
+          mocks.events.push(`branch:${value("--from")}`);
           this.names.get(value("--from"))!.state = "frozen";
           this.names.set(value("--name"), { state: "running", parent: value("--from") });
         } else if (argv[1] === "stop") this.names.get(value("--name"))!.state = "stopped";
         else if (argv[1] === "delete") this.names.delete(value("--name"));
-        else if (argv[1] === "exec") out = "ready";
+        else if (argv[1] === "exec") {
+          const controller = new AbortController();
+          const abort = () => controller.abort();
+          options.signal?.addEventListener("abort", abort, { once: true });
+          if (options.signal?.aborted) controller.abort();
+          let finish!: () => void;
+          const done = new Promise<void>((resolve) => {
+            finish = resolve;
+          });
+          const active = { controller, done };
+          this.active.add(active);
+          try {
+            const guest = JSON.parse(
+              Buffer.from(argv.at(-1)!, "base64").toString(),
+            ) as SandboxCommandRequest;
+            out = mocks.exec
+              ? await mocks.exec(guest, { ...options, signal: controller.signal })
+              : "ready";
+          } finally {
+            this.active.delete(active);
+            options.signal?.removeEventListener("abort", abort);
+            finish();
+          }
+        }
         if (out) options?.onStdout?.(Buffer.from(out));
         return {
           exitCode: 0,
@@ -133,7 +169,11 @@ vi.mock("../cli.js", async (importOriginal) => {
           stderr: Buffer.alloc(0),
         };
       }
-      async cancelActive() {}
+      async cancelActive() {
+        const active = [...this.active];
+        for (const entry of active) entry.controller.abort();
+        await Promise.all(active.map((entry) => entry.done));
+      }
       dispose() {
         mocks.cliDisposeCalls++;
         return mocks.failCliDispose
@@ -152,6 +192,9 @@ afterEach(async () => {
   mocks.failCliDispose = false;
   mocks.cliDisposeCalls = 0;
   mocks.lastStatePath = "";
+  mocks.exec = undefined;
+  mocks.events = [];
+  mocks.stop = undefined;
   vi.unstubAllEnvs();
   for (const dir of dirs.splice(0)) await rm(dir, { recursive: true, force: true });
 });
@@ -172,7 +215,125 @@ async function fixture(patch: Partial<SmolvmOciFamilyOptions> = {}) {
   });
 }
 const suite = process.platform === "linux" && process.arch === "x64" ? describe : describe.skip;
+function deferred<T>() {
+  let resolve!: (value: T) => void;
+  const promise = new Promise<T>((done) => {
+    resolve = done;
+  });
+  return { promise, resolve };
+}
 suite("OCI family controller policy with a simulated CLI", () => {
+  it("runs four requests concurrently and isolates queued cancellation", async () => {
+    const family = await fixture();
+    const started: string[] = [];
+    const entered = deferred<void>();
+    const commands = new Map<string, ReturnType<typeof deferred<string>>>();
+    mocks.exec = async (request) => {
+      const name = request.argv[1]!;
+      started.push(name);
+      const command = deferred<string>();
+      commands.set(name, command);
+      if (started.length === 4) entered.resolve();
+      return command.promise;
+    };
+    try {
+      const active = Array.from({ length: 4 }, (_, i) =>
+        family.execute(family.sourceId, { argv: ["/bin/echo", String(i)] }),
+      );
+      await entered.promise;
+      expect(started).toEqual(["0", "1", "2", "3"]);
+      const controller = new AbortController();
+      const queued = family.execute(
+        family.sourceId,
+        { argv: ["/bin/echo", "queued"] },
+        { signal: controller.signal },
+      );
+      const rejected = expect(queued).rejects.toMatchObject({ code: "sandbox_aborted" });
+      controller.abort();
+      await rejected;
+      expect(started).not.toContain("queued");
+      expect(mocks.events).toEqual([]);
+      for (const [name, command] of commands) command.resolve(name);
+      const results = await Promise.all(active);
+      expect(results.map((r) => r.stdout.toString())).toEqual(["0", "1", "2", "3"]);
+    } finally {
+      await family.close();
+    }
+  });
+  it("holds later requests behind an exclusive branch until active execution finishes", async () => {
+    const family = await fixture();
+    const started = deferred<void>();
+    const release = deferred<string>();
+    mocks.exec = () => {
+      started.resolve();
+      return release.promise;
+    };
+    try {
+      const active = family.execute(family.sourceId, { argv: ["/bin/true"] });
+      await started.promise;
+      const branch = family.branch(family.sourceId, { branchable: false });
+      const later = family.execute(family.sourceId, { argv: ["/bin/true"] });
+      const rejected = expect(later).rejects.toMatchObject({ code: "sandbox_closed" });
+      await Promise.resolve();
+      expect(mocks.events).toEqual([]);
+      release.resolve("complete");
+      await active;
+      const child = await branch;
+      await rejected;
+      expect(mocks.events).toEqual(["branch:candidate"]);
+      mocks.exec = undefined;
+      expect((await family.execute(child, { argv: ["/bin/true"] })).exitCode).toBe(0);
+    } finally {
+      await family.close();
+    }
+  });
+  it("retires peers on active cancellation and awaits VM cleanup before settling them", async () => {
+    const family = await fixture();
+    const allStarted = deferred<void>();
+    const cleanupStarted = deferred<void>();
+    const finishCleanup = deferred<void>();
+    let started = 0;
+    mocks.exec = (_request, options) =>
+      new Promise((_resolve, reject) => {
+        if (++started === 4) allStarted.resolve();
+        const abort = () => reject(new SandboxExecutionError("sandbox_aborted"));
+        options.signal?.addEventListener("abort", abort, { once: true });
+        if (options.signal?.aborted) abort();
+      });
+    mocks.stop = () => {
+      cleanupStarted.resolve();
+      return finishCleanup.promise;
+    };
+    const controller = new AbortController();
+    let settled = 0;
+    const active = Array.from({ length: 4 }, (_, i) =>
+      family
+        .execute(
+          family.sourceId,
+          { argv: ["/bin/sleep", "60"] },
+          i === 0 ? { signal: controller.signal } : {},
+        )
+        .finally(() => {
+          settled++;
+        }),
+    );
+    const results = Promise.allSettled(active);
+    await allStarted.promise;
+    const queued = family.execute(family.sourceId, { argv: ["/bin/true"] });
+    const rejected = expect(queued).rejects.toMatchObject({ code: "sandbox_closed" });
+    controller.abort();
+    await cleanupStarted.promise;
+    expect(settled).toBe(0);
+    expect(started).toBe(4);
+    await rejected;
+    finishCleanup.resolve();
+    const terminal = await results;
+    expect(terminal.every((r) => r.status === "rejected")).toBe(true);
+    expect(mocks.events).toEqual(["stop:candidate"]);
+    await expect(family.execute(family.sourceId, { argv: ["/bin/true"] })).rejects.toMatchObject({
+      code: "sandbox_closed",
+    });
+  });
   it("writes scoped recovery information before launching the VM", async () => {
     const family = await fixture();
     try {
@@ -238,7 +399,7 @@ suite("OCI family controller policy with a simulated CLI", () => {
         },
       },
     );
-    await execution;
+    await expect(execution).rejects.toMatchObject({ code: "sandbox_closed" });
     await closing;
     expect(() => family.attachment(family.sourceId)).toThrow();
     await expect(stat(family.statePath)).rejects.toMatchObject({ code: "ENOENT" });

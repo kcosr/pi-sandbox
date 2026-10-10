@@ -843,6 +843,16 @@ because other host paths are not mounted. The launch directory remains at its
 same absolute path and follows `cwd_writable`; private guest files are writable.
 MCP and managed host extensions remain host-side and retain their policies.
 
+Up to four commands run concurrently, with a fixed limit of 64 outstanding
+requests including the queue. Per-call timeouts include queue wait. Cancelling
+or timing out a queued call leaves running work intact; active cancellation,
+timeout, output overflow or execution infrastructure failure retires the VM and
+interrupts its other calls and background processes. Further calls require a new
+executor. Ordinary nonzero exits keep the VM available. Output follows Pi's
+100 ms post-exit idle drain, resetting with each chunk; continuous background
+output can keep a call open until its timeout or output limit. Redirect background
+server output to files.
+
 Normal Pi shutdown stops and deletes the owned VM. If Pi is killed or crashes,
 a VM may remain. There is no separate watcher process. Use the recorded private
 state and the smolvm CLI to list and stop those machines before deleting their

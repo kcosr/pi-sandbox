@@ -492,3 +492,21 @@ Linux guest; only the launch directory is host-mounted. Runtime startup validate
 the external distribution and image before tool execution. No extra process
 supervisor is introduced. Normal shutdown requests VM cleanup; an abrupt owner
 exit can require manual cleanup with smolvm's CLI.
+
+The host admits up to four executions concurrently, with at most 64 outstanding
+requests including queued calls. Each uses its own short-lived CLI connection to
+smolvm's existing persistent guest agent; it does not boot another VM. Output,
+stdin and deadlines belong to each request. A per-execution guest wrapper matches
+Pi's 100 ms post-exit idle drain, restarting on output and closing inherited
+streams on completion. It is not a resident service.
+
+Owned packed VMs and OCI families share the admission rules. The four-call limit
+applies across an entire OCI family, including borrowed attachments. Branching,
+machine removal and cold retention take exclusive FIFO admission, waiting for
+earlier active calls and preventing later calls from overtaking them. Cancellation
+or expiry while queued removes only that request. An active cancellation,
+timeout, output-limit failure or execution infrastructure failure closes admission,
+interrupts peers and retires the owned VM or family before active calls settle.
+Unlike Bubblewrap's reusable cleanup, smolvm has no supported whole-workload reset
+that also removes previously detached guest processes while keeping the VM alive.
+Normal nonzero command exits do not retire it.

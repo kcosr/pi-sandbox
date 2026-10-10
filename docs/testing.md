@@ -330,7 +330,12 @@ processes, cancellation, timeout, output overflow and close; frozen OCI sources,
 independently writable siblings, branchable implementers, authenticated borrowed
 attachments and repeated cold reopening. Package tests launch ordinary Pi from
 the extracted tarball and check that borrowed shutdown leaves ownership with the
-controller. No live provider is used. Abrupt owner death remains a documented
+controller. Barrier-based tests prove overlapping commands and separate streams,
+queued cancellation/deadlines, exclusive lifecycle admission, peer interruption,
+cleanup settlement and Pi-compatible inherited-pipe draining. The ordinary Pi
+package exercises parallel Bash and same-path write/edit queues both directly
+and through nested Code Mode, for owned and borrowed VMs. No live provider is used.
+Abrupt owner death remains a documented
 manual-recovery case, not a tested automatic-cleanup guarantee.
 
 For the compiled managed application, run the following against an extracted
@@ -351,7 +356,8 @@ This fixture exercises RPC conversation replacement, persistent guest processes,
 host-project writeback, unmounted host-file isolation and VMM death on normal
 EOF. It also checks approved host `git_clone` over loopback HTTP followed by
 guest readback, then reuses the full managed MCP/Code Mode smoke suite with
-scripted loopback providers. No live model is called. VM state and project files
+scripted loopback providers, including overlapping ordinary/nested tool calls and
+same-path mutations. No live model is called. VM state and project files
 use short private `/var/tmp` paths; one disposable Pi state directory under the
 invoking account's home lets the existing stdio account-identity checks run
 without changing host account records. The fixture removes its directories on

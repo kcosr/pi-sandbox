@@ -2,6 +2,7 @@ import { randomBytes } from "node:crypto";
 import { access, lstat, mkdtemp, realpath, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { AdmissionQueue } from "../admission.js";
+import { SMOLVM_GUEST_COMMAND } from "../guest-command.js";
 import {
   SandboxExecutionError,
   type SandboxCommandRequest,
@@ -125,7 +126,6 @@ function ociLimits(limits: SmolvmOciFamilyOptions["limits"]) {
     throw fail();
   return resolved;
 }
-const GUEST_COMMAND = String.raw`const{spawn}=require('node:child_process');const r=JSON.parse(Buffer.from(process.argv[1],'base64'));const p=spawn(r.argv[0],r.argv.slice(1),{cwd:r.cwd,env:{PATH:'/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin',HOME:'/root',LANG:'C.UTF-8',...r.environment},stdio:'inherit'});p.on('error',()=>process.exit(126));p.on('exit',(code,signal)=>process.exit(code??(signal?137:126)));`;
 
 async function validateHostOptions(options: SmolvmOciFamilyOptions): Promise<void> {
   validateOciFamilyOptions(options);
@@ -262,6 +262,7 @@ class Family implements SmolvmOciFamily {
   readonly #queue;
   #stopServer?: () => Promise<void>;
   #closing?: Promise<void>;
+  #closed = false;
   #index = 0;
   constructor(
     readonly options: SmolvmOciFamilyOptions,
@@ -348,7 +349,7 @@ class Family implements SmolvmOciFamily {
     this.#stopServer = await serveOciFamily(path.join(this.statePath, "control.sock"), this);
   }
   private async command(argv: readonly [string, ...string[]]): Promise<SandboxCommandResult> {
-    if (this.#closing) throw new SandboxExecutionError("sandbox_closed");
+    if (this.#closed) throw new SandboxExecutionError("sandbox_closed");
     return checkedCommand(this.cli, argv);
   }
   private async assertAlive(): Promise<void> {
@@ -356,7 +357,7 @@ class Family implements SmolvmOciFamily {
   }
   attachment(machineId: string): SmolvmOciAttachment {
     const machine = this.#machines.get(machineId);
-    if (!machine || machine.frozen || this.#closing)
+    if (!machine || machine.frozen || this.#closed)
       throw new SandboxExecutionError("sandbox_closed");
     return {
       version: 1,
@@ -372,20 +373,24 @@ class Family implements SmolvmOciFamily {
     request: SandboxCommandRequest,
     options: SandboxExecutionOptions = {},
   ): Promise<SandboxCommandResult> {
+    this.#queue.assertAvailable(options);
     const parsed = smolvmRequest(request, this.#limits, this.options.cwd);
+    const deadline = performance.now() + parsed.timeoutMs;
     const payload = Buffer.from(
       JSON.stringify({ argv: parsed.argv, cwd: parsed.cwd, environment: parsed.environment }),
     ).toString("base64");
     // Linux also limits a single argv item. Escaped JSON may expand otherwise
     // valid raw arguments; reject before admitting or launching a command.
     if (payload.length > 98304) throw new SandboxExecutionError("sandbox_invalid_request");
-    const release = await this.#queue.acquire(options);
+    const release = await this.#queue.acquire({ ...options, deadline });
     try {
       const machine = this.#machines.get(machineId);
-      if (!machine || machine.frozen || this.#closing)
+      if (!machine || machine.frozen || this.#closed)
         throw new SandboxExecutionError("sandbox_closed");
       await this.assertAlive();
-      if (this.#closing) throw new SandboxExecutionError("sandbox_closed");
+      if (this.#closed) throw new SandboxExecutionError("sandbox_closed");
+      const timeoutMs = Math.ceil(deadline - performance.now());
+      if (timeoutMs <= 0) throw new SandboxExecutionError("sandbox_timeout");
       const result = await this.cli.run(
         {
           argv: [
@@ -397,11 +402,11 @@ class Family implements SmolvmOciFamily {
             "--",
             "/usr/bin/node",
             "-e",
-            GUEST_COMMAND,
+            SMOLVM_GUEST_COMMAND,
             payload,
           ],
           stdin: parsed.stdin,
-          timeoutMs: parsed.timeoutMs,
+          timeoutMs,
           maxOutputBytes: parsed.maxOutputBytes,
         },
         options,
@@ -410,11 +415,20 @@ class Family implements SmolvmOciFamily {
       // A host CLI signal means transport/lifecycle failure, not tool completion.
       if (result.signal !== null) throw new SandboxExecutionError("sandbox_process_failed");
       await this.assertAlive();
+      if (this.#closed) throw new SandboxExecutionError("sandbox_closed");
+      if (options.signal?.aborted) throw new SandboxExecutionError("sandbox_aborted");
+      if (performance.now() >= deadline) throw new SandboxExecutionError("sandbox_timeout");
       return result;
     } catch (error) {
-      if (error instanceof SandboxExecutionError && error.code === "sandbox_closed") throw error;
+      if (
+        error instanceof SandboxExecutionError &&
+        error.code === "sandbox_closed" &&
+        !this.#closed
+      )
+        throw error;
+      const closing = this.close({ retainState: true });
       release();
-      await this.close({ retainState: true });
+      await closing;
       throw error;
     } finally {
       release();
@@ -427,10 +441,10 @@ class Family implements SmolvmOciFamily {
       typeof options.branchable !== "boolean"
     )
       throw fail();
-    const release = await this.#queue.acquire();
+    const release = await this.#queue.acquire({ exclusive: true });
     try {
       const source = this.#machines.get(machineId);
-      if (!source || this.#closing) throw new SandboxExecutionError("sandbox_closed");
+      if (!source || this.#closed) throw new SandboxExecutionError("sandbox_closed");
       if (!source.branchable) throw fail();
       if (this.#machines.size >= 16) throw new SandboxExecutionError("sandbox_invalid_request");
       await this.assertAlive();
@@ -446,31 +460,36 @@ class Family implements SmolvmOciFamily {
         ...(options.branchable ? ["--branchable"] : []),
       ]);
       source.frozen = true;
+      if (this.#closed) throw new SandboxExecutionError("sandbox_closed");
+      const identity = await captureMachineIdentity(this.cli, child);
+      if (this.#closed) throw new SandboxExecutionError("sandbox_closed");
       this.#machines.set(child, {
         frozen: false,
         token: randomBytes(32).toString("hex"),
         parent: machineId,
-        identity: await captureMachineIdentity(this.cli, child),
+        identity,
         branchable: options.branchable,
       });
       return child;
     } catch (error) {
       if (
         error instanceof SandboxExecutionError &&
-        ["sandbox_closed", "sandbox_invalid_request"].includes(error.code)
+        (error.code === "sandbox_invalid_request" ||
+          (error.code === "sandbox_closed" && !this.#closed))
       )
         throw error;
+      const closing = this.close({ retainState: true });
       release();
-      await this.close({ retainState: true });
+      await closing;
       throw error;
     } finally {
       release();
     }
   }
   async removeMachine(machineId: string): Promise<void> {
-    const release = await this.#queue.acquire();
+    const release = await this.#queue.acquire({ exclusive: true });
     try {
-      if (this.#closing) throw new SandboxExecutionError("sandbox_closed");
+      if (this.#closed) throw new SandboxExecutionError("sandbox_closed");
       if (
         machineId === this.sourceId ||
         !this.#machines.has(machineId) ||
@@ -478,28 +497,32 @@ class Family implements SmolvmOciFamily {
       )
         throw new SandboxExecutionError("sandbox_invalid_request");
       await stopMachine(this.cli, machineId, this.#machines.get(machineId)!.identity);
+      if (this.#closed) throw new SandboxExecutionError("sandbox_closed");
       await deleteStoppedMachine(this.cli, machineId);
       this.#machines.delete(machineId);
       await this.assertAlive();
+      if (this.#closed) throw new SandboxExecutionError("sandbox_closed");
     } catch (error) {
       if (error instanceof SandboxExecutionError && error.code === "sandbox_invalid_request")
         throw error;
+      const closing = this.close({ retainState: true });
       release();
-      await this.close({ retainState: true });
+      await closing;
       throw error;
     } finally {
       release();
     }
   }
   async retainForColdReopen(): Promise<SmolvmOciRetainedFamily> {
-    const release = await this.#queue.acquire();
+    const release = await this.#queue.acquire({ exclusive: true });
     try {
-      if (this.#closing || this.#machines.size !== 1 || !this.#machines.get(this.sourceId)?.frozen)
+      if (this.#closed || this.#machines.size !== 1 || !this.#machines.get(this.sourceId)?.frozen)
         throw new SandboxExecutionError("sandbox_invalid_request");
       await this.assertAlive();
+      if (this.#closed) throw new SandboxExecutionError("sandbox_closed");
+      const closing = this.close({ retainState: true });
       release();
-      this.#closing = this.dispose(true);
-      await this.#closing;
+      await closing;
       const descriptor: SmolvmOciRetainedFamily = {
         version: 1,
         mode: "cold",
@@ -519,11 +542,14 @@ class Family implements SmolvmOciFamily {
     }
   }
   close(options: { readonly retainState?: boolean } = {}): Promise<void> {
-    this.#closing ??= this.dispose(options.retainState ?? false);
+    if (!this.#closing) {
+      this.#closed = true;
+      this.#queue.fail(new SandboxExecutionError("sandbox_closed"));
+      this.#closing = this.dispose(options.retainState ?? false);
+    }
     return this.#closing;
   }
   private async dispose(retain: boolean): Promise<void> {
-    this.#queue.fail(new SandboxExecutionError("sandbox_closed"));
     const failures: unknown[] = [];
     // Retire admission first, then stop active CLI calls. A detached VM remains
     // owned by its recorded name until normal shutdown is confirmed.
