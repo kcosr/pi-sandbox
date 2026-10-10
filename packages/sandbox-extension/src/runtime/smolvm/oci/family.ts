@@ -25,11 +25,14 @@ import {
 } from "../lifecycle.js";
 import { serveOciFamily } from "./transport.js";
 import { verifyOciRawDiskCapacity } from "./disk-capacity.js";
+import { TerminalSessions, validateTerminalOptions } from "./terminals.js";
 import type {
   SmolvmOciAttachment,
   SmolvmOciFamily,
   SmolvmOciFamilyOptions,
   SmolvmOciRetainedFamily,
+  SmolvmOciTerminal,
+  SmolvmOciTerminalOptions,
 } from "./types.js";
 import {
   claimColdRecord,
@@ -260,6 +263,7 @@ class Family implements SmolvmOciFamily {
   >();
   readonly #limits;
   readonly #queue;
+  readonly #terminals = new TerminalSessions();
   #stopServer?: () => Promise<void>;
   #closing?: Promise<void>;
   #closed = false;
@@ -434,6 +438,71 @@ class Family implements SmolvmOciFamily {
       release();
     }
   }
+  async openTerminal(
+    machineId: string,
+    options: SmolvmOciTerminalOptions,
+  ): Promise<SmolvmOciTerminal> {
+    validateTerminalOptions(options);
+    options = { ...options };
+    const release = await this.#queue.acquire(options);
+    try {
+      const machine = this.#machines.get(machineId);
+      if (!machine || machine.frozen || this.#closed)
+        throw new SandboxExecutionError("sandbox_closed");
+      try {
+        await this.assertAlive();
+      } catch (error) {
+        // A dead or replaced VM is a family failure, not a scoped terminal failure.
+        const closing = this.close({ retainState: true });
+        release();
+        await closing;
+        throw error;
+      }
+      if (this.#closed) throw new SandboxExecutionError("sandbox_closed");
+      const readyMarker = `\u001b]777;smolvm-terminal-ready;${randomBytes(24).toString("hex")}\u0007`;
+      const terminal = await this.#terminals.open(
+        machineId,
+        {
+          argv: [
+            this.options.smolvmPath,
+            "machine",
+            "exec",
+            "--name",
+            machineId,
+            "--interactive",
+            "--tty",
+            "--workdir",
+            this.options.cwd,
+            "--user",
+            "0",
+            "--env",
+            `TERM=${options.terminalType}`,
+            "--",
+            "/bin/bash",
+            "--noprofile",
+            "--norc",
+            "-c",
+            'printf %s "$1"; exec /bin/bash -i',
+            "terminal",
+            readyMarker,
+          ],
+          cwd: this.statePath,
+          environment: { ...createStateEnvironment(this.statePath), TERM: options.terminalType },
+          columns: options.columns,
+          rows: options.rows,
+          readyMarker,
+        },
+        options,
+      );
+      if (this.#closed) {
+        await terminal.close();
+        throw new SandboxExecutionError("sandbox_closed");
+      }
+      return terminal;
+    } finally {
+      release();
+    }
+  }
   async branch(machineId: string, options: { readonly branchable: boolean }): Promise<string> {
     if (
       !options ||
@@ -447,6 +516,8 @@ class Family implements SmolvmOciFamily {
       if (!source || this.#closed) throw new SandboxExecutionError("sandbox_closed");
       if (!source.branchable) throw fail();
       if (this.#machines.size >= 16) throw new SandboxExecutionError("sandbox_invalid_request");
+      await this.#terminals.waitFor(machineId);
+      if (this.#closed) throw new SandboxExecutionError("sandbox_closed");
       await this.assertAlive();
       const child = `branch-${++this.#index}`;
       await this.command([
@@ -496,6 +567,8 @@ class Family implements SmolvmOciFamily {
         [...this.#machines.values()].some((m) => m.parent === machineId)
       )
         throw new SandboxExecutionError("sandbox_invalid_request");
+      await this.#terminals.waitFor(machineId);
+      if (this.#closed) throw new SandboxExecutionError("sandbox_closed");
       await stopMachine(this.cli, machineId, this.#machines.get(machineId)!.identity);
       if (this.#closed) throw new SandboxExecutionError("sandbox_closed");
       await deleteStoppedMachine(this.cli, machineId);
@@ -516,8 +589,10 @@ class Family implements SmolvmOciFamily {
   async retainForColdReopen(): Promise<SmolvmOciRetainedFamily> {
     const release = await this.#queue.acquire({ exclusive: true });
     try {
-      if (this.#closed || this.#machines.size !== 1 || !this.#machines.get(this.sourceId)?.frozen)
+      if (this.#closed || this.#machines.size !== 1 || !this.#machines.has(this.sourceId))
         throw new SandboxExecutionError("sandbox_invalid_request");
+      await this.#terminals.waitFor();
+      if (this.#closed) throw new SandboxExecutionError("sandbox_closed");
       await this.assertAlive();
       if (this.#closed) throw new SandboxExecutionError("sandbox_closed");
       const closing = this.close({ retainState: true });
@@ -551,6 +626,11 @@ class Family implements SmolvmOciFamily {
   }
   private async dispose(retain: boolean): Promise<void> {
     const failures: unknown[] = [];
+    try {
+      await this.#terminals.closeAll();
+    } catch (cause) {
+      failures.push(cause);
+    }
     // Retire admission first, then stop active CLI calls. A detached VM remains
     // owned by its recorded name until normal shutdown is confirmed.
     try {

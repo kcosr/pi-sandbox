@@ -167,9 +167,10 @@ OCI commands now receive `TMPDIR` explicitly, where it was previously unset.
 independently writable leaf. Use `branchable: true` only for a child that must
 later be branched itself. It incurs additional RAM-backing work. Native Linux
 qcow2 overlays share the immutable source disks. Host mounts are not snapshotted.
-Remove child leaves before their source. A frozen, child-free original source
+Remove child leaves before their source. A child-free original source
 can be retained and explicitly cold-reopened on the same host; cold reopening
-restores disks, not running processes or RAM.
+restores disks, not running processes or RAM. The source may be frozen or writable;
+edits to a reopened original are saved by another clean `retainForColdReopen()`.
 
 A trusted orchestrator writes this private configuration for ordinary Pi:
 
@@ -195,6 +196,42 @@ request leaves other work intact.
 Normal controller close stops machines and removes disposable state. Abrupt
 owner death may require manual recovery using its recorded private environment.
 Evaluator application adoption is a separate milestone.
+
+### Interactive controller terminals
+
+Trusted host applications can call `family.openTerminal(machineId, options)` on
+the writable source or an exact writable child. This is a controller capability,
+not an agent tool or an attachment RPC. It starts a fixed interactive Bash shell
+at the family working directory through the verified smolvm executable.
+
+Supply `terminalType`, `columns`, `rows` and a runtime-specific `launch` callback,
+plus an optional abort signal. The launcher receives the fixed argv, private
+host environment, state-directory cwd, dimensions, a startup marker and a scoped
+signal. It must provide a real host PTY and consume the exact startup marker
+before resolving, then return `completion`, `write`, `resize` and `close`.
+smolvm flushes early input while entering raw mode, so resolving merely when the
+host client spawns can lose the first command. The launcher owns bounded input
+and output backpressure; a rejected launch must already have cleaned up any
+partially started client. The public library does not depend on Bun, a PTY
+package, or a native helper process.
+If startup cleanup cannot be confirmed, the launcher must reject with the
+exported `SmolvmOciTerminalCleanupError`, which preserves that uncertainty for
+later family cleanup instead of treating the rejection as a clean launch failure.
+
+Each of up to 16 sessions per family has its own exec client. Long-lived terminals
+do not consume the four ordinary command slots. `write` resolves when input is
+accepted, `resize` updates the PTY, and `close` stops and reaps only that exec
+client. A normal or failed terminal exit does not automatically retire the VM or
+cancel another terminal. The completion result acknowledges host-client exit,
+not guest descendant cleanup; deliberately detached guest jobs may remain.
+
+Close a machine's terminals before awaiting its branch or removal. Those
+exclusive transitions wait for its terminal leases, while preventing new
+terminal admission. Retention waits for every terminal; family shutdown actively
+closes all of them. Failed terminal cleanup makes subsequent lifecycle work fail
+and retains state for explicit recovery. It never publishes a clean cold receipt
+after an unconfirmed cleanup. Applications should stop terminal admission and
+close their sessions before automatic collection, reviewer removal or shutdown.
 
 ## Programmatic composition
 

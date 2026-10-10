@@ -453,6 +453,14 @@ abort or deadline expiry in that check therefore also retires the boundary, even
 if the guest command has not started.
 An ordinary nonzero exit is a command result and does not trigger retirement.
 
+Trusted orchestrators may separately open interactive OCI terminals. These are
+not model tools and are not exposed through borrowed attachment capabilities.
+Their PTY launcher receives private host state, so it belongs to the trusted
+host application and must use fixed argv and bounded I/O. Closing a terminal
+stops its exec client without retiring the VM. It does not guarantee termination
+of detached guest jobs. Snapshot/removal waits for the affected terminal leases;
+unconfirmed terminal cleanup retains state and prevents a clean cold receipt.
+
 The owner stops its VM during normal shutdown. Abrupt owner
 death can leave the VM running with its original mount grants. Manual smolvm
 cleanup is part of the accepted crash-recovery contract; no independent watcher
