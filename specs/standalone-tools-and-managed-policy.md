@@ -270,10 +270,9 @@ Git-owned structural interfaces. Include all bundled source inputs in Git's
 provenance hash and artifact inventory, not just `packages/git-extension/src`.
 
 Use the existing build toolchain's bundler for the Git entry, externalizing only
-Node built-ins and declared Pi peers. The current package `tsc` configuration
-sets `rootDir` to `src`, so it cannot simply emit cross-package runner source.
-Handle Git declarations separately with temporary repository-root staging or a
-declaration bundle, retaining only a self-contained public declaration graph.
+Node built-ins and declared Pi peers. Handle Git declarations separately with
+temporary repository-root staging, retaining only a self-contained public
+declaration graph. Sandbox keeps its package-local TypeScript output.
 Check all emitted imports rather than trusting workspace resolution. Do not
 rely on class or private-symbol identity across the artifact-local runner copies.
 

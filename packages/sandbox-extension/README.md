@@ -102,7 +102,7 @@ environment, secrets or checkpoint; its SHA-256 is mandatory.
 The public [image preparation guide](https://github.com/kcosr/pi-sandbox/blob/main/docs/smolvm-images.md)
 provides a small recipe and upstream CLI commands.
 
-Use the same version-2 configuration, replacing `backend` with:
+Use the same version-4 configuration, replacing `backend` with:
 
 ```json
 {
