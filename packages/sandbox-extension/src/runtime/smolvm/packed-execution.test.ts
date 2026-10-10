@@ -73,6 +73,7 @@ vi.mock("./cli.js", async (importActual) => {
           const active = { controller, done };
           this.active.add(active);
           try {
+            if (controller.signal.aborted) throw new SandboxExecutionError("sandbox_aborted");
             stdout = mocks.exec
               ? await mocks.exec(
                   {
@@ -255,6 +256,39 @@ suite("packed smolvm parallel controller", () => {
       await rejected;
       await closing;
       expect(mocks.stopped).toBe(1);
+    },
+  );
+
+  it.each(["abort", "timeout"])(
+    "retires an admitted request on %s during its initial identity check before guest execution",
+    async (mode) => {
+      const executor = await fixture();
+      const initialCheck = deferred<void>();
+      const finishCheck = deferred<void>();
+      mocks.alive = () => {
+        initialCheck.resolve();
+        return finishCheck.promise;
+      };
+      const guestExecution = vi.fn(() => Promise.resolve("unexpected guest execution"));
+      mocks.exec = guestExecution;
+      const controller = new AbortController();
+      const execution = executor.execute(
+        { argv: ["/bin/true"], timeoutMs: 10000 },
+        { signal: controller.signal },
+      );
+      const rejected = expect(execution).rejects.toMatchObject({
+        code: mode === "abort" ? "sandbox_aborted" : "sandbox_timeout",
+      });
+      await initialCheck.promise;
+      if (mode === "abort") controller.abort();
+      else vi.spyOn(performance, "now").mockReturnValue(performance.now() + 10001);
+      finishCheck.resolve();
+      await rejected;
+      expect(guestExecution).not.toHaveBeenCalled();
+      expect(mocks.stopped).toBe(1);
+      await expect(executor.execute({ argv: ["/bin/true"] })).rejects.toMatchObject({
+        code: "sandbox_closed",
+      });
     },
   );
 });

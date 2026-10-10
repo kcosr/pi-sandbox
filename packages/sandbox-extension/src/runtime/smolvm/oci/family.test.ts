@@ -32,6 +32,7 @@ const mocks = vi.hoisted(() => ({
     | undefined,
   events: [] as string[],
   stop: undefined as (() => Promise<void>) | undefined,
+  alive: undefined as (() => Promise<void>) | undefined,
 }));
 vi.mock("node:fs/promises", async (importActual) => {
   const actual = await importActual<typeof FsPromises>();
@@ -70,7 +71,9 @@ vi.mock("../lifecycle.js", async (importActual) => {
         executable: "/trusted/smolvm-bin",
         bootConfig: "/state/boot.json",
       }),
-    assertMachineAlive: async () => {},
+    assertMachineAlive: async () => {
+      await mocks.alive?.();
+    },
     stopMachine: async (cli: SmolvmCli, name: string) => {
       mocks.events.push(`stop:${name}`);
       await mocks.stop?.();
@@ -149,6 +152,7 @@ vi.mock("../cli.js", async (importOriginal) => {
           const active = { controller, done };
           this.active.add(active);
           try {
+            if (controller.signal.aborted) throw new SandboxExecutionError("sandbox_aborted");
             const guest = JSON.parse(
               Buffer.from(argv.at(-1)!, "base64").toString(),
             ) as SandboxCommandRequest;
@@ -185,6 +189,7 @@ vi.mock("../cli.js", async (importOriginal) => {
 });
 const dirs: string[] = [];
 afterEach(async () => {
+  vi.restoreAllMocks();
   mocks.failClose = false;
   mocks.execSignal = null;
   mocks.startFailure = undefined;
@@ -195,6 +200,7 @@ afterEach(async () => {
   mocks.exec = undefined;
   mocks.events = [];
   mocks.stop = undefined;
+  mocks.alive = undefined;
   vi.unstubAllEnvs();
   for (const dir of dirs.splice(0)) await rm(dir, { recursive: true, force: true });
 });
@@ -223,6 +229,40 @@ function deferred<T>() {
   return { promise, resolve };
 }
 suite("OCI family controller policy with a simulated CLI", () => {
+  it.each(["abort", "timeout"])(
+    "retires the family on %s during an admitted request's initial identity check before guest execution",
+    async (mode) => {
+      const family = await fixture();
+      const initialCheck = deferred<void>();
+      const finishCheck = deferred<void>();
+      mocks.alive = () => {
+        initialCheck.resolve();
+        return finishCheck.promise;
+      };
+      const guestExecution = vi.fn(() => Promise.resolve("unexpected guest execution"));
+      mocks.exec = guestExecution;
+      const controller = new AbortController();
+      const execution = family.execute(
+        family.sourceId,
+        { argv: ["/bin/true"], timeoutMs: 10000 },
+        { signal: controller.signal },
+      );
+      const rejected = expect(execution).rejects.toMatchObject({
+        code: mode === "abort" ? "sandbox_aborted" : "sandbox_timeout",
+      });
+      await initialCheck.promise;
+      if (mode === "abort") controller.abort();
+      else vi.spyOn(performance, "now").mockReturnValue(performance.now() + 10001);
+      finishCheck.resolve();
+      await rejected;
+      expect(guestExecution).not.toHaveBeenCalled();
+      expect(mocks.events).toEqual(["stop:candidate"]);
+      expect(() => family.attachment(family.sourceId)).toThrow();
+      await expect(family.execute(family.sourceId, { argv: ["/bin/true"] })).rejects.toMatchObject({
+        code: "sandbox_closed",
+      });
+    },
+  );
   it("runs four requests concurrently and isolates queued cancellation", async () => {
     const family = await fixture();
     const started: string[] = [];

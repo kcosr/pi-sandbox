@@ -448,6 +448,9 @@ can overlap across borrowed attachments. Queue cancellation and queue timeout
 affect only the queued request. Active cancellation, timeout, output overflow or
 execution infrastructure failure closes admission and retires the whole owned VM
 or family, including peers and background services; it does not restart silently.
+Admission marks a call active, including its pre-launch VM identity check. An
+abort or deadline expiry in that check therefore also retires the boundary, even
+if the guest command has not started.
 An ordinary nonzero exit is a command result and does not trigger retirement.
 
 The owner stops its VM during normal shutdown. Abrupt owner

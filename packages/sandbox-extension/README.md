@@ -163,6 +163,10 @@ templates requires host `resize2fs` from e2fsprogs in a system directory
 PATH. Prepared plain packs already contain sized templates and do not require
 this host shrink step.
 
+Owned and OCI guest commands use the same fixed environment defaults, including
+`HOME=/root` and `TMPDIR=/tmp`; scoped environment cannot override those names.
+OCI commands now receive `TMPDIR` explicitly, where it was previously unset.
+
 `family.branch(id, { branchable: false })` freezes the source and makes a cheap,
 independently writable leaf. Use `branchable: true` only for a child that must
 later be branched itself. It incurs additional RAM-backing work. Native Linux
