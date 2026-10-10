@@ -17,8 +17,8 @@
 
 ### Changed
 
-- Clarify source-only installation, backend selection, and reusable extension documentation.
-- Add an explicit required Linux smolvm release lane covering managed, standalone, OCI, and interactive terminal checks.
+- Clarify source-only installation, backend selection, and reusable extension documentation. ([#23](https://github.com/kcosr/pi-sandbox/pull/23))
+- Add an explicit required Linux smolvm release lane covering managed, standalone, OCI, and interactive terminal checks. ([#23](https://github.com/kcosr/pi-sandbox/pull/23))
 
 ### Fixed
 
