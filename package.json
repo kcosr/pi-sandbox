@@ -1,6 +1,6 @@
 {
   "name": "pi-sandbox",
-  "version": "0.6.0",
+  "version": "0.7.0",
   "private": true,
   "license": "MIT",
   "type": "module",
@@ -34,7 +34,9 @@
     "verify:release": "node scripts/verify-release.mjs",
     "test:extension": "node scripts/test/sandbox-extension-package.mjs && node scripts/test/git-extension-package.mjs",
     "test:version": "node --test scripts/test/version.mjs",
-    "build:extensions": "node scripts/build-extensions.mjs"
+    "build:extensions": "node scripts/build-extensions.mjs",
+    "verify:release:smolvm": "node scripts/verify-release.mjs --require-smolvm",
+    "test:release-preflight": "node --test scripts/test/release-preflight.mjs"
   },
   "dependencies": {
     "@iarna/toml": "2.2.5"

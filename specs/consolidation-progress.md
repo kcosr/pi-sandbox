@@ -1,5 +1,10 @@
 # Pi Sandbox consolidation milestones
 
+> Historical checkpoint, recorded 2026-10-10 before the extraction and smolvm
+> pull requests were merged. Status words and test counts below describe that
+> checkpoint, not current delivery. See [the changelog](../CHANGELOG.md) and
+> [maintained documentation](../README.md#documentation) for current behavior.
+
 Implementation starts from merged PR #15, commit
 `16f20912a1ce45d54aea19b80b83fd549f523252`, including Pi 1.1.0, local networking
 and configurable process lifetime. The earlier design and implementation map

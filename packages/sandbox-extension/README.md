@@ -195,7 +195,6 @@ execution failure retires the entire family. Cancelling a queued attachment
 request leaves other work intact.
 Normal controller close stops machines and removes disposable state. Abrupt
 owner death may require manual recovery using its recorded private environment.
-Evaluator application adoption is a separate milestone.
 
 ### Interactive controller terminals
 

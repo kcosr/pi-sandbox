@@ -31,7 +31,30 @@ Pi Sandbox is designed for interactive use with an attentive user. Its boundary
 governs operations routed through `pi-sandbox` and complements the account and
 server controls that govern other software run by the logged-in user.
 
+## Execution backends and reusable extensions
+
+| Backend              | Supported hosts                | Tool filesystem                                                           | Tool networking                               |
+| -------------------- | ------------------------------ | ------------------------------------------------------------------------- | --------------------------------------------- |
+| Bubblewrap (default) | Linux x86-64 / arm64           | Host read-only, selected launch directory writable, optional masks        | None, private loopback, or host               |
+| smolvm (optional)    | Linux x86-64 with KVM          | Disposable Linux guest plus the launch directory mounted at its host path | Offline; guest-local sockets remain available |
+| Direct (explicit)    | Linux and macOS x86-64 / arm64 | Ordinary host access                                                      | Host                                          |
+
+The managed smolvm backend uses an administrator-selected, digest-pinned plain
+`.smolmachine` tools image and a build-selected smolvm distribution. It does not
+import an arbitrary OCI workload or treat a project's Smolfile as policy.
+See [image preparation](docs/smolvm-images.md) and
+[smolvm configuration](docs/configuration.md#smolvm-image-and-runtime-selection).
+
+Ordinary Pi can load the same [sandbox tools](packages/sandbox-extension/README.md)
+or the independent [Git extension](packages/git-extension/README.md). These
+standard extensions do not impose the managed application's permission policy.
+The sandbox package also exposes an OCI family controller for trusted host
+applications; that separate API supports guest-owned workspaces and branching.
+
 ## Isolation at a glance
+
+This diagram shows the default Bubblewrap mode. The backend table above describes
+the other execution boundaries.
 
 ```mermaid
 flowchart LR
@@ -106,7 +129,7 @@ detailed guarantees and trust assumptions.
 
 ## Distribution and operation
 
-The release contains a precompiled Bun application built from an exactly pinned,
+A locally built deployment archive contains a precompiled Bun application built from an exactly pinned,
 minimally patched Pi release, the separately maintained Pi Sandbox extension,
 and the extension manifests selected by its distribution manifest.
 Linux packages also include a small static Rust identity broker that is
@@ -116,13 +139,28 @@ inactive unless configured:
 pi-sandbox
   -> managed Pi
      -> forced Pi Sandbox extension and approval policy
-     -> selected Bubblewrap worker or direct executor
-        -> one bounded direct-argv child per tool or shell operation
+     -> selected Bubblewrap worker, smolvm guest, or direct executor
+        -> bounded tool operations with backend-specific lifecycle
 ```
 
 Installed hosts need supported Linux or macOS plus the platform prerequisites
 listed in the installation guide. A system or bundled Bubblewrap provider is
 required only for Linux Bubblewrap mode.
+
+GitHub releases contain source and release notes, without uploaded binaries.
+Build a deployment archive from a source checkout first. Install the documented
+[build prerequisites](docs/installation.md#building-a-release), including Node 24
+and Rust/Cargo 1.85+ for Linux, then run:
+
+```sh
+env -u NODE_ENV npm ci
+env -u NODE_ENV npm run verify:release
+```
+
+This verifies and builds the default distribution. Release maintainers must also
+complete the [required smolvm release lane](docs/testing.md#required-linux-smolvm-release-lane).
+The archive is written under `release/`. Extract it on the target host, review
+its packaged policy, and run these commands **from its extracted directory**:
 
 ```sh
 sudo ./install.sh
@@ -139,8 +177,8 @@ A normal upgrade preserves the compiled configuration directory. Use
 only when intentionally deploying the configuration packaged with a release.
 See [installation and operation](docs/installation.md).
 
-Pi Sandbox has its own release version. A tagged `0.6.0` build using Pi `1.1.0`
-shows `1.1.0+ps.0.6.0` in `pi-sandbox --version` and the TUI header. Development
+Pi Sandbox has its own release version. A tagged `0.7.0` build using Pi `1.1.0`
+shows `1.1.0+ps.0.7.0` in `pi-sandbox --version` and the TUI header. Development
 builds add source identity. See [versions and releases](docs/releases.md) for
 the independent version numbers and source-only GitHub release process.
 
@@ -204,6 +242,9 @@ These subject documents collectively describe the current product behavior.
 - [User and group environment and overrides](docs/identity-broker.md)
 - [Installation and operation](docs/installation.md)
 - [Versions and releases](docs/releases.md)
+- [smolvm image preparation](docs/smolvm-images.md)
+- [Standalone sandbox extension and OCI controller](packages/sandbox-extension/README.md)
+- [Standalone Git extension](packages/git-extension/README.md)
 - [Security model](docs/security.md)
 - [Testing](docs/testing.md)
 - [Pi integration and upgrade contract](specs/pi-integration.md)

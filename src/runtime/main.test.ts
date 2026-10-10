@@ -5,6 +5,7 @@ import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { parseSandboxArguments } from "./config-arguments.js";
+import { DISPLAY_VERSION } from "../version.js";
 
 import { InMemoryCredentialStore } from "@earendil-works/pi-ai";
 import { SandboxExecutionError } from "../../packages/sandbox-extension/src/runtime/contracts.js";
@@ -111,7 +112,7 @@ describe("administrative configuration", () => {
           allowConfigOverride: false,
         }),
       );
-      expect(write).toHaveBeenCalledWith("1.1.0+ps.0.6.0.dev.source\n");
+      expect(write).toHaveBeenCalledWith(`${DISPLAY_VERSION}\n`);
       expect(cwd).not.toHaveBeenCalled();
     } finally {
       cwd.mockRestore();

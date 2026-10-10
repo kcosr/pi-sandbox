@@ -1251,6 +1251,18 @@
                     </td>
                   </tr>
                   <tr>
+                    <td>smolvm<br /><small>Linux x86-64 / KVM</small></td>
+                    <td>The same built-ins in a disposable Linux guest</td>
+                    <td>
+                      Only the launch project is mounted at its host path. The trusted tools image
+                      and runtime are pinned; external guest networking is disabled.
+                    </td>
+                    <td>
+                      Managed tool policies, approvals, fixed request mapping and limits. Normal
+                      shutdown stops the VM; owner crashes may require manual cleanup.
+                    </td>
+                  </tr>
+                  <tr>
                     <td>Direct<br /><small>Linux / macOS</small></td>
                     <td>The same built-ins when containment is not selected</td>
                     <td>
@@ -1266,8 +1278,8 @@
                     <td>Managed host tool</td>
                     <td>Small typed exceptions such as <code>git_clone</code></td>
                     <td>
-                      Runs outside Bubblewrap as the invoking user because it needs host identity or
-                      network access.
+                      Runs outside the selected sandbox as the invoking user because it needs host
+                      identity or network access.
                     </td>
                     <td>
                       Fixed executable, bounded structured arguments, extension-specific validation,
@@ -1288,7 +1300,7 @@
           </div>
           <footer class="slide-footer">
             <span>Execution boundaries</span
-            ><span>No fallback from Bubblewrap to direct execution</span>
+            ><span>No fallback from a sandbox to direct execution</span>
           </footer>
         </section>
 

@@ -3,14 +3,14 @@
 Pi Sandbox uses its own semantic version, independent of the pinned Pi release
 and the reusable extension packages:
 
-| Component                  | Version source                              | Current version |
-| -------------------------- | ------------------------------------------- | --------------- |
-| Pi Sandbox product         | Root `package.json` and `package-lock.json` | `0.6.0`         |
-| Upstream Pi                | `pi-source.lock.json`                       | `1.1.0`         |
-| Reusable sandbox extension | `packages/sandbox-extension/package.json`   | `0.3.0`         |
-| Reusable Git extension     | `packages/git-extension/package.json`       | `0.1.0`         |
+| Component                  | Authoritative version source                |
+| -------------------------- | ------------------------------------------- |
+| Pi Sandbox product         | Root `package.json` and `package-lock.json` |
+| Upstream Pi                | `pi-source.lock.json`                       |
+| Reusable sandbox extension | `packages/sandbox-extension/package.json`   |
+| Reusable Git extension     | `packages/git-extension/package.json`       |
 
-Product tags use `v<product-version>`, for example `v0.6.0`. During the `0.x`
+Product tags use `v<product-version>`, for example `v0.7.0`. During the `0.x`
 series, new features and breaking changes increment the minor version; fixes
 increment the patch version. Document configuration changes and required
 administrator action in `CHANGELOG.md`. An upstream upgrade does not make the
@@ -24,13 +24,13 @@ application versions:
 
 | Build                                            | Example display                     |
 | ------------------------------------------------ | ----------------------------------- |
-| Clean checkout at the matching product tag       | `1.1.0+ps.0.6.0`                    |
-| Untagged Git checkout                            | `1.1.0+ps.0.6.0.dev.gabcdef0`       |
-| Modified Git checkout                            | `1.1.0+ps.0.6.0.dev.gabcdef0.dirty` |
-| Source execution or a build without Git metadata | `1.1.0+ps.0.6.0.dev.source`         |
+| Clean checkout at the matching product tag       | `1.1.0+ps.0.7.0`                    |
+| Untagged Git checkout                            | `1.1.0+ps.0.7.0.dev.gabcdef0`       |
+| Modified Git checkout                            | `1.1.0+ps.0.7.0.dev.gabcdef0.dirty` |
+| Source execution or a build without Git metadata | `1.1.0+ps.0.7.0.dev.source`         |
 
-Only a clean checkout at `v0.6.0` produces the release display for product
-version `0.6.0`. Build identity is embedded at build time; launching the
+Only a clean checkout at `v0.7.0` produces the release display for product
+version `0.7.0`. Build identity is embedded at build time; launching the
 application does not query Git. The combined value is a display identifier,
 not the product's release number. Use the product version and tag for release
 ordering; SemVer build metadata does not affect precedence.
@@ -50,7 +50,10 @@ omitting empty sections. Put required administrator actions first under
    the completed `CHANGELOG.md` entries from `Unreleased` into a dated section
    for that version, retaining PR links and noting configuration changes.
    Leave an `Unreleased` section for subsequent work.
-2. Complete the applicable checks in [testing](testing.md), review the change,
+2. Complete the applicable checks in [testing](testing.md), including the
+   [required Linux smolvm lane](testing.md#required-linux-smolvm-release-lane)
+   for a release that includes smolvm. Record the exact source commit, runtime
+   version, image digests and check outcomes. Review the change,
    and merge the release changes. Create the matching product tag on the final
    merged commit, then push that tag.
 3. Publish a GitHub release for that tag using the changelog section as its

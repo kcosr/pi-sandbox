@@ -52,6 +52,54 @@ packaged executable diagnostic checks as distinct observable steps. A supported 
 host must execute the Bubblewrap suites rather than accepting a skip caused by
 unavailable namespaces.
 
+### Required Linux smolvm release lane
+
+A source release that includes smolvm must also pass this lane on Linux x86-64
+with usable KVM. Ordinary development commands may skip unavailable VM tests;
+this command may not. Provide the complete pinned smolvm distribution, a
+prepared plain tools pack, an OCI tools archive, their verified SHA-256 values,
+and Bun 1.3.14 or newer on `PATH`. `PI_SANDBOX_TEST_BUN` can additionally select
+the Bun used for the native terminal fixture. See [image preparation](smolvm-images.md).
+
+Create a review distribution manifest outside the source tree, starting from
+`config/default/distribution.toml`. Make its `extension_manifests` entry an
+absolute path to this checkout's
+`src/managed-extensions/git-clone/pi-sandbox-extension.json`, set
+`allow_config_override = true`, and add:
+
+```toml
+[platforms.linux.smolvm]
+path = "/opt/smolvm-1.25.4/smolvm"
+version = "1.25.4"
+```
+
+Then run, using the same runtime path in both places:
+
+```sh
+PI_SANDBOX_SMOLVM_BIN=/opt/smolvm-1.25.4/smolvm \
+PI_SANDBOX_SMOLVM_IMAGE=/absolute/path/tools.smolmachine \
+PI_SANDBOX_SMOLVM_IMAGE_SHA256=REPLACE_WITH_VERIFIED_PLAIN_IMAGE_SHA256 \
+PI_SANDBOX_SMOLVM_OCI_IMAGE=/absolute/path/tools.tar \
+PI_SANDBOX_SMOLVM_OCI_SHA256=REPLACE_WITH_VERIFIED_OCI_IMAGE_SHA256 \
+env -u NODE_ENV npm run verify:release:smolvm -- \
+  --distribution /absolute/path/review-distribution.toml \
+  --out /absolute/path/review-artifacts
+```
+
+The preflight rejects missing inputs, unsupported hosts, inaccessible KVM,
+invalid digest syntax, or a distribution that would skip managed VM acceptance.
+The existing native tests verify the runtime inventory and actual image digests.
+This lane runs the full verifier with `PI_SANDBOX_REQUIRE_SMOLVM=1`: owned tools,
+OCI families, real interactive PTYs, extracted standalone packages, and the
+compiled managed smolvm/Git/MCP/Code Mode fixture all run rather than skip.
+All model responses come from offline fixtures.
+
+Record the final source commit, runtime version, both image digests and test
+outcomes with the release review. Keep this override-enabled review archive
+separate from deployment archives, whose managed configuration remains locked.
+Do not publish review artifacts as the production distribution. The source-only
+GitHub release requires no uploaded application archive.
+
 Linux real-Bubblewrap tests also require Python 3 for offline socket-family and
 namespace probes. This is a test-host dependency, not an application runtime
 dependency.

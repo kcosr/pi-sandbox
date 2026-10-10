@@ -31,8 +31,8 @@ pre-1.0 API or launch compatibility paths.
 ## Product boundary
 
 The managed application's `--version` output and TUI header display the pinned
-Pi version followed by the product identity, for example `1.1.0+ps.0.6.0` for
-a clean checkout at product tag `v0.6.0`. Untagged Git builds append
+Pi version followed by the product identity, for example `1.1.0+ps.0.7.0` for
+a clean checkout at product tag `v0.7.0`. Untagged Git builds append
 `.dev.g<short-sha>` and modified builds append `.dirty`; source execution or
 application builds without Git metadata use `.dev.source`. The full release
 builder requires Git metadata for source provenance. Compute and embed Git
