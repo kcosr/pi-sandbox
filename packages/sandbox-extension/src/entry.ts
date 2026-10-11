@@ -3,6 +3,7 @@ import { realpath } from "node:fs/promises";
 import { fileURLToPath } from "node:url";
 import { isWithin } from "./runtime/smolvm/options.js";
 import { attachSmolvmOciMachine } from "./runtime/smolvm/oci/transport.js";
+import { packagedDarwinProcessQuery } from "./runtime/smolvm/darwin-query.js";
 import type {
   ExtensionAPI,
   ExtensionContext,
@@ -53,6 +54,10 @@ async function createExecutor(
       imageSha256: backend.imageSha256,
       stateDirectory: backend.stateDirectory,
       resources: backend.resources,
+      ...(backend.e2fsprogsDirectory ? { e2fsprogsDirectory: backend.e2fsprogsDirectory } : {}),
+      ...(process.platform === "darwin"
+        ? { darwinProcessQuery: await packagedDarwinProcessQuery() }
+        : {}),
     });
   const runtime = await realpath(backend.runtime);
   const version = execFileSync(runtime, ["--version"], {

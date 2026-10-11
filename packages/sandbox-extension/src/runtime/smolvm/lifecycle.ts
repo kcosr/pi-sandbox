@@ -3,12 +3,14 @@ import path from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
 import { SandboxExecutionError, type SandboxCommandResult } from "../contracts.js";
 import type { SmolvmCli } from "./cli.js";
+import { queryDarwinProcess, type DarwinProcessQuery } from "./darwin-query.js";
 
 export interface MachineIdentity {
   readonly pid: number;
   readonly start: string;
   readonly executable: string;
   readonly bootConfig: string;
+  readonly darwinProcessQuery?: DarwinProcessQuery;
 }
 
 export interface MachineRecord {
@@ -60,7 +62,15 @@ export async function listMachines(cli: SmolvmCli): Promise<readonly MachineReco
 /** Read one stable process generation, including when it is no longer our VMM. */
 async function processSnapshot(
   pid: number,
-): Promise<{ readonly start: string; readonly argv: readonly string[] } | undefined> {
+  query?: DarwinProcessQuery,
+): Promise<
+  | { readonly start: string; readonly argv: readonly string[]; readonly executable?: string }
+  | undefined
+> {
+  if (query) {
+    const observed = await queryDarwinProcess(query, pid);
+    return observed ? { ...observed, argv: [...observed.argv, ""] } : undefined;
+  }
   try {
     const stat = await readFile(`/proc/${pid}/stat`, "utf8");
     const fields = stat.slice(stat.lastIndexOf(")") + 2).split(" ");
@@ -85,28 +95,39 @@ async function processSnapshot(
 }
 
 /** Capturing or using a current VMM requires its complete expected argv shape. */
-async function processIdentity(pid: number): Promise<MachineIdentity | undefined> {
-  const snapshot = await processSnapshot(pid);
+async function processIdentity(
+  pid: number,
+  query?: DarwinProcessQuery,
+): Promise<MachineIdentity | undefined> {
+  const snapshot = await processSnapshot(pid, query);
   if (!snapshot) return undefined;
   const { argv, start } = snapshot;
   if (
     argv.length !== 4 ||
     argv[1] !== "_boot-vm" ||
     !path.isAbsolute(argv[2] ?? "") ||
-    argv[3] !== ""
+    argv[3] !== "" ||
+    (query !== undefined && snapshot.executable !== argv[0])
   )
     throw fail("smolvm_process_identity_invalid");
-  return { pid, start, executable: argv[0]!, bootConfig: argv[2]! };
+  return {
+    pid,
+    start,
+    executable: argv[0]!,
+    bootConfig: argv[2]!,
+    ...(query ? { darwinProcessQuery: query } : {}),
+  };
 }
 
 /** Cleanup asks whether the original VMM remains, not whether its PID is occupied. */
 async function originalProcessAlive(identity: MachineIdentity): Promise<boolean> {
-  const snapshot = await processSnapshot(identity.pid);
+  const snapshot = await processSnapshot(identity.pid, identity.darwinProcessQuery);
   return (
     snapshot !== undefined &&
     snapshot.start === identity.start &&
     snapshot.argv.length === 4 &&
     snapshot.argv[0] === identity.executable &&
+    (!identity.darwinProcessQuery || snapshot.executable === identity.executable) &&
     snapshot.argv[1] === "_boot-vm" &&
     snapshot.argv[2] === identity.bootConfig &&
     snapshot.argv[3] === ""
@@ -117,7 +138,10 @@ function assertOwnedIdentity(cli: SmolvmCli, identity: MachineIdentity): void {
   // Pinned Linux smolvm self_exe_for_spawn deliberately execs /proc/self/exe.
   // The verified CLI launch and its private boot-config path bind the runtime.
   if (
-    identity.executable !== "/proc/self/exe" ||
+    identity.executable !==
+      (cli.darwinProcessQuery
+        ? path.join(path.dirname(cli.smolvmPath), "smolvm-bin")
+        : "/proc/self/exe") ||
     !identity.bootConfig.startsWith(`${cli.stateDirectory}/`) ||
     path.normalize(identity.bootConfig) !== identity.bootConfig
   )
@@ -140,7 +164,7 @@ export async function captureMachineIdentity(
   const record = (await listMachines(cli)).find((r) => r.name === name);
   if (!record || record.pid === null || !["running", "frozen"].includes(record.state))
     throw fail("smolvm_machine_not_running");
-  const identity = await processIdentity(record.pid);
+  const identity = await processIdentity(record.pid, cli.darwinProcessQuery);
   if (!identity) throw fail("smolvm_process_identity_invalid");
   assertOwnedIdentity(cli, identity);
   await assertMachineAlive(identity);
@@ -148,7 +172,7 @@ export async function captureMachineIdentity(
 }
 
 export async function assertMachineAlive(identity: MachineIdentity): Promise<void> {
-  const current = await processIdentity(identity.pid);
+  const current = await processIdentity(identity.pid, identity.darwinProcessQuery);
   if (!current || !sameIdentity(current, identity)) throw fail("smolvm_machine_identity_changed");
 }
 
@@ -166,7 +190,7 @@ export async function stopMachine(
   }
   let captured = identity;
   if (record.pid !== null) {
-    const current = await processIdentity(record.pid);
+    const current = await processIdentity(record.pid, cli.darwinProcessQuery);
     if (captured && current && !sameIdentity(current, captured))
       throw fail("smolvm_machine_identity_changed");
     if (!captured && current) {

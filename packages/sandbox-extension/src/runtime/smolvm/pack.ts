@@ -3,6 +3,7 @@ import { constants } from "node:fs";
 import { open } from "node:fs/promises";
 import type { SmolvmResources } from "./options.js";
 import { fileSha256, SMOLVM_VERSION } from "./runtime-release.js";
+import { smolvmReleaseForPlatform } from "./release-pin.js";
 
 function object(value: unknown): value is Record<string, unknown> {
   return !!value && typeof value === "object" && !Array.isArray(value);
@@ -15,6 +16,7 @@ export async function validateSmolvmPack(
   image: string,
   sha256: string,
   resources: SmolvmResources,
+  platform = smolvmReleaseForPlatform(process.platform, process.arch),
 ): Promise<void> {
   if ((await fileSha256(image)) !== sha256) throw new Error("smolvm_image_digest_mismatch");
   const file = await open(image, constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK);
@@ -70,8 +72,8 @@ export async function validateSmolvmPack(
       !object(m) ||
       Object.keys(m).some((key) => !allowed.includes(key)) ||
       m.mode !== "vm" ||
-      m.platform !== "linux/amd64" ||
-      m.host_platform !== "linux/amd64" ||
+      m.platform !== platform.guestPlatform ||
+      m.host_platform !== platform.platform ||
       m.smolvm_version !== SMOLVM_VERSION ||
       m.network !== false ||
       m.gpu !== false ||

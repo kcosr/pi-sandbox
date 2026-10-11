@@ -1,5 +1,5 @@
 import { randomBytes } from "node:crypto";
-import { access, lstat, mkdtemp, realpath, writeFile } from "node:fs/promises";
+import { lstat, mkdtemp, realpath, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { AdmissionQueue } from "../admission.js";
 import { SMOLVM_GUEST_COMMAND } from "../guest-command.js";
@@ -14,6 +14,8 @@ import { SmolvmCli, createStateEnvironment } from "../cli.js";
 import { hostControlPaths } from "../host-control-paths.js";
 import { removeStoppedPrivateState } from "../private-state.js";
 import { SMOLVM_VERSION, verifySmolvmRuntime } from "../runtime-release.js";
+import { validateHostTools, verifyHostTools } from "../host-tools.js";
+import { assertNoSmolvmLayerAttachments, verifySmolvmCapability } from "../platform.js";
 import {
   assertMachineAlive,
   captureMachineIdentity,
@@ -67,10 +69,13 @@ export function validateOciFamilyOptions(value: SmolvmOciFamilyOptions): void {
           "mounts",
           "resources",
           "limits",
+          "e2fsprogsDirectory",
+          "darwinProcessQuery",
         ].includes(k),
     )
   )
     throw fail();
+  validateHostTools(value);
   for (const p of [value.smolvmPath, value.imageArchive, value.stateDirectory, value.cwd])
     assertGuestPath(p);
   if (!/^[a-f0-9]{64}$/u.test(value.imageSha256) || !["none", "host"].includes(value.networkMode))
@@ -130,25 +135,23 @@ function ociLimits(limits: SmolvmOciFamilyOptions["limits"]) {
   return resolved;
 }
 
-async function validateHostOptions(options: SmolvmOciFamilyOptions): Promise<void> {
+async function validateHostOptions(options: SmolvmOciFamilyOptions): Promise<string | undefined> {
   validateOciFamilyOptions(options);
-  if (process.platform !== "linux" || process.arch !== "x64")
-    throw new Error("smolvm_oci_requires_linux_x64");
   await Promise.all([
     canonical(options.smolvmPath, false),
     canonical(options.imageArchive, false),
     canonical(options.stateDirectory, true),
-    access("/dev/kvm", 6),
+    verifySmolvmCapability(),
   ]);
   const stateStat = await lstat(options.stateDirectory);
   if (stateStat.uid !== process.getuid?.() || (stateStat.mode & 0o077) !== 0)
     throw new Error("smolvm_oci_state_directory_not_private");
-  if (Buffer.byteLength(options.stateDirectory) > 48)
+  if (Buffer.byteLength(options.stateDirectory) > (process.platform === "darwin" ? 32 : 48))
     throw new Error("smolvm_oci_state_path_too_long");
   const protectedPaths = [
     options.stateDirectory,
     options.imageArchive,
-    options.smolvmPath,
+    path.dirname(options.smolvmPath),
     ...(await hostControlPaths()),
   ];
   for (const mount of options.mounts ?? []) {
@@ -158,21 +161,26 @@ async function validateHostOptions(options: SmolvmOciFamilyOptions): Promise<voi
   }
   if ((await fileDigest(options.imageArchive)) !== options.imageSha256)
     throw new Error("smolvm_oci_image_digest_mismatch");
+  return verifyHostTools(
+    options,
+    (options.mounts ?? []).map((m) => m.hostPath),
+  );
 }
 export async function createSmolvmOciFamily(
   options: SmolvmOciFamilyOptions,
 ): Promise<SmolvmOciFamily> {
   options = structuredClone(options);
-  await validateHostOptions(options);
+  const hostToolsIdentity = await validateHostOptions(options);
   const runtimeFingerprint = await verifySmolvmRuntime(options.smolvmPath);
   const mountFingerprint = await mountIdentities(options);
   const state = await mkdtemp(path.join(options.stateDirectory, "family-"));
   const family = new Family(
     options,
     state,
-    new SmolvmCli({ smolvmPath: options.smolvmPath, stateDirectory: state }),
+    new SmolvmCli({ ...options, stateDirectory: state }),
     runtimeFingerprint,
     mountFingerprint,
+    hostToolsIdentity,
   );
   try {
     await family.start();
@@ -207,17 +215,18 @@ export async function reopenSmolvmOciFamily(input: {
   const stateStat = await lstat(input.statePath);
   if (stateStat.uid !== process.getuid?.() || stateStat.mode & 0o077) throw fail();
   const record = await readColdRecord(input.statePath);
-  await validateHostOptions(record.options);
+  const hostToolsIdentity = await validateHostOptions(record.options);
   if (
     path.dirname(input.statePath) !== record.options.stateDirectory ||
     record.cwd !== record.options.cwd ||
     record.imageSha256 !== record.options.imageSha256 ||
+    hostToolsIdentity !== record.hostToolsIdentity ||
     (await verifySmolvmRuntime(record.options.smolvmPath)) !== record.runtimeIdentity ||
     JSON.stringify(await mountIdentities(record.options)) !== JSON.stringify(record.mountIdentities)
   )
     throw new Error("smolvm_oci_cold_binding_changed");
   const cli = new SmolvmCli({
-    smolvmPath: record.options.smolvmPath,
+    ...record.options,
     stateDirectory: input.statePath,
   });
   try {
@@ -240,6 +249,7 @@ export async function reopenSmolvmOciFamily(input: {
     cli,
     record.runtimeIdentity,
     record.mountIdentities,
+    hostToolsIdentity,
   );
   try {
     await family.start(true);
@@ -274,6 +284,7 @@ class Family implements SmolvmOciFamily {
     readonly cli: SmolvmCli,
     readonly runtimeFingerprint: string,
     readonly mountFingerprint: readonly { dev: number; ino: number }[],
+    readonly hostToolsIdentity?: string,
   ) {
     this.#limits = ociLimits(options.limits);
     this.#queue = new AdmissionQueue();
@@ -287,7 +298,7 @@ class Family implements SmolvmOciFamily {
         runtime: this.options.smolvmPath,
         runtimeVersion: SMOLVM_VERSION,
         runtimeIdentity: this.runtimeFingerprint,
-        environment: createStateEnvironment(this.statePath),
+        environment: createStateEnvironment(this.statePath, this.options.e2fsprogsDirectory),
         inspect: ["machine", "ls", "--json"],
         cleanup:
           "Stop and delete child leaves before their frozen parents; retain state until every VM is confirmed stopped.",
@@ -487,7 +498,10 @@ class Family implements SmolvmOciFamily {
             readyMarker,
           ],
           cwd: this.statePath,
-          environment: { ...createStateEnvironment(this.statePath), TERM: options.terminalType },
+          environment: {
+            ...createStateEnvironment(this.statePath, this.options.e2fsprogsDirectory),
+            TERM: options.terminalType,
+          },
           columns: options.columns,
           rows: options.rows,
           readyMarker,
@@ -610,6 +624,7 @@ class Family implements SmolvmOciFamily {
         options: this.options,
         runtimeIdentity: this.runtimeFingerprint,
         mountIdentities: this.mountFingerprint,
+        ...(this.hostToolsIdentity ? { hostToolsIdentity: this.hostToolsIdentity } : {}),
       });
       return descriptor;
     } finally {
@@ -651,6 +666,7 @@ class Family implements SmolvmOciFamily {
         if (leaf.name !== this.sourceId || !retain) await deleteStoppedMachine(this.cli, leaf.name);
         remaining.delete(leaf.name);
       }
+      await assertNoSmolvmLayerAttachments(this.statePath);
     } catch (cause) {
       failures.push(cause);
     }

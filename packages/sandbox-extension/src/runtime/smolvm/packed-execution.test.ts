@@ -1,3 +1,11 @@
+vi.mock("./platform.js", () => ({
+  verifySmolvmCapability: async () => {},
+  assertNoSmolvmLayerAttachments: async () => {},
+}));
+vi.mock("./host-tools.js", () => ({
+  validateHostTools: () => {},
+  verifyHostTools: () => Promise.resolve(undefined),
+}));
 import type * as FsPromises from "node:fs/promises";
 import type * as Cli from "./cli.js";
 import { mkdir, mkdtemp, realpath, rm, writeFile } from "node:fs/promises";
@@ -125,7 +133,7 @@ afterEach(async () => {
     await rm(directory, { recursive: true, force: true });
 });
 async function fixture() {
-  const directory = await mkdtemp("/var/tmp/smol-exec-");
+  const directory = await realpath(await mkdtemp("/tmp/pt-"));
   directories.push(directory);
   const cwd = path.join(directory, "project");
   const stateDirectory = path.join(directory, "state");
@@ -143,7 +151,7 @@ async function fixture() {
   });
 }
 
-const suite = process.platform === "linux" && process.arch === "x64" ? describe : describe.skip;
+const suite = describe;
 suite("packed smolvm parallel controller", () => {
   it("keeps four independent executions active while a queued deadline only removes its request", async () => {
     const executor = await fixture();

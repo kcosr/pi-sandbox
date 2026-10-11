@@ -1,5 +1,15 @@
+import { nativeSmolvmHostTools } from "../fixtures/smolvm-native-host.js";
 import { createServer } from "node:net";
-import { mkdtemp, mkdir, readFile, rm, writeFile, readdir, symlink } from "node:fs/promises";
+import {
+  mkdtemp,
+  realpath,
+  mkdir,
+  readFile,
+  rm,
+  writeFile,
+  readdir,
+  symlink,
+} from "node:fs/promises";
 import path from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
 import { describe, expect, it } from "vitest";
@@ -10,9 +20,15 @@ const runtime = process.env.PI_SANDBOX_SMOLVM_BIN;
 const image = process.env.PI_SANDBOX_SMOLVM_IMAGE;
 const digest = process.env.PI_SANDBOX_SMOLVM_IMAGE_SHA256;
 const enabled =
-  process.platform === "linux" && process.arch === "x64" && !!runtime && !!image && !!digest;
+  ((process.platform === "linux" && process.arch === "x64") ||
+    (process.platform === "darwin" && process.arch === "arm64")) &&
+  !!runtime &&
+  !!image &&
+  !!digest;
 if (process.env.PI_SANDBOX_REQUIRE_SMOLVM === "1" && !enabled)
-  throw new Error("Required smolvm packed tests need Linux x64 and explicit runtime/image/SHA256");
+  throw new Error(
+    "Required smolvm packed tests need a supported host and explicit runtime/image/SHA256",
+  );
 
 async function waitFor(check: () => boolean) {
   const deadline = Date.now() + 20000;
@@ -26,13 +42,14 @@ async function fixture(
   action: (vm: SandboxExecutor, cwd: string, root: string) => Promise<void>,
   writable = true,
 ) {
-  const root = await mkdtemp("/var/tmp/psvm-");
+  const root = await realpath(await mkdtemp("/tmp/psvm-"));
   const cwd = path.join(root, "project");
   const state = path.join(root, "state");
   await mkdir(cwd);
   await mkdir(state, { mode: 0o700 });
   await writeFile(path.join(root, "host-only"), "host secret fixture");
   const vm = await createSmolvmExecutor({
+    ...(await nativeSmolvmHostTools()),
     cwd,
     cwdWritable: writable,
     stateDirectory: state,
@@ -124,7 +141,7 @@ describe.skipIf(!enabled)("native packed smolvm", () => {
     });
   }, 180000);
   it("rejects a project containing host control state through a directory alias", async () => {
-    const root = await mkdtemp("/var/tmp/psalias-");
+    const root = await realpath(await mkdtemp("/tmp/psa-"));
     const cwd = path.join(root, "project");
     const state = path.join(root, "state");
     const alias = path.join(root, "agent-state");
@@ -137,6 +154,7 @@ describe.skipIf(!enabled)("native packed smolvm", () => {
       process.env.PI_CODING_AGENT_DIR = alias;
       await expect(
         createSmolvmExecutor({
+          ...(await nativeSmolvmHostTools()),
           cwd,
           stateDirectory: state,
           smolvmPath: runtime!,

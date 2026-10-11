@@ -9,11 +9,15 @@ import {
 } from "../contracts.js";
 import { createHostCommandExecutor, HostCommandExecutionError } from "../host-command/index.js";
 import { assertGuestPath, smolvmEnvironment } from "./request.js";
+import type { DarwinProcessQuery } from "./darwin-query.js";
 
-export function createStateEnvironment(stateDirectory: string): Record<string, string> {
+export function createStateEnvironment(
+  stateDirectory: string,
+  e2fsprogsDirectory?: string,
+): Record<string, string> {
   assertGuestPath(stateDirectory);
   const environment: Record<string, string> = {
-    PATH: "/usr/bin:/bin:/usr/sbin:/sbin",
+    PATH: "/usr/bin:/bin:/usr/sbin:/sbin" + (e2fsprogsDirectory ? `:${e2fsprogsDirectory}` : ""),
     LANG: "C.UTF-8",
   };
   for (const [name, directory] of Object.entries({
@@ -38,18 +42,22 @@ export class SmolvmCli {
   #disposed = false;
   readonly smolvmPath: string;
   readonly stateDirectory: string;
+  readonly darwinProcessQuery: DarwinProcessQuery | undefined;
 
   constructor(options: {
     readonly smolvmPath: string;
     readonly stateDirectory: string;
     readonly environment?: Readonly<Record<string, string>>;
+    readonly e2fsprogsDirectory?: string;
+    readonly darwinProcessQuery?: DarwinProcessQuery;
   }) {
     assertGuestPath(options.smolvmPath);
     this.smolvmPath = options.smolvmPath;
     this.stateDirectory = options.stateDirectory;
+    this.darwinProcessQuery = options.darwinProcessQuery;
     this.#environment = {
       ...smolvmEnvironment(options.environment),
-      ...createStateEnvironment(options.stateDirectory),
+      ...createStateEnvironment(options.stateDirectory, options.e2fsprogsDirectory),
     };
     this.#ready = this.prepare();
     // Construction is synchronous; preserve preparation failure for run().

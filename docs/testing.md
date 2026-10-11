@@ -401,10 +401,26 @@ layer. Measure the final OCI machine's actual requested disks independently.
 Run its eight portable preparation controls with Python 3.14:
 `python3 scripts/test/inspect-smolvm-pack.test.py`.
 
-These probes are preparation evidence, not extension/application acceptance.
-Darwin backend gates remain closed pending shared runtime integration and native
-Node/Bun tests for execution, binary I/O, admission, cancellation, shutdown,
-retention and attachment-scoped terminals. No crash-cleanup guarantee follows.
+These development probes supplement required native acceptance. Build extensions
+on the Mac first. Supply `PI_SANDBOX_REQUIRE_SMOLVM=1`, `PI_SANDBOX_SMOLVM_BIN`,
+`PI_SANDBOX_SMOLVM_IMAGE`, `PI_SANDBOX_SMOLVM_IMAGE_SHA256`,
+`PI_SANDBOX_SMOLVM_OCI_IMAGE`, `PI_SANDBOX_SMOLVM_OCI_SHA256`, and an explicit
+`PI_SANDBOX_E2FSPROGS_DIRECTORY` when using isolated disk tools. Native fixtures
+obtain the query only from the built package, never a runtime compiler. Run the
+plain `tests/integration/smolvm-executor.test.ts` and OCI `oci.native.test.ts`
+suites under Node 24 and Bun. The latter uses Ubuntu arm64 on Darwin and retains
+its Rocky/x86-64 checks on Linux; Darwin raw branch capacities and isolation are
+checked without treating shared APFS block counts as unique allocation.
+
+Run `tests/fixtures/oci-terminal-native.ts` with Bun for its eight PTY controls.
+`node scripts/test/sandbox-extension-package.mjs` inspects and exercises the
+packed extension with ordinary Pi; on Darwin it requires explicit VM fixtures and
+runs owned and borrowed modes under Node and `PI_SANDBOX_TEST_BUN`. Local scripted
+providers exercise parallel tools without a live model call. Run
+`scripts/test/smolvm-owner-recovery.mjs` under each runtime for owner PID/group
+SIGKILL, observed VMM survival and explicit stock CLI recovery with confirmed
+writer/process death. None of these tests establishes crash-proof cleanup.
+Managed application and evaluator acceptance remain separate milestones.
 
 Managed unit checks cover schema 11 image/resource validation, fixed VM lifetime,
 identity backend transitions, refusal of identity image overrides, VM-aware

@@ -1,6 +1,7 @@
+import { nativeSmolvmHostTools, nativeHostProcessAlive } from "./smolvm-native-host.js";
 // Bun-only trusted PTY fixture. The public controller remains runtime-neutral.
 import { strict as assert } from "node:assert";
-import { mkdtemp, readFile, readdir, rm } from "node:fs/promises";
+import { mkdtemp, realpath, readFile, readdir, rm } from "node:fs/promises";
 import path from "node:path";
 import {
   createSmolvmOciFamily,
@@ -29,7 +30,7 @@ declare const Bun: {
   };
 };
 
-const state = await mkdtemp("/var/tmp/oci-term-");
+const state = await realpath(await mkdtemp("/tmp/oci-term-"));
 let family: SmolvmOciFamily | undefined;
 const checks: string[] = [];
 let safeToRemove = false;
@@ -162,6 +163,7 @@ async function pids(directory: string): Promise<number[]> {
 }
 try {
   family = await createSmolvmOciFamily({
+    ...(await nativeSmolvmHostTools()),
     smolvmPath: process.env.PI_SANDBOX_SMOLVM_BIN!,
     imageArchive: process.env.PI_SANDBOX_SMOLVM_OCI_IMAGE!,
     imageSha256: process.env.PI_SANDBOX_SMOLVM_OCI_SHA256!,
@@ -259,13 +261,7 @@ try {
   await family.close();
   await terminal.completion;
   for (const pid of [final.pid(), ...vmPids]) {
-    let exists = true;
-    try {
-      const stat = await readFile(`/proc/${pid}/stat`, "utf8");
-      exists = !/[)] [ZX] /.test(stat);
-    } catch {
-      exists = false;
-    }
+    const exists = await nativeHostProcessAlive(pid);
     assert(!exists, `fixture pid ${pid} survived close`);
   }
   safeToRemove = true;

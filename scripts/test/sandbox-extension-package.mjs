@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { Buffer } from "node:buffer";
 import { execFileSync, spawn } from "node:child_process";
 import { createHash } from "node:crypto";
-import { mkdtemp, mkdir, readFile, readdir, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, mkdir, readFile, readdir, realpath, rm, writeFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { setTimeout as delay } from "node:timers/promises";
@@ -13,7 +13,7 @@ const root = dirname(dirname(dirname(fileURLToPath(import.meta.url))));
 execFileSync(process.execPath, [join(root, "scripts/build-extensions.mjs")], {
   stdio: "inherit",
 });
-const temp = await mkdtemp("/var/tmp/pie-");
+const temp = await realpath(await mkdtemp("/tmp/pie-"));
 const children = new Set();
 const vmStates = [];
 const families = [];
@@ -21,16 +21,51 @@ try {
   const artifacts = await installExtensionArtifacts(root, temp, ["sandbox-extension"]);
   const packed = artifacts["sandbox-extension"];
   const archive = packed.archive;
-  if (process.platform !== "linux")
-    throw new Error("This package acceptance requires Linux Bubblewrap");
-  const runtimes = [process.execPath, execFileSync("which", ["bun"], { encoding: "utf8" }).trim()];
-  const cases = runtimes.map((runtime) => ({ kind: "bubblewrap", runtime }));
+  if (process.platform !== "linux" && !(process.platform === "darwin" && process.arch === "arm64"))
+    throw new Error("This package acceptance requires Linux or Darwin arm64");
+  const runtimes = [
+    process.execPath,
+    process.env.PI_SANDBOX_TEST_BUN ?? execFileSync("which", ["bun"], { encoding: "utf8" }).trim(),
+  ];
+  const cases =
+    process.platform === "linux"
+      ? runtimes.map((runtime) => ({ kind: "bubblewrap", runtime }))
+      : [];
+  const vmHosts = process.platform === "darwin" ? runtimes : [process.execPath];
+  const diskTools = process.env.PI_SANDBOX_E2FSPROGS_DIRECTORY
+    ? { e2fsprogsDirectory: process.env.PI_SANDBOX_E2FSPROGS_DIRECTORY }
+    : {};
+  let nativeTools = diskTools;
+  if (process.platform === "darwin") {
+    const directory = join(packed.directory, "dist/runtime/smolvm/native/darwin-arm64");
+    const metadata = JSON.parse(await readFile(join(directory, "provenance.json"), "utf8"));
+    const file = join(directory, "process-query");
+    assert.equal(
+      createHash("sha256")
+        .update(await readFile(file))
+        .digest("hex"),
+      metadata.sha256,
+    );
+    assert.equal(
+      createHash("sha256")
+        .update(await readFile(join(directory, "process-query.c")))
+        .digest("hex"),
+      metadata.sourceSha256,
+    );
+    nativeTools = { ...diskTools, darwinProcessQuery: { path: file, sha256: metadata.sha256 } };
+  }
   if (
     process.env.PI_SANDBOX_SMOLVM_BIN &&
     process.env.PI_SANDBOX_SMOLVM_IMAGE &&
     process.env.PI_SANDBOX_SMOLVM_IMAGE_SHA256
   )
-    cases.push({ kind: "smolvm", runtime: process.env.PI_SANDBOX_SMOLVM_BIN });
+    cases.push(
+      ...vmHosts.map((hostRuntime) => ({
+        kind: "smolvm",
+        runtime: process.env.PI_SANDBOX_SMOLVM_BIN,
+        hostRuntime,
+      })),
+    );
   else if (process.env.PI_SANDBOX_REQUIRE_SMOLVM === "1")
     throw new Error("Required package VM fixture needs runtime, image and digest");
   if (
@@ -38,9 +73,16 @@ try {
     process.env.PI_SANDBOX_SMOLVM_OCI_IMAGE &&
     process.env.PI_SANDBOX_SMOLVM_OCI_SHA256
   )
-    cases.push({ kind: "attached", runtime: process.env.PI_SANDBOX_SMOLVM_BIN });
+    cases.push(
+      ...vmHosts.map((hostRuntime) => ({
+        kind: "attached",
+        runtime: process.env.PI_SANDBOX_SMOLVM_BIN,
+        hostRuntime,
+      })),
+    );
   else if (process.env.PI_SANDBOX_REQUIRE_SMOLVM === "1")
     throw new Error("Required package attachment fixture needs OCI image and digest");
+  if (!cases.length) throw new Error("Darwin package acceptance requires explicit smolvm fixtures");
   const { createSmolvmOciFamily } = await import(
     pathToFileURL(join(packed.directory, "dist/controller.js")).href
   );
@@ -57,6 +99,7 @@ try {
     let family;
     if (selected.kind === "attached") {
       family = await createSmolvmOciFamily({
+        ...nativeTools,
         smolvmPath: runtime,
         imageArchive: process.env.PI_SANDBOX_SMOLVM_OCI_IMAGE,
         imageSha256: process.env.PI_SANDBOX_SMOLVM_OCI_SHA256,
@@ -75,6 +118,7 @@ try {
             image: process.env.PI_SANDBOX_SMOLVM_IMAGE,
             imageSha256: process.env.PI_SANDBOX_SMOLVM_IMAGE_SHA256,
             stateDirectory,
+            ...diskTools,
             resources: { cpus: 1, memoryMiB: 512, storageGiB: 1, overlayGiB: 1 },
             cwdWritable: true,
             environment: {},
@@ -102,7 +146,7 @@ try {
     );
     const launch = (args = []) =>
       spawn(
-        process.execPath,
+        selected.hostRuntime ?? process.execPath,
         [
           join(root, "node_modules/@earendil-works/pi-coding-agent/dist/cli.js"),
           "--mode",

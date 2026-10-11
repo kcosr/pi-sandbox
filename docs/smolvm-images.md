@@ -179,8 +179,8 @@ and cannot request smaller capacities in our backend.
 ## Darwin arm64 preparation checkpoint
 
 Image preparation is also qualified with stock 1.26.1 on an arm64 Mac with
-Hypervisor.framework available and macOS 26 or newer. This does not yet enable
-Darwin smolvm in the extension or managed application. Use the official Darwin
+Hypervisor.framework available and macOS 26 or newer. The reusable extension supports these images with a Mac-built package; managed
+application enablement is qualified separately. Use the official Darwin
 arm64 archive, SHA-256
 `3aee6c92aa0552754159494c2f073d5f99cf1c2a12ecc022a08976bd8a1fc5bb`, and verify its
 complete contents. The bundled firmware library sets the macOS 26 minimum.

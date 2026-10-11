@@ -1,4 +1,4 @@
-/* Development probe, not a runtime dependency. Build with the Apple SDK.
+/* Short-lived read-only process query. Precompile with the Apple SDK.
  * One same-user PID in, one bounded JSON observation out. No signals, child
  * processes, persistent state, environment output, or process supervision.
  * Byte strings are hexadecimal so argv boundaries and arbitrary bytes survive.
@@ -63,8 +63,8 @@ int main(int argc, char **argv) {
   if (found == 0) return absent();
   if (found < 0) return fail("bsdinfo_before");
 
-  unsigned char executable[PROC_PIDPATHINFO_MAXSIZE];
-  unsigned char final_executable[PROC_PIDPATHINFO_MAXSIZE];
+  unsigned char executable[PROC_PIDPATHINFO_MAXSIZE] = {0};
+  unsigned char final_executable[PROC_PIDPATHINFO_MAXSIZE] = {0};
   int executable_size = proc_pidpath(pid, executable, sizeof(executable));
   if (executable_size <= 0) return fail("path_before");
   size_t executable_length = strnlen((char *)executable, sizeof(executable));
@@ -96,6 +96,15 @@ int main(int argc, char **argv) {
     if (cursor == size) { free(buffer); return fail("argv_termination"); }
     lengths[i] = cursor - offsets[i];
     cursor++;
+  }
+  /* Only observe our full-path launches. KERN_PROCARGS2's padding before argv
+   * cannot distinguish an empty argv[0]; do not reinterpret following bytes
+   * as an owned command when its first argument is missing or rewritten. */
+  if (lengths[0] != executable_length ||
+      memcmp(buffer + offsets[0], executable, executable_length)) {
+    free(buffer);
+    errno = EINVAL;
+    return fail("argv0_path");
   }
   /* No bytes after argc strings (the environment) are emitted. */
   int final_size = proc_pidpath(pid, final_executable, sizeof(final_executable));

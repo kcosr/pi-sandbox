@@ -8,6 +8,8 @@
 
 ### Changed
 
+- Support Darwin arm64 smolvm in the reusable extension and OCI controller with a packaged read-only process query and explicit isolated disk tools.
+
 - Update the reusable sandbox extension to 0.4.1 with the verified smolvm 1.26.1 runtime inventory. ([#24](https://github.com/kcosr/pi-sandbox/pull/24))
 
 ## 0.7.0 - 2026-10-10

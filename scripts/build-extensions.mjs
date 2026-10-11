@@ -5,6 +5,7 @@ import { dirname, join, relative, resolve } from "node:path";
 import { tmpdir } from "node:os";
 import { fileURLToPath } from "node:url";
 import { build } from "esbuild";
+import { buildSmolvmProcessQuery, processQuerySource } from "./build/smolvm-process-query.mjs";
 
 const root = dirname(dirname(fileURLToPath(import.meta.url)));
 for (const name of ["sandbox-extension", "git-extension"]) {
@@ -59,6 +60,10 @@ for (const name of ["sandbox-extension", "git-extension"]) {
       [join(root, "node_modules/typescript/bin/tsc"), "-p", join(pkg, "tsconfig.build.json")],
       { stdio: "inherit" },
     );
+    sourceFiles.add(processQuerySource);
+    sourceFiles.add(join(root, "scripts/build/smolvm-process-query.mjs"));
+    if (process.platform === "darwin")
+      await buildSmolvmProcessQuery(join(pkg, "dist/runtime/smolvm/native/darwin-arm64"));
   }
   await cp(join(root, "LICENSE"), join(pkg, "LICENSE"));
   const digest = createHash("sha256");

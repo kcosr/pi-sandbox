@@ -1,6 +1,7 @@
 import path from "node:path";
 import { SandboxExecutionError, type SandboxResourceLimits } from "../contracts.js";
 import { resolveSmolvmLimits, smolvmEnvironment } from "./request.js";
+import { validateHostTools, type SmolvmHostTools } from "./host-tools.js";
 
 export interface SmolvmResources {
   readonly cpus: number;
@@ -8,7 +9,7 @@ export interface SmolvmResources {
   readonly storageGiB: number;
   readonly overlayGiB: number;
 }
-export interface CreateSmolvmExecutorOptions {
+export interface CreateSmolvmExecutorOptions extends SmolvmHostTools {
   readonly cwd: string;
   readonly cwdWritable?: boolean;
   readonly environment?: Readonly<Record<string, string>>;
@@ -67,10 +68,13 @@ export function validateSmolvmOptions(options: CreateSmolvmExecutorOptions): voi
             "imageSha256",
             "stateDirectory",
             "resources",
+            "e2fsprogsDirectory",
+            "darwinProcessQuery",
           ].includes(key),
       )
     )
       throw new Error("smolvm_options_invalid");
+    validateHostTools(options);
     for (const value of [
       options.cwd,
       options.smolvmPath,
@@ -87,9 +91,13 @@ export function validateSmolvmOptions(options: CreateSmolvmExecutorOptions): voi
     if (options.cwdWritable !== undefined && typeof options.cwdWritable !== "boolean")
       throw new Error("smolvm_writable_invalid");
     if (
-      [options.imagePath, path.dirname(options.smolvmPath), options.stateDirectory].some(
-        (value) => isWithin(options.cwd, value) || isWithin(value, options.cwd),
-      )
+      [
+        options.imagePath,
+        path.dirname(options.smolvmPath),
+        options.stateDirectory,
+        ...(options.e2fsprogsDirectory ? [options.e2fsprogsDirectory] : []),
+        ...(options.darwinProcessQuery ? [options.darwinProcessQuery.path] : []),
+      ].some((value) => isWithin(options.cwd, value) || isWithin(value, options.cwd))
     )
       throw new Error("smolvm_trusted_storage_overlaps_workspace");
     validateSmolvmResources(options.resources);

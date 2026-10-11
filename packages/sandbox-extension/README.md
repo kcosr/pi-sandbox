@@ -91,11 +91,16 @@ For explicit host execution, replace `backend` with:
 Direct mode keeps the existing platform-specific command prerequisites and
 command-scoped cleanup.
 
-## Linux smolvm
+## smolvm
 
-smolvm **1.26.1** is supported on Linux x86-64 with `/dev/kvm`. Install the complete
+smolvm **1.26.1** is supported on Linux x86-64 with `/dev/kvm` and Darwin arm64
+with macOS 26+ and Hypervisor.framework available. Install the complete
 official distribution outside the project. The package verifies its pinned
 executable, library and guest-rootfs inventory before launching anything.
+Darwin requires a Mac-built extension package containing the fixed adjacent
+`dist/runtime/smolvm/native/darwin-arm64/process-query` helper, its C source and
+SHA-256 provenance. Ordinary Pi resolves this read-only, short-lived helper
+automatically; it never compiles code at runtime. Linux ignores the helper.
 Provision a trusted plain Linux tools pack separately with the required GNU
 commands and Node. The image must be offline, without an imported workload,
 environment, secrets or checkpoint; its SHA-256 is mandatory.
@@ -118,7 +123,9 @@ Use the same version-4 configuration, replacing `backend` with:
 ```
 
 Create `stateDirectory` as an owned private directory (0700). Its canonical path
-must be at most 48 bytes because smolvm uses Unix sockets. Keep runtime, image,
+must be at most 48 bytes on Linux or 32 bytes on Darwin because smolvm uses Unix
+sockets. On Darwin use a short canonical directory under `/private/tmp`, created
+explicitly rather than deriving it from ambient HOME or TMPDIR. Keep runtime, image,
 configuration and state outside the project. The host project is mounted at the
 same absolute path, writable unless `cwdWritable` is false. Project edits persist;
 the disposable guest root does not. Other host directories are not projected into
@@ -143,6 +150,10 @@ runtime path and private HOME/XDG environment. Use those values with
 `smolvm machine ls --json`, then `machine stop --name workspace` and
 `machine delete --name workspace --force`. An unconfirmed stop preserves state;
 do not remove state before the VM is stopped.
+On Darwin a crashed VM can leave a stopped record with a stale PID. This is still
+an unconfirmed automatic cleanup: verify process death and scoped layer attachments
+before explicit stock CLI recovery. No PID-only or second-resolution process check
+is used to declare successful cleanup.
 Stock Pi can still exit successfully after reporting an extension cleanup error;
 inspect that error and the retained state instead of relying only on its exit code.
 
@@ -158,6 +169,11 @@ templates requires host `resize2fs` from e2fsprogs in a system directory
 (`/usr/bin`, `/bin`, `/usr/sbin` or `/sbin`). The launcher clears the inherited
 PATH. Prepared plain packs already contain sized templates and do not require
 this host shrink step.
+For isolated tooling, owned configuration and controller options accept
+`e2fsprogsDirectory`, a canonical directory containing executable `resize2fs` and
+`e2fsck`. Only that directory is appended to the fixed PATH. A conflicting tool in
+upstream's higher-priority installation directories is rejected. Actual tool targets
+and hashes are protected from mounts and bound into retained-family identity.
 
 Owned and OCI guest commands use the same fixed environment defaults, including
 `HOME=/root` and `TMPDIR=/tmp`; scoped environment cannot override those names.
@@ -166,7 +182,9 @@ OCI commands now receive `TMPDIR` explicitly, where it was previously unset.
 `family.branch(id, { branchable: false })` freezes the source and makes a cheap,
 independently writable leaf. Use `branchable: true` only for a child that must
 later be branched itself. It incurs additional RAM-backing work. Native Linux
-qcow2 overlays share the immutable source disks. Host mounts are not snapshotted.
+qcow2 overlays share the immutable source disks; Darwin uses upstream APFS raw disk
+clones. Per-file allocated-block counts on APFS do not measure unique physical use.
+Host mounts are not snapshotted.
 Remove child leaves before their source. A child-free original source
 can be retained and explicitly cold-reopened on the same host; cold reopening
 restores disks, not running processes or RAM. The source may be frozen or writable;

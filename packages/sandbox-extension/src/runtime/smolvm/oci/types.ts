@@ -5,9 +5,10 @@ import type {
   SandboxResourceLimits,
   SandboxExecutor,
 } from "../../contracts.js";
+import type { SmolvmHostTools } from "../host-tools.js";
 
 /** Trusted controller configuration; never supplied by a tool call. */
-export interface SmolvmOciFamilyOptions {
+export interface SmolvmOciFamilyOptions extends SmolvmHostTools {
   readonly smolvmPath: string;
   /** Pinned `docker save` archive, provisioned before evaluation. */
   readonly imageArchive: string;

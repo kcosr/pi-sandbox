@@ -1,3 +1,11 @@
+vi.mock("../platform.js", () => ({
+  verifySmolvmCapability: async () => {},
+  assertNoSmolvmLayerAttachments: async () => {},
+}));
+vi.mock("../host-tools.js", () => ({
+  validateHostTools: () => {},
+  verifyHostTools: () => Promise.resolve(undefined),
+}));
 import type * as FsPromises from "node:fs/promises";
 import type * as Lifecycle from "../lifecycle.js";
 import type * as Cli from "../cli.js";
@@ -210,7 +218,7 @@ afterEach(async () => {
   for (const dir of dirs.splice(0)) await rm(dir, { recursive: true, force: true });
 });
 async function fixture(patch: Partial<SmolvmOciFamilyOptions> = {}) {
-  const dir = await mkdtemp("/var/tmp/oci-policy-");
+  const dir = await realpath(await mkdtemp("/tmp/pt-"));
   dirs.push(dir);
   const image = path.join(dir, "image.tar");
   await writeFile(image, "fixture");
@@ -225,7 +233,7 @@ async function fixture(patch: Partial<SmolvmOciFamilyOptions> = {}) {
     ...patch,
   });
 }
-const suite = process.platform === "linux" && process.arch === "x64" ? describe : describe.skip;
+const suite = describe;
 function deferred<T>() {
   let resolve!: (value: T) => void;
   const promise = new Promise<T>((done) => {
@@ -667,7 +675,7 @@ suite("OCI family controller policy with a simulated CLI", () => {
     }
   });
   it("rejects a read-only mount exposing custom Pi state through an alias", async () => {
-    const directory = await mkdtemp("/var/tmp/oci-control-");
+    const directory = await realpath(await mkdtemp("/tmp/pt-"));
     dirs.push(directory);
     const control = path.join(directory, "actual");
     const alias = path.join(directory, "alias");

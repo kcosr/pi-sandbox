@@ -544,46 +544,53 @@ administrative edits made after cold reopening persist on the next cold boot.
 Terminal-client cleanup failure preserves forensic state and prevents publishing
 a clean cold receipt. Terminal exit does not prove all guest descendants exited.
 
-### Darwin extension preparation
+### Darwin reusable extension
 
-Darwin arm64 is currently a development target, not an enabled smolvm backend.
-The native preparation probes use stock 1.26.1 and the same normal-stop/manual
-crash-recovery contract. Managed application build and configuration gates remain
-unchanged. The proposed implementation keeps Linux's process observation intact.
+The reusable extension and OCI controller support Darwin arm64 with stock 1.26.1
+under the same normal-stop/manual crash-recovery contract. Managed application
+build and configuration enablement is a separate integration milestone. Linux
+process observation and its release archive hash remain unchanged.
 
-The smallest verified Darwin observation route is a short-lived, read-only native
-query shared by Node and Bun. `proc_pidinfo(PROC_PIDTBSDINFO)` supplies both seconds
-and microseconds of process creation; `proc_pidpath` and `KERN_PROCARGS2` supply
-the executable and individual argv bytes. The probe samples identity and executable
-again before emitting a result, excludes environment bytes, and treats permission,
-partial-read and generation-race failures as uncertainty. A stopped process is
-still alive. A missing process or zombie cannot keep the original VMM alive.
-PID-only identity and human-readable, second-resolution `ps` timestamps are
-insufficient. No resident observer, signal sender or process supervisor is added.
+A short-lived, read-only native query shared by Node and Bun uses
+`proc_pidinfo(PROC_PIDTBSDINFO)` for creation seconds and microseconds,
+`proc_pidpath` for the executable and `KERN_PROCARGS2` for individual argv bytes.
+It samples generation and executable again before emitting a bounded result,
+excludes environment bytes and treats permission, partial-read, timeout and race
+failures as uncertainty. Identity uses `darwin:<seconds>:<microseconds>`.
+Stopped processes remain live; missing processes and zombies do not. No resident
+observer or signal sender is added. A crashed VMM may leave an upstream stopped
+record with a stale PID; automatic cleanup retains state and explicit stock CLI
+recovery remains necessary. Before recursive state removal or cold retention,
+Darwin also checks for disk-image attachments scoped to that private state.
 
-Two shared-option additions are proposed for review before runtime wiring:
+Shared executor and OCI options accept:
 
-- `e2fsprogsDirectory?: string`: one canonical trusted directory, appended to
-  the cleared launcher PATH. Validate executable `resize2fs` and `e2fsck`, resolve
-  and hash their actual targets, protect those paths from guest-writable shares,
-  and bind their identities into cold retention. Omission keeps existing Linux
-  behavior. Upstream searches fixed installation prefixes before PATH; when an
-  explicit directory is supplied, reject any different higher-priority selection
-  rather than claiming the supplied tools would be used.
+- `e2fsprogsDirectory?: string`: a canonical trusted directory appended to the
+  cleared PATH. Validate executable `resize2fs` and `e2fsck`, resolve and hash actual
+  targets, reject overlaps with host shares and bind identity into cold retention.
+  Omission preserves Linux behavior. Upstream searches fixed prefixes before PATH;
+  an explicit directory conflicting with a higher-priority selection is rejected.
 - `darwinProcessQuery?: { path: string; sha256: string }`: trusted embedding
-  metadata required on Darwin and rejected on Linux. The standard package would
-  supply its fixed adjacent precompiled query and build-recorded hash; this is
-  not a model command or an ordinary Pi configuration field. Verify canonical
-  placement, artifact identity and absence of guest write access. Cold identity
-  includes the helper. Build/package its source and provenance without a runtime
-  compiler or Python dependency. The current development C probe is not yet a
-  shipped helper or an implemented public option.
+  metadata required at the Darwin factory and rejected by other platforms. The
+  ordinary package supplies its fixed adjacent helper and build-recorded hash.
+  This field is not accepted in ordinary Pi configuration or model input. Verify
+  canonical placement, executable artifact identity and no overlapping share.
+  Cold retention includes helper identity. The factory never compiles code.
 
-The Darwin release must have its own complete verified distribution inventory
-and archive fingerprint. The official 1.26.1 arm64 `libkrunfw.5.dylib` declares
-macOS 26.0 minimum, despite the main executable's 11.0 deployment target; admission
-must enforce the dependency's minimum. Keep canonical short private HOME and XDG
-directories: Darwin smolvm also writes under HOME/Library. Plain packs pair
-`linux/arm64` guests with `darwin/arm64` host assets. Imported authority checks,
-actual disk-capacity admission, queues, borrowed attachment limits and terminal
-ownership retain their existing contracts.
+`npm run build:extensions` on a Darwin arm64 build host uses
+`scripts/build/smolvm-process-query.mjs` to compile the C source into
+`dist/runtime/smolvm/native/darwin-arm64/process-query`, alongside source and
+`provenance.json` with protocol, architecture and source/binary SHA-256 values.
+Generated binaries stay out of tracked source. Linux can consume this same package
+without invoking its Darwin helper. A package built only on Linux cannot supply a
+Darwin helper implicitly. Compiled managed consumers inject explicit fixed metadata.
+
+Darwin pins its complete official distribution inventory and archive digest.
+`smolvmReleaseForPlatform(platform, architecture)` selects an explicit build target;
+`SMOLVM_RELEASE_SHA256` remains the Linux hash. The pinned firmware requires macOS
+26.0 even though the main executable targets 11.0. Capability preflight checks the
+actual OS and Hypervisor.framework availability. Darwin private state parents are
+canonical, owner-private and limited to 32 path bytes; HOME/Library and XDG paths
+all stay underneath fresh private state. Plain packs require Linux/arm64 guest and
+Darwin/arm64 host assets. Imported authority, actual disk capacity, admission,
+binary streams, borrowed attachments and terminal ownership retain their contracts.

@@ -34,8 +34,9 @@ function observe(pid) {
     }),
   );
 }
-async function createTarget(args = []) {
+async function createTarget(args = [], argv0) {
   const child = spawn(target, args, {
+    ...(argv0 === undefined ? {} : { argv0 }),
     env: { ...environment, QUERY_ENV_CANARY: "must-never-appear-in-query-output" },
     stdio: ["ignore", "pipe", "pipe"],
   });
@@ -49,7 +50,7 @@ async function createTarget(args = []) {
 }
 try {
   for (const [input, output] of [
-    ["darwin-process-query.c", query],
+    ["../../packages/sandbox-extension/native/darwin-process-query.c", query],
     ["darwin-query-target.c", target],
   ]) {
     execFileSync(
@@ -103,6 +104,9 @@ try {
     assert.throws(() => execFileSync(query, [invalid], { env: environment, timeout: 3000 }));
   }
   tests.push("strict bounded PID input");
+  const rewritten = await createTarget([], "rewritten-argv-zero");
+  assert.throws(() => observe(rewritten.child.pid));
+  tests.push("rewritten argv zero fails closed before emitting argument bytes");
   if (Object.keys(options).length) {
     assert.equal(Object.keys(options).length, 3);
     const runtime = realpathSync(options["--runtime"]);

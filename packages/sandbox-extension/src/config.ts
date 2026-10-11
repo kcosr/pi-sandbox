@@ -32,6 +32,7 @@ export interface SmolvmBackendConfig {
   readonly image: string;
   readonly imageSha256: string;
   readonly stateDirectory: string;
+  readonly e2fsprogsDirectory?: string;
   readonly resources: SmolvmResources;
   readonly cwdWritable: boolean;
   readonly environment: Readonly<Record<string, string>>;
@@ -147,11 +148,13 @@ export function parseSandboxConfig(value: unknown): SandboxExtensionConfig {
       "image",
       "imageSha256",
       "stateDirectory",
+      ...(input.e2fsprogsDirectory !== undefined ? ["e2fsprogsDirectory"] : []),
       "resources",
       "cwdWritable",
       "environment",
     ]);
     for (const field of [input.executable, input.image, input.stateDirectory]) absolute(field);
+    if (input.e2fsprogsDirectory !== undefined) absolute(input.e2fsprogsDirectory);
     record(input.resources);
     if (
       typeof input.cwdWritable !== "boolean" ||
@@ -169,6 +172,9 @@ export function parseSandboxConfig(value: unknown): SandboxExtensionConfig {
       image: input.image as string,
       imageSha256: input.imageSha256,
       stateDirectory: input.stateDirectory as string,
+      ...(input.e2fsprogsDirectory !== undefined
+        ? { e2fsprogsDirectory: input.e2fsprogsDirectory }
+        : {}),
       resources,
       cwdWritable: input.cwdWritable,
       environment: env,

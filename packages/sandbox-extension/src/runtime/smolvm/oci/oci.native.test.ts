@@ -1,4 +1,17 @@
-import { mkdtemp, readFile, readdir, rm, stat, symlink, writeFile } from "node:fs/promises";
+import {
+  nativeSmolvmHostTools,
+  nativeHostProcessAlive,
+} from "../../../../../../tests/fixtures/smolvm-native-host.js";
+import {
+  mkdtemp,
+  realpath,
+  readFile,
+  readdir,
+  rm,
+  stat,
+  symlink,
+  writeFile,
+} from "node:fs/promises";
 import path from "node:path";
 import { createServer } from "node:net";
 import { networkInterfaces } from "node:os";
@@ -7,6 +20,10 @@ import type { SandboxCommandRequest } from "../../contracts.js";
 import { createSmolvmOciFamily, reopenSmolvmOciFamily } from "./family.js";
 import { attachSmolvmOciMachine } from "./transport.js";
 import type { SmolvmOciFamily, SmolvmOciFamilyOptions } from "./types.js";
+import { SmolvmCli } from "../cli.js";
+import { checkedCommand, listMachines } from "../lifecycle.js";
+import { assertNoSmolvmLayerAttachments } from "../platform.js";
+import { removeStoppedPrivateState } from "../private-state.js";
 
 const required = process.env.PI_SANDBOX_REQUIRE_SMOLVM === "1";
 const configured = !!process.env.PI_SANDBOX_SMOLVM_OCI_IMAGE;
@@ -17,18 +34,23 @@ let options: SmolvmOciFamilyOptions;
 beforeAll(() => {
   if (!required && !configured) return;
   if (
-    process.platform !== "linux" ||
-    process.arch !== "x64" ||
+    !(
+      (process.platform === "linux" && process.arch === "x64") ||
+      (process.platform === "darwin" && process.arch === "arm64")
+    ) ||
     !process.env.PI_SANDBOX_SMOLVM_BIN ||
     !process.env.PI_SANDBOX_SMOLVM_OCI_IMAGE ||
     !process.env.PI_SANDBOX_SMOLVM_OCI_SHA256
   )
-    throw Error("OCI qualification requires Linux x64, pinned smolvm path, image and checksum");
+    throw Error(
+      "OCI qualification requires a supported host, pinned smolvm path, image and checksum",
+    );
 });
 async function opts() {
-  const state = await mkdtemp("/var/tmp/oci-t-");
+  const state = await realpath(await mkdtemp("/tmp/oci-t-"));
   dirs.push(state);
   options = {
+    ...(await nativeSmolvmHostTools()),
     smolvmPath: process.env.PI_SANDBOX_SMOLVM_BIN!,
     imageArchive: process.env.PI_SANDBOX_SMOLVM_OCI_IMAGE!,
     imageSha256: process.env.PI_SANDBOX_SMOLVM_OCI_SHA256!,
@@ -44,14 +66,7 @@ async function make() {
   families.push(f);
   return f;
 }
-async function alive(pid: number) {
-  try {
-    const s = await readFile(`/proc/${pid}/stat`, "utf8");
-    return !["Z", "X"].includes(s.slice(s.lastIndexOf(")") + 2).split(" ")[0]!);
-  } catch {
-    return false;
-  }
-}
+const alive = (pid: number) => nativeHostProcessAlive(pid);
 async function gone(pids: number[]) {
   for (let n = 0; n < 400; n++) {
     if (!(await Promise.all(pids.map(alive))).some(Boolean)) return;
@@ -88,7 +103,7 @@ function readyBarrier(count: number) {
   };
 }
 async function controlledFamily() {
-  const input = await mkdtemp("/var/tmp/oci-parallel-");
+  const input = await realpath(await mkdtemp("/tmp/oci-parallel-"));
   dirs.push(input);
   const family = await createSmolvmOciFamily({
     ...(await opts()),
@@ -125,7 +140,7 @@ afterEach(async () => {
   if (!failed) for (const dir of paths) await rm(dir, { recursive: true, force: true });
   else throw Error("Native fixture cleanup unconfirmed; state retained for inspection");
 });
-suite("Rocky OCI native family", () => {
+suite("OCI native family", () => {
   it("overlaps four calls across direct and borrowed access with separate binary streams", async () => {
     const { family: f, input } = await controlledFamily();
     const client = await attachSmolvmOciMachine(f.attachment(f.sourceId));
@@ -333,7 +348,7 @@ suite("Rocky OCI native family", () => {
   }, 120000);
   it("cold reopens retained source disks with fresh authority and without old guest processes", async () => {
     const options = await opts();
-    const input = await mkdtemp("/var/tmp/oci-input-");
+    const input = await realpath(await mkdtemp("/tmp/oci-input-"));
     dirs.push(input);
     await writeFile(path.join(input, "readonly"), "same-input");
     const f = await createSmolvmOciFamily({
@@ -402,6 +417,31 @@ suite("Rocky OCI native family", () => {
     expect(await alive(recorded[0]!)).toBe(true);
     process.kill(recorded[0]!, "SIGKILL");
     await gone(recorded);
+    if (process.platform === "darwin") {
+      // Stock Darwin stop may retain a stale PID in a stopped record after a
+      // crash. Automatic cleanup must refuse and keep forensic state.
+      await expect(f.execute(f.sourceId, { argv: ["/bin/true"] })).rejects.toThrow();
+      await expect(f.close()).rejects.toThrow("cleanup_unconfirmed");
+      expect((await stat(f.statePath)).isDirectory()).toBe(true);
+      expect(() => f.attachment(f.sourceId)).toThrow();
+      // Explicit operator recovery is separate from the rejected automatic close.
+      const cli = new SmolvmCli({ ...options, stateDirectory: f.statePath });
+      try {
+        const records = await listMachines(cli);
+        expect(records).toHaveLength(1);
+        expect(records[0]?.state).toBe("stopped");
+        await gone(recorded);
+        await assertNoSmolvmLayerAttachments(f.statePath);
+        await checkedCommand(cli, ["machine", "delete", "--name", f.sourceId, "--force"]);
+        expect(await listMachines(cli)).toEqual([]);
+        await assertNoSmolvmLayerAttachments(f.statePath);
+      } finally {
+        await cli.dispose();
+      }
+      await removeStoppedPrivateState(f.statePath);
+      families.splice(families.indexOf(f), 1);
+      return;
+    }
     await expect(f.execute(f.sourceId, { argv: ["/bin/true"] })).rejects.toMatchObject({
       code: "sandbox_process_failed",
     });
@@ -411,7 +451,7 @@ suite("Rocky OCI native family", () => {
   }, 120000);
   it("preserves whole-workload changes in isolated CoW branches with read-only inputs and scoped tools", async () => {
     const options = await opts();
-    const input = await mkdtemp("/var/tmp/oci-input-");
+    const input = await realpath(await mkdtemp("/tmp/oci-input-"));
     dirs.push(input);
     await writeFile(path.join(input, "library.txt"), "host-input");
     const f = await createSmolvmOciFamily({
@@ -427,7 +467,10 @@ suite("Rocky OCI native family", () => {
         argv: [
           "/bin/bash",
           "-c",
-          "set -eu; grep 'Rocky Linux' /etc/os-release; test $(uname -m) = x86_64; command -v node python3 rg fd gcc make git file; echo original >/etc/eval-marker; mkdir -p /workspace/project; printf '#include <stdio.h>\\nint main(){puts(\"build-ok\");}\\n' >/workspace/project/test.c; gcc /workspace/project/test.c -o /workspace/project/test; /workspace/project/test; test $(cat /inputs/library.txt) = host-input; if echo bad >/inputs/library.txt; then exit 50; fi; /usr/bin/node -e \"const s=require('node:net').connect(443,'1.1.1.1');s.on('connect',()=>process.exit(51));s.on('error',()=>process.exit(0));setTimeout(()=>process.exit(0),500)\"; sync",
+          (process.platform === "darwin"
+            ? "set -eu; grep Ubuntu /etc/os-release; test $(uname -m) = aarch64; command -v node python3 gcc make git file; "
+            : "set -eu; grep 'Rocky Linux' /etc/os-release; test $(uname -m) = x86_64; command -v node python3 rg fd gcc make git file; ") +
+            "echo original >/etc/eval-marker; mkdir -p /workspace/project; printf '#include <stdio.h>\\nint main(){puts(\"build-ok\");}\\n' >/workspace/project/test.c; gcc /workspace/project/test.c -o /workspace/project/test; /workspace/project/test; test $(cat /inputs/library.txt) = host-input; if echo bad >/inputs/library.txt; then exit 50; fi; /usr/bin/node -e \"const s=require('node:net').connect(443,'1.1.1.1');s.on('connect',()=>process.exit(51));s.on('error',()=>process.exit(0));setTimeout(()=>process.exit(0),500)\"; sync",
         ],
         maxOutputBytes: 1048576,
       },
@@ -477,8 +520,17 @@ suite("Rocky OCI native family", () => {
     ).toBe(0);
     const disks = await diskFiles(f.statePath);
     const overlays = disks.filter((d) => d.name.endsWith(".qcow2"));
-    expect(overlays.length).toBeGreaterThanOrEqual(4);
-    expect(overlays.reduce((a, d) => a + d.allocated, 0)).toBeLessThan(80 * 1048576);
+    if (process.platform === "darwin") {
+      // Pinned upstream uses APFS clonefile for these raw branch disks. st_blocks
+      // counts shared extents in each clone, so it cannot measure unique space.
+      expect(overlays).toHaveLength(0);
+      const raw = disks.filter((d) => d.name.endsWith(".raw"));
+      expect(raw.length).toBeGreaterThanOrEqual(6);
+      expect(raw.every((d) => [1073741824, 2147483648].includes(d.bytes))).toBe(true);
+    } else {
+      expect(overlays.length).toBeGreaterThanOrEqual(4);
+      expect(overlays.reduce((a, d) => a + d.allocated, 0)).toBeLessThan(80 * 1048576);
+    }
     console.info(
       "OCI disk evidence",
       JSON.stringify({
@@ -512,6 +564,15 @@ suite("Rocky OCI native family", () => {
   }, 180000);
   it("refuses aliases and mounts that expose runtime state or credentials", async () => {
     const o = await opts();
+    if (o.darwinProcessQuery) {
+      await expect(
+        createSmolvmOciFamily({
+          ...o,
+          darwinProcessQuery: { ...o.darwinProcessQuery, sha256: "0".repeat(64) },
+        }),
+      ).rejects.toThrow("tool_digest_mismatch");
+      expect(await readdir(o.stateDirectory)).toEqual([]);
+    }
     const alias = path.join(o.stateDirectory, "alias.tar");
     await symlink(o.imageArchive, alias);
     await expect(createSmolvmOciFamily({ ...o, imageArchive: alias })).rejects.toMatchObject({

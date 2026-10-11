@@ -1,5 +1,4 @@
-import { constants } from "node:fs";
-import { access, lstat, mkdtemp, realpath, writeFile } from "node:fs/promises";
+import { lstat, mkdtemp, realpath, writeFile } from "node:fs/promises";
 import path from "node:path";
 import {
   SandboxExecutionError,
@@ -25,6 +24,8 @@ import { validateSmolvmPack } from "./pack.js";
 import { removeStoppedPrivateState } from "./private-state.js";
 import { resolveSmolvmLimits, smolvmEnvironment, smolvmRequest } from "./request.js";
 import { SMOLVM_VERSION, verifySmolvmRuntime } from "./runtime-release.js";
+import { verifyHostTools } from "./host-tools.js";
+import { assertNoSmolvmLayerAttachments, verifySmolvmCapability } from "./platform.js";
 
 const NAME = "workspace";
 
@@ -35,7 +36,8 @@ export async function createSmolvmExecutor(
   validateSmolvmOptions(input);
   const options = structuredClone(input);
   await verifySmolvmRuntime(options.smolvmPath);
-  await access("/dev/kvm", constants.R_OK | constants.W_OK);
+  await verifySmolvmCapability();
+  await verifyHostTools(options, [options.cwd]);
   for (const file of [options.cwd, options.stateDirectory, options.imagePath])
     if ((await realpath(file)) !== file) throw new Error("smolvm_path_not_canonical");
   if (!(await lstat(options.cwd)).isDirectory()) throw new Error("smolvm_workspace_not_directory");
@@ -44,7 +46,7 @@ export async function createSmolvmExecutor(
     !stateStat.isDirectory() ||
     stateStat.uid !== process.getuid?.() ||
     (stateStat.mode & 0o077) !== 0 ||
-    Buffer.byteLength(options.stateDirectory) > 48
+    Buffer.byteLength(options.stateDirectory) > (process.platform === "darwin" ? 32 : 48)
   )
     throw new Error("smolvm_state_requires_short_private_owned_directory");
   for (const control of await hostControlPaths()) {
@@ -88,7 +90,12 @@ class PackedExecutor implements SandboxExecutor {
     this.cwd = options.cwd;
     this.#limits = resolveSmolvmLimits(options.limits);
     this.#environment = smolvmEnvironment(options.environment);
-    this.#cli = new SmolvmCli({ smolvmPath: options.smolvmPath, stateDirectory: state });
+    this.#cli = new SmolvmCli({
+      smolvmPath: options.smolvmPath,
+      stateDirectory: state,
+      ...(options.e2fsprogsDirectory ? { e2fsprogsDirectory: options.e2fsprogsDirectory } : {}),
+      ...(options.darwinProcessQuery ? { darwinProcessQuery: options.darwinProcessQuery } : {}),
+    });
   }
   async #command(argv: readonly [string, ...string[]]): Promise<SandboxCommandResult> {
     const result = await this.#cli.run({ argv, timeoutMs: 180000, maxOutputBytes: 4 * 1048576 });
@@ -106,7 +113,7 @@ class PackedExecutor implements SandboxExecutor {
         runtimeVersion: SMOLVM_VERSION,
         imageSha256: this.options.imageSha256,
         machine: NAME,
-        environment: createStateEnvironment(this.state),
+        environment: createStateEnvironment(this.state, this.options.e2fsprogsDirectory),
         cleanup: ["machine", "stop", "--name", NAME],
       }) + "\n",
       { mode: 0o600 },
@@ -243,6 +250,7 @@ class PackedExecutor implements SandboxExecutor {
         await stopMachine(this.#cli, NAME, this.#identity);
         await deleteStoppedMachine(this.#cli, NAME);
       }
+      await assertNoSmolvmLayerAttachments(this.state);
       await this.#cli.dispose();
       await removeStoppedPrivateState(this.state);
     } catch (cause) {

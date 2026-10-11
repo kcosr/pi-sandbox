@@ -1,4 +1,4 @@
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdtemp, realpath, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -15,7 +15,7 @@ afterEach(async () => {
 });
 
 async function temporaryCwd(): Promise<string> {
-  const cwd = await mkdtemp(join(tmpdir(), "pi-sandbox-direct-"));
+  const cwd = await realpath(await mkdtemp(join(tmpdir(), "pi-sandbox-direct-")));
   temporaryDirectories.push(cwd);
   return cwd;
 }

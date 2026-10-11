@@ -43,6 +43,21 @@ describe("standalone sandbox configuration", () => {
       environment: {},
     };
     expect(parseSandboxConfig({ ...config, backend }).mode).toBe("owned");
+    expect(
+      parseSandboxConfig({
+        ...config,
+        backend: { ...backend, e2fsprogsDirectory: "/trusted/tools" },
+      }).mode,
+    ).toBe("owned");
+    expect(() =>
+      parseSandboxConfig({
+        ...config,
+        backend: {
+          ...backend,
+          darwinProcessQuery: { path: "/model/query", sha256: "a".repeat(64) },
+        },
+      }),
+    ).toThrow();
     const attachment = {
       version: 1,
       socketPath: "/private/control.sock",

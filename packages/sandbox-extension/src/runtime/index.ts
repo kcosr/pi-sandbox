@@ -1,6 +1,8 @@
 export { buildBubblewrapArguments, safeSandboxEnvironment } from "./bubblewrap-policy.js";
 export { createBubblewrapExecutor } from "./bubblewrap-executor.js";
 export { createSmolvmExecutor } from "./smolvm/packed.js";
+export { smolvmReleaseForPlatform } from "./smolvm/release-pin.js";
+export type { DarwinProcessQuery } from "./smolvm/darwin-query.js";
 export {
   validateSmolvmOptions,
   type CreateSmolvmExecutorOptions,

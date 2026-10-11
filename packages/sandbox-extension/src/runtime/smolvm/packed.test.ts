@@ -1,3 +1,4 @@
+import { smolvmReleaseForPlatform } from "./release-pin.js";
 import { createHash } from "node:crypto";
 import {
   chmod,
@@ -29,8 +30,8 @@ const options = {
 function manifest() {
   return {
     mode: "vm",
-    platform: "linux/amd64",
-    host_platform: "linux/amd64",
+    platform: smolvmReleaseForPlatform(process.platform, process.arch).guestPlatform,
+    host_platform: smolvmReleaseForPlatform(process.platform, process.arch).platform,
     smolvm_version: "1.26.1",
     network: false,
     gpu: false,
@@ -89,7 +90,7 @@ describe("packed smolvm admission", () => {
     { cuda: true },
     { mode: "oci" },
     { smolvm_version: "1.23.1" },
-    { host_platform: "darwin/arm64" },
+    { host_platform: "unsupported/arch" },
     { cmd: ["/bin/evil"] },
     { entrypoint: ["/bin/evil"] },
     { env: ["SECRET=value"] },
