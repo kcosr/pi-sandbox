@@ -1,4 +1,20 @@
-import { mkdtemp, mkdir, readFile, readdir, rm, stat, symlink, writeFile } from "node:fs/promises";
+import {
+  nativeSmolvmHostTools,
+  nativeHostProcessAlive,
+  assertNoFixtureLayerAttachments,
+} from "../../../../../../tests/fixtures/smolvm-native-host.js";
+import { removeStoppedPrivateState } from "../private-state.js";
+import {
+  mkdtemp,
+  realpath,
+  mkdir,
+  readFile,
+  readdir,
+  rm,
+  stat,
+  symlink,
+  writeFile,
+} from "node:fs/promises";
 import path from "node:path";
 import { createServer } from "node:net";
 import { networkInterfaces } from "node:os";
@@ -26,14 +42,18 @@ let cleanupFailed = false;
 beforeAll(async () => {
   if (!required && !configured) return;
   if (
-    process.platform !== "linux" ||
-    process.arch !== "x64" ||
+    !(
+      (process.platform === "linux" && process.arch === "x64") ||
+      (process.platform === "darwin" && process.arch === "arm64")
+    ) ||
     !process.env.PI_SANDBOX_SMOLVM_BIN ||
     !process.env.PI_SANDBOX_SMOLVM_OCI_IMAGE ||
     !process.env.PI_SANDBOX_SMOLVM_OCI_SHA256
   )
-    throw Error("OCI qualification requires Linux x64, pinned smolvm path, image and checksum");
-  suiteRoot = await mkdtemp("/var/tmp/oci-native-");
+    throw Error(
+      "OCI qualification requires a supported host, pinned smolvm path, image and checksum",
+    );
+  suiteRoot = await realpath(await mkdtemp("/tmp/oci-suite-"));
   for (const [key, dir] of Object.entries({ HOME: "h", XDG_DATA_HOME: "d", XDG_CACHE_HOME: "c" })) {
     await mkdir(path.join(suiteRoot, dir), { mode: 0o700 });
     vi.stubEnv(key, path.join(suiteRoot, dir));
@@ -42,9 +62,10 @@ beforeAll(async () => {
   await writeFile(path.join(suiteRoot, "config.toml"), "", { mode: 0o600 });
 });
 async function opts() {
-  const state = await mkdtemp("/var/tmp/oci-t-");
+  const state = await realpath(await mkdtemp("/tmp/oci-t-"));
   dirs.push(state);
   options = {
+    ...nativeSmolvmHostTools(),
     smolvmPath: process.env.PI_SANDBOX_SMOLVM_BIN!,
     imageArchive: process.env.PI_SANDBOX_SMOLVM_OCI_IMAGE!,
     imageSha256: process.env.PI_SANDBOX_SMOLVM_OCI_SHA256!,
@@ -60,14 +81,7 @@ async function make() {
   families.push(f);
   return f;
 }
-async function alive(pid: number) {
-  try {
-    const s = await readFile(`/proc/${pid}/stat`, "utf8");
-    return !["Z", "X"].includes(s.slice(s.lastIndexOf(")") + 2).split(" ")[0]!);
-  } catch {
-    return false;
-  }
-}
+const alive = nativeHostProcessAlive;
 async function gone(pids: number[]) {
   for (let n = 0; n < 400; n++) {
     if (!(await Promise.all(pids.map(alive))).some(Boolean)) return;
@@ -118,7 +132,7 @@ function readyBarrier(count: number) {
   };
 }
 async function controlledFamily() {
-  const input = await mkdtemp("/var/tmp/oci-parallel-");
+  const input = await realpath(await mkdtemp("/tmp/oci-parallel-"));
   dirs.push(input);
   const family = await createSmolvmOciFamily({
     ...(await opts()),
@@ -186,8 +200,10 @@ afterAll(async () => {
   } finally {
     await cli.dispose();
   }
-  if (!cleanupFailed) await rm(suiteRoot, { recursive: true, force: true });
-  else console.error("Native test registry retained", suiteRoot);
+  if (!cleanupFailed) {
+    assertNoFixtureLayerAttachments(suiteRoot);
+    await rm(suiteRoot, { recursive: true, force: true });
+  } else console.error("Native test registry retained", suiteRoot);
   vi.unstubAllEnvs();
   if (cleanupFailed) throw Error("Native registry cleanup unconfirmed");
 });
@@ -399,7 +415,7 @@ suite("OCI native family", () => {
   }, 120000);
   it("cold reopens retained source disks with fresh authority and without old guest processes", async () => {
     const options = await opts();
-    const input = await mkdtemp("/var/tmp/oci-input-");
+    const input = await realpath(await mkdtemp("/tmp/oci-input-"));
     dirs.push(input);
     await writeFile(path.join(input, "readonly"), "same-input");
     const f = await createSmolvmOciFamily({
@@ -470,6 +486,23 @@ suite("OCI native family", () => {
     expect(await alive(recorded[0]!)).toBe(true);
     process.kill(recorded[0]!, "SIGKILL");
     await gone(recorded);
+    if (process.platform === "darwin") {
+      await expect(f.execute(f.sourceId, { argv: ["/bin/true"] })).rejects.toThrow();
+      await expect(f.close()).rejects.toThrow("cleanup_unconfirmed");
+      expect((await stat(f.statePath)).isDirectory()).toBe(true);
+      const cli = new SmolvmCli({ smolvmPath: options.smolvmPath, stateDirectory: f.statePath });
+      try {
+        expect((await listMachines(cli)).find((m) => m.name === f.sourceId)?.state).toBe("stopped");
+        await gone(recorded);
+        await checkedCommand(cli, ["machine", "delete", "--name", f.sourceId, "--force"]);
+        expect((await listMachines(cli)).some((m) => m.name === f.sourceId)).toBe(false);
+      } finally {
+        await cli.dispose();
+      }
+      await removeStoppedPrivateState(f.statePath);
+      families.splice(families.indexOf(f), 1);
+      return;
+    }
     await expect(f.execute(f.sourceId, { argv: ["/bin/true"] })).rejects.toMatchObject({
       code: "sandbox_process_failed",
     });
@@ -479,7 +512,7 @@ suite("OCI native family", () => {
   }, 120000);
   it("preserves whole-workload changes in isolated CoW branches with read-only inputs and scoped tools", async () => {
     const options = await opts();
-    const input = await mkdtemp("/var/tmp/oci-input-");
+    const input = await realpath(await mkdtemp("/tmp/oci-input-"));
     dirs.push(input);
     await writeFile(path.join(input, "library.txt"), "host-input");
     const f = await createSmolvmOciFamily({
@@ -495,7 +528,10 @@ suite("OCI native family", () => {
         argv: [
           "/bin/bash",
           "-c",
-          "set -eu; cat /etc/os-release; test $(uname -m) = x86_64; command -v node python3 rg fd gcc make git file; echo original >/etc/eval-marker; mkdir -p /workspace/project; printf '#include <stdio.h>\\nint main(){puts(\"build-ok\");}\\n' >/workspace/project/test.c; gcc /workspace/project/test.c -o /workspace/project/test; /workspace/project/test; test $(cat /inputs/library.txt) = host-input; if echo bad >/inputs/library.txt; then exit 50; fi; /usr/bin/node -e \"const s=require('node:net').connect(443,'1.1.1.1');s.on('connect',()=>process.exit(51));s.on('error',()=>process.exit(0));setTimeout(()=>process.exit(0),500)\"; sync",
+          (process.platform === "darwin"
+            ? "set -eu; cat /etc/os-release; test $(uname -m) = aarch64; command -v node python3 gcc make git file; "
+            : "set -eu; cat /etc/os-release; test $(uname -m) = x86_64; command -v node python3 rg fd gcc make git file; ") +
+            "echo original >/etc/eval-marker; mkdir -p /workspace/project; printf '#include <stdio.h>\\nint main(){puts(\"build-ok\");}\\n' >/workspace/project/test.c; gcc /workspace/project/test.c -o /workspace/project/test; /workspace/project/test; test $(cat /inputs/library.txt) = host-input; if echo bad >/inputs/library.txt; then exit 50; fi; /usr/bin/node -e \"const s=require('node:net').connect(443,'1.1.1.1');s.on('connect',()=>process.exit(51));s.on('error',()=>process.exit(0));setTimeout(()=>process.exit(0),500)\"; sync",
         ],
         maxOutputBytes: 1048576,
       },
@@ -545,8 +581,15 @@ suite("OCI native family", () => {
     ).toBe(0);
     const disks = (await Promise.all((await nativeDirectories(f.statePath)).map(diskFiles))).flat();
     const overlays = disks.filter((d) => d.name.endsWith(".qcow2"));
-    expect(overlays.length).toBeGreaterThanOrEqual(4);
-    expect(overlays.reduce((a, d) => a + d.allocated, 0)).toBeLessThan(80 * 1048576);
+    if (process.platform === "darwin") {
+      expect(overlays).toHaveLength(0);
+      const raw = disks.filter((d) => d.name.endsWith(".raw"));
+      expect(raw.length).toBeGreaterThanOrEqual(6);
+      expect(raw.every((d) => [1073741824, 2147483648].includes(d.bytes))).toBe(true);
+    } else {
+      expect(overlays.length).toBeGreaterThanOrEqual(4);
+      expect(overlays.reduce((a, d) => a + d.allocated, 0)).toBeLessThan(80 * 1048576);
+    }
     console.info(
       "OCI disk evidence",
       JSON.stringify({

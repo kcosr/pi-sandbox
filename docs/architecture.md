@@ -502,8 +502,8 @@ it is not an execution backend and does not run tool operations.
 
 ## Optional smolvm tool executor
 
-On Linux x86-64, the same extracted tool factory can use a smolvm 1.26.1
-executor. The managed application still owns one executor for its lifetime and
+The reusable extension supports smolvm 1.26.1 on Linux x86-64 and macOS 26+
+arm64. Managed application enablement remains Linux-only at this checkpoint. The managed application still owns one executor for its lifetime and
 keeps configuration, permissions, audit and host MCP outside it. A fixed
 build-selected runtime plus administrator-selected image creates the private
 Linux guest; only the launch directory is host-mounted. Runtime startup validates
@@ -517,7 +517,11 @@ Its separate state directory contains only ownership metadata and sockets.
 Named stop/delete commands manage native storage; the application never removes
 VM disks recursively or sweeps the shared registry. Lifecycle decisions check
 recorded ownership and CLI state, without a process observer or watcher.
-Ambiguous failed starts remain available for operator recovery.
+Ambiguous failed starts remain available for operator recovery. On macOS, native
+registry/cache locations are beneath HOME/Library; XDG data/cache settings do not
+replace them. Selected isolated e2fsprogs tools can be supplied through the shared
+`e2fsprogsDirectory` option and are bound into cold-reopen metadata. There is no
+native process-query helper in the extension package.
 
 The host admits up to four executions concurrently, with at most 64 outstanding
 requests including queued calls. Each uses its own short-lived CLI connection to

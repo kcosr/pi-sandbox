@@ -380,7 +380,8 @@ identity backend transitions, refusal of identity image overrides, VM-aware
 mount/policy diagnostics and the `smolvm` audit boundary. Distribution checks
 cover the optional fixed external 1.26.1 provider without requiring an installed
 runtime during cross-build/staged validation. Real VM tests must additionally
-use a verified full runtime and trusted tools image on Linux x86-64 with KVM;
+use a verified full runtime and trusted tools image on Linux x86-64 with KVM
+or, for shared extension acceptance, macOS 26+ arm64 with Hypervisor.framework;
 ordinary host-only tests are not evidence of VM confinement or cleanup.
 
 Set `PI_SANDBOX_SMOLVM_BIN` to the official distribution's wrapper,
@@ -389,6 +390,18 @@ tools image, and `PI_SANDBOX_SMOLVM_OCI_IMAGE` and `PI_SANDBOX_SMOLVM_OCI_SHA256
 to a local OCI tools archive. `PI_SANDBOX_REQUIRE_SMOLVM=1` makes missing native
 prerequisites fail instead of skipping. The release verifier uses these inputs
 for owned project execution, OCI families and the standard Pi package.
+
+For macOS extension qualification, set `PI_SANDBOX_E2FSPROGS_DIRECTORY` to the
+canonical isolated e2fsprogs sbin directory if needed, and `PI_SANDBOX_TEST_BUN`
+(and `PI_SANDBOX_BUN` for package tests) to a trusted Bun executable. Run
+`tests/integration/smolvm-executor.test.ts` and the package's `oci.native.test.ts`
+under Node 24 and Bun with required VM inputs, then `oci-terminal-native.ts`
+under Bun and `scripts/test/sandbox-extension-package.mjs`. These fixtures use a
+short canonical temporary HOME as well as XDG paths; XDG alone would leave the
+real macOS registry exposed. Fixture-only process and layer-volume observations
+are independent test evidence, not a stronger product lifecycle guarantee.
+Before deleting a whole disposable account, confirm its registry is empty and
+no fixture layer image remains attached; never unmount unrelated host volumes.
 
 The native cases cover RW/RO project access, binary streaming, persistent guest
 processes, cancellation, timeout, output overflow and close; frozen OCI sources,

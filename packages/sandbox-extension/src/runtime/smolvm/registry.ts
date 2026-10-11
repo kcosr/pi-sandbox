@@ -12,9 +12,9 @@ export interface SmolvmRegistryIdentity {
 }
 
 /** Native runtime context, captured once. Guest/request environments never select it. */
-export function createSmolvmEnvironment(): Record<string, string> {
+export function createSmolvmEnvironment(e2fsprogsDirectory?: string): Record<string, string> {
   const environment: Record<string, string> = {
-    PATH: "/usr/bin:/bin:/usr/sbin:/sbin",
+    PATH: "/usr/bin:/bin:/usr/sbin:/sbin" + (e2fsprogsDirectory ? `:${e2fsprogsDirectory}` : ""),
     LANG: "C.UTF-8",
     HOME: process.env.HOME || homedir(),
   };

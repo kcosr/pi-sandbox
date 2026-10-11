@@ -4,6 +4,7 @@ import {
   validMachineName,
   validateNamePrefix,
   validateSmolvmSocketPaths,
+  registryIdentity,
 } from "./registry.js";
 
 describe("generated machine name hostname bound", () => {
@@ -26,6 +27,26 @@ describe("generated machine name hostname bound", () => {
 });
 
 describe("ordinary registry socket paths", () => {
+  it("resolves the native account registry separately from the settings file", async () => {
+    const identity = await registryIdentity({
+      HOME: "/smolvm-test-account",
+      XDG_DATA_HOME: "/smolvm-test-data",
+      XDG_CACHE_HOME: "/smolvm-test-cache",
+      SMOLVM_CONFIG: "/smolvm-test-settings/config.toml",
+    });
+    expect(identity).toEqual({
+      home: "/smolvm-test-account",
+      dataDirectory:
+        process.platform === "darwin"
+          ? "/smolvm-test-account/Library/Application Support/smolvm"
+          : "/smolvm-test-data/smolvm",
+      cacheDirectory:
+        process.platform === "darwin"
+          ? "/smolvm-test-account/Library/Caches"
+          : "/smolvm-test-cache",
+      configFile: "/smolvm-test-settings/config.toml",
+    });
+  });
   it("accepts ordinary short shared cache paths", () => {
     expect(() =>
       validateSmolvmSocketPaths({ HOME: "/home/user", XDG_CACHE_HOME: "/cache" }),

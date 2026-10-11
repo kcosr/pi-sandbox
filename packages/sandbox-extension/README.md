@@ -91,9 +91,11 @@ For explicit host execution, replace `backend` with:
 Direct mode keeps the existing platform-specific command prerequisites and
 command-scoped cleanup.
 
-## Linux smolvm
+## smolvm on Linux and macOS
 
-smolvm **1.26.1** is supported on Linux x86-64 with `/dev/kvm`. Install the complete
+smolvm **1.26.1** is supported on Linux x86-64 with `/dev/kvm` and macOS 26+
+arm64 with `kern.hv_support=1`. The macOS minimum comes from the bundled guest
+firmware. Use a native arm64 guest on macOS. Install the complete
 official distribution outside the project. The package verifies its pinned
 executable, library and guest-rootfs inventory before launching anything.
 Provision a trusted plain Linux tools pack separately with the required GNU
@@ -122,7 +124,12 @@ check the derived attachment socket length; all VM modes check smolvm’s derive
 shared-cache socket path before creation. This directory holds only
 application metadata and attachment sockets, not VM disks or smolvm caches.
 smolvm uses the account’s ordinary registry and cache, captured from the host
-HOME/XDG environment at creation. Keep these locations, the runtime, image and
+HOME/XDG environment at creation. On macOS this means
+`HOME/Library/Application Support/smolvm` and `HOME/Library/Caches/smolvm`; XDG
+data/cache overrides do not relocate those native macOS paths. `SMOLVM_CONFIG`
+selects settings separately (default `HOME/.config/smolvm/config.toml`). Deep HOME
+paths can exceed the Unix socket limit; use a short canonical account context
+for disposable qualification fixtures. Keep these locations, the runtime, image and
 configuration outside the project. The host project is mounted at the
 same absolute path, writable unless `cwdWritable` is false. Project edits persist;
 the disposable guest root does not. Other host directories are not projected into
@@ -161,10 +168,16 @@ disks, with optional explicit read-only host inputs. `networkMode` is either
 `none` or explicit `host`; the latter enables smolvm outbound networking and does
 not literally join the host kernel namespace.
 Creating OCI disks smaller than the bundled 20 GiB storage or 10 GiB overlay
-templates requires host `resize2fs` from e2fsprogs in a system directory
-(`/usr/bin`, `/bin`, `/usr/sbin` or `/sbin`). The launcher clears the inherited
-PATH. Prepared plain packs already contain sized templates and do not require
-this host shrink step.
+templates requires host `resize2fs` and `e2fsck` from e2fsprogs. For isolated tools,
+set optional `e2fsprogsDirectory` to their absolute canonical directory in the
+owned backend configuration or OCI controller options. It appends only that
+trusted directory to the fixed, cleared launcher PATH. A different tool selected
+by upstream's higher-priority fixed search directories is rejected. Selected
+paths, resolved targets and file hashes bind cold reopening; host system libraries
+remain trusted prerequisites. Guest mounts cannot overlap these tools. Prepared
+plain packs already contain sized templates and do not require the host shrink
+step. Actual disk capacities are still checked: upstream can warn and continue
+with oversized default templates when shrinking fails.
 
 Owned and OCI guest commands use the same fixed environment defaults, including
 `HOME=/root` and `TMPDIR=/tmp`; scoped environment cannot override those names.
@@ -173,7 +186,8 @@ OCI commands now receive `TMPDIR` explicitly, where it was previously unset.
 `family.branch(id, { branchable: false })` freezes the source and makes a cheap,
 independently writable leaf. Use `branchable: true` only for a child that must
 later be branched itself. It incurs additional RAM-backing work. Native Linux
-qcow2 overlays share the immutable source disks. Host mounts are not snapshotted.
+qcow2 overlays share the immutable source disks. macOS uses native raw-disk CoW
+clones. Host mounts are not snapshotted.
 Remove child leaves before their source. A child-free original source
 can be retained and explicitly cold-reopened on the same host; cold reopening
 restores disks, not running processes or RAM. The source may be frozen or writable;
@@ -215,7 +229,8 @@ recovery metadata, and `deleteSmolvmOciFamily({ statePath })` deletes a stopped
 family through named CLI operations. Cold receipts use version 2 and bind the
 recorded source and registry. Earlier private-registry receipts are not accepted.
 Deleting a stopped family needs its recorded runtime, registry and machine
-identity, but does not need the original image archive or read-only input mounts.
+identity, but does not need the original image archive, read-only input mounts,
+or selected disk-tool files. Reopening revalidates all those boot inputs.
 Failed deletion releases its controller claim so the operation can be retried.
 Abrupt owner death may require manual recovery with the recorded names.
 
@@ -285,4 +300,7 @@ executor it supplies to the factory and must close it explicitly.
 
 Built artifacts include declarations, the worker, license and provenance. Run
 `npm run test:extension` from the repository to build, inspect and exercise the
-tarball with stock Pi and both Node/Bun workers on Linux.
+tarball with stock Pi under Node/Bun, using Bubblewrap on Linux and configured
+owned/borrowed smolvm fixtures on Linux or macOS. The package is JavaScript-only;
+no native process observer, compiler, Python or runtime helper is required.
+Managed macOS application integration is a separate release gate.
