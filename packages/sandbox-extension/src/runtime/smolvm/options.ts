@@ -16,7 +16,7 @@ export interface CreateSmolvmExecutorOptions {
   readonly smolvmPath: string;
   readonly imagePath: string;
   readonly imageSha256: string;
-  /** Existing private host directory outside the project and other mounts. */
+  /** Private controller metadata/socket parent outside the project; never VM storage. */
   readonly stateDirectory: string;
   readonly resources: SmolvmResources;
 }

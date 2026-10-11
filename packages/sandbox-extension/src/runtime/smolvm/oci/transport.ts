@@ -1,3 +1,4 @@
+import { validMachineName } from "../registry.js";
 import { timingSafeEqual } from "node:crypto";
 import { chmod, lstat, realpath } from "node:fs/promises";
 import { createConnection, createServer, type Socket } from "node:net";
@@ -153,8 +154,7 @@ export function validateOciAttachment(value: unknown): asserts value is SmolvmOc
     Buffer.byteLength(d.socketPath) > 100 ||
     typeof d.token !== "string" ||
     !/^[a-f0-9]{64}$/u.test(d.token) ||
-    typeof d.machineId !== "string" ||
-    !/^(?:candidate|branch-[1-9][0-9]*)$/u.test(d.machineId) ||
+    !validMachineName(d.machineId) ||
     typeof d.cwd !== "string" ||
     !path.posix.isAbsolute(d.cwd) ||
     path.posix.normalize(d.cwd) !== d.cwd ||

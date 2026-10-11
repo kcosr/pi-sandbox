@@ -1,16 +1,24 @@
 // Bun-only trusted PTY fixture. The public controller remains runtime-neutral.
 import { strict as assert } from "node:assert";
-import { mkdtemp, readFile, readdir, rm } from "node:fs/promises";
+import { mkdtemp, mkdir, readFile, rm } from "node:fs/promises";
 import path from "node:path";
 import {
   createSmolvmOciFamily,
   reopenSmolvmOciFamily,
+  deleteSmolvmOciFamily,
+  readSmolvmOciFamily,
 } from "../../packages/sandbox-extension/src/runtime/smolvm/oci/family.js";
 import type {
   SmolvmOciFamily,
   SmolvmOciTerminal,
   SmolvmOciTerminalLauncher,
 } from "../../packages/sandbox-extension/src/runtime/smolvm/oci/types.js";
+
+import { SmolvmCli } from "../../packages/sandbox-extension/src/runtime/smolvm/cli.js";
+import {
+  checkedCommand,
+  listMachines,
+} from "../../packages/sandbox-extension/src/runtime/smolvm/lifecycle.js";
 
 declare const Bun: {
   Terminal: new (options: {
@@ -30,6 +38,12 @@ declare const Bun: {
 };
 
 const state = await mkdtemp("/var/tmp/oci-term-");
+// One ordinary registry shared across every family/reopen in this test process.
+for (const [key, dir] of Object.entries({ HOME: "h", XDG_DATA_HOME: "d", XDG_CACHE_HOME: "c" })) {
+  await mkdir(path.join(state, dir), { mode: 0o700 });
+  process.env[key] = path.join(state, dir);
+}
+process.env.SMOLVM_CONFIG = path.join(state, "config.toml");
 let family: SmolvmOciFamily | undefined;
 const checks: string[] = [];
 let safeToRemove = false;
@@ -150,16 +164,27 @@ async function command(
   await terminal.write(encode(`${command}; printf '\\n__DONE_%s__\\n' ${marker}\n`));
   await until(() => f.output().includes(`__DONE_${marker}__`), marker);
 }
-async function pids(directory: string): Promise<number[]> {
-  const result: number[] = [];
-  for (const entry of await readdir(directory, { withFileTypes: true })) {
-    const file = path.join(directory, entry.name);
-    if (entry.isDirectory()) result.push(...(await pids(file)));
-    else if (entry.name === "agent.pid")
-      result.push(Number((await readFile(file, "utf8")).split("\n")[0]));
+async function pids(statePath: string): Promise<number[]> {
+  const metadata = await readSmolvmOciFamily({ statePath });
+  const cli = new SmolvmCli({ smolvmPath: metadata.runtime, stateDirectory: statePath });
+  try {
+    const result = [];
+    for (const machine of metadata.machines.filter((m) => m.status !== "deleted")) {
+      const directory = (
+        await checkedCommand(cli, ["machine", "data-dir", "--name", machine.name])
+      ).stdout
+        .toString()
+        .trim();
+      result.push(
+        Number((await readFile(path.join(directory, "agent.pid"), "utf8")).split("\n")[0]),
+      );
+    }
+    return result;
+  } finally {
+    await cli.dispose();
   }
-  return result;
 }
+
 try {
   family = await createSmolvmOciFamily({
     smolvmPath: process.env.PI_SANDBOX_SMOLVM_BIN!,
@@ -273,7 +298,18 @@ try {
   console.log(JSON.stringify({ checks }));
 } finally {
   try {
-    await family?.close();
+    const disposition = await family?.close();
+    if (disposition?.retained && family)
+      await deleteSmolvmOciFamily({ statePath: family.statePath });
+    const cli = new SmolvmCli({
+      smolvmPath: process.env.PI_SANDBOX_SMOLVM_BIN!,
+      stateDirectory: state,
+    });
+    try {
+      assert.equal((await listMachines(cli)).length, 0, "test registry not empty");
+    } finally {
+      await cli.dispose();
+    }
     if (safeToRemove) await rm(state, { recursive: true, force: true });
   } catch (error) {
     console.error("Fixture cleanup unconfirmed; state retained", state, error);

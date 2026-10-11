@@ -2,7 +2,7 @@ import { mkdtemp, readFile, rm } from "node:fs/promises";
 import path from "node:path";
 import os from "node:os";
 import { afterEach, describe, expect, it } from "vitest";
-import { SmolvmCli, createStateEnvironment } from "./cli.js";
+import { SmolvmCli } from "./cli.js";
 
 const directories: string[] = [];
 afterEach(async () => {
@@ -15,7 +15,7 @@ async function fixture() {
 }
 
 describe("bounded in-process smolvm CLI", () => {
-  it("uses only its private environment and preserves binary streams", async () => {
+  it("uses only its captured native environment and preserves binary streams", async () => {
     const cli = await fixture();
     try {
       const result = await cli.run({
@@ -26,7 +26,7 @@ describe("bounded in-process smolvm CLI", () => {
       const env = await cli.run({
         argv: ["-e", "process.stdout.write(JSON.stringify(process.env))"],
       });
-      expect(JSON.parse(env.stdout.toString())).toEqual(createStateEnvironment(cli.stateDirectory));
+      expect(JSON.parse(env.stdout.toString())).toEqual(cli.environment);
     } finally {
       await cli.dispose();
     }

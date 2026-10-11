@@ -105,7 +105,7 @@ describe("packed smolvm admission", () => {
       });
     }
   });
-  it("removes stopped immutable caches without traversing outside symlinks", async () => {
+  it("removes application metadata without traversing outside symlinks", async () => {
     const root = await mkdtemp(path.join(tmpdir(), "smol-state-test-"));
     const outside = await mkdtemp(path.join(tmpdir(), "smol-outside-test-"));
     try {
@@ -115,7 +115,6 @@ describe("packed smolvm admission", () => {
       await writeFile(path.join(outside, "keep"), "outside");
       await chmod(outside, 0o500);
       await symlink(outside, path.join(root, "outside"));
-      await chmod(immutable, 0o500);
       await removeStoppedPrivateState(root);
       expect(await readFile(path.join(outside, "keep"), "utf8")).toBe("outside");
       expect((await stat(outside)).mode & 0o777).toBe(0o500);

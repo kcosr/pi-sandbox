@@ -1,5 +1,4 @@
-import { lstat, mkdir, realpath } from "node:fs/promises";
-import path from "node:path";
+import { lstat, realpath } from "node:fs/promises";
 import {
   SandboxExecutionError,
   type SandboxCommandRequest,
@@ -8,31 +7,12 @@ import {
   type SandboxExecutionErrorCode,
 } from "../contracts.js";
 import { createHostCommandExecutor, HostCommandExecutionError } from "../host-command/index.js";
-import { assertGuestPath, smolvmEnvironment } from "./request.js";
+import { assertGuestPath } from "./request.js";
+import { createSmolvmEnvironment } from "./registry.js";
 
-export function createStateEnvironment(stateDirectory: string): Record<string, string> {
-  assertGuestPath(stateDirectory);
-  const environment: Record<string, string> = {
-    PATH: "/usr/bin:/bin:/usr/sbin:/sbin",
-    LANG: "C.UTF-8",
-  };
-  for (const [name, directory] of Object.entries({
-    HOME: "h",
-    XDG_DATA_HOME: "d",
-    XDG_CACHE_HOME: "c",
-    XDG_CONFIG_HOME: "f",
-    XDG_STATE_HOME: "s",
-    XDG_RUNTIME_DIR: "r",
-    TMPDIR: "t",
-  })) {
-    environment[name] = path.join(stateDirectory, directory);
-  }
-  return environment;
-}
-
-/** Fixed executable/private state; each bounded CLI invocation is a direct child. */
+/** Fixed executable/shared native context; each bounded CLI invocation is a direct child. */
 export class SmolvmCli {
-  readonly #environment: Record<string, string>;
+  readonly environment: Readonly<Record<string, string>>;
   readonly #ready: Promise<void>;
   readonly #active = new Set<{ controller: AbortController; done: Promise<void> }>();
   #disposed = false;
@@ -42,15 +22,14 @@ export class SmolvmCli {
   constructor(options: {
     readonly smolvmPath: string;
     readonly stateDirectory: string;
-    readonly environment?: Readonly<Record<string, string>>;
+    readonly nativeEnvironment?: Readonly<Record<string, string>>;
   }) {
     assertGuestPath(options.smolvmPath);
     this.smolvmPath = options.smolvmPath;
     this.stateDirectory = options.stateDirectory;
-    this.#environment = {
-      ...smolvmEnvironment(options.environment),
-      ...createStateEnvironment(options.stateDirectory),
-    };
+    this.environment = Object.freeze({
+      ...(options.nativeEnvironment ?? createSmolvmEnvironment()),
+    });
     this.#ready = this.prepare();
     // Construction is synchronous; preserve preparation failure for run().
     void this.#ready.catch(() => undefined);
@@ -65,18 +44,6 @@ export class SmolvmCli {
       (await realpath(this.stateDirectory)) !== this.stateDirectory
     )
       throw new SandboxExecutionError("sandbox_start_failed");
-    for (const [name, directory] of Object.entries(this.#environment)) {
-      if (name !== "HOME" && name !== "TMPDIR" && !name.startsWith("XDG_")) continue;
-      await mkdir(directory, { mode: 0o700, recursive: true });
-      const st = await lstat(directory);
-      if (
-        !st.isDirectory() ||
-        st.uid !== process.getuid?.() ||
-        st.mode & 0o077 ||
-        (await realpath(directory)) !== directory
-      )
-        throw new SandboxExecutionError("sandbox_start_failed");
-    }
   }
 
   async run(
@@ -107,7 +74,7 @@ export class SmolvmCli {
       if (controller.signal.aborted) throw new SandboxExecutionError("sandbox_aborted");
       const host = createHostCommandExecutor({
         cwd: this.stateDirectory,
-        environment: this.#environment,
+        environment: this.environment,
       });
       try {
         return await host.execute(

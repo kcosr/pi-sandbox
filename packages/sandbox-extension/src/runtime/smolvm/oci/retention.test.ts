@@ -20,7 +20,22 @@ async function fixture() {
 }
 function record(statePath: string): ColdRecord {
   return {
-    version: 1,
+    version: 2,
+    sourceId: "pi-source",
+    registry: {
+      home: "/home/test",
+      dataDirectory: "/home/test/data",
+      cacheDirectory: "/home/test/cache",
+      configFile: "/home/test/config",
+    },
+    sourceIdentity: {
+      name: "pi-source",
+      parent: null,
+      createdAt: 42,
+      dataDirectory: "/cache/machine",
+      dev: 1,
+      ino: 2,
+    },
     mode: "cold",
     statePath,
     cwd: "/workspace",
