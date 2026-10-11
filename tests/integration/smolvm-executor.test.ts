@@ -1,10 +1,23 @@
 import { createServer } from "node:net";
-import { mkdtemp, mkdir, readFile, rm, writeFile, readdir, symlink } from "node:fs/promises";
+import {
+  chmod,
+  lstat,
+  mkdtemp,
+  mkdir,
+  readFile,
+  rm,
+  writeFile,
+  readdir,
+  symlink,
+} from "node:fs/promises";
 import path from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
-import { describe, expect, it } from "vitest";
+import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { createSmolvmExecutor } from "../../packages/sandbox-extension/src/runtime/smolvm/packed.js";
 import type { SandboxExecutor } from "../../packages/sandbox-extension/src/runtime/contracts.js";
+import { SmolvmCli } from "../../packages/sandbox-extension/src/runtime/smolvm/cli.js";
+import { listMachines } from "../../packages/sandbox-extension/src/runtime/smolvm/lifecycle.js";
+import { createSmolvmEnvironment } from "../../packages/sandbox-extension/src/runtime/smolvm/registry.js";
 
 const runtime = process.env.PI_SANDBOX_SMOLVM_BIN;
 const image = process.env.PI_SANDBOX_SMOLVM_IMAGE;
@@ -13,6 +26,87 @@ const enabled =
   process.platform === "linux" && process.arch === "x64" && !!runtime && !!image && !!digest;
 if (process.env.PI_SANDBOX_REQUIRE_SMOLVM === "1" && !enabled)
   throw new Error("Required smolvm packed tests need Linux x64 and explicit runtime/image/SHA256");
+
+let suiteRoot: string | undefined;
+let nativeEnvironment: Readonly<Record<string, string>> | undefined;
+let cleanupFailed = false;
+beforeAll(async () => {
+  if (!enabled) return;
+  suiteRoot = await mkdtemp("/var/tmp/psvm-suite-");
+  // All cases share one disposable ordinary account registry/cache. Never
+  // inherit the operator's native storage or cloud/registry settings.
+  for (const [key, dir] of Object.entries({
+    HOME: "h",
+    XDG_DATA_HOME: "d",
+    XDG_CACHE_HOME: "c",
+    XDG_CONFIG_HOME: "config",
+    XDG_STATE_HOME: "state",
+    XDG_RUNTIME_DIR: "run",
+  })) {
+    await mkdir(path.join(suiteRoot, dir), { mode: 0o700 });
+    vi.stubEnv(key, path.join(suiteRoot, dir));
+  }
+  const config = path.join(suiteRoot, "config.toml");
+  await writeFile(config, "", { mode: 0o600 });
+  vi.stubEnv("SMOLVM_CONFIG", config);
+  nativeEnvironment = Object.freeze(createSmolvmEnvironment());
+});
+async function assertEmptyFixtureRegistry(): Promise<void> {
+  if (!suiteRoot || !nativeEnvironment) throw new Error("Native fixture environment missing");
+  const cli = new SmolvmCli({
+    smolvmPath: runtime!,
+    stateDirectory: suiteRoot,
+    nativeEnvironment,
+  });
+  try {
+    const machines = await listMachines(cli);
+    if (machines.length)
+      throw new Error(
+        `Native fixture registry is not empty: ${machines.map((m) => m.name).join(", ")}`,
+      );
+  } finally {
+    await cli.dispose();
+  }
+}
+async function removeCase(root: string, state: string, vm?: SandboxExecutor): Promise<void> {
+  try {
+    await vm?.close();
+    expect(await readdir(state)).toEqual([]);
+    await assertEmptyFixtureRegistry();
+    await rm(root, { recursive: true, force: true });
+  } catch (error) {
+    cleanupFailed = true;
+    console.error("Preserving uncertain packed native fixture", root);
+    throw error;
+  }
+}
+afterAll(async () => {
+  if (!suiteRoot) return;
+  try {
+    await assertEmptyFixtureRegistry();
+    if (cleanupFailed) throw new Error("Native fixture cleanup was not confirmed");
+    // Test-only disposal after CLI-confirmed deletion. Upstream shared CoW
+    // caches contain read-only directories; restore owner traversal/removal
+    // permissions only within this suite's disposable tree, without following
+    // symlinks. Product lifecycle cleanup never performs this traversal.
+    const pending = [suiteRoot];
+    while (pending.length) {
+      const current = pending.pop()!;
+      const metadata = await lstat(current);
+      if (!metadata.isDirectory()) continue;
+      if (metadata.uid !== process.getuid?.()) throw new Error("Fixture directory owner changed");
+      await chmod(current, (metadata.mode & 0o777) | 0o700);
+      for (const entry of await readdir(current, { withFileTypes: true }))
+        if (entry.isDirectory()) pending.push(path.join(current, entry.name));
+    }
+    await rm(suiteRoot, { recursive: true, force: true });
+  } catch (error) {
+    console.error("Preserving uncertain packed native registry", suiteRoot);
+    throw error;
+  } finally {
+    vi.unstubAllEnvs();
+  }
+});
 
 async function waitFor(check: () => boolean) {
   const deadline = Date.now() + 20000;
@@ -26,28 +120,28 @@ async function fixture(
   action: (vm: SandboxExecutor, cwd: string, root: string) => Promise<void>,
   writable = true,
 ) {
-  const root = await mkdtemp("/var/tmp/psvm-");
+  if (!suiteRoot || cleanupFailed) throw new Error("Native fixture registry unavailable");
+  const root = await mkdtemp(path.join(suiteRoot, "case-"));
   const cwd = path.join(root, "project");
   const state = path.join(root, "state");
   await mkdir(cwd);
   await mkdir(state, { mode: 0o700 });
   await writeFile(path.join(root, "host-only"), "host secret fixture");
-  const vm = await createSmolvmExecutor({
-    cwd,
-    cwdWritable: writable,
-    stateDirectory: state,
-    smolvmPath: runtime!,
-    imagePath: image!,
-    imageSha256: digest!,
-    resources: { cpus: 1, memoryMiB: 512, storageGiB: 1, overlayGiB: 1 },
-    environment: { FIXTURE_VALUE: "configured" },
-  });
+  let vm: SandboxExecutor | undefined;
   try {
+    vm = await createSmolvmExecutor({
+      cwd,
+      cwdWritable: writable,
+      stateDirectory: state,
+      smolvmPath: runtime!,
+      imagePath: image!,
+      imageSha256: digest!,
+      resources: { cpus: 1, memoryMiB: 512, storageGiB: 1, overlayGiB: 1 },
+      environment: { FIXTURE_VALUE: "configured" },
+    });
     await action(vm, cwd, root);
   } finally {
-    await vm.close();
-    expect(await readdir(state)).toEqual([]);
-    await rm(root, { recursive: true, force: true });
+    await removeCase(root, state, vm);
   }
 }
 
@@ -124,7 +218,8 @@ describe.skipIf(!enabled)("native packed smolvm", () => {
     });
   }, 180000);
   it("rejects a project containing host control state through a directory alias", async () => {
-    const root = await mkdtemp("/var/tmp/psalias-");
+    if (!suiteRoot || cleanupFailed) throw new Error("Native fixture registry unavailable");
+    const root = await mkdtemp(path.join(suiteRoot, "alias-"));
     const cwd = path.join(root, "project");
     const state = path.join(root, "state");
     const alias = path.join(root, "agent-state");
@@ -149,7 +244,7 @@ describe.skipIf(!enabled)("native packed smolvm", () => {
     } finally {
       if (original === undefined) delete process.env.PI_CODING_AGENT_DIR;
       else process.env.PI_CODING_AGENT_DIR = original;
-      await rm(root, { recursive: true, force: true });
+      await removeCase(root, state);
     }
   });
   it("shares only the project, streams binary input, and retains background work until close", async () => {
