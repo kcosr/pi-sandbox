@@ -16,7 +16,9 @@ The build and installer validate required Bubblewrap options, including
 macOS direct mode requires Homebrew `coreutils`, `findutils`,
 `grep`, `gawk`, `fd`, and `ripgrep`, plus system Bash, `sh`, and `file`. The
 runtime resolves the Homebrew prefix for Apple silicon or Intel and fails
-closed if a GNU command is missing. A macOS release build additionally requires
+closed if a GNU command is missing. The macOS installer validates the selected
+administrative backend before checking these direct-mode prerequisites; smolvm
+installations do not require them. A macOS release build additionally requires
 Homebrew GNU tar (`gtar`) for reproducible archives.
 
 Configured home-directory expansion requires `/usr/bin/getent` on Linux or
@@ -621,7 +623,8 @@ requires usable `/dev/kvm` on Linux x86-64 or Hypervisor.framework on macOS 26+ 
 the configured image and a private controller-metadata directory outside the launch project.
 Provision each account's expanded `smolvm.state_directory` with that account as
 owner and mode `0700`; `/var/tmp/pi-vm-{{uid}}` keeps paths short and accounts
-separate. Its canonical expanded path must occupy at most 48 bytes. Startup does
+separate on Linux; use `/private/var/tmp/pi-vm-{{uid}}` on macOS to avoid the
+`/var` symlink. Its canonical expanded path must occupy at most 48 bytes. Startup does
 not create this directory or repair its ownership or permissions. VM disks and
 shared caches remain in smolvm’s ordinary account locations, not this directory.
 Normal shutdown calls named stop/delete; after a crash, use the recorded machine

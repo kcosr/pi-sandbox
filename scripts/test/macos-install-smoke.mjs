@@ -18,12 +18,14 @@ import {
 import { tmpdir } from "node:os";
 import { dirname, join, relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+import { renderLayoutText } from "../build/layout-render.mjs";
 
 const repositoryRoot = resolve(dirname(fileURLToPath(import.meta.url)), "../..");
 const temporaryRoot = await mkdtemp(join(tmpdir(), "pi-sandbox-macos-install-"));
 
 try {
   await verifyPayloadIntegrityChecks(temporaryRoot);
+  await verifyExecutionBackends(temporaryRoot);
 
   const release = join(temporaryRoot, "release");
   const installRoot = join(temporaryRoot, "root");
@@ -142,15 +144,85 @@ async function verifyPayloadIntegrityChecks(temporaryRoot) {
   );
 }
 
-async function createRelease(directory) {
+async function verifyExecutionBackends(root) {
+  const release = join(root, "smolvm-release");
+  const installRoot = join(root, "smolvm-root");
+  await createRelease(release, { backend: "smolvm" });
+  run(join(release, "install.sh"), [], { DESTDIR: installRoot });
+  const config = join(installRoot, "etc/pi-sandbox/config.toml");
+  const original = await readFile(config, "utf8");
+  if (!original.includes('backend = "smolvm"')) throw new Error("smolvm policy was not installed");
+  const directRelease = join(root, "direct-upgrade");
+  await createRelease(directRelease);
+  run(join(directRelease, "install.sh"), [], { DESTDIR: installRoot });
+  if ((await readFile(config, "utf8")) !== original)
+    throw new Error("ordinary upgrade replaced the installed smolvm policy");
+  run(join(directRelease, "install.sh"), ["--replace-config"], { DESTDIR: installRoot });
+  if (!(await readFile(config, "utf8")).includes('backend = "direct"'))
+    throw new Error("explicit replacement did not install the direct policy");
+
+  const unsupportedRelease = join(root, "unsupported-backend-release");
+  const unsupportedRoot = join(root, "unsupported-backend-root");
+  await createRelease(unsupportedRelease, { backend: "bubblewrap" });
+  expectFailure(
+    join(unsupportedRelease, "install.sh"),
+    [],
+    { DESTDIR: unsupportedRoot },
+    "unsupported macOS execution backend: bubblewrap",
+  );
+  await expectMissing(join(unsupportedRoot, "usr/local/libexec/pi-sandbox"));
+  await expectMissing(join(unsupportedRoot, "etc/pi-sandbox/config.toml"));
+
+  // Exercise the non-DESTDIR prerequisite branch with every installation path
+  // rendered into this disposable tree. No system paths or VM commands are used.
+  const hostRoot = join(root, "simulated-host");
+  const layout = {
+    configDir: join(hostRoot, "etc/pi-sandbox"),
+    libexecDir: join(hostRoot, "libexec/pi-sandbox"),
+    launcherPath: join(hostRoot, "bin/pi-sandbox"),
+    identitySocketPath: join(hostRoot, "identity.sock"),
+    auditSocketPath: join(hostRoot, "audit.sock"),
+  };
+  const fakeBin = join(root, "host-probes");
+  await mkdir(fakeBin);
+  await writeFile(join(fakeBin, "id"), '#!/bin/sh\n[ "$1" = -u ] && echo 0\n', { mode: 0o755 });
+  await writeFile(
+    join(fakeBin, "uname"),
+    '#!/bin/sh\ncase "$1" in -s) echo Darwin ;; -m) echo arm64 ;; *) exit 1 ;; esac\n',
+    { mode: 0o755 },
+  );
+  const environment = { DESTDIR: "", PATH: `${fakeBin}:${process.env.PATH}` };
+  const missingTools = join(root, "missing-homebrew");
+  const hostDirect = join(root, "host-direct-release");
+  await createRelease(hostDirect, { layout, homebrewPrefix: missingTools });
+  expectFailure(
+    join(hostDirect, "install.sh"),
+    [],
+    environment,
+    "missing required host executables",
+  );
+  await expectMissing(layout.libexecDir);
+  await expectMissing(join(layout.configDir, "config.toml"));
+  const hostSmolvm = join(root, "host-smolvm-release");
+  await createRelease(hostSmolvm, { backend: "smolvm", layout, homebrewPrefix: missingTools });
+  run(join(hostSmolvm, "install.sh"), [], environment);
+  if (!(await lstat(join(layout.libexecDir, "pi-sandbox"))).isFile())
+    throw new Error("smolvm install without direct-mode host tools failed");
+}
+
+async function createRelease(directory, { backend = "direct", layout, homebrewPrefix } = {}) {
   const payload = join(directory, "payload/pi-sandbox");
   for (const child of ["defaults", "theme", "assets", "export-html", "licenses"]) {
     await mkdir(join(payload, child), { recursive: true });
   }
-  await copyFile(
-    join(repositoryRoot, "scripts/install/macos-install.sh"),
-    join(directory, "install.sh"),
-  );
+  let installer = await readFile(join(repositoryRoot, "scripts/install/macos-install.sh"), "utf8");
+  if (layout) installer = renderLayoutText(installer, layout, "darwin");
+  if (homebrewPrefix)
+    installer = installer.replace(
+      "brew_prefix=/opt/homebrew",
+      `brew_prefix=${shellQuote(homebrewPrefix)}`,
+    );
+  await writeFile(join(directory, "install.sh"), installer);
   await copyFile(
     join(repositoryRoot, "scripts/install/macos-uninstall.sh"),
     join(directory, "uninstall.sh"),
@@ -166,11 +238,12 @@ shift
 root=
 if [ "\${1:-}" = --root ]; then root=$2; shift 2; fi
 [ "$#" -eq 0 ]
-grep -q '^config_version = 11$' "$root/etc/pi-sandbox/config.toml"
-grep -q '"providers"' "$root/etc/pi-sandbox/models.json"
+config_dir=${shellQuote(layout?.configDir ?? "/etc/pi-sandbox")}
+grep -q '^config_version = 11$' "$root$config_dir/config.toml"
+grep -q '"providers"' "$root$config_dir/models.json"
 case "$operation" in
   --validate-installation) ;;
-  --print-execution-backend) echo direct ;;
+  --print-execution-backend) sed -n 's/^backend = "\\([a-z]*\\)"$/\\1/p' "$root$config_dir/config.toml" ;;
   *) exit 64 ;;
 esac
 `,
@@ -178,7 +251,7 @@ esac
   );
   await writeFile(
     join(payload, "defaults/config.toml"),
-    'config_version = 11\nmodels_file = "/etc/pi-sandbox/models.json"\n\n[codemode]\nenabled = false\n\n[mcp.servers]\n\n[sessions]\nretention_days = 0\n\n[audit]\nenabled = false\nfacility = "local0"\n\n[filesystem]\ncwd_writable = true\nhidden_paths = []\n\n[execution]\nbackend = "direct"\n\n[identity]\nmode = "disabled"\n\n[network]\nmode = "host"\n\n[environment.pi]\n\n[environment.sandbox]\n\n[environment.extensions]\n\n[extensions]\n',
+    `config_version = 11\nmodels_file = "/etc/pi-sandbox/models.json"\n\n[codemode]\nenabled = false\n\n[mcp.servers]\n\n[sessions]\nretention_days = 0\n\n[audit]\nenabled = false\nfacility = "local0"\n\n[filesystem]\ncwd_writable = true\nhidden_paths = []\n\n[execution]\nbackend = "${backend}"\n\n[identity]\nmode = "disabled"\n\n[network]\nmode = "host"\n\n[environment.pi]\n\n[environment.sandbox]\n\n[environment.extensions]\n\n[extensions]\n`,
   );
   await writeFile(join(payload, "defaults/models.json"), '{"providers":{}}\n');
   await writeFile(join(payload, "package.json"), '{"name":"pi-sandbox"}\n');
@@ -209,6 +282,10 @@ async function regularFiles(directory) {
     else if (entry.isFile()) output.push(path);
   }
   return output;
+}
+
+function shellQuote(value) {
+  return `'${value.replaceAll("'", "'\\''")}'`;
 }
 
 function run(command, args, environment) {
