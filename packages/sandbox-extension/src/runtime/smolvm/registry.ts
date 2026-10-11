@@ -82,9 +82,11 @@ export function validateSmolvmSocketPaths(environment: Readonly<Record<string, s
 }
 
 export function validateNamePrefix(prefix: unknown): asserts prefix is string {
+  // Stock OCI branch rejuvenation sets the container's Linux hostname. Reserve
+  // one separator plus the full 128-bit random suffix within its 64-byte limit.
   if (
     typeof prefix !== "string" ||
-    !/^[A-Za-z0-9][A-Za-z0-9_-]{0,94}$/u.test(prefix) ||
+    !/^[A-Za-z0-9][A-Za-z0-9_-]{0,30}$/u.test(prefix) ||
     prefix.endsWith("-") ||
     prefix.includes("--")
   )

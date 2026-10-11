@@ -245,13 +245,14 @@ async function rejectAfterCleanup(
   error: unknown,
   cleanup: () => Promise<unknown>,
   statePath: string,
+  operation = "start",
 ): Promise<never> {
   try {
     await cleanup();
   } catch (cleanupError) {
     throw new AggregateError(
       [error, cleanupError],
-      `smolvm_oci_start_failed; retained state: ${statePath}; use recovery.json for scoped CLI recovery`,
+      `smolvm_oci_${operation}_failed; retained state: ${statePath}; use recovery.json for scoped CLI recovery`,
     );
   }
   throw error;
@@ -772,8 +773,7 @@ class Family implements SmolvmOciFamily {
         throw error;
       const closing = this.close({ retainState: true });
       release();
-      await closing;
-      throw error;
+      return rejectAfterCleanup(error, () => closing, this.statePath, "branch");
     } finally {
       release();
     }

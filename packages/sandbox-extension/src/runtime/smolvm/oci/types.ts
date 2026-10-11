@@ -10,6 +10,7 @@ import type {
 /** Trusted controller configuration; never supplied by a tool call. */
 export interface SmolvmOciFamilyOptions {
   readonly smolvmPath: string;
+  /** At most 31 ASCII characters; a 128-bit random suffix keeps owned names within 64 bytes. */
   readonly namePrefix?: string;
   /** Pinned `docker save` archive, provisioned before evaluation. */
   readonly imageArchive: string;

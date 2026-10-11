@@ -430,6 +430,29 @@ suite("OCI family controller policy with a simulated CLI", () => {
     expect(mocks.calls).toHaveLength(0);
     await expect(stat(statePath)).rejects.toMatchObject({ code: "ENOENT" });
   });
+  it("enforces the hostname prefix boundary before create or branch can mutate native state", async () => {
+    await expect(fixture({ namePrefix: "x".repeat(32) })).rejects.toThrow(
+      "smolvm_name_prefix_invalid",
+    );
+    expect(mocks.calls).toHaveLength(0);
+    const family = await fixture({ namePrefix: "s".repeat(31) });
+    expect(Buffer.byteLength(family.sourceId)).toBe(64);
+    try {
+      const calls = mocks.calls.length;
+      await expect(
+        family.branch(family.sourceId, { branchable: false, namePrefix: "x".repeat(32) }),
+      ).rejects.toThrow("smolvm_name_prefix_invalid");
+      expect(mocks.calls).toHaveLength(calls);
+      expect(() => family.attachment(family.sourceId)).not.toThrow();
+      const child = await family.branch(family.sourceId, {
+        branchable: false,
+        namePrefix: "c".repeat(31),
+      });
+      expect(Buffer.byteLength(child)).toBe(64);
+    } finally {
+      await family.close();
+    }
+  });
   it("persists intent before onPrepared and never adopts a colliding nonzero create", async () => {
     let preparedName = "";
     let preparedState = "";
@@ -468,7 +491,7 @@ suite("OCI family controller policy with a simulated CLI", () => {
     const family = await fixture();
     mocks.branchFailure = true;
     await expect(family.branch(family.sourceId, { branchable: false })).rejects.toThrow(
-      "cleanup_unconfirmed",
+      "smolvm_oci_branch_failed",
     );
     const journal = await readSmolvmOciFamily({ statePath: family.statePath });
     expect(journal.machines.at(-1)?.status).toBe("uncertain");
@@ -483,7 +506,7 @@ suite("OCI family controller policy with a simulated CLI", () => {
     mocks.calls = [];
     mocks.branchFailure = true;
     await expect(family.branch(family.sourceId, { branchable: false })).rejects.toThrow(
-      "cleanup_unconfirmed",
+      "smolvm_oci_branch_failed",
     );
     expect(mocks.names.has(sibling)).toBe(false);
     expect(mocks.names.get(family.sourceId)?.state).toBe("frozen");
@@ -495,6 +518,25 @@ suite("OCI family controller policy with a simulated CLI", () => {
         .filter((argv) => ["stop", "delete"].includes(argv[1]!))
         .every((argv) => argv.includes(sibling)),
     ).toBe(true);
+  });
+  it("preserves the original branch failure together with uncertain cleanup and recovery metadata", async () => {
+    const family = await fixture();
+    mocks.branchFailure = true;
+    const error: unknown = await family
+      .branch(family.sourceId, { branchable: false })
+      .catch((cause: unknown) => cause);
+    expect(error).toBeInstanceOf(AggregateError);
+    if (!(error instanceof AggregateError)) throw Error("expected aggregate branch failure");
+    expect(error.message).toContain(family.statePath);
+    expect(error.errors[0]).toMatchObject({
+      code: "sandbox_process_failed",
+      cause: { message: "smolvm_command_failed: branch failed" },
+    });
+    expect(error.errors[1]).toBeInstanceOf(AggregateError);
+    expect((error.errors[1] as AggregateError).message).toContain("cleanup_unconfirmed");
+    expect(
+      (await readSmolvmOciFamily({ statePath: family.statePath })).machines.at(-1)?.status,
+    ).toBe("uncertain");
   });
   it("does not probe foreign machines during healthy guest calls", async () => {
     const family = await fixture();
@@ -819,7 +861,7 @@ suite("OCI family controller policy with a simulated CLI", () => {
       }),
     });
     const branching = family.branch(family.sourceId, { branchable: false });
-    const rejected = expect(branching).rejects.toThrow("cleanup_unconfirmed");
+    const rejected = expect(branching).rejects.toThrow("smolvm_oci_branch_failed");
     await expect(handle.close()).rejects.toThrow("exec reap unconfirmed");
     await rejected;
     expect(mocks.events).toEqual([`stop:${family.sourceId}`]);
@@ -1127,14 +1169,14 @@ suite("OCI family controller policy with a simulated CLI", () => {
     await reopened.close();
   });
   it("keeps the recovery journal bounded through repeated branch/delete and cold-reopen cycles", async () => {
-    let family = await fixture({ namePrefix: "s".repeat(95) });
+    let family = await fixture({ namePrefix: "s".repeat(31) });
     const statePath = family.statePath;
     const initialSize = (await stat(path.join(statePath, "recovery.json"))).size;
     for (let generation = 0; generation < 4; generation++) {
       for (let index = 0; index < 40; index++) {
         const child = await family.branch(family.sourceId, {
           branchable: false,
-          namePrefix: "c".repeat(95),
+          namePrefix: "c".repeat(31),
         });
         await family.removeMachine(child);
       }
