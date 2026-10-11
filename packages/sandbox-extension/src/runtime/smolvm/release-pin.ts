@@ -1,5 +1,5 @@
 /** Shared by runtime verification and Node 24+ release tooling. */
-export const SMOLVM_VERSION = "1.25.4";
-export const SMOLVM_SOURCE_COMMIT = "3a2d56c295c7e58a036bd8cac2d7b078b7a6c8b0";
+export const SMOLVM_VERSION = "1.26.1";
+export const SMOLVM_SOURCE_COMMIT = "093852e8f527ce7db5f96195b909de15fef82251";
 export const SMOLVM_RELEASE_SHA256 =
-  "5a470d2db922290f17918bb8cee35820a389690b7c741570d8944f500bc04bc9";
+  "bcae519f7dad3cead2deaa0362a42a1ad7bffce73ea7a28161dea6822c559654";

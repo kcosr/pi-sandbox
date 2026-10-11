@@ -35,7 +35,7 @@ reimplemented rather than mechanically reapplied.
   an absolute system Bubblewrap executable or a verified bundled executable;
   runtime configuration cannot change that provider.
 - Optional smolvm supports Linux x86-64 using a build-selected external complete
-  1.25.4 distribution and administrator-selected image/resource policy. Mount only
+  1.26.1 distribution and administrator-selected image/resource policy. Mount only
   the launch directory at its host path, require offline networking and no hidden
   paths, and keep its fixed VM process lifetime. Normal shutdown cleans up; abrupt
   owner death can require manual smolvm cleanup. Add no guardian or watcher.

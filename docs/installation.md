@@ -605,7 +605,7 @@ adapters and preserves administrator-selected permissions and audit controls.
 ## Optional external smolvm runtime
 
 Linux x86-64 distributions may opt into smolvm by setting
-`platforms.linux.smolvm.path` and `version = "1.25.4"` in the build manifest.
+`platforms.linux.smolvm.path` and `version = "1.26.1"` in the build manifest.
 Keep the official wrapper, binary, libraries and guest rootfs together at that
 fixed path. A wrapper copied by itself is insufficient. Pi verifies the pinned
 complete runtime inventory at VM startup. The generated release manifest records

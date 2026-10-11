@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+### Changed
+
+- Pin the Linux smolvm distribution and reusable sandbox extension to smolvm 1.26.1. Rebuild plain tool images with that version; runtime-bound retained state continues to require its recorded distribution.
+
 ## 0.7.0 - 2026-10-10
 
 ### Breaking changes

@@ -16,7 +16,7 @@ export interface CompiledLayout {
   };
   readonly smolvm?: {
     readonly path: string;
-    readonly version: "1.25.4";
+    readonly version: "1.26.1";
   };
 }
 

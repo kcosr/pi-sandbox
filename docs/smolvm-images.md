@@ -7,8 +7,14 @@ project's `Smolfile`, `Dockerfile`, image build scripts, or registry references.
 
 ## Plain tools image for a mounted host project
 
+Plain packs must match the runtime version exactly. Rebuild an older tools image
+with 1.26.1 before selecting this runtime; changing the configured checksum does
+not upgrade the image. Keep the previous distribution available for any retained
+VM state bound to it, and finish or recover those machines before switching their
+configuration. Do not rewrite old image manifests or retention receipts.
+
 [examples/smolvm/Smolfile](../examples/smolvm/Smolfile) records the small Alpine
-tools recipe qualified with smolvm **1.25.4** on Linux x86-64. The commands below
+tools recipe qualified with smolvm **1.26.1** on Linux x86-64. The commands below
 apply its resource values and installation steps explicitly through the upstream
 CLI. No private repository or custom builder is required.
 
@@ -16,7 +22,7 @@ Prepare these prerequisites first:
 
 - A Linux x86-64 host with usable `/dev/kvm` and enough free disk space for the
   builder, packed image, and offline verification copy.
-- The complete official [smolvm 1.25.4 distribution](https://github.com/smol-machines/smolvm/releases/tag/v1.25.4),
+- The complete official [smolvm 1.26.1 distribution](https://github.com/smol-machines/smolvm/releases/tag/v1.26.1),
   verified against its release checksums. Keep its wrapper, executable, libraries,
   and guest rootfs together in an operator-controlled directory.
 - Host `resize2fs` from e2fsprogs to shrink the bundled templates to the
@@ -30,7 +36,7 @@ Run these steps from one shell, stopping if any command fails. Set the executabl
 and a new output directory to your actual absolute paths:
 
 ```sh
-smolvm_bin=/opt/smolvm-1.25.4/smolvm
+smolvm_bin=/opt/smolvm-1.26.1/smolvm
 image_output=/absolute/operator-owned/tools-image
 test -x "$smolvm_bin"
 test -x /usr/sbin/resize2fs
@@ -54,7 +60,7 @@ smol() (
 smol --version
 ```
 
-Expect `smolvm 1.25.4`. The private, short state path avoids Unix socket path
+Expect `smolvm 1.26.1`. The private, short state path avoids Unix socket path
 limits and separates this builder from your usual smolvm machines. Preserve this
 environment when inspecting or cleaning up the builder, including after an
 interrupted shell.

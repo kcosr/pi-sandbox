@@ -22,7 +22,7 @@ const vm =
     .replace('process_lifetime = "command"\n', "") + imagePolicy;
 const catalog = createManagedExtensionCatalog([]);
 const parse = (source: string) => parseConfig(source, "test", catalog);
-const layout = { smolvm: { path: "/opt/smolvm/smolvm", version: "1.25.4" } } as const;
+const layout = { smolvm: { path: "/opt/smolvm/smolvm", version: "1.26.1" } } as const;
 
 describe("managed smolvm policy", () => {
   it("selects a fixed VM lifetime and immutable administrator image policy", () => {

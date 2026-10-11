@@ -502,7 +502,7 @@ it is not an execution backend and does not run tool operations.
 
 ## Optional smolvm tool executor
 
-On Linux x86-64, the same extracted tool factory can use a smolvm 1.25.4
+On Linux x86-64, the same extracted tool factory can use a smolvm 1.26.1
 executor. The managed application still owns one executor for its lifetime and
 keeps configuration, permissions, audit and host MCP outside it. A fixed
 build-selected runtime plus administrator-selected image creates the private

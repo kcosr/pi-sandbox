@@ -89,7 +89,7 @@ test("release inventory ties source and executable identity to selected shipped 
       ...args,
       smolvm: {
         path: "/opt/smolvm/smolvm",
-        version: "1.25.4",
+        version: "1.26.1",
         sourceCommit: "e".repeat(40),
         releaseArchiveSha256: "f".repeat(64),
       },
@@ -97,7 +97,7 @@ test("release inventory ties source and executable identity to selected shipped 
     assert.ok(
       externalRuntime.metadata.component.properties.some(
         (property) =>
-          property.name.endsWith("external-smolvm-version") && property.value === "1.25.4",
+          property.name.endsWith("external-smolvm-version") && property.value === "1.26.1",
       ),
     );
     assert.ok(
