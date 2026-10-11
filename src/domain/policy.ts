@@ -48,6 +48,7 @@ export interface ExecutionConfig {
 }
 
 export interface SmolvmConfig {
+  readonly e2fsprogsDirectory?: string;
   readonly image: string;
   readonly imageSha256: string;
   readonly stateDirectory: string;

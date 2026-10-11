@@ -255,6 +255,9 @@ async function createProbedExecutor(
         imagePath: config.smolvm.image,
         imageSha256: config.smolvm.imageSha256,
         stateDirectory: config.smolvm.stateDirectory,
+        ...(config.smolvm.e2fsprogsDirectory === undefined
+          ? {}
+          : { e2fsprogsDirectory: config.smolvm.e2fsprogsDirectory }),
         resources: {
           cpus: config.smolvm.cpus,
           memoryMiB: config.smolvm.memoryMiB,
@@ -295,7 +298,7 @@ function executionStartupMessage(config: SandboxConfig): string {
   if (config.execution.backend === "bubblewrap")
     return "Bubblewrap could not establish the required sandbox; verify unprivileged user namespaces and Bubblewrap compatibility";
   if (config.execution.backend === "smolvm")
-    return "smolvm could not start the VM; verify KVM access, the pinned complete runtime distribution, the image digest, and private state directory";
+    return "smolvm could not start the VM; verify host virtualization support, the pinned complete runtime distribution, the image digest, and private state directory";
   return "Direct execution could not establish its bounded command runner; verify the documented host prerequisites";
 }
 
@@ -303,6 +306,7 @@ export function assertExecutionPlatform(
   config: SandboxConfig,
   platform: NodeJS.Platform = process.platform,
   layout: Pick<CompiledLayout, "smolvm"> = buildLayout,
+  architecture: string = process.arch,
 ): void {
   if (platform !== "linux" && platform !== "darwin") {
     throw new Error(`Unsupported operating system: ${platform}`);
@@ -311,7 +315,11 @@ export function assertExecutionPlatform(
     throw new Error("Bubblewrap execution is supported only on Linux");
   }
   if (config.execution.backend === "smolvm") {
-    if (platform !== "linux") throw new Error("smolvm execution is supported only on Linux");
+    if (!(
+      (platform === "linux" && architecture === "x64") ||
+      (platform === "darwin" && architecture === "arm64")
+    ))
+      throw new Error("smolvm execution requires Linux x86-64 or macOS arm64");
     if (layout.smolvm === undefined)
       throw new Error("This distribution does not include a smolvm execution provider");
     if (config.smolvm === undefined)

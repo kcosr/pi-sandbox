@@ -20,3 +20,11 @@ libexec_dir = "/usr/local/libexec/pi-sandbox"
 launcher_path = "/usr/local/bin/pi-sandbox"
 identity_socket_path = "/run/pi-sandbox-identity/broker.sock"
 audit_socket_path = "/run/pi-sandbox-audit/collector.sock"
+
+# Optional external complete runtime, selected separately for each target.
+# [platforms.linux.smolvm]
+# path = "/opt/smolvm-1.26.1/smolvm"
+# version = "1.26.1"
+# [platforms.darwin.smolvm]
+# path = "/opt/smolvm-1.26.1/smolvm"
+# version = "1.26.1"

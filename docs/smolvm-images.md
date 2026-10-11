@@ -14,13 +14,14 @@ VM state bound to it, and finish or recover those machines before switching thei
 configuration. Do not rewrite old image manifests or retention receipts.
 
 [examples/smolvm/Smolfile](../examples/smolvm/Smolfile) records the small Alpine
-tools recipe qualified with smolvm **1.26.1** on Linux x86-64. The commands below
+tools recipe qualified with smolvm **1.26.1** on Linux x86-64 and macOS arm64. The commands below
 apply its resource values and installation steps explicitly through the upstream
 CLI. No private repository or custom builder is required.
 
 Prepare these prerequisites first:
 
-- A Linux x86-64 host with usable `/dev/kvm` and enough free disk space for the
+- A Linux x86-64 host with usable `/dev/kvm`, or a macOS 26+ arm64 host with
+  `sysctl -n kern.hv_support` reporting `1`, and enough free disk space for the
   builder, packed image, and offline verification copy.
 - The complete official [smolvm 1.26.1 distribution](https://github.com/smol-machines/smolvm/releases/tag/v1.26.1),
   verified against its release checksums. Keep its wrapper, executable, libraries,
@@ -149,7 +150,7 @@ The extension's `./controller` API separately accepts a local, digest-pinned
 writable guest workspace for branching. An OCI archive is not interchangeable
 with the plain `.smolmachine` image used above.
 
-Build from an operator-reviewed Dockerfile and context, target `linux/amd64`, and
+Build from an operator-reviewed Dockerfile and context, target `linux/amd64` on Linux x86-64 or `linux/arm64` on Apple Silicon, and
 install the fixed GNU paths listed above plus Node at `/usr/bin/node`. Include
 `/bin/sleep` with support for `infinity`; the controller supplies the running
 workload and does not rely on the image's application command. An example export,
@@ -175,3 +176,36 @@ it in a system directory searched by the launcher's fixed PATH
 (`/usr/bin:/bin:/usr/sbin:/sbin`); a user-local PATH entry is not inherited. This
 is distinct from prepared plain packs, which already contain sized templates
 and cannot request smaller capacities in our backend.
+
+## macOS arm64 image preparation
+
+Use the complete official Darwin arm64 1.26.1 distribution. Its archive SHA-256
+is `3aee6c92aa0552754159494c2f073d5f99cf1c2a12ecc022a08976bd8a1fc5bb`.
+The plain recipe above also produces an arm64 pack. Use a short canonical
+`/private/tmp/...` builder account and provision both `resize2fs` and `e2fsck`.
+For a nonstandard installation, add only the trusted directory to the builder's
+explicit PATH; the extension/controller can select it with `e2fsprogsDirectory`.
+Upstream searches fixed Homebrew/system directories before PATH. A conflicting
+higher-priority tool is rejected when an explicit directory is configured.
+
+Use `/usr/bin/shasum -a 256` in place of `sha256sum` on macOS. Inspect actual
+block-device capacities: smolvm 1.26.1 can warn about missing `resize2fs` and still
+succeed with bundled 20/10 GiB disks after a 1/1 GiB request. Do not accept resource
+labels as proof. The integration checks capacities before serving tools.
+
+For an OCI Ubuntu guest, the public
+[arm64 recipe](../examples/smolvm/Dockerfile.ubuntu24.04-arm64) pins an Ubuntu
+24.04 base and installs the development tools used by the evaluator:
+
+```sh
+docker build --platform linux/arm64 -t pi-eval-tools:reviewed \
+  -f examples/smolvm/Dockerfile.ubuntu24.04-arm64 examples/smolvm
+docker image save --output /absolute/operator-owned/tools-arm64.tar pi-eval-tools:reviewed
+shasum -a 256 /absolute/operator-owned/tools-arm64.tar
+```
+
+Docker is needed only for that build procedure, not for normal VM execution.
+Package repositories are not snapshot-pinned; retain each build's inventory and
+verify its own digest, offline tool execution, native compiler, branch isolation
+and cold reopening. An x86-64 archive is not an arm64 image. Neither mode adds
+automatic registry pulls or executes a project's build recipe.

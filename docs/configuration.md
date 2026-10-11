@@ -47,7 +47,7 @@ available only on Linux. Direct execution is available on Linux and macOS and
 runs approved built-in operations with the invoking user's ordinary host
 filesystem and process authority. It is an explicit operating mode, never a
 fallback after a sandbox failure. macOS requires `identity.mode = disabled`.
-The optional smolvm backend supports Linux x86-64 and requires a provider selected
+The optional smolvm backend supports Linux x86-64 and macOS 26+ arm64 and requires a provider selected
 at build time. It mounts only the launch directory from the host.
 
 The required `network` table selects `none`, `local`, or `host` for built-in tools and
@@ -771,7 +771,7 @@ function record tool identity, permission decisions, and outcomes only.
 
 ## smolvm image and runtime selection
 
-The optional Linux x86-64 backend uses a complete, fixed smolvm **1.26.1**
+The optional Linux x86-64 and macOS 26+ arm64 backend uses a complete, fixed smolvm **1.26.1**
 distribution. The distribution manifest, not runtime configuration or an
 identity rule, selects its absolute wrapper path:
 
@@ -780,6 +780,8 @@ identity rule, selects its absolute wrapper path:
 path = "/opt/smolvm-1.26.1/smolvm"
 version = "1.26.1"
 ```
+
+For macOS arm64, use `[platforms.darwin.smolvm]` with the complete Darwin arm64 distribution. Intel macOS and Linux arm64 are not supported by this VM backend.
 
 This extends distribution format 3. The runtime, adjacent libraries and guest
 rootfs are external prerequisites, not included in the Pi archive. Startup
@@ -818,7 +820,7 @@ path below `/`, contain no colon and occupy at most 48 bytes. Provision this
 directory for each account before use, owned by that account with mode `0700`.
 For example, the template above selects `/var/tmp/pi-vm-1001` for UID 1001.
 This holds ownership records and attachment sockets, not VM disks. The native
-registry and caches use the invoking process’s ordinary HOME/XDG locations,
+registry and caches use the invoking process’s ordinary HOME/XDG locations on Linux, or HOME/Library locations on macOS,
 captured before starting smolvm. They must also remain outside guest mounts.
 Startup verifies canonical paths, private ownership and placement outside the
 project; it does not create or change permissions on this account directory.
@@ -832,10 +834,18 @@ host `resize2fs` from e2fsprogs. See the
 Prepared plain packs use their already-sized templates; capacities below the
 image's logical disk sizes are rejected instead of shrinking them at launch.
 
+Optional `smolvm.e2fsprogs_directory` selects a literal, canonical trusted directory
+containing executable `resize2fs` and `e2fsck`, outside guest mounts. The launcher
+adds only that directory to its fixed PATH. Because upstream checks fixed install
+locations first, a conflicting earlier tool is rejected. This is administrator
+configuration, never supplied by the project or identity overrides. Leave it
+unset when the ordinary system tools suffice. The standalone extension and OCI
+controller expose the same option as `e2fsprogsDirectory`.
+
 The `[smolvm]` table is optional for other backends. It may be present in a
 Bubblewrap base policy when an identity rule is allowed to select smolvm.
 Identity rules cannot replace the image, digest, private state location,
-resources or pinned runtime. The complete effective configuration is validated
+resources, disk-tool directory or pinned runtime. The complete effective configuration is validated
 after identity selection.
 
 smolvm has one fixed process lifetime: background processes survive ordinary

@@ -115,22 +115,32 @@ function parseBubblewrap(value, manifestDirectory, libexecDir) {
   throw new Error("distribution platforms.linux.bubblewrap.mode must be system or bundled");
 }
 
-function parseSmolvm(value) {
+function parseSmolvm(value, platform, architecture) {
   if (value === undefined) return undefined;
-  const provider = object(value, "distribution platforms.linux.smolvm");
-  rejectUnknown(provider, new Set(["path", "version"]), "distribution platforms.linux.smolvm");
+  if (!(
+    (platform === "linux" && architecture === "x64") ||
+    (platform === "darwin" && architecture === "arm64")
+  )) {
+    throw new Error("smolvm execution requires Linux x86-64 or macOS arm64");
+  }
+  const description = `distribution platforms.${platform}.smolvm`;
+  const provider = object(value, description);
+  rejectUnknown(provider, new Set(["path", "version"]), description);
   if (provider.version !== SMOLVM_VERSION)
-    throw new Error(`distribution platforms.linux.smolvm.version must be ${SMOLVM_VERSION}`);
-  const path = absolutePath(provider.path, "distribution platforms.linux.smolvm.path");
-  if (/[:\r\n]/u.test(path))
-    throw new Error("distribution platforms.linux.smolvm.path contains unsupported characters");
+    throw new Error(`${description}.version must be ${SMOLVM_VERSION}`);
+  const path = absolutePath(provider.path, `${description}.path`);
+  if (/[:\r\n]/u.test(path)) throw new Error(`${description}.path contains unsupported characters`);
   return Object.freeze({
     path,
     version: provider.version,
   });
 }
 
-export async function loadDistribution(path, platform = process.platform) {
+export async function loadDistribution(
+  path,
+  platform = process.platform,
+  architecture = process.arch,
+) {
   const distributionPath = resolve(path);
   let parsed;
   try {
@@ -191,13 +201,9 @@ export async function loadDistribution(path, platform = process.platform) {
       : undefined;
   if (
     platform === "darwin" &&
-    (selected.service_dir !== undefined ||
-      selected.bubblewrap !== undefined ||
-      selected.smolvm !== undefined)
+    (selected.service_dir !== undefined || selected.bubblewrap !== undefined)
   ) {
-    throw new Error(
-      "distribution platforms.darwin does not support service_dir, bubblewrap or smolvm",
-    );
+    throw new Error("distribution platforms.darwin does not support service_dir or bubblewrap");
   }
   if (launcherPath === libexecDir || launcherPath.startsWith(`${libexecDir}/`)) {
     throw new Error("distribution launcher_path must be outside libexec_dir");
@@ -206,7 +212,7 @@ export async function loadDistribution(path, platform = process.platform) {
     platform === "linux"
       ? parseBubblewrap(selected.bubblewrap, manifestDirectory, libexecDir)
       : undefined;
-  const smolvm = platform === "linux" ? parseSmolvm(selected.smolvm) : undefined;
+  const smolvm = parseSmolvm(selected.smolvm, platform, architecture);
 
   return Object.freeze({
     path: distributionPath,

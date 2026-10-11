@@ -38,10 +38,72 @@ describe("managed smolvm policy", () => {
       overlayGiB: 1,
     });
     expect(Object.isFrozen(config.smolvm)).toBe(true);
-    expect(() => assertExecutionPlatform(config, "linux", layout)).not.toThrow();
-    // Build/config validation does not need installed runtime/image paths or KVM.
-    expect(() => assertExecutionPlatform(config, "linux", {})).toThrow("smolvm execution provider");
-    expect(() => assertExecutionPlatform(config, "darwin", layout)).toThrow("only on Linux");
+    expect(() => assertExecutionPlatform(config, "linux", layout, "x64")).not.toThrow();
+  });
+
+  it.each([
+    ["linux", "x64"],
+    ["darwin", "arm64"],
+  ] as const)("admits build-selected smolvm on %s %s", (platform, architecture) => {
+    const config = parse(vm);
+    // Administrative validation does not require installed runtime/image paths or virtualization.
+    expect(() => assertExecutionPlatform(config, platform, layout, architecture)).not.toThrow();
+    expect(() => assertExecutionPlatform(config, platform, {}, architecture)).toThrow(
+      "smolvm execution provider",
+    );
+    expect(() =>
+      assertExecutionPlatform(
+        { ...config, filesystem: { cwdWritable: false, hiddenPaths: [] } },
+        platform,
+        layout,
+        architecture,
+      ),
+    ).not.toThrow();
+  });
+
+  it.each([
+    ["linux", "arm64"],
+    ["darwin", "x64"],
+    ["darwin", "arm"],
+  ] as const)("rejects smolvm on %s %s", (platform, architecture) => {
+    expect(() => assertExecutionPlatform(parse(vm), platform, layout, architecture)).toThrow(
+      "smolvm execution requires Linux x86-64 or macOS arm64",
+    );
+  });
+
+  it("preserves Darwin policy restrictions after effective configuration selection", () => {
+    const config = parse(vm);
+    const assertDarwin = (candidate: typeof config) =>
+      assertExecutionPlatform(candidate, "darwin", layout, "arm64");
+    expect(() => assertDarwin({ ...parse(base), execution: config.execution })).toThrow(
+      "configured image",
+    );
+    for (const mode of ["host", "local"] as const) {
+      expect(() => assertDarwin({ ...config, network: { mode } })).toThrow("network.mode = none");
+    }
+    expect(() =>
+      assertDarwin({ ...config, execution: { backend: "smolvm", processLifetime: "command" } }),
+    ).toThrow("fixed sandbox process lifetime");
+    expect(() =>
+      assertDarwin({ ...config, filesystem: { cwdWritable: true, hiddenPaths: ["/private"] } }),
+    ).toThrow("filesystem.hidden_paths = []");
+    expect(() => assertDarwin({ ...config, identity: { mode: "broker" } })).toThrow(
+      "macOS requires identity.mode = disabled",
+    );
+    expect(() => assertDarwin({ ...config, audit: { ...config.audit, enabled: true } })).toThrow(
+      "macOS requires audit.enabled = false",
+    );
+    expect(() =>
+      assertDarwin({ ...config, execution: { backend: "bubblewrap", processLifetime: "command" } }),
+    ).toThrow("Bubblewrap execution is supported only on Linux");
+  });
+
+  it("accepts only a literal administrator-selected disk tool directory", () => {
+    const config = parse(vm + 'e2fsprogs_directory = "/opt/e2fsprogs/sbin"\n');
+    expect(config.smolvm?.e2fsprogsDirectory).toBe("/opt/e2fsprogs/sbin");
+    expect(applyIdentityOverrides(config, { tools: {} }).smolvm).toBe(config.smolvm);
+    for (const value of ["relative", "/", "/tmp/../tools", "/tools:extra"])
+      expect(() => parse(vm + `e2fsprogs_directory = "${value}"\n`)).toThrow("e2fsprogs_directory");
   });
 
   it("retains an optional image policy for a later broker backend selection", () => {
@@ -52,7 +114,7 @@ describe("managed smolvm policy", () => {
     });
     expect(selected.smolvm).toBe(config.smolvm);
     expect(selected.execution).toEqual({ backend: "smolvm", processLifetime: "sandbox" });
-    expect(() => assertExecutionPlatform(selected, "linux", layout)).not.toThrow();
+    expect(() => assertExecutionPlatform(selected, "linux", layout, "x64")).not.toThrow();
     const returned = applyIdentityOverrides(selected, {
       execution: { backend: "bubblewrap" },
       tools: {},
@@ -93,13 +155,16 @@ describe("managed smolvm policy", () => {
       execution: { backend: "smolvm" },
       tools: {},
     });
-    expect(() => assertExecutionPlatform(selected, "linux", layout)).toThrow("configured image");
+    expect(() => assertExecutionPlatform(selected, "linux", layout, "x64")).toThrow(
+      "configured image",
+    );
     const config = parse(vm);
     expect(() =>
       assertExecutionPlatform(
         applyIdentityOverrides(config, { network: { mode: "host" }, tools: {} }),
         "linux",
         layout,
+        "x64",
       ),
     ).toThrow("network.mode = none");
     const response = (overrides: unknown) =>

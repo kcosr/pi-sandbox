@@ -387,6 +387,7 @@ function parseSmolvm(value: unknown, issues: string[]): SmolvmConfig | undefined
       "image",
       "image_sha256",
       "state_directory",
+      ...(Object.hasOwn(value, "e2fsprogs_directory") ? ["e2fsprogs_directory"] : []),
       "cpus",
       "memory_mib",
       "storage_gib",
@@ -397,6 +398,9 @@ function parseSmolvm(value: unknown, issues: string[]): SmolvmConfig | undefined
   );
   const image = own(value, "image");
   const stateDirectory = own(value, "state_directory");
+  const e2fsprogsDirectory = own(value, "e2fsprogs_directory");
+  if (e2fsprogsDirectory !== undefined && !validSmolvmPath(e2fsprogsDirectory))
+    issues.push("config.smolvm.e2fsprogs_directory must be a normalized absolute path below /");
   const imageSha256 = own(value, "image_sha256");
   if (!validSmolvmPath(image))
     issues.push("config.smolvm.image must be a normalized absolute path");
@@ -433,6 +437,7 @@ function parseSmolvm(value: unknown, issues: string[]): SmolvmConfig | undefined
   if (
     !validSmolvmPath(image) ||
     !validSmolvmPath(stateDirectory) ||
+    (e2fsprogsDirectory !== undefined && !validSmolvmPath(e2fsprogsDirectory)) ||
     typeof imageSha256 !== "string" ||
     !/^[0-9a-f]{64}$/u.test(imageSha256) ||
     cpus === undefined ||
@@ -445,6 +450,7 @@ function parseSmolvm(value: unknown, issues: string[]): SmolvmConfig | undefined
     image,
     imageSha256,
     stateDirectory,
+    ...(e2fsprogsDirectory === undefined ? {} : { e2fsprogsDirectory }),
     cpus,
     memoryMiB,
     storageGiB,

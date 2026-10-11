@@ -49,6 +49,14 @@ const platformChecks =
       ]
     : process.platform === "darwin"
       ? [
+          ...(requireSmolvm
+            ? [
+                [
+                  process.execPath,
+                  [join(repositoryRoot, "scripts/test/sandbox-extension-package.mjs")],
+                ],
+              ]
+            : []),
           ["npm", ["run", "build:application"]],
           ["npm", ["run", "test:install:macos"]],
         ]

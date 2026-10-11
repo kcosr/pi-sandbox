@@ -199,16 +199,20 @@ describe("administrative configuration", () => {
     expect(() => assertExecutionPlatform(config, "darwin")).toThrow(
       "Bubblewrap execution is supported only on Linux",
     );
-    expect(() =>
-      assertExecutionPlatform(
-        {
-          ...config,
-          execution: { backend: "direct", processLifetime: "command" },
-          network: { mode: "host" },
-        },
-        "darwin",
-      ),
-    ).not.toThrow();
+    for (const architecture of ["x64", "arm64"]) {
+      expect(() =>
+        assertExecutionPlatform(
+          {
+            ...config,
+            execution: { backend: "direct", processLifetime: "command" },
+            network: { mode: "host" },
+          },
+          "darwin",
+          {},
+          architecture,
+        ),
+      ).not.toThrow();
+    }
     expect(() =>
       assertExecutionPlatform(
         {
