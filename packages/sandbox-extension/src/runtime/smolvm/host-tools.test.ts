@@ -5,7 +5,7 @@ import type * as FsPromises from "node:fs/promises";
 import { validateHostTools, verifyHostTools } from "./host-tools.js";
 import { createSmolvmEnvironment } from "./registry.js";
 
-const selection = vi.hoisted(() => ({ conflict: false }));
+const selection = vi.hoisted(() => ({ conflict: false, dangling: "" }));
 vi.mock("node:fs/promises", async (importOriginal) => {
   const actual = await importOriginal<typeof FsPromises>();
   const fixed =
@@ -14,11 +14,16 @@ vi.mock("node:fs/promises", async (importOriginal) => {
     ...actual,
     lstat: (file: Parameters<typeof actual.lstat>[0]) => {
       if (!fixed.test(String(file))) return actual.lstat(file);
+      if (selection.dangling && String(file).startsWith("/opt/homebrew/opt/"))
+        return actual.lstat(selection.dangling);
       if (selection.conflict) return Promise.resolve({});
       return Promise.reject(Object.assign(new Error("missing fixture prefix"), { code: "ENOENT" }));
     },
-    realpath: (file: Parameters<typeof actual.realpath>[0]) =>
-      fixed.test(String(file)) ? Promise.resolve("/different/tool") : actual.realpath(file),
+    realpath: (file: Parameters<typeof actual.realpath>[0]) => {
+      if (selection.dangling && String(file).startsWith("/opt/homebrew/opt/"))
+        return actual.realpath(selection.dangling);
+      return fixed.test(String(file)) ? Promise.resolve("/different/tool") : actual.realpath(file);
+    },
   };
 });
 
@@ -35,6 +40,24 @@ describe("trusted smolvm host tooling", () => {
       "/usr/bin:/bin:/usr/sbin:/sbin:/trusted/sbin",
     );
     expect(createSmolvmEnvironment().PATH).toBe("/usr/bin:/bin:/usr/sbin:/sbin");
+  });
+  it("skips a dangling prefix symlink but still refuses a later conflicting tool", async () => {
+    const root = await realpath(await mkdtemp("/tmp/disk-tools-"));
+    try {
+      for (const tool of ["resize2fs", "e2fsck"])
+        await writeFile(path.join(root, tool), "tool fixture", { mode: 0o700 });
+      const options = { e2fsprogsDirectory: root };
+      const identity = await verifyHostTools(options, []);
+      selection.dangling = path.join(root, "dangling");
+      await symlink(path.join(root, "absent"), selection.dangling);
+      await expect(verifyHostTools(options, [])).resolves.toBe(identity);
+      selection.conflict = true;
+      await expect(verifyHostTools(options, [])).rejects.toThrow("selection_conflict");
+    } finally {
+      selection.dangling = "";
+      selection.conflict = false;
+      await rm(root, { recursive: true, force: true });
+    }
   });
   it("binds disk content into cold identity and refuses a higher-priority selection", async () => {
     const root = await realpath(await mkdtemp("/tmp/disk-tools-"));

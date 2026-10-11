@@ -61,12 +61,13 @@ export async function verifyHostTools(
         const candidate = path.join(prefix, tool);
         try {
           await lstat(candidate);
+          // Upstream skips missing targets, including dangling prefix symlinks.
+          if ((await realpath(candidate)) !== selected)
+            throw new Error("smolvm_disk_tool_selection_conflict");
         } catch (error) {
           if ((error as NodeJS.ErrnoException).code === "ENOENT") continue;
           throw error;
         }
-        if ((await realpath(candidate)) !== selected)
-          throw new Error("smolvm_disk_tool_selection_conflict");
         break;
       }
     }
