@@ -400,8 +400,10 @@ queued cancellation/deadlines, exclusive lifecycle admission, peer interruption,
 cleanup settlement and Pi-compatible inherited-pipe draining. The ordinary Pi
 package exercises parallel Bash and same-path write/edit queues both directly
 and through nested Code Mode, for owned and borrowed VMs. No live provider is used.
-Abrupt owner death remains a documented
-manual-recovery case, not a tested automatic-cleanup guarantee.
+Shared-registry tests use one disposable account registry across multiple families
+and unrelated machines, exercising collisions, retained reopen and scoped cleanup.
+No fixture sweeps the developer’s normal registry. Abrupt owner death remains a
+documented manual-recovery case, not an automatic-cleanup guarantee.
 
 For the compiled managed application, run the following against an extracted
 Linux x86-64 review build with `allow_config_override = true`, the Git extension
@@ -422,8 +424,8 @@ host-project writeback, unmounted host-file isolation and VMM death on normal
 EOF. It also checks approved host `git_clone` over loopback HTTP followed by
 guest readback, then reuses the full managed MCP/Code Mode smoke suite with
 scripted loopback providers, including overlapping ordinary/nested tool calls and
-same-path mutations. No live model is called. VM state and project files
-use short private `/var/tmp` paths; one disposable Pi state directory under the
+same-path mutations. No live model is called. Controller metadata, project files
+and one shared fixture registry use disposable `/var/tmp` paths; one Pi state directory under the
 invoking account's home lets the existing stdio account-identity checks run
 without changing host account records. The fixture removes its directories on
 confirmed cleanup and preserves them with reported paths after uncertain cleanup.

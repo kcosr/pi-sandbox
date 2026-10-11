@@ -592,7 +592,7 @@ when using dependency scanners.
 
 ## Ordinary Pi extension packages
 
-The release build creates `kcosr-pi-sandbox-extension-0.4.1.tgz` and
+The release build creates `kcosr-pi-sandbox-extension-0.5.0.tgz` and
 `kcosr-pi-git-extension-0.1.0.tgz`, each with a SHA256 sidecar. They are independent
 standard extensions for ordinary Pi 1.1.0. Sandbox includes its runtime and
 Bubblewrap worker; Git includes its bounded host runner. Neither needs a permissions
@@ -618,11 +618,14 @@ public recipe, upstream CLI steps, and offline verification. The default package
 and direct execution on macOS. Config validation and staged installation do not
 start VMs or require the external runtime/image paths to exist. VM startup
 requires Linux x86-64, usable `/dev/kvm`, the pinned external distribution,
-the configured image and a private state directory outside the launch project.
+the configured image and a private controller-metadata directory outside the launch project.
 Provision each account's expanded `smolvm.state_directory` with that account as
 owner and mode `0700`; `/var/tmp/pi-vm-{{uid}}` keeps paths short and accounts
 separate. Its canonical expanded path must occupy at most 48 bytes. Startup does
-not create this directory or repair its ownership or permissions.
+not create this directory or repair its ownership or permissions. VM disks and
+shared caches remain in smolvm’s ordinary account locations, not this directory.
+Normal shutdown calls named stop/delete; after a crash, use the recorded machine
+name with the stock CLI. Do not remove native storage by deleting this directory.
 Host e2fsprogs is needed during image preparation and when the separate OCI
 controller creates disks smaller than smolvm's bundled templates. Make
 `resize2fs` available in a system directory searched by the fixed launcher

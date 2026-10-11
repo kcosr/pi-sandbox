@@ -448,7 +448,7 @@ can overlap across borrowed attachments. Queue cancellation and queue timeout
 affect only the queued request. Active cancellation, timeout, output overflow or
 execution infrastructure failure closes admission and retires the whole owned VM
 or family, including peers and background services; it does not restart silently.
-Admission marks a call active, including its pre-launch VM identity check. An
+Admission marks a call active, including its pre-launch machine ownership check. An
 abort or deadline expiry in that check therefore also retires the boundary, even
 if the guest command has not started.
 An ordinary nonzero exit is a command result and does not trigger retirement.
@@ -465,9 +465,18 @@ The owner stops its VM during normal shutdown. Abrupt owner
 death can leave the VM running with its original mount grants. Manual smolvm
 cleanup is part of the accepted crash-recovery contract; no independent watcher
 or daemon is added by Pi Sandbox. Do not infer successful cleanup from a missing
-Pi process, and do not recursively delete state while its VM might still run.
-Failed startup can conservatively preserve even a never-started machine's state
-directory for manual cleanup when the recorded state does not confirm termination.
+Pi process. Stop is acknowledged by the stock CLI; it is not independently
+verified through a native process observer. Failed or ambiguous startup preserves
+its ownership record for manual recovery. The application never recursively
+removes native VM storage.
+
+Native VM storage and caches share the user’s ordinary smolvm registry. Cleanup
+uses only explicitly recorded names, checks the recorded machine and directory
+identity, and stops/deletes children before their parent. Unrelated machines are
+never cleanup targets. Random name suffixes avoid accidental collisions; they do
+not defend against a hostile same-account host process replacing records between
+checks and a CLI command. The host account and smolvm installation remain trusted.
+Guest mounts cannot expose the captured registry/cache/config paths.
 
 ## Ordinary Pi extensions
 

@@ -118,8 +118,11 @@ Use the same version-4 configuration, replacing `backend` with:
 ```
 
 Create `stateDirectory` as an owned private directory (0700). Its canonical path
-must be at most 48 bytes because smolvm uses Unix sockets. Keep runtime, image,
-configuration and state outside the project. The host project is mounted at the
+must be at most 48 bytes for the controller socket. This directory holds only
+application metadata and attachment sockets, not VM disks or smolvm caches.
+smolvm uses the account’s ordinary registry and cache, captured from the host
+HOME/XDG environment at creation. Keep these locations, the runtime, image and
+configuration outside the project. The host project is mounted at the
 same absolute path, writable unless `cwdWritable` is false. Project edits persist;
 the disposable guest root does not. Other host directories are not projected into
 the guest. Host Pi keeps its providers, MCP connections, logs and credentials.
@@ -138,11 +141,14 @@ transport failures interrupt peer calls and retire the VM, including earlier
 background processes. This differs from Bubblewrap's reusable sandbox cleanup;
 smolvm does not expose an equivalent whole-workload reset. Normal nonzero command
 exits keep the VM available. There is no custom background watcher. If Pi is killed or crashes, a
-smolvm VM can remain alive. Private state contains `owner.json`, recording the
-runtime path and private HOME/XDG environment. Use those values with
-`smolvm machine ls --json`, then `machine stop --name workspace` and
-`machine delete --name workspace --force`. An unconfirmed stop preserves state;
-do not remove state before the VM is stopped.
+smolvm VM can remain alive. The controller records its unique machine name and
+registry locations before creation. Use the recorded runtime with ordinary
+`smolvm machine ls --json`, `machine stop --name NAME` and
+`machine delete --name NAME --force`. Use the same account and HOME/XDG settings
+as the original launch. Delete owned children before their source. A failed or
+ambiguous startup preserves its record for manual recovery. Stop results are
+smolvm CLI acknowledgements, not an independent proof that every process exited.
+The extension never recursively deletes native VM storage or prunes shared caches.
 Stock Pi can still exit successfully after reporting an extension cleanup error;
 inspect that error and the retained state instead of relying only on its exit code.
 
@@ -193,8 +199,25 @@ attachments. Branching, removal and retention take exclusive FIFO admission;
 they wait for earlier calls and block later calls until complete. An active
 execution failure retires the entire family. Cancelling a queued attachment
 request leaves other work intact.
-Normal controller close stops machines and removes disposable state. Abrupt
-owner death may require manual recovery using its recorded private environment.
+Each family uses an explicit ownership journal and unique random-suffixed machine
+names. `namePrefix` labels the source; branch options can label child roles.
+The journal is written before creation; `onPrepared` lets an orchestrator record
+the family before native startup. Shared-registry machines outside this journal
+are never adopted or removed. External children block parent deletion.
+
+Normal controller close stops owned machines and uses smolvm to delete disposable
+machines. `close()` returns `{ retained }`; callers must not infer retention from
+the metadata directory’s existence. `readSmolvmOciFamily({ statePath })` provides
+recovery metadata, and `deleteSmolvmOciFamily({ statePath })` deletes a stopped
+family through named CLI operations. Cold receipts use version 2 and bind the
+recorded source and registry. Earlier private-registry receipts are not accepted.
+Abrupt owner death may require manual recovery with the recorded names.
+
+The ordinary cache can reuse upstream image data subject to smolvm’s eligibility
+rules. In 1.26.1, OCI image seeds require at least 20 GiB of storage, so small
+fixtures do not demonstrate that optimization. Cache pruning is an explicit
+operator action, not family cleanup. `pack prune` and `machine prune` serve
+different purposes; the latter can start a stopped VM.
 
 ### Interactive controller terminals
 
@@ -204,8 +227,8 @@ not an agent tool or an attachment RPC. It starts a fixed interactive Bash shell
 at the family working directory through the verified smolvm executable.
 
 Supply `terminalType`, `columns`, `rows` and a runtime-specific `launch` callback,
-plus an optional abort signal. The launcher receives the fixed argv, private
-host environment, state-directory cwd, dimensions, a startup marker and a scoped
+plus an optional abort signal. The launcher receives the fixed argv, captured
+registry environment, control-directory cwd, dimensions, a startup marker and a scoped
 signal. It must provide a real host PTY and consume the exact startup marker
 before resolving, then return `completion`, `write`, `resize` and `close`.
 smolvm flushes early input while entering raw mode, so resolving merely when the

@@ -40,8 +40,18 @@ const configPath = join(temporary, "config.toml");
 const modelsPath = join(temporary, "models.json");
 const children = new Set();
 let forced = false;
+const environment = {
+  PATH: "/usr/bin:/bin:/usr/sbin:/sbin",
+  HOME: account.homedir,
+  XDG_DATA_HOME: join(temporary, "account-data"),
+  XDG_CACHE_HOME: join(temporary, "account-cache"),
+  SMOLVM_CONFIG: join(temporary, "smolvm-config.toml"),
+  LANG: "C.UTF-8",
+  PI_CODING_AGENT_DIR: userState,
+};
 
 try {
+  await writeFile(environment.SMOLVM_CONFIG, "");
   await mkdir(state, { mode: 0o700 });
   await mkdir(workspace);
   const config = parseToml(await readFile(join(defaults, "config.toml"), "utf8"));
@@ -94,12 +104,6 @@ try {
     }),
     { mode: 0o600 },
   );
-  const environment = {
-    PATH: "/usr/bin:/bin:/usr/sbin:/sbin",
-    HOME: account.homedir,
-    LANG: "C.UTF-8",
-    PI_CODING_AGENT_DIR: userState,
-  };
   const launchArguments = (args) => {
     const child = spawn(executable, ["--config", configPath, ...args], {
       cwd: workspace,
@@ -170,7 +174,9 @@ try {
 
   const running = rpc(launch(["--provider", "fixture", "--model", "fixture"]));
   await running.request("get_state");
-  const pids = await vmmPids(state);
+  const machines = listFixtureMachines();
+  const pids = machines.map((machine) => machine.pid);
+  assert(pids.every((pid) => Number.isSafeInteger(pid) && pid > 0));
   assert.equal(pids.length, 1, "One actual VMM must back this Pi process");
   const outside = join(temporary, "host-only.txt");
   await writeFile(outside, "host-private-fixture");
@@ -202,7 +208,9 @@ try {
   await running.stop();
   for (const pid of pids)
     assert.equal(await processAlive(pid), false, `VMM ${pid} survived normal EOF`);
-  assert.deepEqual(await readdir(state), [], "Normal shutdown removes private VM state");
+  assert.deepEqual(await readdir(state), [], "Normal shutdown removes controller metadata");
+
+  assert.deepEqual(listFixtureMachines(), [], "Named VM deleted through stock CLI");
 
   await gitCloneSmoke({ config, configPath, modelsPath, temporary, workspace, launch });
   assert.deepEqual(await readdir(state), []);
@@ -256,7 +264,13 @@ try {
     if (error.code === "ENOENT") return [];
     throw error;
   });
-  if (forced || children.size || remaining.length) {
+  let registryEmpty = false;
+  try {
+    registryEmpty = listFixtureMachines().length === 0;
+  } catch {
+    /* Preserve on uncertainty. */
+  }
+  if (forced || children.size || remaining.length || !registryEmpty) {
     console.error(`Preserving uncertain fixture state: ${temporary}; Pi state: ${userState}`);
   } else {
     await rm(temporary, { recursive: true, force: true });
@@ -279,18 +293,15 @@ async function processAlive(pid) {
     throw error;
   }
 }
-async function vmmPids(directory) {
-  const pids = [];
-  for (const entry of await readdir(directory, { withFileTypes: true })) {
-    const filename = join(directory, entry.name);
-    if (entry.isDirectory()) pids.push(...(await vmmPids(filename)));
-    else if (entry.name === "agent.pid") {
-      const pid = Number((await readFile(filename, "utf8")).split("\n")[0]);
-      assert(Number.isSafeInteger(pid) && pid > 0);
-      pids.push(pid);
-    }
-  }
-  return pids;
+function listFixtureMachines() {
+  const machines = JSON.parse(
+    execFileSync(release.smolvm.path, ["machine", "ls", "--json"], {
+      env: environment,
+      encoding: "utf8",
+    }),
+  );
+  assert(Array.isArray(machines));
+  return machines;
 }
 function rpc(child) {
   const messages = [];

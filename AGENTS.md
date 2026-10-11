@@ -39,6 +39,10 @@ reimplemented rather than mechanically reapplied.
   the launch directory at its host path, require offline networking and no hidden
   paths, and keep its fixed VM process lifetime. Normal shutdown cleans up; abrupt
   owner death can require manual smolvm cleanup. Add no guardian or watcher.
+  Use the account’s ordinary native registry/cache and unique owned machine names.
+  Keep controller metadata separate; stop/delete only recorded owned names through
+  the stock CLI, preserve ambiguous starts, and never recursively remove native
+  storage or automatically prune shared caches.
   Admit up to four executions and 64 outstanding requests per VM/OCI family;
   keep family lifecycle operations exclusive. Include queue wait in request
   deadlines, isolate queued cancellation, and retire the entire owned VM/family
