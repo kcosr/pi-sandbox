@@ -4,7 +4,7 @@
 
 ### Added
 
-- Add macOS 26+ arm64 smolvm to the reusable extension and managed application, with ordinary account registry cleanup and optional trusted disk tools.
+- Add macOS 26+ arm64 smolvm to the reusable extension and managed application, with ordinary account registry cleanup and optional trusted disk tools. ([#26](https://github.com/kcosr/pi-sandbox/pull/26))
 
 ### Breaking changes
 
