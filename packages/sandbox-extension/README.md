@@ -212,6 +212,9 @@ the metadata directory’s existence. `readSmolvmOciFamily({ statePath })` provi
 recovery metadata, and `deleteSmolvmOciFamily({ statePath })` deletes a stopped
 family through named CLI operations. Cold receipts use version 2 and bind the
 recorded source and registry. Earlier private-registry receipts are not accepted.
+Deleting a stopped family needs its recorded runtime, registry and machine
+identity, but does not need the original image archive or read-only input mounts.
+Failed deletion releases its controller claim so the operation can be retried.
 Abrupt owner death may require manual recovery with the recorded names.
 
 The ordinary cache can reuse upstream image data subject to smolvm’s eligibility
