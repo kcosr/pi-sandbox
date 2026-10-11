@@ -14,7 +14,7 @@ const root = dirname(dirname(dirname(fileURLToPath(import.meta.url))));
 execFileSync(process.execPath, [join(root, "scripts/build-extensions.mjs")], {
   stdio: "inherit",
 });
-const temp = await realpath(await mkdtemp("/tmp/pie-"));
+const temp = await realpath(await mkdtemp("/var/tmp/pie-"));
 const children = new Set();
 const vmStates = [];
 const families = [];

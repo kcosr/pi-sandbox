@@ -298,7 +298,7 @@ function executionStartupMessage(config: SandboxConfig): string {
   if (config.execution.backend === "bubblewrap")
     return "Bubblewrap could not establish the required sandbox; verify unprivileged user namespaces and Bubblewrap compatibility";
   if (config.execution.backend === "smolvm")
-    return "smolvm could not start the VM; verify host virtualization support, the pinned complete runtime distribution, the image digest, and private state directory";
+    return "smolvm could not start the VM; verify host virtualization support, the pinned complete runtime distribution, the image digest, and controller metadata directory";
   return "Direct execution could not establish its bounded command runner; verify the documented host prerequisites";
 }
 
@@ -323,7 +323,7 @@ export function assertExecutionPlatform(
     if (layout.smolvm === undefined)
       throw new Error("This distribution does not include a smolvm execution provider");
     if (config.smolvm === undefined)
-      throw new Error("smolvm execution requires a configured image and private state directory");
+      throw new Error("smolvm execution requires a configured image and controller metadata directory");
     if (config.network.mode !== "none")
       throw new Error("smolvm execution requires network.mode = none");
     if (config.execution.processLifetime !== "sandbox")
