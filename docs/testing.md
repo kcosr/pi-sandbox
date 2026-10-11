@@ -375,6 +375,37 @@ provider and local MCP servers; it never contacts a live model provider. Project
 
 ## smolvm qualification
 
+The Darwin preparation checkpoint can be reproduced with
+`node scripts/test/darwin-process-query.mjs` and the same command under Bun.
+It requires arm64 macOS and the Apple compiler, builds only temporary development
+probes, and removes them after testing. It exercises a same-user `PT_DENY_ATTACH`
+session leader, exact argv bytes (including empty and non-ASCII arguments), stable
+subsecond generation values, stopped/dead processes, environment exclusion and
+invalid PID input. To additionally bind a real stock VMM, pass all three options:
+`--vmm-pid=PID --runtime=/absolute/smolvm-bin --boot-config=/absolute/boot-config.json`.
+Obtain the PID from the private machine inventory and the config directory from
+`machine data-dir`; do not infer it from a machine-name hash. Upstream's
+`PR_SET_DUMPABLE` control is Linux-only. The actual Darwin VMM observation and
+the separate deny-attach target are distinct controls.
+
+For trusted build artifacts, Python 3.14 can run
+`scripts/test/inspect-smolvm-pack.py IMAGE.smolmachine`. This reads the complete
+sidecar CRC and asset inventory without extracting guest paths. Plain packs must
+be offline and carry no workload authority or workspace seed. With a stopped
+Ubuntu builder exported by official `pack create --from-vm`, `--layer-output FILE`
+copies its one flattened OCI layer to a new file, never replacing an existing
+output. Library declarations refer to the separate launcher/runtime and are not
+sidecar members. An intermediate container export may contain a 20 GiB storage
+template; that template is not part of a Docker-save archive assembled from its
+layer. Measure the final OCI machine's actual requested disks independently.
+Run its eight portable preparation controls with Python 3.14:
+`python3 scripts/test/inspect-smolvm-pack.test.py`.
+
+These probes are preparation evidence, not extension/application acceptance.
+Darwin backend gates remain closed pending shared runtime integration and native
+Node/Bun tests for execution, binary I/O, admission, cancellation, shutdown,
+retention and attachment-scoped terminals. No crash-cleanup guarantee follows.
+
 Managed unit checks cover schema 11 image/resource validation, fixed VM lifetime,
 identity backend transitions, refusal of identity image overrides, VM-aware
 mount/policy diagnostics and the `smolvm` audit boundary. Distribution checks

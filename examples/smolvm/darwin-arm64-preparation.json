@@ -1,0 +1,118 @@
+{
+  "schemaVersion": 1,
+  "status": "preparation checkpoint; Darwin runtime gates still closed",
+  "date": "2026-10-11",
+  "sourceBase": "a01257085493ba6bd793362f5b27e89af57fae85",
+  "host": {
+    "platform": "darwin",
+    "architecture": "arm64",
+    "macOS": "26.7.1",
+    "build": "25G241",
+    "kernHvSupport": 1
+  },
+  "runtime": {
+    "version": "1.26.1",
+    "archiveSha256": "3aee6c92aa0552754159494c2f073d5f99cf1c2a12ecc022a08976bd8a1fc5bb",
+    "wrapperSha256": "b67b25f363403e19deceb6897e5a4d94be30a079f8cb751372782f17fc99003a",
+    "binarySha256": "1f4b258df63bd9ef12295d33121702985267b2e753017feeab71aef56807c6aa",
+    "releaseInventoryEntries": 938,
+    "releaseInventorySha256": "51070515baccc864a2e5d5bbddd1d6a956da6849875df67efa3b180dd5f55d66",
+    "officialContentTypesRegularModesAndLinkTargetsVerified": true,
+    "symlinkModeDifferencesAfterDarwinExtraction": 390,
+    "upstreamExpandedTemplateFiles": [
+      {
+        "path": "overlay-template.ext4",
+        "logicalBytes": 10737418240,
+        "allocatedBytes": 10485760
+      },
+      {
+        "path": "storage-template.ext4",
+        "logicalBytes": 21474836480,
+        "allocatedBytes": 10485760
+      }
+    ],
+    "signatureVerified": true,
+    "minimumMacOSFromFirmware": "26.0"
+  },
+  "plain": {
+    "filename": "plain-tools.smolmachine",
+    "sha256": "e579dfb7a630d8658c712ffd96760a1cb39cce93cbd5f5c4e0f6253c5deeaba5",
+    "bytes": 57911680,
+    "recipe": "examples/smolvm/Smolfile",
+    "recipeSha256": "3fc3ce558b02c3c15d153ee05fb571846f5a28c46d7deff5ace3f547aa3408bb",
+    "storageBytes": 1073741824,
+    "overlayBytes": 1073741824,
+    "fullCrcAndInventoryVerified": true,
+    "offlineBootAndRequiredToolsPassed": true,
+    "guestArchitecture": "aarch64",
+    "nodeVersion": "20.15.1",
+    "pythonVersion": "3.11.14",
+    "packagesSha256": "22a9dbc37cdd36bbf4703f919d9af619b59009b1e707191c3ef4993b149b488f"
+  },
+  "ubuntu": {
+    "filename": "ubuntu24.04-arm64-tools.tar",
+    "sha256": "4ded4e29fae2a09a6190554dca868fd020cedf4a39e354828b974034b935608a",
+    "bytes": 499302400,
+    "baseManifest": "sha256:08571ca13e00ca07a2a84eab83a959b4242e22cceb16486a11bef1428c9e93a7",
+    "layerSha256": "f68f3edab42771132d8e623a0ea3ced2ddc4e87499ebdd6ac62fa6538f093df1",
+    "configSha256": "248b52e888ef4d7aacecec3d81b628cb8fb6a7808ef53c3456139c1c5d00587f",
+    "layerMembers": 11324,
+    "recipe": "examples/smolvm/Dockerfile.ubuntu24.04-arm64",
+    "recipeSha256": "f910e7cf1bfddb0b080a89fa97504798d9fd4690f9c754bfc78b6886787a80dd",
+    "recipeExecution": "Equivalent trusted package installation in stock OCI builder, then official flatten/export and Docker-save assembly",
+    "storageBytes": 2147483648,
+    "overlayBytes": 1073741824,
+    "fullExportCrcAndInventoryVerified": true,
+    "offlineBootCompilerBranchColdReopenPassed": true,
+    "guestArchitecture": "aarch64",
+    "nodeVersion": "18.19.1",
+    "pythonVersion": "3.12.3",
+    "gccVersion": "13.3.0",
+    "packagesSha256": "e6ee8943f6ade48ce4c40b7875c6ac3d530ab08d83e7040b1e240dd6f2eef54c"
+  },
+  "diskTools": {
+    "version": "e2fsprogs 1.47.4",
+    "resize2fsSha256": "b67a09058bb65513a6f903325b0cfc3bca8dac1f27261bdf5c2e6b91f8a7c6a3",
+    "e2fsckSha256": "736286a95a45534df9b085ec732d986cef4d4d37a00a5ac95fbe95562bad9392",
+    "explicitClearedPath": true,
+    "competingFixedPrefixTools": false
+  },
+  "checks": {
+    "processQuery": {
+      "node": "24.20.0",
+      "bun": "1.4.2",
+      "controlsEach": 7,
+      "actualStockVmmObserved": true,
+      "denyAttachTargetSeparate": true
+    },
+    "portableSmolvm": {
+      "passed": 90,
+      "skipped": 36
+    },
+    "packInspector": {
+      "python": "3.14.8",
+      "passed": 8
+    },
+    "typecheck": "passed",
+    "extensionBuild": "passed",
+    "changedFilesFormattingAndLint": "passed",
+    "packedExtensionImports": {
+      "node": "passed",
+      "bun": "passed",
+      "packages": ["sandbox-extension", "git-extension"]
+    }
+  },
+  "cleanup": {
+    "temporaryBuilderCertificateAbsentFromBothImages": true,
+    "normalStopExactVmmDeathConfirmed": true,
+    "scopedLayerVolumesBeforeDeletion": 0,
+    "fixtureStateRemoved": true,
+    "historicalArtifactsPreserved": true
+  },
+  "remainingGates": [
+    "Review proposed e2fsprogsDirectory and trusted darwinProcessQuery embedding fields",
+    "Implement Darwin platform verification, process observation, lifecycle and cold identity",
+    "Native Node/Bun extension execution, binary I/O, cancellation, timeouts, retention and attachment terminals",
+    "Managed application/evaluator integration and final acceptance are later milestones"
+  ]
+}

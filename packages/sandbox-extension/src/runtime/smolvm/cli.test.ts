@@ -1,4 +1,4 @@
-import { mkdtemp, readFile, rm } from "node:fs/promises";
+import { mkdtemp, readFile, realpath, rm } from "node:fs/promises";
 import path from "node:path";
 import os from "node:os";
 import { afterEach, describe, expect, it } from "vitest";
@@ -8,27 +8,32 @@ const directories: string[] = [];
 afterEach(async () => {
   for (const dir of directories.splice(0)) await rm(dir, { recursive: true, force: true });
 });
-async function fixture() {
-  const stateDirectory = await mkdtemp(path.join(os.tmpdir(), "smol-cli-"));
+async function fixture(smolvmPath = process.execPath) {
+  const stateDirectory = await realpath(await mkdtemp(path.join(os.tmpdir(), "smol-cli-")));
   directories.push(stateDirectory);
-  return new SmolvmCli({ smolvmPath: process.execPath, stateDirectory });
+  return new SmolvmCli({ smolvmPath, stateDirectory });
 }
 
 describe("bounded in-process smolvm CLI", () => {
   it("uses only its private environment and preserves binary streams", async () => {
     const cli = await fixture();
+    // Observe the launch environment before Node initializes platform libraries.
+    const envCli = await fixture("/usr/bin/env");
     try {
       const result = await cli.run({
         argv: ["-e", "process.stdin.pipe(process.stdout)"],
         stdin: Uint8Array.of(0, 255, 42),
       });
       expect(result.stdout).toEqual(Buffer.from([0, 255, 42]));
-      const env = await cli.run({
-        argv: ["-e", "process.stdout.write(JSON.stringify(process.env))"],
-      });
-      expect(JSON.parse(env.stdout.toString())).toEqual(createStateEnvironment(cli.stateDirectory));
+      const env = await envCli.run({ argv: ["--"] });
+      expect(env.stdout.toString().trimEnd().split("\n").sort()).toEqual(
+        Object.entries(createStateEnvironment(envCli.stateDirectory))
+          .map(([key, value]) => `${key}=${value}`)
+          .sort(),
+      );
     } finally {
       await cli.dispose();
+      await envCli.dispose();
     }
   });
   it("cancels running commands but still permits a subsequent cleanup command", async () => {

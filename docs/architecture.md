@@ -543,3 +543,47 @@ A child-free original can be cleanly retained whether frozen or writable, so
 administrative edits made after cold reopening persist on the next cold boot.
 Terminal-client cleanup failure preserves forensic state and prevents publishing
 a clean cold receipt. Terminal exit does not prove all guest descendants exited.
+
+### Darwin extension preparation
+
+Darwin arm64 is currently a development target, not an enabled smolvm backend.
+The native preparation probes use stock 1.26.1 and the same normal-stop/manual
+crash-recovery contract. Managed application build and configuration gates remain
+unchanged. The proposed implementation keeps Linux's process observation intact.
+
+The smallest verified Darwin observation route is a short-lived, read-only native
+query shared by Node and Bun. `proc_pidinfo(PROC_PIDTBSDINFO)` supplies both seconds
+and microseconds of process creation; `proc_pidpath` and `KERN_PROCARGS2` supply
+the executable and individual argv bytes. The probe samples identity and executable
+again before emitting a result, excludes environment bytes, and treats permission,
+partial-read and generation-race failures as uncertainty. A stopped process is
+still alive. A missing process or zombie cannot keep the original VMM alive.
+PID-only identity and human-readable, second-resolution `ps` timestamps are
+insufficient. No resident observer, signal sender or process supervisor is added.
+
+Two shared-option additions are proposed for review before runtime wiring:
+
+- `e2fsprogsDirectory?: string`: one canonical trusted directory, appended to
+  the cleared launcher PATH. Validate executable `resize2fs` and `e2fsck`, resolve
+  and hash their actual targets, protect those paths from guest-writable shares,
+  and bind their identities into cold retention. Omission keeps existing Linux
+  behavior. Upstream searches fixed installation prefixes before PATH; when an
+  explicit directory is supplied, reject any different higher-priority selection
+  rather than claiming the supplied tools would be used.
+- `darwinProcessQuery?: { path: string; sha256: string }`: trusted embedding
+  metadata required on Darwin and rejected on Linux. The standard package would
+  supply its fixed adjacent precompiled query and build-recorded hash; this is
+  not a model command or an ordinary Pi configuration field. Verify canonical
+  placement, artifact identity and absence of guest write access. Cold identity
+  includes the helper. Build/package its source and provenance without a runtime
+  compiler or Python dependency. The current development C probe is not yet a
+  shipped helper or an implemented public option.
+
+The Darwin release must have its own complete verified distribution inventory
+and archive fingerprint. The official 1.26.1 arm64 `libkrunfw.5.dylib` declares
+macOS 26.0 minimum, despite the main executable's 11.0 deployment target; admission
+must enforce the dependency's minimum. Keep canonical short private HOME and XDG
+directories: Darwin smolvm also writes under HOME/Library. Plain packs pair
+`linux/arm64` guests with `darwin/arm64` host assets. Imported authority checks,
+actual disk-capacity admission, queues, borrowed attachment limits and terminal
+ownership retain their existing contracts.

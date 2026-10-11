@@ -1,5 +1,15 @@
 import { createHash } from "node:crypto";
-import { chmod, mkdtemp, mkdir, readFile, rm, stat, symlink, writeFile } from "node:fs/promises";
+import {
+  chmod,
+  mkdtemp,
+  mkdir,
+  readFile,
+  realpath,
+  rm,
+  stat,
+  symlink,
+  writeFile,
+} from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
@@ -106,8 +116,8 @@ describe("packed smolvm admission", () => {
     }
   });
   it("removes stopped immutable caches without traversing outside symlinks", async () => {
-    const root = await mkdtemp(path.join(tmpdir(), "smol-state-test-"));
-    const outside = await mkdtemp(path.join(tmpdir(), "smol-outside-test-"));
+    const root = await realpath(await mkdtemp(path.join(tmpdir(), "smol-state-test-")));
+    const outside = await realpath(await mkdtemp(path.join(tmpdir(), "smol-outside-test-")));
     try {
       const immutable = path.join(root, "cache");
       await mkdir(immutable);

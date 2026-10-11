@@ -175,3 +175,43 @@ it in a system directory searched by the launcher's fixed PATH
 (`/usr/bin:/bin:/usr/sbin:/sbin`); a user-local PATH entry is not inherited. This
 is distinct from prepared plain packs, which already contain sized templates
 and cannot request smaller capacities in our backend.
+
+## Darwin arm64 preparation checkpoint
+
+Image preparation is also qualified with stock 1.26.1 on an arm64 Mac with
+Hypervisor.framework available and macOS 26 or newer. This does not yet enable
+Darwin smolvm in the extension or managed application. Use the official Darwin
+arm64 archive, SHA-256
+`3aee6c92aa0552754159494c2f073d5f99cf1c2a12ecc022a08976bd8a1fc5bb`, and verify its
+complete contents. The bundled firmware library sets the macOS 26 minimum.
+The sanitized [preparation receipt](../examples/smolvm/darwin-arm64-preparation.json)
+records the tested images, capacities, inventories and remaining acceptance gates.
+
+The plain recipe and CLI sequence above also prepare a native arm64 tools pack.
+Use a canonical short `/private/tmp` state directory and explicit trusted
+e2fsprogs directory in the cleared PATH. Do not rely only on XDG variables or on
+`machine ls` resource labels: missing disk tools can yield a successful launch
+with 20/10 GiB disks after requesting 1/1 GiB. Verify the actual files, manifest
+logical capacities, full pack CRC/inventory, and final offline guest block sizes.
+
+[Dockerfile.ubuntu24.04-arm64](../examples/smolvm/Dockerfile.ubuntu24.04-arm64)
+pins the official arm64 Ubuntu base and carries the same package set as the
+public evaluator's Ubuntu recipe. Build/export it with an existing Docker setup,
+or prepare that package set in a disposable stock smolvm OCI guest. The latter
+needs no Docker daemon: stop the builder, disable networking, use upstream
+`pack create --from-vm` to flatten its base plus installed packages, and inspect
+the result with `scripts/test/inspect-smolvm-pack.py --layer-output FILE`.
+Wrap that layer in a Docker-save archive with a Linux/arm64 image config, its
+uncompressed SHA-256 in `rootfs.diff_ids`, a fixed PATH and the trusted
+`/bin/sleep infinity` default command. Do not import runtime state, checkpoints,
+workspace contents, mounts or host environment into that image config.
+
+Use network access only for the trusted builder. If the environment requires an
+additional public CA, verify it against the observed chain, apply it only to
+the builder's package operation with TLS verification enabled, and remove it
+before export. Inspect the final layer or pack to verify its absence. Keep
+certificate payloads, machine-specific paths and private preparation logs out
+of the source repository. Record recipe/base/image digests, package and compiler
+versions, runtime identity, actual capacities and confirmed fixture cleanup in
+operator-owned receipts. The final Ubuntu archive must boot offline with its
+required tools and compile a native arm64 fixture before application acceptance.
