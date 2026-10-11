@@ -1,3 +1,4 @@
+vi.mock("./platform.js", () => ({ verifySmolvmCapability: () => Promise.resolve() }));
 import type * as FsPromises from "node:fs/promises";
 import { mkdir, mkdtemp, realpath, rm, writeFile } from "node:fs/promises";
 import path from "node:path";
@@ -123,7 +124,7 @@ afterEach(async () => {
     await rm(directory, { recursive: true, force: true });
 });
 async function fixture() {
-  const directory = await mkdtemp("/var/tmp/smol-exec-");
+  const directory = await realpath(await mkdtemp("/tmp/smol-exec-"));
   directories.push(directory);
   const cwd = path.join(directory, "project");
   const stateDirectory = path.join(directory, "state");
@@ -141,7 +142,7 @@ async function fixture() {
   });
 }
 
-const suite = process.platform === "linux" && process.arch === "x64" ? describe : describe.skip;
+const suite = describe;
 suite("packed smolvm parallel controller", () => {
   it("keeps four independent executions active while a queued deadline only removes its request", async () => {
     const executor = await fixture();

@@ -1,4 +1,4 @@
-import { mkdtemp, readFile, rm } from "node:fs/promises";
+import { mkdtemp, realpath, readFile, rm } from "node:fs/promises";
 import path from "node:path";
 import os from "node:os";
 import { afterEach, describe, expect, it } from "vitest";
@@ -9,7 +9,7 @@ afterEach(async () => {
   for (const dir of directories.splice(0)) await rm(dir, { recursive: true, force: true });
 });
 async function fixture() {
-  const stateDirectory = await mkdtemp(path.join(os.tmpdir(), "smol-cli-"));
+  const stateDirectory = await realpath(await mkdtemp(path.join(os.tmpdir(), "smol-cli-")));
   directories.push(stateDirectory);
   return new SmolvmCli({ smolvmPath: process.execPath, stateDirectory });
 }
@@ -26,7 +26,10 @@ describe("bounded in-process smolvm CLI", () => {
       const env = await cli.run({
         argv: ["-e", "process.stdout.write(JSON.stringify(process.env))"],
       });
-      expect(JSON.parse(env.stdout.toString())).toEqual(cli.environment);
+      const actual = JSON.parse(env.stdout.toString()) as Record<string, string>;
+      // libSystem adds this locale hint independently of the cleared launcher environment.
+      if (process.platform === "darwin") delete actual.__CF_USER_TEXT_ENCODING;
+      expect(actual).toEqual(cli.environment);
     } finally {
       await cli.dispose();
     }

@@ -1,3 +1,4 @@
+import type { SmolvmHostTools } from "../host-tools.js";
 import type { SmolvmRegistryIdentity } from "../registry.js";
 import type {
   SandboxCommandRequest,
@@ -8,7 +9,7 @@ import type {
 } from "../../contracts.js";
 
 /** Trusted controller configuration; never supplied by a tool call. */
-export interface SmolvmOciFamilyOptions {
+export interface SmolvmOciFamilyOptions extends SmolvmHostTools {
   readonly smolvmPath: string;
   /** At most 31 ASCII characters; a 128-bit random suffix keeps owned names within 64 bytes. */
   readonly namePrefix?: string;

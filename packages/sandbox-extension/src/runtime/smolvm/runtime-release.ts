@@ -3,7 +3,8 @@ import { constants } from "node:fs";
 import { access, lstat, open, readdir, readlink, realpath } from "node:fs/promises";
 import path from "node:path";
 import { RELEASE_INVENTORY } from "./release-inventory.js";
-import { SMOLVM_RELEASE_SHA256 } from "./release-pin.js";
+import { DARWIN_RELEASE_INVENTORY } from "./release-inventory-darwin.js";
+import { smolvmReleaseForPlatform } from "./release-pin.js";
 export { SMOLVM_VERSION, SMOLVM_SOURCE_COMMIT, SMOLVM_RELEASE_SHA256 } from "./release-pin.js";
 
 export async function fileSha256(file: string): Promise<string> {
@@ -27,8 +28,8 @@ export async function fileSha256(file: string): Promise<string> {
 
 /** Check the complete upstream runtime dependency tree before executing it. */
 export async function verifySmolvmRuntime(executable: string): Promise<string> {
-  if (process.platform !== "linux" || process.arch !== "x64")
-    throw new Error("smolvm_requires_linux_x64");
+  const release = smolvmReleaseForPlatform(process.platform, process.arch);
+  const inventory = process.platform === "darwin" ? DARWIN_RELEASE_INVENTORY : RELEASE_INVENTORY;
   if (
     !path.isAbsolute(executable) ||
     (await realpath(executable)) !== executable ||
@@ -36,9 +37,7 @@ export async function verifySmolvmRuntime(executable: string): Promise<string> {
   )
     throw new Error("smolvm_runtime_path_invalid");
   const root = path.dirname(executable);
-  const expected = new Map(
-    RELEASE_INVENTORY.map(([name, type, identity]) => [name, { type, identity }]),
-  );
+  const expected = new Map(inventory.map(([name, type, identity]) => [name, { type, identity }]));
   // Exact tree membership prevents an extra library or guest startup file from
   // acquiring authority outside the pinned inventory. Generated disk templates
   // live beside these trees and remain upstream-managed provisioning caches.
@@ -60,9 +59,9 @@ export async function verifySmolvmRuntime(executable: string): Promise<string> {
     }
     expected.delete(relative);
   }
-  for (const [name] of RELEASE_INVENTORY) if (!name.includes("/")) await walk(name);
+  for (const [name] of inventory) if (!name.includes("/")) await walk(name);
   if (expected.size) throw new Error("smolvm_runtime_inventory_incomplete");
   await access(executable, constants.X_OK);
   await access(path.join(root, "smolvm-bin"), constants.X_OK);
-  return SMOLVM_RELEASE_SHA256;
+  return release.sha256;
 }

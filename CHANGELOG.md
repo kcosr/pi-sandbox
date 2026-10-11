@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+### Added
+
+- Add macOS 26+ arm64 smolvm to the reusable extension and managed application, with ordinary account registry cleanup and optional trusted disk tools. ([#26](https://github.com/kcosr/pi-sandbox/pull/26))
+
 ### Breaking changes
 
 - Use the ordinary smolvm account registry/cache and unique owned machine names. Controller state now contains metadata only; old private-registry cold receipts are not accepted. ([#25](https://github.com/kcosr/pi-sandbox/pull/25))

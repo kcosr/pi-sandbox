@@ -1,0 +1,11 @@
+# Official Ubuntu 24.04 arm64/v8 manifest dated 2026-09-17.
+# Same tool set as Agent Eval Runner's public Ubuntu recipe at 8ed0107.
+# Package repositories are not snapshots; retain each build's package inventory.
+FROM ubuntu:24.04@sha256:08571ca13e00ca07a2a84eab83a959b4242e22cceb16486a11bef1428c9e93a7
+RUN sed -i 's|http://ports.ubuntu.com|https://ports.ubuntu.com|g' /etc/apt/sources.list.d/ubuntu.sources \
+    && apt-get update \
+    && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
+       ca-certificates nodejs python3 coreutils findutils grep sed gawk \
+       git make gcc libc6-dev procps tar gzip diffutils util-linux file \
+    && rm -rf /var/lib/apt/lists/*
+CMD ["/bin/sleep", "infinity"]

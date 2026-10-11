@@ -1,4 +1,4 @@
-import { chmod, mkdtemp, rm, symlink } from "node:fs/promises";
+import { chmod, mkdtemp, realpath, rm, symlink } from "node:fs/promises";
 import { createConnection, createServer, type Socket } from "node:net";
 import path from "node:path";
 import { setImmediate as immediate, setTimeout as delay } from "node:timers/promises";
@@ -19,7 +19,7 @@ describe("OCI attachment capability", () => {
   it.each([false, true])(
     "preserves 70000 alternating tiny writes with drain opportunities=%s",
     async (paced) => {
-      const dir = await mkdtemp("/var/tmp/oci-tiny-");
+      const dir = await realpath(await mkdtemp("/var/tmp/oci-tiny-"));
       const descriptor: SmolvmOciAttachment = {
         version: 1,
         socketPath: path.join(dir, "control.sock"),
@@ -95,7 +95,7 @@ describe("OCI attachment capability", () => {
   );
 
   it("accepts 70000 small wire frames within the byte allowance", async () => {
-    const dir = await mkdtemp("/var/tmp/oci-wire-");
+    const dir = await realpath(await mkdtemp("/var/tmp/oci-wire-"));
     const descriptor: SmolvmOciAttachment = {
       version: 1,
       socketPath: path.join(dir, "control.sock"),
@@ -153,7 +153,7 @@ describe("OCI attachment capability", () => {
   });
 
   it.each(["cancel", "disconnect"])("still aborts an active request on %s", async (action) => {
-    const dir = await mkdtemp("/var/tmp/oci-cancel-");
+    const dir = await realpath(await mkdtemp("/var/tmp/oci-cancel-"));
     const descriptor: SmolvmOciAttachment = {
       version: 1,
       socketPath: path.join(dir, "control.sock"),
@@ -215,7 +215,7 @@ describe("OCI attachment capability", () => {
   it.each(["result", "failure"])(
     "preserves cross-stream callback order and %s through a temporarily paused reader",
     async (completion) => {
-      const dir = await mkdtemp("/var/tmp/oci-slow-");
+      const dir = await realpath(await mkdtemp("/var/tmp/oci-slow-"));
       const descriptor: SmolvmOciAttachment = {
         version: 1,
         socketPath: path.join(dir, "control.sock"),
@@ -357,7 +357,7 @@ describe("OCI attachment capability", () => {
   );
 
   it("authenticates before tool dispatch and offers no controller operation", async () => {
-    const dir = await mkdtemp("/var/tmp/oci-rpc-");
+    const dir = await realpath(await mkdtemp("/var/tmp/oci-rpc-"));
     const socketPath = path.join(dir, "control.sock");
     let executions = 0;
     const d: SmolvmOciAttachment = {

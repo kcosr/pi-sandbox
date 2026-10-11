@@ -1,6 +1,8 @@
 import { randomBytes } from "node:crypto";
-import { access, lstat, mkdtemp, realpath, writeFile, open, unlink } from "node:fs/promises";
+import { lstat, mkdtemp, realpath, writeFile, open, unlink } from "node:fs/promises";
 import path from "node:path";
+import { verifySmolvmCapability } from "../platform.js";
+import { validateHostTools, verifyHostTools } from "../host-tools.js";
 import { AdmissionQueue } from "../admission.js";
 import { SMOLVM_GUEST_COMMAND } from "../guest-command.js";
 import {
@@ -87,10 +89,12 @@ export function validateOciFamilyOptions(value: SmolvmOciFamilyOptions): void {
           "mounts",
           "resources",
           "limits",
+          "e2fsprogsDirectory",
         ].includes(k),
     )
   )
     throw fail();
+  validateHostTools(value);
   if (value.namePrefix !== undefined) validateNamePrefix(value.namePrefix);
   for (const p of [value.smolvmPath, value.imageArchive, value.stateDirectory, value.cwd])
     assertGuestPath(p);
@@ -157,13 +161,11 @@ async function validateHostOptions(
   requireKvm = true,
 ): Promise<void> {
   validateOciFamilyOptions(options);
-  if (process.platform !== "linux" || process.arch !== "x64")
-    throw new Error("smolvm_oci_requires_linux_x64");
   await Promise.all([
     canonical(options.smolvmPath, false),
     canonical(options.imageArchive, false),
     canonical(options.stateDirectory, true),
-    ...(requireKvm ? [access("/dev/kvm", 6)] : []),
+    ...(requireKvm || process.platform === "darwin" ? [verifySmolvmCapability()] : []),
   ]);
   const stateStat = await lstat(options.stateDirectory);
   if (stateStat.uid !== process.getuid?.() || (stateStat.mode & 0o077) !== 0)
@@ -198,10 +200,14 @@ export async function createSmolvmOciFamily(
     (hooks.onPrepared !== undefined && typeof hooks.onPrepared !== "function")
   )
     throw fail();
-  const environment = createSmolvmEnvironment();
+  const environment = createSmolvmEnvironment(options.e2fsprogsDirectory);
   validateSmolvmSocketPaths(environment);
   const registry = await registryIdentity(environment);
   await validateHostOptions(options, registry);
+  const hostToolsIdentity = await verifyHostTools(
+    options,
+    (options.mounts ?? []).map((m) => m.hostPath),
+  );
   const runtimeFingerprint = await verifySmolvmRuntime(options.smolvmPath);
   const mountFingerprint = await mountIdentities(options);
   const state = await mkdtemp(path.join(options.stateDirectory, "family-"));
@@ -219,6 +225,7 @@ export async function createSmolvmOciFamily(
     mountFingerprint,
     sourceId,
     registry,
+    hostToolsIdentity,
   );
   let nativeStarted = false;
   try {
@@ -282,7 +289,7 @@ async function disposeCliClaim(cli: SmolvmCli, statePath: string, claimed: boole
 async function loadBoundJournal(statePath: string): Promise<FamilyJournal> {
   const journal = await readJournal(statePath);
   validateOciFamilyOptions(journal.options);
-  const environment = createSmolvmEnvironment();
+  const environment = createSmolvmEnvironment(journal.options.e2fsprogsDirectory);
   validateSmolvmSocketPaths(environment);
   const registry = await registryIdentity(environment);
   if (
@@ -316,6 +323,12 @@ async function validateRuntimeBinding(record: FamilyJournal): Promise<void> {
 async function validateRetainedBinding(record: FamilyJournal): Promise<void> {
   await validateHostOptions(record.options, record.registry, false);
   await validateRuntimeBinding(record);
+  const hostToolsIdentity = await verifyHostTools(
+    record.options,
+    (record.options.mounts ?? []).map((m) => m.hostPath),
+  );
+  if (hostToolsIdentity !== record.hostToolsIdentity)
+    throw new Error("smolvm_oci_host_tools_binding_changed");
   if (
     JSON.stringify(await mountIdentities(record.options)) !== JSON.stringify(record.mountIdentities)
   )
@@ -336,6 +349,7 @@ export async function reopenSmolvmOciFamily(input: {
     record.cwd !== journal.options.cwd ||
     record.imageSha256 !== journal.options.imageSha256 ||
     record.runtimeIdentity !== journal.runtimeIdentity ||
+    record.hostToolsIdentity !== journal.hostToolsIdentity ||
     JSON.stringify(record.registry) !== JSON.stringify(journal.registry) ||
     JSON.stringify(record.options) !== JSON.stringify(journal.options) ||
     JSON.stringify(record.mountIdentities) !== JSON.stringify(journal.mountIdentities)
@@ -377,6 +391,7 @@ export async function reopenSmolvmOciFamily(input: {
     journal.mountIdentities,
     journal.sourceId,
     journal.registry,
+    journal.hostToolsIdentity,
     journal.machines,
   );
   try {
@@ -453,6 +468,7 @@ class Family implements SmolvmOciFamily {
     readonly mountFingerprint: readonly { dev: number; ino: number }[],
     readonly sourceId: string,
     readonly registry: SmolvmRegistryIdentity,
+    readonly hostToolsIdentity?: string,
     inventory?: readonly OwnedMachine[],
   ) {
     for (const entry of inventory ?? [
@@ -476,6 +492,7 @@ class Family implements SmolvmOciFamily {
       environment: this.cli.environment,
       options: this.options,
       mountIdentities: this.mountFingerprint,
+      ...(this.hostToolsIdentity ? { hostToolsIdentity: this.hostToolsIdentity } : {}),
       machines,
     });
     const retained = new Set(machines.map((machine) => machine.name));
@@ -840,6 +857,7 @@ class Family implements SmolvmOciFamily {
         sourceIdentity: this.#inventory.get(this.sourceId)!.identity!,
         runtimeIdentity: this.runtimeFingerprint,
         mountIdentities: this.mountFingerprint,
+        ...(this.hostToolsIdentity ? { hostToolsIdentity: this.hostToolsIdentity } : {}),
       });
       await releaseController(this.statePath);
       return descriptor;

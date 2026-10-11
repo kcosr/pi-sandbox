@@ -38,3 +38,5 @@ export {
   type ToolCommandName,
   type ToolCommandPaths,
 } from "./contracts.js";
+
+export { smolvmReleaseForPlatform } from "./smolvm/release-pin.js";

@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { mkdir, mkdtemp, rename, rm, symlink } from "node:fs/promises";
+import { mkdir, mkdtemp, realpath, rename, rm, symlink } from "node:fs/promises";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { SmolvmCli } from "./cli.js";
@@ -15,11 +15,11 @@ afterEach(async () => {
   for (const dir of directories.splice(0)) await rm(dir, { recursive: true, force: true });
 });
 async function fixture(state = "running") {
-  const root = await mkdtemp("/var/tmp/smol-identity-");
+  const root = await realpath(await mkdtemp("/var/tmp/smol-identity-"));
   directories.push(root);
   const directory = path.join(
     root,
-    "cache/smolvm/vms",
+    process.platform === "darwin" ? "Library/Caches/smolvm/vms" : "cache/smolvm/vms",
     createHash("sha256").update("candidate").digest("hex").slice(0, 16),
   );
   await mkdir(directory, { recursive: true });
@@ -149,22 +149,15 @@ describe("stock CLI lifecycle ownership", () => {
   it("accepts an ordinary cache ancestor alias while retaining canonical data identity", async () => {
     const { cli, run, directory } = await fixture();
     const root = cli.environment.HOME!;
-    const alias = path.join(root, "cache-alias");
-    await symlink(path.join(root, "cache"), alias);
-    const environment = { ...cli.environment, XDG_CACHE_HOME: alias };
-    const aliasCli = {
-      environment,
-      run: (request: { argv: readonly string[] }) =>
-        request.argv[1] === "data-dir"
-          ? Promise.resolve({
-              stdout: Buffer.from(directory.replace(path.join(root, "cache"), alias)),
-              stderr: Buffer.alloc(0),
-              exitCode: 0,
-              signal: null,
-            })
-          : run(request),
-    } as unknown as SmolvmCli;
-    expect((await captureMachineIdentity(aliasCli, "candidate")).dataDirectory).toBe(directory);
+    const cache =
+      process.platform === "darwin" ? path.join(root, "Library/Caches") : path.join(root, "cache");
+    const target = path.join(root, "cache-target");
+    await rename(cache, target);
+    await symlink(target, cache);
+    const aliasCli = { environment: cli.environment, run } as unknown as SmolvmCli;
+    expect((await captureMachineIdentity(aliasCli, "candidate")).dataDirectory).toBe(
+      directory.replace(cache, target),
+    );
   });
   it.each(["created", "failed"])(
     "retains unprobed %s even when upstream would acknowledge stop",

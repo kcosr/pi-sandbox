@@ -33,11 +33,11 @@ server controls that govern other software run by the logged-in user.
 
 ## Execution backends and reusable extensions
 
-| Backend              | Supported hosts                | Tool filesystem                                                           | Tool networking                               |
-| -------------------- | ------------------------------ | ------------------------------------------------------------------------- | --------------------------------------------- |
-| Bubblewrap (default) | Linux x86-64 / arm64           | Host read-only, selected launch directory writable, optional masks        | None, private loopback, or host               |
-| smolvm (optional)    | Linux x86-64 with KVM          | Disposable Linux guest plus the launch directory mounted at its host path | Offline; guest-local sockets remain available |
-| Direct (explicit)    | Linux and macOS x86-64 / arm64 | Ordinary host access                                                      | Host                                          |
+| Backend              | Supported hosts                                                  | Tool filesystem                                                           | Tool networking                               |
+| -------------------- | ---------------------------------------------------------------- | ------------------------------------------------------------------------- | --------------------------------------------- |
+| Bubblewrap (default) | Linux x86-64 / arm64                                             | Host read-only, selected launch directory writable, optional masks        | None, private loopback, or host               |
+| smolvm (optional)    | Linux x86-64 with KVM; macOS 26+ arm64 with Hypervisor.framework | Disposable Linux guest plus the launch directory mounted at its host path | Offline; guest-local sockets remain available |
+| Direct (explicit)    | Linux and macOS x86-64 / arm64                                   | Ordinary host access                                                      | Host                                          |
 
 The managed smolvm backend uses an administrator-selected, digest-pinned plain
 `.smolmachine` tools image and a build-selected smolvm distribution. It does not
@@ -161,7 +161,7 @@ env -u NODE_ENV npm run verify:release
 ```
 
 This verifies and builds the default distribution. Release maintainers must also
-complete the [required smolvm release lane](docs/testing.md#required-linux-smolvm-release-lane).
+complete the [required smolvm release lane](docs/testing.md#required-smolvm-release-lane).
 The archive is written under `release/`. Extract it on the target host, review
 its packaged policy, and run these commands **from its extracted directory**:
 

@@ -52,6 +52,7 @@ async function createExecutor(
       imagePath: backend.image,
       imageSha256: backend.imageSha256,
       stateDirectory: backend.stateDirectory,
+      ...(backend.e2fsprogsDirectory ? { e2fsprogsDirectory: backend.e2fsprogsDirectory } : {}),
       resources: backend.resources,
     });
   const runtime = await realpath(backend.runtime);

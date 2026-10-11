@@ -23,6 +23,7 @@ export interface FamilyJournal {
   readonly runtime: string;
   readonly runtimeVersion: string;
   readonly runtimeIdentity: string;
+  readonly hostToolsIdentity?: string;
   readonly registry: SmolvmRegistryIdentity;
   readonly environment: Readonly<Record<string, string>>;
   readonly options: SmolvmOciFamilyOptions;
@@ -80,9 +81,15 @@ export async function readJournal(statePath: string): Promise<FamilyJournal> {
     const value = JSON.parse(bytes.subarray(0, length).toString()) as FamilyJournal;
     if (
       !value ||
-      Object.keys(value).sort().join(",") !==
+      Object.keys(value)
+        .filter((key) => key !== "hostToolsIdentity")
+        .sort()
+        .join(",") !==
         "environment,kind,machines,mountIdentities,options,registry,runtime,runtimeIdentity,runtimeVersion,sourceId,statePath,version" ||
       value.version !== 2 ||
+      (value.hostToolsIdentity !== undefined &&
+        (typeof value.hostToolsIdentity !== "string" ||
+          !/^[a-f0-9]{64}$/u.test(value.hostToolsIdentity))) ||
       value.kind !== "oci-family" ||
       value.statePath !== statePath ||
       !validMachineName(value.sourceId) ||

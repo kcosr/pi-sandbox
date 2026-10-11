@@ -13,10 +13,12 @@ the fixed GNU utilities used by typed tools.
 The build and installer validate required Bubblewrap options, including
 `--remount-ro` for directory masks and `--ro-bind-data` for empty file masks.
 
-macOS supports direct mode only and requires Homebrew `coreutils`, `findutils`,
+macOS direct mode requires Homebrew `coreutils`, `findutils`,
 `grep`, `gawk`, `fd`, and `ripgrep`, plus system Bash, `sh`, and `file`. The
 runtime resolves the Homebrew prefix for Apple silicon or Intel and fails
-closed if a GNU command is missing. A macOS release build additionally requires
+closed if a GNU command is missing. The macOS installer validates the selected
+administrative backend before checking these direct-mode prerequisites; smolvm
+installations do not require them. A macOS release build additionally requires
 Homebrew GNU tar (`gtar`) for reproducible archives.
 
 Configured home-directory expansion requires `/usr/bin/getent` on Linux or
@@ -604,8 +606,8 @@ adapters and preserves administrator-selected permissions and audit controls.
 
 ## Optional external smolvm runtime
 
-Linux x86-64 distributions may opt into smolvm by setting
-`platforms.linux.smolvm.path` and `version = "1.26.1"` in the build manifest.
+Linux x86-64 and macOS 26+ arm64 distributions may opt into smolvm by setting
+`platforms.linux.smolvm.path` or `platforms.darwin.smolvm.path` and `version = "1.26.1"` in the build manifest.
 Keep the official wrapper, binary, libraries and guest rootfs together at that
 fixed path. A wrapper copied by itself is insufficient. Pi verifies the pinned
 complete runtime inventory at VM startup. The generated release manifest records
@@ -617,11 +619,12 @@ policy table. Follow the [image preparation guide](smolvm-images.md) for the
 public recipe, upstream CLI steps, and offline verification. The default packaged configuration remains Bubblewrap on Linux
 and direct execution on macOS. Config validation and staged installation do not
 start VMs or require the external runtime/image paths to exist. VM startup
-requires Linux x86-64, usable `/dev/kvm`, the pinned external distribution,
+requires usable `/dev/kvm` on Linux x86-64 or Hypervisor.framework on macOS 26+ arm64, the matching pinned external distribution,
 the configured image and a private controller-metadata directory outside the launch project.
 Provision each account's expanded `smolvm.state_directory` with that account as
 owner and mode `0700`; `/var/tmp/pi-vm-{{uid}}` keeps paths short and accounts
-separate. Its canonical expanded path must occupy at most 48 bytes. Startup does
+separate on Linux; use `/private/var/tmp/pi-vm-{{uid}}` on macOS to avoid the
+`/var` symlink. Its canonical expanded path must occupy at most 48 bytes. Startup does
 not create this directory or repair its ownership or permissions. VM disks and
 shared caches remain in smolvm’s ordinary account locations, not this directory.
 Normal shutdown calls named stop/delete; after a crash, use the recorded machine
@@ -634,6 +637,14 @@ backend does not shrink disks at startup: it rejects configured capacities below
 the image's logical sizes, copies its prepared templates and lets the guest grow
 their filesystems if needed. It therefore does not unconditionally require host
 e2fsprogs just to launch a valid prepared pack.
+On macOS, the pinned firmware requires macOS 26 or later and the host must report
+`sysctl -n kern.hv_support` as `1`; an outer VM may not expose this capability.
+Use arm64 Linux images. Direct mode's GNU/Homebrew prerequisites do not apply to
+VM tools. Image builders and OCI launches can use an explicitly provisioned
+`smolvm.e2fsprogs_directory` (or `e2fsprogsDirectory` in the extension/controller),
+containing both `resize2fs` and `e2fsck`. Keep the account's real HOME short enough
+for upstream's Unix sockets. XDG does not relocate Darwin's HOME/Library registry.
+
 No host packages or services are automatically installed. See
 [configuration](configuration.md#smolvm-image-and-runtime-selection) for the
 exact policy fields and resource limits.

@@ -21,7 +21,7 @@ selected with `PI_SANDBOX_TEST_BUN`). Run
 `packages/sandbox-extension/src/runtime/smolvm/oci/terminal.native.test.ts` with
 `PI_SANDBOX_SMOLVM_BIN`, `PI_SANDBOX_SMOLVM_OCI_IMAGE` and
 `PI_SANDBOX_SMOLVM_OCI_SHA256` set to a verified 1.26.1 distribution and provisioned
-Linux x86-64 tool image. It checks actual guest PTY startup, resize, Ctrl-C,
+Linux tool image matching the host architecture. It checks actual guest PTY startup, resize, Ctrl-C,
 streaming beyond 1 MiB, simultaneous tools and independent shells, exact reviewer
 branch access, scoped closure and repeated writable-original cold retention.
 The fixture sends bounded small inputs; application-level slow-consumer and
@@ -52,10 +52,10 @@ packaged executable diagnostic checks as distinct observable steps. A supported 
 host must execute the Bubblewrap suites rather than accepting a skip caused by
 unavailable namespaces.
 
-### Required Linux smolvm release lane
+### Required smolvm release lane
 
-A source release that includes smolvm must also pass this lane on Linux x86-64
-with usable KVM. Ordinary development commands may skip unavailable VM tests;
+A source release that includes smolvm must pass this lane on each supported host:
+Linux x86-64 with usable KVM and macOS 26+ arm64 with Hypervisor.framework. Ordinary development commands may skip unavailable VM tests;
 this command may not. Provide the complete pinned smolvm distribution, a
 prepared plain tools pack, an OCI tools archive, their verified SHA-256 values,
 and Bun 1.3.14 or newer on `PATH`. `PI_SANDBOX_TEST_BUN` can additionally select
@@ -72,6 +72,12 @@ absolute path to this checkout's
 path = "/opt/smolvm-1.26.1/smolvm"
 version = "1.26.1"
 ```
+
+On macOS select `[platforms.darwin.smolvm]` instead, use arm64 images, and set
+`PI_SANDBOX_E2FSPROGS_DIRECTORY` if disk tools live outside standard locations.
+The same setting reaches the managed smoke policy. Use native canonical paths
+(`/private/var/tmp/...` rather than its `/var/tmp` alias). Release builds still
+need the documented direct-mode GNU tools and GNU tar for their other checks.
 
 Then run, using the same runtime path in both places:
 
@@ -380,7 +386,8 @@ identity backend transitions, refusal of identity image overrides, VM-aware
 mount/policy diagnostics and the `smolvm` audit boundary. Distribution checks
 cover the optional fixed external 1.26.1 provider without requiring an installed
 runtime during cross-build/staged validation. Real VM tests must additionally
-use a verified full runtime and trusted tools image on Linux x86-64 with KVM;
+use a verified full runtime and trusted tools image on Linux x86-64 with KVM
+or macOS 26+ arm64 with Hypervisor.framework;
 ordinary host-only tests are not evidence of VM confinement or cleanup.
 
 Set `PI_SANDBOX_SMOLVM_BIN` to the official distribution's wrapper,
@@ -389,6 +396,18 @@ tools image, and `PI_SANDBOX_SMOLVM_OCI_IMAGE` and `PI_SANDBOX_SMOLVM_OCI_SHA256
 to a local OCI tools archive. `PI_SANDBOX_REQUIRE_SMOLVM=1` makes missing native
 prerequisites fail instead of skipping. The release verifier uses these inputs
 for owned project execution, OCI families and the standard Pi package.
+
+For macOS qualification, set `PI_SANDBOX_E2FSPROGS_DIRECTORY` to the
+canonical isolated e2fsprogs sbin directory if needed, and `PI_SANDBOX_TEST_BUN`
+(and `PI_SANDBOX_BUN` for package tests) to a trusted Bun executable. Run
+`tests/integration/smolvm-executor.test.ts` and the package's `oci.native.test.ts`
+under Node 24 and Bun with required VM inputs, then `oci-terminal-native.ts`
+under Bun and `scripts/test/sandbox-extension-package.mjs`. These fixtures use a
+short canonical temporary HOME as well as XDG paths; XDG alone would leave the
+real macOS registry exposed. Fixture-only process and layer-volume observations
+are independent test evidence, not a stronger product lifecycle guarantee.
+Before deleting a whole disposable account, confirm its registry is empty and
+no fixture layer image remains attached; never unmount unrelated host volumes.
 
 The native cases cover RW/RO project access, binary streaming, persistent guest
 processes, cancellation, timeout, output overflow and close; frozen OCI sources,
@@ -406,7 +425,7 @@ No fixture sweeps the developer’s normal registry. Abrupt owner death remains 
 documented manual-recovery case, not an automatic-cleanup guarantee.
 
 For the compiled managed application, run the following against an extracted
-Linux x86-64 review build with `allow_config_override = true`, the Git extension
+Linux x86-64 or macOS arm64 review build with `allow_config_override = true`, the Git extension
 included, and its build-selected external smolvm distribution available:
 
 ```sh

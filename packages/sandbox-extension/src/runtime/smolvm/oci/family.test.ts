@@ -1,3 +1,5 @@
+vi.mock("../platform.js", () => ({ verifySmolvmCapability: () => Promise.resolve() }));
+import type * as HostTools from "../host-tools.js";
 import type * as FsPromises from "node:fs/promises";
 import type * as Lifecycle from "../lifecycle.js";
 import type * as Transport from "./transport.js";
@@ -44,6 +46,7 @@ import {
 const mocks = vi.hoisted(() => ({
   names: new Map<string, { state: string; parent: string | null; createdAt: number }>(),
   cache: "",
+  hostToolsIdentity: "d".repeat(64),
   createFailure: false,
   branchFailure: false,
   failDelete: false,
@@ -74,6 +77,11 @@ vi.mock("node:fs/promises", async (importActual) => {
       file === "/dev/kvm" ? Promise.resolve() : actual.access(file, mode),
   };
 });
+vi.mock("../host-tools.js", async (importActual) => ({
+  ...(await importActual<typeof HostTools>()),
+  verifyHostTools: (options: { e2fsprogsDirectory?: string }) =>
+    Promise.resolve(options.e2fsprogsDirectory ? mocks.hostToolsIdentity : undefined),
+}));
 vi.mock("../runtime-release.js", () => ({
   verifySmolvmRuntime: () => Promise.resolve(mocks.runtimeIdentity),
   SMOLVM_VERSION: "1.26.1",
@@ -266,9 +274,12 @@ vi.mock("../cli.js", () => {
 });
 const dirs: string[] = [];
 beforeEach(async () => {
-  const root = await mkdtemp("/var/tmp/oci-shared-");
+  const root = await realpath(await mkdtemp("/tmp/oci-shared-"));
   dirs.push(root);
-  mocks.cache = path.join(root, "cache");
+  mocks.cache =
+    process.platform === "darwin"
+      ? path.join(root, "home/Library/Caches")
+      : path.join(root, "cache");
   for (const [key, dir] of Object.entries({
     HOME: "home",
     XDG_CACHE_HOME: "cache",
@@ -278,6 +289,8 @@ beforeEach(async () => {
     vi.stubEnv(key, path.join(root, dir));
   }
   vi.stubEnv("SMOLVM_CONFIG", path.join(root, "home/config.toml"));
+  await mkdir(mocks.cache, { recursive: true });
+  mocks.hostToolsIdentity = "d".repeat(64);
   mocks.names.clear();
   mocks.calls = [];
   mocks.createFailure = false;
@@ -306,7 +319,7 @@ async function fixture(
   patch: Partial<SmolvmOciFamilyOptions> = {},
   hooks: SmolvmOciFamilyHooks = {},
 ) {
-  const dir = await mkdtemp("/var/tmp/oci-policy-");
+  const dir = await realpath(await mkdtemp("/tmp/oci-policy-"));
   dirs.push(dir);
   const image = path.join(dir, "image.tar");
   await writeFile(image, "fixture");
@@ -324,7 +337,7 @@ async function fixture(
     hooks,
   );
 }
-const suite = process.platform === "linux" && process.arch === "x64" ? describe : describe.skip;
+const suite = describe;
 function deferred<T>() {
   let resolve!: (value: T) => void;
   const promise = new Promise<T>((done) => {
@@ -610,7 +623,7 @@ suite("OCI family controller policy with a simulated CLI", () => {
   it.each(["image", "mount"])(
     "deletes stopped disks after the original %s input disappears or changes",
     async (input) => {
-      const mount = await mkdtemp("/var/tmp/oci-mount-");
+      const mount = await realpath(await mkdtemp("/tmp/oci-mount-"));
       dirs.push(mount, mount + "-old");
       const family = await fixture({
         mounts: [{ hostPath: mount, guestPath: "/inputs", readOnly: true }],
@@ -627,6 +640,18 @@ suite("OCI family controller policy with a simulated CLI", () => {
       expect(mocks.names.has(family.sourceId)).toBe(false);
     },
   );
+  it("binds selected disk tools on reopen but does not require them for stopped deletion", async () => {
+    const family = await fixture({ e2fsprogsDirectory: "/trusted/disk-tools" });
+    await family.retainForColdReopen();
+    mocks.calls = [];
+    mocks.hostToolsIdentity = "e".repeat(64);
+    await expect(reopenSmolvmOciFamily({ statePath: family.statePath })).rejects.toThrow(
+      "host_tools_binding_changed",
+    );
+    expect(mocks.calls.some((argv) => argv[1] === "start")).toBe(false);
+    await deleteSmolvmOciFamily({ statePath: family.statePath });
+    expect(mocks.names.has(family.sourceId)).toBe(false);
+  });
   it("still requires the captured runtime and machine identity when deleting stopped disks", async () => {
     const family = await fixture();
     await family.close({ retainState: true });
@@ -1053,7 +1078,7 @@ suite("OCI family controller policy with a simulated CLI", () => {
     }
   });
   it("rejects a read-only mount exposing custom Pi state through an alias", async () => {
-    const directory = await mkdtemp("/var/tmp/oci-control-");
+    const directory = await realpath(await mkdtemp("/tmp/oci-control-"));
     dirs.push(directory);
     const control = path.join(directory, "actual");
     const alias = path.join(directory, "alias");

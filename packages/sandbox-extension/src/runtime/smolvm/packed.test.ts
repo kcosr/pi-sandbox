@@ -1,5 +1,16 @@
+import { smolvmReleaseForPlatform } from "./release-pin.js";
 import { createHash } from "node:crypto";
-import { chmod, mkdtemp, mkdir, readFile, rm, stat, symlink, writeFile } from "node:fs/promises";
+import {
+  chmod,
+  mkdtemp,
+  realpath,
+  mkdir,
+  readFile,
+  rm,
+  stat,
+  symlink,
+  writeFile,
+} from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
@@ -19,8 +30,8 @@ const options = {
 function manifest() {
   return {
     mode: "vm",
-    platform: "linux/amd64",
-    host_platform: "linux/amd64",
+    platform: smolvmReleaseForPlatform(process.platform, process.arch).guestPlatform,
+    host_platform: smolvmReleaseForPlatform(process.platform, process.arch).platform,
     smolvm_version: "1.26.1",
     network: false,
     gpu: false,
@@ -37,7 +48,7 @@ function manifest() {
   };
 }
 async function fixture(value: unknown, action: (file: string, digest: string) => Promise<void>) {
-  const root = await mkdtemp(path.join(tmpdir(), "smol-pack-test-"));
+  const root = await realpath(await mkdtemp(path.join(tmpdir(), "smol-pack-test-")));
   try {
     const data = Buffer.from(JSON.stringify(value));
     const footer = Buffer.alloc(64);
@@ -79,7 +90,7 @@ describe("packed smolvm admission", () => {
     { cuda: true },
     { mode: "oci" },
     { smolvm_version: "1.23.1" },
-    { host_platform: "darwin/arm64" },
+    { host_platform: process.platform === "darwin" ? "linux/x64" : "darwin/arm64" },
     { cmd: ["/bin/evil"] },
     { entrypoint: ["/bin/evil"] },
     { env: ["SECRET=value"] },
@@ -106,8 +117,8 @@ describe("packed smolvm admission", () => {
     }
   });
   it("removes application metadata without traversing outside symlinks", async () => {
-    const root = await mkdtemp(path.join(tmpdir(), "smol-state-test-"));
-    const outside = await mkdtemp(path.join(tmpdir(), "smol-outside-test-"));
+    const root = await realpath(await mkdtemp(path.join(tmpdir(), "smol-state-test-")));
+    const outside = await realpath(await mkdtemp(path.join(tmpdir(), "smol-outside-test-")));
     try {
       const immutable = path.join(root, "cache");
       await mkdir(immutable);

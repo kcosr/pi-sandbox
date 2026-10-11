@@ -1,6 +1,7 @@
-import { constants } from "node:fs";
-import { access, lstat, mkdtemp, realpath, writeFile } from "node:fs/promises";
+import { lstat, mkdtemp, realpath, writeFile } from "node:fs/promises";
 import path from "node:path";
+import { verifySmolvmCapability } from "./platform.js";
+import { verifyHostTools } from "./host-tools.js";
 import {
   SandboxExecutionError,
   type SandboxCommandRequest,
@@ -40,7 +41,8 @@ export async function createSmolvmExecutor(
   validateSmolvmOptions(input);
   const options = structuredClone(input);
   await verifySmolvmRuntime(options.smolvmPath);
-  await access("/dev/kvm", constants.R_OK | constants.W_OK);
+  await verifySmolvmCapability();
+  await verifyHostTools(options, [options.cwd]);
   for (const file of [options.cwd, options.stateDirectory, options.imagePath])
     if ((await realpath(file)) !== file) throw new Error("smolvm_path_not_canonical");
   if (!(await lstat(options.cwd)).isDirectory()) throw new Error("smolvm_workspace_not_directory");
@@ -51,7 +53,7 @@ export async function createSmolvmExecutor(
     (stateStat.mode & 0o077) !== 0
   )
     throw new Error("smolvm_state_requires_private_owned_directory");
-  const environment = createSmolvmEnvironment();
+  const environment = createSmolvmEnvironment(options.e2fsprogsDirectory);
   validateSmolvmSocketPaths(environment);
   const registry = await registryIdentity(environment);
   for (const control of [

@@ -34,35 +34,6 @@ if [ -z "$destdir" ]; then
     x86_64) brew_prefix=/usr/local ;;
     *) echo "unsupported macOS architecture" >&2; exit 1 ;;
   esac
-  required="$brew_prefix/opt/coreutils/libexec/gnubin/cat
-$brew_prefix/opt/coreutils/libexec/gnubin/chmod
-$brew_prefix/opt/coreutils/libexec/gnubin/mkdir
-$brew_prefix/opt/coreutils/libexec/gnubin/mv
-$brew_prefix/opt/coreutils/libexec/gnubin/rm
-$brew_prefix/opt/coreutils/libexec/gnubin/head
-$brew_prefix/opt/coreutils/libexec/gnubin/sha256sum
-$brew_prefix/opt/coreutils/libexec/gnubin/sort
-$brew_prefix/opt/coreutils/libexec/gnubin/tail
-$brew_prefix/opt/coreutils/libexec/gnubin/test
-$brew_prefix/opt/coreutils/libexec/gnubin/wc
-$brew_prefix/opt/findutils/libexec/gnubin/find
-$brew_prefix/opt/grep/libexec/gnubin/grep
-$brew_prefix/bin/gawk
-/bin/bash
-/bin/sh
-/usr/bin/file"
-  missing=
-  for executable in $required; do
-    [ -x "$executable" ] || missing="$missing $executable"
-  done
-  command -v fd >/dev/null 2>&1 || missing="$missing fd"
-  command -v rg >/dev/null 2>&1 || missing="$missing rg"
-  if [ -n "$missing" ]; then
-    echo "missing required host executables:" >&2
-    for executable in $missing; do echo "  $executable" >&2; done
-    echo "install Homebrew coreutils, findutils, grep, gawk, fd, and ripgrep, then retry" >&2
-    exit 1
-  fi
 fi
 
 release_root=$(CDPATH= cd "$(dirname "$0")" && pwd -P)
@@ -184,7 +155,41 @@ else
   "$candidate" --validate-installation --root "$validation_root"
   execution_backend=$("$candidate" --print-execution-backend --root "$validation_root")
 fi
-[ "$execution_backend" = direct ] || { echo "macOS packages require direct execution" >&2; exit 1; }
+case "$execution_backend" in
+  direct|smolvm) ;;
+  *) echo "unsupported macOS execution backend: $execution_backend" >&2; exit 1 ;;
+esac
+if [ -z "$destdir" ] && [ "$execution_backend" = direct ]; then
+  required="$brew_prefix/opt/coreutils/libexec/gnubin/cat
+$brew_prefix/opt/coreutils/libexec/gnubin/chmod
+$brew_prefix/opt/coreutils/libexec/gnubin/mkdir
+$brew_prefix/opt/coreutils/libexec/gnubin/mv
+$brew_prefix/opt/coreutils/libexec/gnubin/rm
+$brew_prefix/opt/coreutils/libexec/gnubin/head
+$brew_prefix/opt/coreutils/libexec/gnubin/sha256sum
+$brew_prefix/opt/coreutils/libexec/gnubin/sort
+$brew_prefix/opt/coreutils/libexec/gnubin/tail
+$brew_prefix/opt/coreutils/libexec/gnubin/test
+$brew_prefix/opt/coreutils/libexec/gnubin/wc
+$brew_prefix/opt/findutils/libexec/gnubin/find
+$brew_prefix/opt/grep/libexec/gnubin/grep
+$brew_prefix/bin/gawk
+/bin/bash
+/bin/sh
+/usr/bin/file"
+  missing=
+  for executable in $required; do
+    [ -x "$executable" ] || missing="$missing $executable"
+  done
+  command -v fd >/dev/null 2>&1 || missing="$missing fd"
+  command -v rg >/dev/null 2>&1 || missing="$missing rg"
+  if [ -n "$missing" ]; then
+    echo "missing required host executables:" >&2
+    for executable in $missing; do echo "  $executable" >&2; done
+    echo "install Homebrew coreutils, findutils, grep, gawk, fd, and ripgrep, then retry" >&2
+    exit 1
+  fi
+fi
 
 stage=$(mktemp -d "$libexec_parent/.pi-sandbox-stage.XXXXXX")
 cp -R "$payload/." "$stage/"
@@ -229,7 +234,7 @@ if [ "$install_defaults" -eq 1 ]; then
 fi
 if ! path_exists "$launcher"; then ln -s "$expected_link" "$launcher"; launcher_created=1; fi
 complete=1
-echo "installed Pi Sandbox direct-execution package:"
+echo "installed Pi Sandbox $execution_backend execution package:"
 echo "  $install_base/pi-sandbox"
 echo "  $launcher -> $install_base/pi-sandbox"
 echo "  $config"

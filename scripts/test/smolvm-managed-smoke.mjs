@@ -13,14 +13,18 @@ import { setTimeout as delay } from "node:timers/promises";
 import { URL } from "node:url";
 import { parse as parseToml, stringify as stringifyToml } from "@iarna/toml";
 import { testManagedMcpCodemode } from "./mcp-codemode-smoke.mjs";
+import { nativeHostProcessAlive } from "../../tests/fixtures/smolvm-native-host.ts";
 import { removeSmolvmFixture } from "./remove-smolvm-fixture.mjs";
 
 if (process.argv.length !== 4) {
   console.error("usage: smolvm-managed-smoke.mjs EXECUTABLE DEFAULTS_DIRECTORY");
   process.exit(2);
 }
-assert.equal(process.platform, "linux");
-assert.equal(process.arch, "x64");
+assert(
+  (process.platform === "linux" && process.arch === "x64") ||
+    (process.platform === "darwin" && process.arch === "arm64"),
+  "Managed smolvm acceptance requires Linux x86-64 or macOS arm64",
+);
 const executable = await realpath(resolve(process.argv[2]));
 const defaults = await realpath(resolve(process.argv[3]));
 const release = JSON.parse(
@@ -32,7 +36,7 @@ assert.equal(typeof release.smolvm.path, "string");
 const image = await realpath(process.env.PI_SANDBOX_SMOLVM_IMAGE ?? "");
 const imageSha256 = process.env.PI_SANDBOX_SMOLVM_IMAGE_SHA256;
 assert.match(imageSha256 ?? "", /^[a-f0-9]{64}$/u);
-const temporary = await mkdtemp("/var/tmp/pim-");
+const temporary = await realpath(await mkdtemp("/var/tmp/pim-"));
 const account = userInfo();
 const userState = await mkdtemp(join(account.homedir, ".pi-smolvm-smoke-"));
 const state = join(temporary, "state");
@@ -43,7 +47,7 @@ const children = new Set();
 let forced = false;
 const environment = {
   PATH: "/usr/bin:/bin:/usr/sbin:/sbin",
-  HOME: account.homedir,
+  HOME: join(temporary, "home"),
   XDG_DATA_HOME: join(temporary, "account-data"),
   XDG_CACHE_HOME: join(temporary, "account-cache"),
   SMOLVM_CONFIG: join(temporary, "smolvm-config.toml"),
@@ -52,6 +56,7 @@ const environment = {
 };
 
 try {
+  await mkdir(environment.HOME, { mode: 0o700 });
   await writeFile(environment.SMOLVM_CONFIG, "");
   await mkdir(state, { mode: 0o700 });
   await mkdir(workspace);
@@ -71,6 +76,9 @@ try {
     ["read", "grep", "find", "ls", "write", "edit", "bash"].map((name) => [name, policy("allow")]),
   );
   config.smolvm = {
+    ...(process.env.PI_SANDBOX_E2FSPROGS_DIRECTORY
+      ? { e2fsprogs_directory: process.env.PI_SANDBOX_E2FSPROGS_DIRECTORY }
+      : {}),
     image,
     image_sha256: imageSha256,
     state_directory: state,
@@ -208,7 +216,7 @@ try {
   assert.equal(await readFile(outside, "utf8"), "host-private-fixture");
   await running.stop();
   for (const pid of pids)
-    assert.equal(await processAlive(pid), false, `VMM ${pid} survived normal EOF`);
+    assert.equal(await nativeHostProcessAlive(pid), false, `VMM ${pid} survived normal EOF`);
   assert.deepEqual(await readdir(state), [], "Normal shutdown removes controller metadata");
 
   assert.deepEqual(listFixtureMachines(), [], "Named VM deleted through stock CLI");
@@ -284,15 +292,6 @@ function policy(mode) {
 }
 function shell(value) {
   return `'${value.replaceAll("'", "'\\''")}'`;
-}
-async function processAlive(pid) {
-  try {
-    const stat = await readFile(`/proc/${pid}/stat`, "utf8");
-    return !["Z", "X"].includes(stat.slice(stat.lastIndexOf(")") + 2).split(" ")[0]);
-  } catch (error) {
-    if (error.code === "ENOENT") return false;
-    throw error;
-  }
 }
 function listFixtureMachines() {
   const machines = JSON.parse(

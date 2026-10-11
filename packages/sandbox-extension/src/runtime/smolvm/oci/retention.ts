@@ -10,6 +10,7 @@ export interface ColdRecord extends SmolvmOciRetainedFamily {
   readonly options: SmolvmOciFamilyOptions;
   readonly sourceIdentity: MachineIdentity;
   readonly runtimeIdentity: string;
+  readonly hostToolsIdentity?: string;
   readonly mountIdentities: readonly { dev: number; ino: number }[];
 }
 const READY = "cold-ready.json";
@@ -58,9 +59,15 @@ export async function readColdRecord(statePath: string): Promise<ColdRecord> {
     const value = parsed as Record<string, unknown>;
     if (
       !value ||
-      Object.keys(value).sort().join(",") !==
+      Object.keys(value)
+        .filter((key) => key !== "hostToolsIdentity")
+        .sort()
+        .join(",") !==
         "cwd,imageSha256,mode,mountIdentities,options,registry,runtimeIdentity,sourceId,sourceIdentity,statePath,version" ||
       value.version !== 2 ||
+      (value.hostToolsIdentity !== undefined &&
+        (typeof value.hostToolsIdentity !== "string" ||
+          !/^[a-f0-9]{64}$/u.test(value.hostToolsIdentity))) ||
       value.mode !== "cold" ||
       value.statePath !== statePath ||
       typeof value.runtimeIdentity !== "string" ||

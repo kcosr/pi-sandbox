@@ -1,8 +1,13 @@
+import {
+  nativeSmolvmHostTools,
+  assertNoFixtureLayerAttachments,
+} from "../fixtures/smolvm-native-host.js";
 import { createServer } from "node:net";
 import {
   chmod,
   lstat,
   mkdtemp,
+  realpath,
   mkdir,
   readFile,
   rm,
@@ -23,16 +28,22 @@ const runtime = process.env.PI_SANDBOX_SMOLVM_BIN;
 const image = process.env.PI_SANDBOX_SMOLVM_IMAGE;
 const digest = process.env.PI_SANDBOX_SMOLVM_IMAGE_SHA256;
 const enabled =
-  process.platform === "linux" && process.arch === "x64" && !!runtime && !!image && !!digest;
+  ((process.platform === "linux" && process.arch === "x64") ||
+    (process.platform === "darwin" && process.arch === "arm64")) &&
+  !!runtime &&
+  !!image &&
+  !!digest;
 if (process.env.PI_SANDBOX_REQUIRE_SMOLVM === "1" && !enabled)
-  throw new Error("Required smolvm packed tests need Linux x64 and explicit runtime/image/SHA256");
+  throw new Error(
+    "Required smolvm packed tests need a supported host and explicit runtime/image/SHA256",
+  );
 
 let suiteRoot: string | undefined;
 let nativeEnvironment: Readonly<Record<string, string>> | undefined;
 let cleanupFailed = false;
 beforeAll(async () => {
   if (!enabled) return;
-  suiteRoot = await mkdtemp("/var/tmp/psvm-suite-");
+  suiteRoot = await realpath(await mkdtemp("/tmp/ps-suite-"));
   // All cases share one disposable ordinary account registry/cache. Never
   // inherit the operator's native storage or cloud/registry settings.
   for (const [key, dir] of Object.entries({
@@ -89,6 +100,7 @@ afterAll(async () => {
     // caches contain read-only directories; restore owner traversal/removal
     // permissions only within this suite's disposable tree, without following
     // symlinks. Product lifecycle cleanup never performs this traversal.
+    assertNoFixtureLayerAttachments(suiteRoot);
     const pending = [suiteRoot];
     while (pending.length) {
       const current = pending.pop()!;
@@ -130,6 +142,7 @@ async function fixture(
   let vm: SandboxExecutor | undefined;
   try {
     vm = await createSmolvmExecutor({
+      ...nativeSmolvmHostTools(),
       cwd,
       cwdWritable: writable,
       stateDirectory: state,
@@ -232,6 +245,7 @@ describe.skipIf(!enabled)("native packed smolvm", () => {
       process.env.PI_CODING_AGENT_DIR = alias;
       await expect(
         createSmolvmExecutor({
+          ...nativeSmolvmHostTools(),
           cwd,
           stateDirectory: state,
           smolvmPath: runtime!,
