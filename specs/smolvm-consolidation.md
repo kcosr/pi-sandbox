@@ -1,5 +1,11 @@
 # Linux smolvm consolidation
 
+> Historical milestone record from 2026-10-10. Release identities and probe
+> results below describe that checkpoint, not the current runtime pin. See
+> [release-pin.ts](../packages/sandbox-extension/src/runtime/smolvm/release-pin.ts)
+> and the [maintained documentation](../README.md#documentation) for current
+> requirements and behavior.
+
 This milestone adds smolvm to the public reusable extension and managed Pi
 Sandbox. The evaluator application is unchanged. macOS, Seatbelt and OpenCode
 are outside this change. Current configuration and security contracts remain in
