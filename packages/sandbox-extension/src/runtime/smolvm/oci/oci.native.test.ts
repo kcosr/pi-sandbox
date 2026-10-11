@@ -1,10 +1,17 @@
-import { mkdtemp, readFile, readdir, rm, stat, symlink, writeFile } from "node:fs/promises";
+import { mkdtemp, mkdir, readFile, readdir, rm, stat, symlink, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { createServer } from "node:net";
 import { networkInterfaces } from "node:os";
-import { afterEach, beforeAll, describe, expect, it } from "vitest";
+import { afterEach, afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import type { SandboxCommandRequest } from "../../contracts.js";
-import { createSmolvmOciFamily, reopenSmolvmOciFamily } from "./family.js";
+import {
+  createSmolvmOciFamily,
+  reopenSmolvmOciFamily,
+  deleteSmolvmOciFamily,
+  readSmolvmOciFamily,
+} from "./family.js";
+import { SmolvmCli } from "../cli.js";
+import { checkedCommand, listMachines } from "../lifecycle.js";
 import { attachSmolvmOciMachine } from "./transport.js";
 import type { SmolvmOciFamily, SmolvmOciFamilyOptions } from "./types.js";
 
@@ -14,7 +21,9 @@ const suite = required || configured ? describe : describe.skip;
 const dirs: string[] = [];
 const families: SmolvmOciFamily[] = [];
 let options: SmolvmOciFamilyOptions;
-beforeAll(() => {
+let suiteRoot: string | undefined;
+let cleanupFailed = false;
+beforeAll(async () => {
   if (!required && !configured) return;
   if (
     process.platform !== "linux" ||
@@ -24,6 +33,13 @@ beforeAll(() => {
     !process.env.PI_SANDBOX_SMOLVM_OCI_SHA256
   )
     throw Error("OCI qualification requires Linux x64, pinned smolvm path, image and checksum");
+  suiteRoot = await mkdtemp("/var/tmp/oci-native-");
+  for (const [key, dir] of Object.entries({ HOME: "h", XDG_DATA_HOME: "d", XDG_CACHE_HOME: "c" })) {
+    await mkdir(path.join(suiteRoot, dir), { mode: 0o700 });
+    vi.stubEnv(key, path.join(suiteRoot, dir));
+  }
+  vi.stubEnv("SMOLVM_CONFIG", path.join(suiteRoot, "config.toml"));
+  await writeFile(path.join(suiteRoot, "config.toml"), "", { mode: 0o600 });
 });
 async function opts() {
   const state = await mkdtemp("/var/tmp/oci-t-");
@@ -59,16 +75,30 @@ async function gone(pids: number[]) {
   }
   throw Error("fixture VM processes survived");
 }
-async function vmPids(dir: string): Promise<number[]> {
-  const found: number[] = [];
-  for (const entry of await readdir(dir, { withFileTypes: true })) {
-    const name = path.join(dir, entry.name);
-    if (entry.isDirectory()) found.push(...(await vmPids(name)));
-    else if (entry.name === "agent.pid")
-      found.push(Number((await readFile(name, "utf8")).split("\n")[0]));
+async function nativeDirectories(statePath: string): Promise<string[]> {
+  const metadata = await readSmolvmOciFamily({ statePath });
+  const cli = new SmolvmCli({ smolvmPath: metadata.runtime, stateDirectory: statePath });
+  try {
+    const directories = [];
+    for (const machine of metadata.machines.filter((m) => m.status !== "deleted"))
+      directories.push(
+        (await checkedCommand(cli, ["machine", "data-dir", "--name", machine.name])).stdout
+          .toString()
+          .trim(),
+      );
+    return directories;
+  } finally {
+    await cli.dispose();
   }
-  return found;
 }
+async function vmPids(statePath: string): Promise<number[]> {
+  return Promise.all(
+    (await nativeDirectories(statePath)).map(async (directory) =>
+      Number((await readFile(path.join(directory, "agent.pid"), "utf8")).split("\n")[0]),
+    ),
+  );
+}
+
 function readyBarrier(count: number) {
   let ready!: () => void;
   const promise = new Promise<void>((resolve) => {
@@ -115,17 +145,53 @@ afterEach(async () => {
   let failed = false;
   for (const f of families.splice(0)) {
     try {
-      await f.close();
+      const disposition = await f.close();
+      if (disposition.retained) {
+        try {
+          await stat(f.statePath);
+          await deleteSmolvmOciFamily({ statePath: f.statePath });
+        } catch (error) {
+          if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+        }
+      }
     } catch (error) {
       failed = true;
+      cleanupFailed = true;
       console.error("Retaining unconfirmed native fixture", f.statePath, error);
+    }
+  }
+  if (suiteRoot) {
+    const cli = new SmolvmCli({
+      smolvmPath: process.env.PI_SANDBOX_SMOLVM_BIN!,
+      stateDirectory: suiteRoot,
+    });
+    try {
+      if ((await listMachines(cli)).length) failed = cleanupFailed = true;
+    } finally {
+      await cli.dispose();
     }
   }
   const paths = dirs.splice(0);
   if (!failed) for (const dir of paths) await rm(dir, { recursive: true, force: true });
   else throw Error("Native fixture cleanup unconfirmed; state retained for inspection");
 });
-suite("Rocky OCI native family", () => {
+afterAll(async () => {
+  if (!suiteRoot) return;
+  const cli = new SmolvmCli({
+    smolvmPath: process.env.PI_SANDBOX_SMOLVM_BIN!,
+    stateDirectory: suiteRoot,
+  });
+  try {
+    if ((await listMachines(cli)).length) cleanupFailed = true;
+  } finally {
+    await cli.dispose();
+  }
+  if (!cleanupFailed) await rm(suiteRoot, { recursive: true, force: true });
+  else console.error("Native test registry retained", suiteRoot);
+  vi.unstubAllEnvs();
+  if (cleanupFailed) throw Error("Native registry cleanup unconfirmed");
+});
+suite("OCI native family", () => {
   it("overlaps four calls across direct and borrowed access with separate binary streams", async () => {
     const { family: f, input } = await controlledFamily();
     const client = await attachSmolvmOciMachine(f.attachment(f.sourceId));
@@ -355,7 +421,9 @@ suite("Rocky OCI native family", () => {
     await f.removeMachine(child);
     const retained = await f.retainForColdReopen();
     expect(retained).toEqual({
-      version: 1,
+      version: 2,
+      sourceId: f.sourceId,
+      registry: (await readSmolvmOciFamily({ statePath: f.statePath })).registry,
       mode: "cold",
       statePath: f.statePath,
       imageSha256: options.imageSha256,
@@ -427,7 +495,7 @@ suite("Rocky OCI native family", () => {
         argv: [
           "/bin/bash",
           "-c",
-          "set -eu; grep 'Rocky Linux' /etc/os-release; test $(uname -m) = x86_64; command -v node python3 rg fd gcc make git file; echo original >/etc/eval-marker; mkdir -p /workspace/project; printf '#include <stdio.h>\\nint main(){puts(\"build-ok\");}\\n' >/workspace/project/test.c; gcc /workspace/project/test.c -o /workspace/project/test; /workspace/project/test; test $(cat /inputs/library.txt) = host-input; if echo bad >/inputs/library.txt; then exit 50; fi; /usr/bin/node -e \"const s=require('node:net').connect(443,'1.1.1.1');s.on('connect',()=>process.exit(51));s.on('error',()=>process.exit(0));setTimeout(()=>process.exit(0),500)\"; sync",
+          "set -eu; cat /etc/os-release; test $(uname -m) = x86_64; command -v node python3 rg fd gcc make git file; echo original >/etc/eval-marker; mkdir -p /workspace/project; printf '#include <stdio.h>\\nint main(){puts(\"build-ok\");}\\n' >/workspace/project/test.c; gcc /workspace/project/test.c -o /workspace/project/test; /workspace/project/test; test $(cat /inputs/library.txt) = host-input; if echo bad >/inputs/library.txt; then exit 50; fi; /usr/bin/node -e \"const s=require('node:net').connect(443,'1.1.1.1');s.on('connect',()=>process.exit(51));s.on('error',()=>process.exit(0));setTimeout(()=>process.exit(0),500)\"; sync",
         ],
         maxOutputBytes: 1048576,
       },
@@ -475,7 +543,7 @@ suite("Rocky OCI native family", () => {
         })
       ).exitCode,
     ).toBe(0);
-    const disks = await diskFiles(f.statePath);
+    const disks = (await Promise.all((await nativeDirectories(f.statePath)).map(diskFiles))).flat();
     const overlays = disks.filter((d) => d.name.endsWith(".qcow2"));
     expect(overlays.length).toBeGreaterThanOrEqual(4);
     expect(overlays.reduce((a, d) => a + d.allocated, 0)).toBeLessThan(80 * 1048576);
@@ -496,7 +564,9 @@ suite("Rocky OCI native family", () => {
       const offset = Number(header.readBigUInt64BE(8));
       const length = header.readUInt32BE(16);
       expect(length).toBeGreaterThan(0);
-      expect(header.subarray(offset, offset + length).toString()).toContain(f.statePath);
+      expect(header.subarray(offset, offset + length).toString()).toContain(
+        path.join(process.env.XDG_CACHE_HOME!, "smolvm/vms"),
+      );
     }
     await expect(
       attachSmolvmOciMachine({ ...f.attachment(reviewer), token: f.attachment(collector).token }),

@@ -1,208 +1,199 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { createHash } from "node:crypto";
+import { mkdir, mkdtemp, rename, rm, symlink } from "node:fs/promises";
+import path from "node:path";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import type { SmolvmCli } from "./cli.js";
 import {
   assertMachineAlive,
   captureMachineIdentity,
   deleteStoppedMachine,
+  listMachines,
   stopMachine,
 } from "./lifecycle.js";
-
-const state = vi.hoisted(() => ({
-  exists: true,
-  start: "1234",
-  boot: "/private/state/boot.json",
-  failStop: false,
-  processState: "S",
-  cmdline: undefined as string | undefined,
-  afterCmdline: undefined as (() => void) | undefined,
-  afterStop: undefined as (() => void) | undefined,
-}));
-vi.mock("node:fs/promises", () => ({
-  readFile: (name: string) => {
-    if (!state.exists) return Promise.reject(Object.assign(new Error("gone"), { code: "ENOENT" }));
-    if (name.endsWith("/stat")) {
-      const fields = Array<string>(20).fill("0");
-      fields[0] = state.processState;
-      fields[19] = state.start;
-      return Promise.resolve(`4321 (vm name) ${fields.join(" ")}`);
-    }
-    const cmdline = state.cmdline ?? `/proc/self/exe\0_boot-vm\0${state.boot}\0`;
-    const after = state.afterCmdline;
-    state.afterCmdline = undefined;
-    after?.();
-    return Promise.resolve(cmdline);
-  },
-}));
-
-function fixture(created = false) {
-  let present = true;
-  let stopped = false;
-  const run = vi.fn((request: { argv: readonly string[] }) => {
-    let out = "";
-    if (request.argv[1] === "ls")
-      out = JSON.stringify(
-        present
-          ? [
-              {
-                name: "candidate",
-                state: created ? "created" : !stopped && state.exists ? "running" : "stopped",
-                pid: !created && !stopped && state.exists ? 4321 : null,
-                parent_machine: null,
-              },
-            ]
-          : [],
-      );
-    if (request.argv[1] === "stop") {
-      if (state.failStop)
-        return Promise.resolve({
-          exitCode: 1,
-          signal: null,
-          stdout: Buffer.alloc(0),
-          stderr: Buffer.from("sync failed"),
-        });
-      if (!created) {
-        state.exists = false;
-        stopped = true;
-      }
-      state.afterStop?.();
-    }
-    if (request.argv[1] === "delete") present = false;
-    return Promise.resolve({
-      exitCode: 0,
-      signal: null,
-      stdout: Buffer.from(out),
-      stderr: Buffer.alloc(0),
-    });
-  });
-  return {
-    run,
-    removeRecord: () => {
-      present = false;
-    },
-    cli: {
-      run,
-      smolvmPath: "/runtime/smolvm",
-      stateDirectory: "/private/state",
-    } as unknown as SmolvmCli,
-  };
-}
-
-beforeEach(() => {
-  state.exists = true;
-  state.start = "1234";
-  state.boot = "/private/state/boot.json";
-  state.failStop = false;
-  state.processState = "S";
-  state.cmdline = undefined;
-  state.afterCmdline = undefined;
-  state.afterStop = undefined;
+const directories: string[] = [];
+afterEach(async () => {
+  for (const dir of directories.splice(0)) await rm(dir, { recursive: true, force: true });
 });
-
-describe("named machine lifecycle identity", () => {
-  it("verifies actual boot identity before and after stopping, then permits deletion", async () => {
-    const { cli, run } = fixture();
+async function fixture(state = "running") {
+  const root = await mkdtemp("/var/tmp/smol-identity-");
+  directories.push(root);
+  const directory = path.join(
+    root,
+    "cache/smolvm/vms",
+    createHash("sha256").update("candidate").digest("hex").slice(0, 16),
+  );
+  await mkdir(directory, { recursive: true });
+  const records = [
+    {
+      name: "candidate",
+      state,
+      pid: state === "running" ? 123 : (null as number | null),
+      parent_machine: null as string | null,
+      created_at: 42,
+    },
+    {
+      name: "foreign-name_" + "x".repeat(90),
+      state: "running",
+      pid: 124,
+      parent_machine: null,
+      created_at: 43,
+    },
+  ];
+  const behavior = {
+    failStop: false,
+    failDelete: false,
+    failStatus: false,
+    failList: false,
+    acknowledgeOnly: false,
+  };
+  const run = vi.fn(({ argv }: { argv: readonly string[] }) => {
+    let out = "";
+    let exitCode = 0;
+    if (argv[1] === "ls") {
+      if (behavior.failList) throw Error("foreign machine probe blocked");
+      out = JSON.stringify(records);
+    }
+    if (argv[1] === "status") {
+      const record = records.find((r) => r.name === argv[argv.indexOf("--name") + 1]);
+      if (!record || behavior.failStatus) exitCode = 1;
+      else out = JSON.stringify(record);
+    }
+    if (argv[1] === "data-dir") out = directory;
+    if (argv[1] === "stop") {
+      if (behavior.failStop) exitCode = 1;
+      else if (!behavior.acknowledgeOnly) {
+        records[0]!.state = "stopped";
+        records[0]!.pid = null;
+      }
+    }
+    if (argv[1] === "delete") {
+      if (behavior.failDelete) exitCode = 1;
+      else records.splice(0, 1);
+    }
+    return Promise.resolve({
+      stdout: Buffer.from(out),
+      stderr: Buffer.from(exitCode ? "refused" : ""),
+      exitCode,
+      signal: null,
+    });
+  });
+  const cli = {
+    run,
+    environment: {
+      HOME: root,
+      XDG_DATA_HOME: path.join(root, "data"),
+      XDG_CACHE_HOME: path.join(root, "cache"),
+      SMOLVM_CONFIG: path.join(root, "config"),
+    },
+  } as unknown as SmolvmCli;
+  return { cli, run, records, behavior, directory };
+}
+describe("stock CLI lifecycle ownership", () => {
+  it("uses one named status for each live check without probing unrelated machines", async () => {
+    const { cli, run, behavior } = await fixture();
+    behavior.failList = true;
     const identity = await captureMachineIdentity(cli, "candidate");
-    await assertMachineAlive(identity);
+    run.mockClear();
+    await assertMachineAlive(cli, identity);
+    expect(run.mock.calls.filter(([r]) => r.argv[1] === "status")).toEqual([
+      [expect.objectContaining({ argv: ["machine", "status", "--name", "candidate", "--json"] })],
+    ]);
+    expect(run.mock.calls.some(([r]) => r.argv[1] === "ls")).toBe(false);
+  });
+  it("does not mistake a failed named status for absence of an existing owned machine", async () => {
+    const { cli, run, behavior, records } = await fixture();
+    const identity = await captureMachineIdentity(cli, "candidate");
+    behavior.failStatus = true;
+    await expect(stopMachine(cli, "candidate", identity)).rejects.toMatchObject({
+      code: "sandbox_process_failed",
+    });
+    expect(run.mock.calls.some(([r]) => r.argv[1] === "stop")).toBe(false);
+    records.splice(0, 1);
     await stopMachine(cli, "candidate", identity);
-    await deleteStoppedMachine(cli, "candidate");
-    expect(run.mock.calls.filter(([request]) => request.argv[1] === "stop")).toHaveLength(1);
-    expect(run.mock.calls.filter(([request]) => request.argv[1] === "delete")).toHaveLength(1);
+    expect(run.mock.calls.some(([r]) => r.argv[1] === "stop")).toBe(false);
   });
-  it("does not stop a recycled PID or accept a boot path outside private state", async () => {
-    const { cli, run } = fixture();
+  it("checks exact record/directory identity, acknowledges stop and confirms deletion without touching foreign machines", async () => {
+    const { cli, run, records } = await fixture();
     const identity = await captureMachineIdentity(cli, "candidate");
-    state.start = "5678";
-    await expect(stopMachine(cli, "candidate", identity)).rejects.toMatchObject({
-      code: "sandbox_process_failed",
-    });
-    expect(run.mock.calls.some(([request]) => request.argv[1] === "stop")).toBe(false);
-    state.boot = "/unrelated/boot.json";
-    await expect(captureMachineIdentity(cli, "candidate")).rejects.toMatchObject({
-      code: "sandbox_process_failed",
-    });
+    await assertMachineAlive(cli, identity);
+    await stopMachine(cli, "candidate", identity);
+    await deleteStoppedMachine(cli, "candidate", identity);
+    expect(records).toHaveLength(1);
+    expect(records[0]!.name).toMatch(/^foreign/);
+    expect(
+      run.mock.calls
+        .filter(([r]) => ["stop", "delete"].includes(r.argv[1]!))
+        .every(([r]) => r.argv.includes("candidate")),
+    ).toBe(true);
   });
-  it("propagates failed stop and refuses deleting a running VM", async () => {
-    const { cli, run } = fixture();
-    const identity = await captureMachineIdentity(cli, "candidate");
-    state.failStop = true;
-    await expect(stopMachine(cli, "candidate", identity)).rejects.toMatchObject({
-      code: "sandbox_process_failed",
-    });
-    await expect(deleteStoppedMachine(cli, "candidate")).rejects.toMatchObject({
-      code: "sandbox_process_failed",
-    });
-    expect(run.mock.calls.some(([request]) => request.argv[1] === "delete")).toBe(false);
-  });
-  it("confirms an exit between the first stat and an empty command-line read", async () => {
-    const { cli } = fixture();
-    const identity = await captureMachineIdentity(cli, "candidate");
-    state.afterStop = () => {
-      state.exists = true;
-      state.cmdline = "";
-      state.afterCmdline = () => {
-        state.processState = "Z";
-      };
-    };
-    await expect(stopMachine(cli, "candidate", identity)).resolves.toBeUndefined();
-    await expect(deleteStoppedMachine(cli, "candidate")).resolves.toBeUndefined();
-  });
-  it("confirms the original VMM stopped when its PID now belongs to another program", async () => {
-    const { cli } = fixture();
-    const identity = await captureMachineIdentity(cli, "candidate");
-    state.afterStop = () => {
-      state.exists = true;
-      state.start = "5678";
-      state.cmdline = "/usr/bin/other\0argument\0";
-    };
-    await expect(stopMachine(cli, "candidate", identity)).resolves.toBeUndefined();
-    await expect(deleteStoppedMachine(cli, "candidate")).resolves.toBeUndefined();
-  });
-  it("requires the exact live identity before calling a missing record an orphan", async () => {
-    const { cli, run, removeRecord } = fixture();
-    const identity = await captureMachineIdentity(cli, "candidate");
-    removeRecord();
-    await expect(stopMachine(cli, "candidate", identity)).rejects.toMatchObject({
-      cause: { message: "smolvm_live_machine_record_missing" },
-    });
-    state.start = "5678";
-    state.cmdline = "/usr/bin/other\0argument\0";
-    await expect(stopMachine(cli, "candidate", identity)).resolves.toBeUndefined();
-    expect(run.mock.calls.some(([request]) => request.argv[1] === "stop")).toBe(false);
-  });
-  it("still rejects an unrelated program during capture, use, and pre-stop admission", async () => {
-    const { cli, run } = fixture();
-    const identity = await captureMachineIdentity(cli, "candidate");
-    state.start = "5678";
-    state.cmdline = "/usr/bin/other\0argument\0";
-    await expect(captureMachineIdentity(cli, "candidate")).rejects.toMatchObject({
-      cause: { message: "smolvm_process_identity_invalid" },
-    });
-    await expect(assertMachineAlive(identity)).rejects.toMatchObject({
-      code: "sandbox_process_failed",
-    });
-    await expect(stopMachine(cli, "candidate", identity)).rejects.toMatchObject({
-      code: "sandbox_process_failed",
-    });
-    expect(run.mock.calls.some(([request]) => request.argv[1] === "stop")).toBe(false);
-  });
-  it.each([false, true])(
-    "retains an unprobed created record after successful stop (unrecorded process present: %s)",
-    async (processPresent) => {
-      state.exists = processPresent;
-      const { cli, run } = fixture(true);
-      // Upstream leaves Created unchanged on stop, with no persisted PID to
-      // inspect. Its successful exit cannot distinguish these two situations.
-      await expect(stopMachine(cli, "candidate")).rejects.toMatchObject({
+  it.each(["timestamp", "parent", "directory"])(
+    "rejects changed %s before stopping or deleting",
+    async (mode) => {
+      const { cli, run, records, directory } = await fixture();
+      const identity = await captureMachineIdentity(cli, "candidate");
+      if (mode === "timestamp") records[0]!.created_at++;
+      else if (mode === "parent") records[0]!.parent_machine = "foreign";
+      else {
+        await rename(directory, directory + "-old");
+        await mkdir(directory);
+      }
+      await expect(stopMachine(cli, "candidate", identity)).rejects.toMatchObject({
         code: "sandbox_process_failed",
-        cause: { message: "smolvm_stop_unconfirmed" },
       });
-      await expect(deleteStoppedMachine(cli, "candidate")).rejects.toMatchObject({
+      await expect(deleteStoppedMachine(cli, "candidate", identity)).rejects.toMatchObject({
         code: "sandbox_process_failed",
-        cause: { message: "smolvm_delete_requires_stopped_machine" },
       });
-      expect(run.mock.calls.filter(([request]) => request.argv[1] === "stop")).toHaveLength(1);
-      expect(run.mock.calls.some(([request]) => request.argv[1] === "delete")).toBe(false);
-      expect(state.exists).toBe(processPresent);
+      expect(run.mock.calls.some(([r]) => ["stop", "delete"].includes(r.argv[1]!))).toBe(false);
     },
   );
+  it("accepts an ordinary cache ancestor alias while retaining canonical data identity", async () => {
+    const { cli, run, directory } = await fixture();
+    const root = cli.environment.HOME!;
+    const alias = path.join(root, "cache-alias");
+    await symlink(path.join(root, "cache"), alias);
+    const environment = { ...cli.environment, XDG_CACHE_HOME: alias };
+    const aliasCli = {
+      environment,
+      run: (request: { argv: readonly string[] }) =>
+        request.argv[1] === "data-dir"
+          ? Promise.resolve({
+              stdout: Buffer.from(directory.replace(path.join(root, "cache"), alias)),
+              stderr: Buffer.alloc(0),
+              exitCode: 0,
+              signal: null,
+            })
+          : run(request),
+    } as unknown as SmolvmCli;
+    expect((await captureMachineIdentity(aliasCli, "candidate")).dataDirectory).toBe(directory);
+  });
+  it.each(["created", "failed"])(
+    "retains unprobed %s even when upstream would acknowledge stop",
+    async (state) => {
+      const { cli, run } = await fixture(state);
+      const identity = await captureMachineIdentity(cli, "candidate", false);
+      await expect(stopMachine(cli, "candidate", identity)).rejects.toMatchObject({
+        cause: { message: "smolvm_stop_unconfirmed" },
+      });
+      await expect(deleteStoppedMachine(cli, "candidate", identity)).rejects.toMatchObject({
+        cause: { message: "smolvm_delete_requires_stopped_machine" },
+      });
+      expect(run.mock.calls.some(([r]) => ["stop", "delete"].includes(r.argv[1]!))).toBe(false);
+    },
+  );
+  it("propagates failed stop/delete and rejects acknowledgement without target state", async () => {
+    const { cli, behavior } = await fixture();
+    const identity = await captureMachineIdentity(cli, "candidate");
+    behavior.failStop = true;
+    await expect(stopMachine(cli, "candidate", identity)).rejects.toThrow();
+    behavior.failStop = false;
+    behavior.acknowledgeOnly = true;
+    await expect(stopMachine(cli, "candidate", identity)).rejects.toMatchObject({
+      cause: { message: "smolvm_stop_unconfirmed" },
+    });
+    behavior.acknowledgeOnly = false;
+    await stopMachine(cli, "candidate", identity);
+    behavior.failDelete = true;
+    await expect(deleteStoppedMachine(cli, "candidate", identity)).rejects.toThrow();
+    expect((await listMachines(cli)).some((r) => r.name === "candidate")).toBe(true);
+  });
 });

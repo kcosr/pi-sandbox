@@ -1,5 +1,7 @@
 export {
   createSmolvmOciFamily,
+  deleteSmolvmOciFamily,
+  readSmolvmOciFamily,
   reopenSmolvmOciFamily,
   validateOciFamilyOptions,
 } from "./family.js";
@@ -9,6 +11,7 @@ export type {
   SmolvmOciAttachment,
   SmolvmOciFamily,
   SmolvmOciFamilyOptions,
+  SmolvmOciFamilyHooks,
   SmolvmOciMachine,
   SmolvmOciRetainedFamily,
   SmolvmOciTerminal,

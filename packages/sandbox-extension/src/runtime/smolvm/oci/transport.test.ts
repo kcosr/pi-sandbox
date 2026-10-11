@@ -55,7 +55,7 @@ describe("OCI attachment capability", () => {
         branch: () => Promise.reject(Error("not used")),
         removeMachine: () => Promise.reject(Error("not used")),
         retainForColdReopen: () => Promise.reject(Error("not used")),
-        close: async () => {},
+        close: () => Promise.resolve({ retained: false }),
       };
       const stop = await serveOciFamily(descriptor.socketPath, family);
       const client = await attachSmolvmOciMachine(descriptor);
@@ -184,7 +184,7 @@ describe("OCI attachment capability", () => {
       branch: () => Promise.reject(Error("not used")),
       removeMachine: () => Promise.reject(Error("not used")),
       retainForColdReopen: () => Promise.reject(Error("not used")),
-      close: async () => {},
+      close: () => Promise.resolve({ retained: false }),
     };
     const stop = await serveOciFamily(descriptor.socketPath, family);
     const socket = createConnection(descriptor.socketPath);
@@ -394,7 +394,7 @@ describe("OCI attachment capability", () => {
       branch: () => Promise.reject(Error("not reachable")),
       removeMachine: () => Promise.reject(Error("not reachable")),
       retainForColdReopen: () => Promise.reject(Error("not exposed by transport")),
-      close: async () => {},
+      close: () => Promise.resolve({ retained: false }),
     };
     const stop = await serveOciFamily(socketPath, family);
     try {

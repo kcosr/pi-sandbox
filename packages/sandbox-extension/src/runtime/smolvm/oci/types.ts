@@ -1,3 +1,4 @@
+import type { SmolvmRegistryIdentity } from "../registry.js";
 import type {
   SandboxCommandRequest,
   SandboxCommandResult,
@@ -9,10 +10,12 @@ import type {
 /** Trusted controller configuration; never supplied by a tool call. */
 export interface SmolvmOciFamilyOptions {
   readonly smolvmPath: string;
+  /** At most 31 ASCII characters; a 128-bit random suffix keeps owned names within 64 bytes. */
+  readonly namePrefix?: string;
   /** Pinned `docker save` archive, provisioned before evaluation. */
   readonly imageArchive: string;
   readonly imageSha256: string;
-  /** Existing private canonical directory. Each family creates a fresh child. */
+  /** Private controller metadata/socket parent, never the native registry or cache. */
   readonly stateDirectory: string;
   readonly cwd: string;
   readonly networkMode: "none" | "host";
@@ -46,7 +49,9 @@ export interface SmolvmOciMachine extends SandboxExecutor {
 }
 
 export interface SmolvmOciRetainedFamily {
-  readonly version: 1;
+  readonly version: 2;
+  readonly sourceId: string;
+  readonly registry: SmolvmRegistryIdentity;
   readonly mode: "cold";
   readonly statePath: string;
   readonly imageSha256: string;
@@ -118,18 +123,27 @@ export interface SmolvmOciFamily {
   openTerminal(machineId: string, options: SmolvmOciTerminalOptions): Promise<SmolvmOciTerminal>;
   attachment(machineId: string): SmolvmOciAttachment;
   /** Freeze source, preserve its generation, and return a writable native child. */
-  branch(machineId: string, options: { readonly branchable: boolean }): Promise<string>;
+  branch(
+    machineId: string,
+    options: { readonly branchable: boolean; readonly namePrefix?: string },
+  ): Promise<string>;
   /** Delete a leaf reviewer/collector. Sources with dependent children are refused. */
   removeMachine(machineId: string): Promise<void>;
   /** Retain a child-free source, frozen or writable, after acknowledged shutdown
    * for explicit same-host cold boot. Close its terminals first. Running
    * processes/RAM are not restored; edits to a reopened original are preserved. */
   retainForColdReopen(): Promise<SmolvmOciRetainedFamily>;
-  /** Stop every named family VM before removing state. Retained state is forensic,
-   * not a promise that an in-memory native checkpoint can be reopened. The first
-   * close determines retention; abnormal retirement always retains. After a
-   * successful shutdown, controllers can inspect statePath to record retained
-   * versus removed state. A rejection leaves cleanup unconfirmed. Owner crashes
-   * may leave VMs running; there is no background supervisor. */
-  close(options?: { readonly retainState?: boolean }): Promise<void>;
+  /** Ask stock smolvm to stop owned machines and delete their records/disks unless
+   * retaining the source. The first close fixes the returned disposition.
+   * Failure preserves controller metadata and reports uncertainty; this is a
+   * CLI acknowledgement, not independent VMM death verification. Abrupt owner
+   * death can leave VMs requiring manual recovery; no supervisor is installed. */
+  close(options?: { readonly retainState?: boolean }): Promise<{ readonly retained: boolean }>;
+}
+
+export interface SmolvmOciFamilyHooks {
+  readonly onPrepared?: (prepared: {
+    readonly statePath: string;
+    readonly sourceId: string;
+  }) => void | Promise<void>;
 }

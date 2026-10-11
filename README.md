@@ -50,6 +50,9 @@ or the independent [Git extension](packages/git-extension/README.md). These
 standard extensions do not impose the managed application's permission policy.
 The sandbox package also exposes an OCI family controller for trusted host
 applications; that separate API supports guest-owned workspaces and branching.
+VMs use unique names in the account’s normal smolvm registry with shared caches.
+The owner calls stock stop/delete on its recorded machines. After a crash, those
+names remain available for manual CLI recovery; no watcher is installed.
 
 ## Isolation at a glance
 

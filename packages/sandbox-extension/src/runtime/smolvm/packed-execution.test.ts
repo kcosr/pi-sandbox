@@ -1,5 +1,4 @@
 import type * as FsPromises from "node:fs/promises";
-import type * as Cli from "./cli.js";
 import { mkdir, mkdtemp, realpath, rm, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -49,11 +48,10 @@ vi.mock("./lifecycle.js", () => ({
   },
   deleteStoppedMachine: async () => {},
 }));
-vi.mock("./cli.js", async (importActual) => {
-  const actual = await importActual<typeof Cli>();
+vi.mock("./cli.js", () => {
   return {
-    createStateEnvironment: actual.createStateEnvironment,
     SmolvmCli: class {
+      readonly environment = {};
       readonly active = new Set<{ controller: AbortController; done: Promise<void> }>();
       async run(request: SandboxCommandRequest, options: SandboxExecutionOptions = {}) {
         let stdout = "";

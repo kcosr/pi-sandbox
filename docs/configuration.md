@@ -810,13 +810,16 @@ overlay_gib = 1
 ```
 
 Replace the digest with exactly 64 lowercase hexadecimal characters and choose
-a private state path for the invoking account outside the project. The image
+a private controller-metadata path for the invoking account outside the project. The image
 path remains literal. The state directory accepts `{{uid}}` and `{{username}}`
 using the same trusted account lookup as the scoped environment, before any
 managed `HOME` takes effect. The expanded value must be a normalized absolute
 path below `/`, contain no colon and occupy at most 48 bytes. Provision this
 directory for each account before use, owned by that account with mode `0700`.
 For example, the template above selects `/var/tmp/pi-vm-1001` for UID 1001.
+This holds ownership records and attachment sockets, not VM disks. The native
+registry and caches use the invoking process’s ordinary HOME/XDG locations,
+captured before starting smolvm. They must also remain outside guest mounts.
 Startup verifies canonical paths, private ownership and placement outside the
 project; it does not create or change permissions on this account directory.
 CPU count is 1–32; memory is 256–65536 MiB; each disk is 1–64 GiB. The trusted
@@ -854,7 +857,9 @@ output can keep a call open until its timeout or output limit. Redirect backgrou
 server output to files.
 
 Normal Pi shutdown stops and deletes the owned VM. If Pi is killed or crashes,
-a VM may remain. There is no separate watcher process. Use the recorded private
-state and the smolvm CLI to list and stop those machines before deleting their
-state. A failed cleanup preserves state for recovery instead of claiming the VM
-was removed.
+a VM may remain. There is no separate watcher process. Ownership metadata records
+a unique machine name: use ordinary `smolvm machine ls --json`,
+`smolvm machine stop --name NAME` and `smolvm machine delete --name NAME --force`
+with the original account/environment. Only recorded owned names are cleaned up.
+A failed or ambiguous startup preserves metadata for recovery. Native storage is
+deleted only through smolvm, and shared caches are never automatically pruned.

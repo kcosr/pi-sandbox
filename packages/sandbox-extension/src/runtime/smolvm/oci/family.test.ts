@@ -1,6 +1,5 @@
 import type * as FsPromises from "node:fs/promises";
 import type * as Lifecycle from "../lifecycle.js";
-import type * as Cli from "../cli.js";
 import type * as Transport from "./transport.js";
 import { SmolvmCli } from "../cli.js";
 import {
@@ -9,21 +8,48 @@ import {
   type SandboxExecutionOptions,
 } from "../../contracts.js";
 import { createHash } from "node:crypto";
-import { mkdir, mkdtemp, readFile, realpath, rm, stat, symlink, writeFile } from "node:fs/promises";
+import {
+  mkdir,
+  mkdtemp,
+  readFile,
+  realpath,
+  rename,
+  rm,
+  stat,
+  symlink,
+  unlink,
+  writeFile,
+} from "node:fs/promises";
 import type {
   SmolvmOciFamilyOptions,
+  SmolvmOciFamilyHooks,
   SmolvmOciTerminalExit,
   SmolvmOciTerminalLauncher,
 } from "./types.js";
 import { SmolvmOciTerminalCleanupError } from "./types.js";
 import { attachSmolvmOciMachine } from "./transport.js";
+import { createSmolvmEnvironment } from "../registry.js";
+import { readJournal } from "./journal.js";
 import { createConnection } from "node:net";
 import { once } from "node:events";
 import path from "node:path";
-import { afterEach, describe, expect, it, vi } from "vitest";
-import { createSmolvmOciFamily, reopenSmolvmOciFamily } from "./family.js";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  createSmolvmOciFamily,
+  reopenSmolvmOciFamily,
+  deleteSmolvmOciFamily,
+  readSmolvmOciFamily,
+} from "./family.js";
 
 const mocks = vi.hoisted(() => ({
+  names: new Map<string, { state: string; parent: string | null; createdAt: number }>(),
+  cache: "",
+  createFailure: false,
+  branchFailure: false,
+  failDelete: false,
+  failList: false,
+  runtimeIdentity: "b".repeat(64),
+  calls: [] as string[][],
   failClose: false,
   recoveryPresentAtCreate: false,
   execSignal: null as NodeJS.Signals | null,
@@ -49,7 +75,7 @@ vi.mock("node:fs/promises", async (importActual) => {
   };
 });
 vi.mock("../runtime-release.js", () => ({
-  verifySmolvmRuntime: () => Promise.resolve("b".repeat(64)),
+  verifySmolvmRuntime: () => Promise.resolve(mocks.runtimeIdentity),
   SMOLVM_VERSION: "1.26.1",
 }));
 vi.mock("./transport.js", async (importActual) => {
@@ -69,83 +95,129 @@ vi.mock("../lifecycle.js", async (importActual) => {
   const actual = await importActual<typeof Lifecycle>();
   return {
     ...actual,
-    captureMachineIdentity: () =>
-      Promise.resolve({
-        pid: 123,
-        start: "42",
-        executable: "/trusted/smolvm-bin",
-        bootConfig: "/state/boot.json",
-      }),
-    assertMachineAlive: async () => {
+    assertMachineAlive: async (...args: Parameters<typeof actual.assertMachineAlive>) => {
       await mocks.alive?.();
+      await actual.assertMachineAlive(...args);
     },
-    stopMachine: async (cli: SmolvmCli, name: string) => {
+    stopMachine: async (cli: SmolvmCli, name: string, identity: Lifecycle.MachineIdentity) => {
       mocks.events.push(`stop:${name}`);
       await mocks.stop?.();
       if (mocks.failClose) throw Error("stop not confirmed");
-      await actual.checkedCommand(cli, ["machine", "stop", "--name", name]);
+      await actual.stopMachine(cli, name, identity);
     },
   };
 });
-vi.mock("../cli.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof Cli>();
-  const families = new Map<string, Map<string, { state: string; parent: string | null }>>();
+vi.mock("../cli.js", () => {
   return {
-    createStateEnvironment: actual.createStateEnvironment,
     SmolvmCli: class {
       readonly active = new Set<{ controller: AbortController; done: Promise<void> }>();
-      readonly names: Map<string, { state: string; parent: string | null }>;
+      readonly names = mocks.names;
+      readonly environment: Record<string, string>;
       readonly stateDirectory: string;
-      constructor(options: { stateDirectory: string }) {
+      constructor(options: { stateDirectory: string; nativeEnvironment?: Record<string, string> }) {
         this.stateDirectory = options.stateDirectory;
+        this.environment = options.nativeEnvironment ?? createSmolvmEnvironment();
         mocks.lastStatePath = options.stateDirectory;
-        this.names =
-          families.get(this.stateDirectory) ??
-          new Map<string, { state: string; parent: string | null }>();
-        families.set(this.stateDirectory, this.names);
       }
       async run(request: SandboxCommandRequest, options: SandboxExecutionOptions = {}) {
         const argv = request.argv;
+        mocks.calls.push([...argv]);
         const fs = await import("node:fs/promises");
         let out = "";
         const value = (key: string) => argv[argv.indexOf(key) + 1]!;
+        const nativeDir = path.join(
+          mocks.cache,
+          "smolvm/vms",
+          createHash("sha256").update(value("--name")).digest("hex").slice(0, 16),
+        );
         if (argv[1] === "create") {
           mocks.recoveryPresentAtCreate = (
             await fs.stat(this.stateDirectory + "/recovery.json")
           ).isFile();
-          this.names.set(value("--name"), { state: "stopped", parent: null });
+          if (mocks.createFailure || this.names.has(value("--name")))
+            return {
+              exitCode: 1,
+              signal: null,
+              stdout: Buffer.alloc(0),
+              stderr: Buffer.from("create collision"),
+            };
+          this.names.set(value("--name"), { state: "created", parent: null, createdAt: 42 });
         } else if (argv[1] === "start") {
           if (mocks.startFailure) throw mocks.startFailure;
-          await fs.mkdir(this.stateDirectory + "/vms", { recursive: true });
-          this.names.set(value("--name"), { state: "running", parent: null });
+          await fs.mkdir(nativeDir, { recursive: true });
+          this.names.get(value("--name"))!.state = "running";
           for (const [name, size] of [
             ["storage.raw", 2],
             ["overlay.raw", 1],
           ] as const) {
-            const file = await fs.open(this.stateDirectory + "/vms/" + name, "a");
+            const file = await fs.open(path.join(nativeDir, name), "a");
             try {
               await file.truncate(size * 1024 ** 3);
             } finally {
               await file.close();
             }
           }
-        } else if (argv[1] === "data-dir") out = this.stateDirectory + "/vms";
-        else if (argv[1] === "ls")
-          out = JSON.stringify(
-            [...this.names].map(([name, r]) => ({
-              name,
-              pid: r.state === "stopped" ? null : 123,
-              state: r.state,
-              parent_machine: r.parent,
-            })),
-          );
-        else if (argv[1] === "branch") {
+        } else if (argv[1] === "data-dir") out = nativeDir;
+        else if (argv[1] === "ls" || argv[1] === "status") {
+          if (argv[1] === "ls" && mocks.failList) throw Error("foreign probe blocked");
+          const records = [...this.names].map(([name, r]) => ({
+            name,
+            pid: ["stopped", "created", "failed"].includes(r.state) ? null : 123,
+            state: r.state,
+            parent_machine: r.parent,
+            created_at: r.createdAt,
+          }));
+          if (argv[1] === "ls") out = JSON.stringify(records);
+          else {
+            const record = records.find((r) => r.name === value("--name"));
+            if (!record)
+              return {
+                exitCode: 1,
+                signal: null,
+                stdout: Buffer.alloc(0),
+                stderr: Buffer.from("not found"),
+              };
+            out = JSON.stringify(record);
+          }
+        } else if (argv[1] === "branch") {
           mocks.events.push(`branch:${value("--from")}`);
           this.names.get(value("--from"))!.state = "frozen";
-          this.names.set(value("--name"), { state: "running", parent: value("--from") });
-        } else if (argv[1] === "stop") this.names.get(value("--name"))!.state = "stopped";
-        else if (argv[1] === "delete") this.names.delete(value("--name"));
-        else if (argv[1] === "exec") {
+          if (mocks.branchFailure)
+            return {
+              exitCode: 1,
+              signal: null,
+              stdout: Buffer.alloc(0),
+              stderr: Buffer.from("branch failed"),
+            };
+          await fs.mkdir(nativeDir, { recursive: true });
+          this.names.set(value("--name"), {
+            state: "running",
+            parent: value("--from"),
+            createdAt: 42,
+          });
+        } else if (argv[1] === "stop") {
+          if ([...this.names.values()].some((r) => r.parent === value("--name")))
+            return {
+              exitCode: 1,
+              signal: null,
+              stdout: Buffer.alloc(0),
+              stderr: Buffer.from("dependent children"),
+            };
+          this.names.get(value("--name"))!.state = "stopped";
+        } else if (argv[1] === "delete") {
+          if (
+            mocks.failDelete ||
+            [...this.names.values()].some((r) => r.parent === value("--name"))
+          )
+            return {
+              exitCode: 1,
+              signal: null,
+              stdout: Buffer.alloc(0),
+              stderr: Buffer.from("delete refused"),
+            };
+          this.names.delete(value("--name"));
+          await fs.rm(nativeDir, { recursive: true, force: true });
+        } else if (argv[1] === "exec") {
           const controller = new AbortController();
           const abort = () => controller.abort();
           options.signal?.addEventListener("abort", abort, { once: true });
@@ -193,6 +265,27 @@ vi.mock("../cli.js", async (importOriginal) => {
   };
 });
 const dirs: string[] = [];
+beforeEach(async () => {
+  const root = await mkdtemp("/var/tmp/oci-shared-");
+  dirs.push(root);
+  mocks.cache = path.join(root, "cache");
+  for (const [key, dir] of Object.entries({
+    HOME: "home",
+    XDG_CACHE_HOME: "cache",
+    XDG_DATA_HOME: "data",
+  })) {
+    await mkdir(path.join(root, dir), { recursive: true });
+    vi.stubEnv(key, path.join(root, dir));
+  }
+  vi.stubEnv("SMOLVM_CONFIG", path.join(root, "home/config.toml"));
+  mocks.names.clear();
+  mocks.calls = [];
+  mocks.createFailure = false;
+  mocks.branchFailure = false;
+  mocks.failDelete = false;
+  mocks.failList = false;
+  mocks.runtimeIdentity = "b".repeat(64);
+});
 afterEach(async () => {
   vi.restoreAllMocks();
   mocks.failClose = false;
@@ -209,21 +302,27 @@ afterEach(async () => {
   vi.unstubAllEnvs();
   for (const dir of dirs.splice(0)) await rm(dir, { recursive: true, force: true });
 });
-async function fixture(patch: Partial<SmolvmOciFamilyOptions> = {}) {
+async function fixture(
+  patch: Partial<SmolvmOciFamilyOptions> = {},
+  hooks: SmolvmOciFamilyHooks = {},
+) {
   const dir = await mkdtemp("/var/tmp/oci-policy-");
   dirs.push(dir);
   const image = path.join(dir, "image.tar");
   await writeFile(image, "fixture");
-  return createSmolvmOciFamily({
-    smolvmPath: await realpath("/usr/bin/true"),
-    imageArchive: image,
-    imageSha256: createHash("sha256").update("fixture").digest("hex"),
-    stateDirectory: dir,
-    cwd: "/workspace",
-    networkMode: "none",
-    resources: { cpus: 1, memoryMiB: 512, storageGiB: 2, overlayGiB: 1 },
-    ...patch,
-  });
+  return createSmolvmOciFamily(
+    {
+      smolvmPath: await realpath("/usr/bin/true"),
+      imageArchive: image,
+      imageSha256: createHash("sha256").update("fixture").digest("hex"),
+      stateDirectory: dir,
+      cwd: "/workspace",
+      networkMode: "none",
+      resources: { cpus: 1, memoryMiB: 512, storageGiB: 2, overlayGiB: 1 },
+      ...patch,
+    },
+    hooks,
+  );
 }
 const suite = process.platform === "linux" && process.arch === "x64" ? describe : describe.skip;
 function deferred<T>() {
@@ -293,6 +392,292 @@ suite("OCI family controller policy with a simulated CLI", () => {
     }
     expect(terminals.every((terminal) => terminal.close.mock.calls.length === 1)).toBe(true);
   });
+  it("shares ordinary native storage between two families and leaves a foreign machine untouched", async () => {
+    mocks.names.set("foreign", { state: "running", parent: null, createdAt: 9 });
+    const first = await fixture({ namePrefix: "eval-source" });
+    const second = await fixture({ namePrefix: "eval-source" });
+    const attached = await attachSmolvmOciMachine(first.attachment(first.sourceId));
+    expect((await attached.execute({ argv: ["/bin/true"] })).exitCode).toBe(0);
+    await attached.close();
+    expect(first.sourceId).toMatch(/^eval-source-[a-f0-9]{32}$/u);
+    expect(second.sourceId).not.toBe(first.sourceId);
+    const one = await readSmolvmOciFamily({ statePath: first.statePath });
+    const two = await readSmolvmOciFamily({ statePath: second.statePath });
+    expect(one.registry).toEqual(two.registry);
+    expect(one.environment.HOME).toBe(process.env.HOME);
+    const child = await first.branch(first.sourceId, { branchable: false, namePrefix: "reviewer" });
+    expect(child).toMatch(/^reviewer-[a-f0-9]{32}$/u);
+    expect(await first.close()).toEqual({ retained: false });
+    expect(mocks.names.has(second.sourceId)).toBe(true);
+    expect(mocks.names.get("foreign")?.state).toBe("running");
+    await second.close();
+    expect([...mocks.names.keys()]).toEqual(["foreign"]);
+  });
+  it("removes harmless prepared metadata if onPrepared rejects before native creation", async () => {
+    let statePath = "";
+    const expected = new Error("durable owner write failed");
+    await expect(
+      fixture(
+        {},
+        {
+          onPrepared: (prepared) => {
+            statePath = prepared.statePath;
+            throw expected;
+          },
+        },
+      ),
+    ).rejects.toBe(expected);
+    expect(mocks.calls).toHaveLength(0);
+    await expect(stat(statePath)).rejects.toMatchObject({ code: "ENOENT" });
+  });
+  it("enforces the hostname prefix boundary before create or branch can mutate native state", async () => {
+    await expect(fixture({ namePrefix: "x".repeat(32) })).rejects.toThrow(
+      "smolvm_name_prefix_invalid",
+    );
+    expect(mocks.calls).toHaveLength(0);
+    const family = await fixture({ namePrefix: "s".repeat(31) });
+    expect(Buffer.byteLength(family.sourceId)).toBe(64);
+    try {
+      const calls = mocks.calls.length;
+      await expect(
+        family.branch(family.sourceId, { branchable: false, namePrefix: "x".repeat(32) }),
+      ).rejects.toThrow("smolvm_name_prefix_invalid");
+      expect(mocks.calls).toHaveLength(calls);
+      expect(() => family.attachment(family.sourceId)).not.toThrow();
+      const child = await family.branch(family.sourceId, {
+        branchable: false,
+        namePrefix: "c".repeat(31),
+      });
+      expect(Buffer.byteLength(child)).toBe(64);
+    } finally {
+      await family.close();
+    }
+  });
+  it("persists intent before onPrepared and never adopts a colliding nonzero create", async () => {
+    let preparedName = "";
+    let preparedState = "";
+    await expect(
+      fixture(
+        {},
+        {
+          onPrepared: async (prepared) => {
+            preparedName = prepared.sourceId;
+            preparedState = prepared.statePath;
+            const journal = await readSmolvmOciFamily({ statePath: prepared.statePath });
+            expect(journal.machines).toEqual([
+              { name: prepared.sourceId, parent: null, status: "intent" },
+            ]);
+            expect(mocks.calls.some((argv) => argv[1] === "create")).toBe(false);
+            mocks.names.set(prepared.sourceId, { state: "running", parent: null, createdAt: 5 });
+          },
+        },
+      ),
+    ).rejects.toThrow("retained state");
+    expect(mocks.names.get(preparedName)).toEqual({ state: "running", parent: null, createdAt: 5 });
+    expect(
+      mocks.calls.some(
+        (argv) => ["stop", "delete"].includes(argv[1]!) && argv.includes(preparedName),
+      ),
+    ).toBe(false);
+    expect((await readSmolvmOciFamily({ statePath: preparedState })).machines[0]?.status).toBe(
+      "uncertain",
+    );
+  });
+  it("preserves failed startup and failed branch intents without adopting their records", async () => {
+    mocks.startFailure = new Error("native start failed");
+    await expect(fixture()).rejects.toThrow("retained state");
+    expect(mocks.calls.some((argv) => ["stop", "delete"].includes(argv[1]!))).toBe(false);
+    mocks.startFailure = undefined;
+    const family = await fixture();
+    mocks.branchFailure = true;
+    await expect(family.branch(family.sourceId, { branchable: false })).rejects.toThrow(
+      "smolvm_oci_branch_failed",
+    );
+    const journal = await readSmolvmOciFamily({ statePath: family.statePath });
+    expect(journal.machines.at(-1)?.status).toBe("uncertain");
+    await expect(deleteSmolvmOciFamily({ statePath: family.statePath })).rejects.toThrow(
+      "uncertain",
+    );
+  });
+  it("cleans known siblings after a failed branch while preserving its uncertain intent and parent", async () => {
+    const family = await fixture();
+    const sibling = await family.branch(family.sourceId, { branchable: false });
+    mocks.names.set("foreign", { state: "running", parent: null, createdAt: 9 });
+    mocks.calls = [];
+    mocks.branchFailure = true;
+    await expect(family.branch(family.sourceId, { branchable: false })).rejects.toThrow(
+      "smolvm_oci_branch_failed",
+    );
+    expect(mocks.names.has(sibling)).toBe(false);
+    expect(mocks.names.get(family.sourceId)?.state).toBe("frozen");
+    expect(mocks.names.get("foreign")?.state).toBe("running");
+    const journal = await readSmolvmOciFamily({ statePath: family.statePath });
+    expect(journal.machines.map((m) => m.status)).toEqual(["running", "uncertain"]);
+    expect(
+      mocks.calls
+        .filter((argv) => ["stop", "delete"].includes(argv[1]!))
+        .every((argv) => argv.includes(sibling)),
+    ).toBe(true);
+  });
+  it("preserves the original branch failure together with uncertain cleanup and recovery metadata", async () => {
+    const family = await fixture();
+    mocks.branchFailure = true;
+    const error: unknown = await family
+      .branch(family.sourceId, { branchable: false })
+      .catch((cause: unknown) => cause);
+    expect(error).toBeInstanceOf(AggregateError);
+    if (!(error instanceof AggregateError)) throw Error("expected aggregate branch failure");
+    expect(error.message).toContain(family.statePath);
+    expect(error.errors[0]).toMatchObject({
+      code: "sandbox_process_failed",
+      cause: { message: "smolvm_command_failed: branch failed" },
+    });
+    expect(error.errors[1]).toBeInstanceOf(AggregateError);
+    expect((error.errors[1] as AggregateError).message).toContain("cleanup_unconfirmed");
+    expect(
+      (await readSmolvmOciFamily({ statePath: family.statePath })).machines.at(-1)?.status,
+    ).toBe("uncertain");
+  });
+  it("does not probe foreign machines during healthy guest calls", async () => {
+    const family = await fixture();
+    mocks.names.set("foreign", { state: "unreachable", parent: null, createdAt: 9 });
+    mocks.failList = true;
+    try {
+      expect((await family.execute(family.sourceId, { argv: ["/bin/true"] })).exitCode).toBe(0);
+      expect(() => family.attachment(family.sourceId)).not.toThrow();
+    } finally {
+      mocks.failList = false;
+      await family.close();
+    }
+  });
+  it("refuses replacement under a captured name before any lifecycle mutation", async () => {
+    const family = await fixture();
+    mocks.names.get(family.sourceId)!.createdAt++;
+    await expect(family.close()).rejects.toThrow("cleanup_unconfirmed");
+    expect(mocks.calls.some((argv) => ["stop", "delete"].includes(argv[1]!))).toBe(false);
+  });
+  it("returns the first close disposition and deletes a stopped retained journal through exact CLI names", async () => {
+    const family = await fixture();
+    mocks.names.set("foreign", { state: "running", parent: null, createdAt: 9 });
+    expect(await family.close({ retainState: true })).toEqual({ retained: true });
+    expect(await family.close()).toEqual({ retained: true });
+    await deleteSmolvmOciFamily({ statePath: family.statePath });
+    expect([...mocks.names.keys()]).toEqual(["foreign"]);
+    await expect(stat(family.statePath)).rejects.toMatchObject({ code: "ENOENT" });
+  });
+  it("releases its delete claim after failure so exact stopped cleanup can be retried", async () => {
+    const family = await fixture();
+    await family.close({ retainState: true });
+    mocks.failDelete = true;
+    await expect(deleteSmolvmOciFamily({ statePath: family.statePath })).rejects.toThrow();
+    await expect(stat(path.join(family.statePath, "controller.claim"))).rejects.toMatchObject({
+      code: "ENOENT",
+    });
+    expect((await readSmolvmOciFamily({ statePath: family.statePath })).machines[0]?.status).toBe(
+      "stopped",
+    );
+    mocks.failDelete = false;
+    await deleteSmolvmOciFamily({ statePath: family.statePath });
+    expect(mocks.names.has(family.sourceId)).toBe(false);
+  });
+  it("never releases another controller's claim after acquisition is refused", async () => {
+    const family = await fixture();
+    await family.close({ retainState: true });
+    const claim = path.join(family.statePath, "controller.claim");
+    await writeFile(claim, "other controller", { mode: 0o600 });
+    await expect(deleteSmolvmOciFamily({ statePath: family.statePath })).rejects.toMatchObject({
+      code: "EEXIST",
+    });
+    expect(await readFile(claim, "utf8")).toBe("other controller");
+    await unlink(claim);
+    await deleteSmolvmOciFamily({ statePath: family.statePath });
+  });
+  it("releases its delete claim even when native deletion and CLI disposal both fail", async () => {
+    const family = await fixture();
+    await family.close({ retainState: true });
+    mocks.failDelete = true;
+    mocks.failCliDispose = true;
+    await expect(deleteSmolvmOciFamily({ statePath: family.statePath })).rejects.toBeInstanceOf(
+      AggregateError,
+    );
+    await expect(stat(path.join(family.statePath, "controller.claim"))).rejects.toMatchObject({
+      code: "ENOENT",
+    });
+    mocks.failDelete = false;
+    mocks.failCliDispose = false;
+    await deleteSmolvmOciFamily({ statePath: family.statePath });
+  });
+  it.each(["image", "mount"])(
+    "deletes stopped disks after the original %s input disappears or changes",
+    async (input) => {
+      const mount = await mkdtemp("/var/tmp/oci-mount-");
+      dirs.push(mount, mount + "-old");
+      const family = await fixture({
+        mounts: [{ hostPath: mount, guestPath: "/inputs", readOnly: true }],
+      });
+      await family.retainForColdReopen();
+      const journal = await readJournal(family.statePath);
+      if (input === "image") await unlink(journal.options.imageArchive);
+      else {
+        await rename(mount, mount + "-old");
+        await mkdir(mount);
+      }
+      await expect(reopenSmolvmOciFamily({ statePath: family.statePath })).rejects.toThrow();
+      await deleteSmolvmOciFamily({ statePath: family.statePath });
+      expect(mocks.names.has(family.sourceId)).toBe(false);
+    },
+  );
+  it("still requires the captured runtime and machine identity when deleting stopped disks", async () => {
+    const family = await fixture();
+    await family.close({ retainState: true });
+    mocks.calls = [];
+    mocks.runtimeIdentity = "c".repeat(64);
+    await expect(deleteSmolvmOciFamily({ statePath: family.statePath })).rejects.toThrow(
+      "runtime_binding_changed",
+    );
+    expect(mocks.calls).toEqual([]);
+    mocks.runtimeIdentity = "b".repeat(64);
+    mocks.names.get(family.sourceId)!.createdAt++;
+    await expect(deleteSmolvmOciFamily({ statePath: family.statePath })).rejects.toMatchObject({
+      cause: { message: "smolvm_machine_identity_changed" },
+    });
+    expect(mocks.calls.some((argv) => argv[1] === "delete")).toBe(false);
+    await expect(stat(path.join(family.statePath, "controller.claim"))).rejects.toMatchObject({
+      code: "ENOENT",
+    });
+  });
+  it("lets native dependency protection preserve externally created descendants", async () => {
+    const family = await fixture();
+    mocks.names.set("foreign-child", { state: "running", parent: family.sourceId, createdAt: 9 });
+    await expect(family.close()).rejects.toThrow("cleanup_unconfirmed");
+    expect(mocks.names.has("foreign-child")).toBe(true);
+    expect(mocks.calls.some((argv) => argv.includes("--cascade"))).toBe(false);
+    expect(
+      mocks.calls.some(
+        (argv) => ["stop", "delete"].includes(argv[1]!) && argv.includes("foreign-child"),
+      ),
+    ).toBe(false);
+  });
+  it("reopens cold sources among foreign machines and refuses registry drift", async () => {
+    const family = await fixture();
+    const retained = await family.retainForColdReopen();
+    expect(retained.version).toBe(2);
+    expect(retained.sourceId).toBe(family.sourceId);
+    mocks.names.set("foreign", { state: "running", parent: null, createdAt: 9 });
+    vi.stubEnv("XDG_DATA_HOME", process.env.XDG_DATA_HOME + "-changed");
+    await expect(reopenSmolvmOciFamily({ statePath: family.statePath })).rejects.toThrow(
+      "registry_binding_changed",
+    );
+    vi.stubEnv("XDG_DATA_HOME", process.env.XDG_DATA_HOME!.replace(/-changed$/u, ""));
+    const reopened = await reopenSmolvmOciFamily({ statePath: family.statePath });
+    await reopened.close();
+    expect(mocks.names.has("foreign")).toBe(true);
+  });
+  it("protects ordinary shared cache paths from guest mounts", async () => {
+    await expect(
+      fixture({ mounts: [{ hostPath: mocks.cache, guestPath: "/cache", readOnly: true }] }),
+    ).rejects.toThrow("protected_mount");
+  });
   it("launches only the fixed scoped guest shell and validates terminal and machine input", async () => {
     const family = await fixture();
     const terminal = terminalFixture();
@@ -321,7 +706,7 @@ suite("OCI family controller policy with a simulated CLI", () => {
           "machine",
           "exec",
           "--name",
-          "candidate",
+          family.sourceId,
           "--interactive",
           "--tty",
           "--workdir",
@@ -341,7 +726,7 @@ suite("OCI family controller policy with a simulated CLI", () => {
         ],
         cwd: family.statePath,
         environment: expect.objectContaining({
-          HOME: path.join(family.statePath, "h"),
+          HOME: process.env.HOME,
           TERM: "xterm-256color",
         }) as unknown,
         columns: 120,
@@ -376,10 +761,10 @@ suite("OCI family controller policy with a simulated CLI", () => {
       const leafTerminal = await family.openTerminal(child, terminalFixture().options);
       const removal = family.removeMachine(child);
       await new Promise((r) => setTimeout(r, 10));
-      expect(mocks.events).toEqual(["branch:candidate"]);
+      expect(mocks.events).toEqual([`branch:${family.sourceId}`]);
       await leafTerminal.close();
       await removal;
-      expect(mocks.events).toEqual(["branch:candidate", `stop:${child}`]);
+      expect(mocks.events).toEqual([`branch:${family.sourceId}`, `stop:${child}`]);
     } finally {
       await family.close();
     }
@@ -402,7 +787,7 @@ suite("OCI family controller policy with a simulated CLI", () => {
     await entered.promise;
     await family.close();
     await rejected;
-    expect(mocks.events).toEqual(["stop:candidate"]);
+    expect(mocks.events).toEqual([`stop:${family.sourceId}`]);
   });
   it("closes a family while a branch waits for a terminal without starting the branch", async () => {
     const family = await fixture();
@@ -412,7 +797,7 @@ suite("OCI family controller policy with a simulated CLI", () => {
     await new Promise((resolve) => setTimeout(resolve, 10));
     await family.close();
     await rejected;
-    expect(mocks.events).toEqual(["stop:candidate"]);
+    expect(mocks.events).toEqual([`stop:${family.sourceId}`]);
   });
   it("isolates an active terminal abort and a failed launch from ordinary execution", async () => {
     const family = await fixture();
@@ -454,7 +839,7 @@ suite("OCI family controller policy with a simulated CLI", () => {
     );
     expect(failed.launch).not.toHaveBeenCalled();
     expect(peer.close).toHaveBeenCalledTimes(1);
-    expect(mocks.events).toEqual(["stop:candidate"]);
+    expect(mocks.events).toEqual([`stop:${family.sourceId}`]);
     expect(() => family.attachment(family.sourceId)).toThrow("sandbox_closed");
     await expect(family.execute(family.sourceId, { argv: ["/bin/true"] })).rejects.toMatchObject({
       code: "sandbox_closed",
@@ -476,10 +861,10 @@ suite("OCI family controller policy with a simulated CLI", () => {
       }),
     });
     const branching = family.branch(family.sourceId, { branchable: false });
-    const rejected = expect(branching).rejects.toThrow("cleanup_unconfirmed");
+    const rejected = expect(branching).rejects.toThrow("smolvm_oci_branch_failed");
     await expect(handle.close()).rejects.toThrow("exec reap unconfirmed");
     await rejected;
-    expect(mocks.events).toEqual(["stop:candidate"]);
+    expect(mocks.events).toEqual([`stop:${family.sourceId}`]);
     expect((await stat(family.statePath)).isDirectory()).toBe(true);
     terminal.exit.resolve({ exitCode: null, signal: "SIGKILL" });
   });
@@ -498,7 +883,7 @@ suite("OCI family controller policy with a simulated CLI", () => {
     expect((await family.execute(family.sourceId, { argv: ["/bin/true"] })).exitCode).toBe(0);
     await expect(family.retainForColdReopen()).rejects.toThrow("cleanup_unconfirmed");
     await expect(family.close()).rejects.toThrow("cleanup_unconfirmed");
-    expect(mocks.events).toEqual(["stop:candidate"]);
+    expect(mocks.events).toEqual([`stop:${family.sourceId}`]);
     expect((await stat(family.statePath)).isDirectory()).toBe(true);
     await expect(stat(path.join(family.statePath, "cold-ready.json"))).rejects.toMatchObject({
       code: "ENOENT",
@@ -531,7 +916,7 @@ suite("OCI family controller policy with a simulated CLI", () => {
       finishCheck.resolve();
       await rejected;
       expect(guestExecution).not.toHaveBeenCalled();
-      expect(mocks.events).toEqual(["stop:candidate"]);
+      expect(mocks.events).toEqual([`stop:${family.sourceId}`]);
       expect(() => family.attachment(family.sourceId)).toThrow();
       await expect(family.execute(family.sourceId, { argv: ["/bin/true"] })).rejects.toMatchObject({
         code: "sandbox_closed",
@@ -556,7 +941,7 @@ suite("OCI family controller policy with a simulated CLI", () => {
         family.execute(family.sourceId, { argv: ["/bin/echo", String(i)] }),
       );
       await entered.promise;
-      expect(started).toEqual(["0", "1", "2", "3"]);
+      expect([...started].sort()).toEqual(["0", "1", "2", "3"]);
       const controller = new AbortController();
       const queued = family.execute(
         family.sourceId,
@@ -572,6 +957,7 @@ suite("OCI family controller policy with a simulated CLI", () => {
       const results = await Promise.all(active);
       expect(results.map((r) => r.stdout.toString())).toEqual(["0", "1", "2", "3"]);
     } finally {
+      for (const [name, command] of commands) command.resolve(name);
       await family.close();
     }
   });
@@ -595,7 +981,7 @@ suite("OCI family controller policy with a simulated CLI", () => {
       await active;
       const child = await branch;
       await rejected;
-      expect(mocks.events).toEqual(["branch:candidate"]);
+      expect(mocks.events).toEqual([`branch:${family.sourceId}`]);
       mocks.exec = undefined;
       expect((await family.execute(child, { argv: ["/bin/true"] })).exitCode).toBe(0);
     } finally {
@@ -644,7 +1030,7 @@ suite("OCI family controller policy with a simulated CLI", () => {
     finishCleanup.resolve();
     const terminal = await results;
     expect(terminal.every((r) => r.status === "rejected")).toBe(true);
-    expect(mocks.events).toEqual(["stop:candidate"]);
+    expect(mocks.events).toEqual([`stop:${family.sourceId}`]);
     await expect(family.execute(family.sourceId, { argv: ["/bin/true"] })).rejects.toMatchObject({
       code: "sandbox_closed",
     });
@@ -659,8 +1045,8 @@ suite("OCI family controller policy with a simulated CLI", () => {
       expect(recovery.runtimeVersion).toBe("1.26.1");
       expect(recovery.runtimeIdentity).toBe("b".repeat(64));
       expect(recovery.environment).toMatchObject({
-        HOME: path.join(family.statePath, "h"),
-        XDG_CACHE_HOME: path.join(family.statePath, "c"),
+        HOME: process.env.HOME,
+        XDG_CACHE_HOME: process.env.XDG_CACHE_HOME,
       });
     } finally {
       await family.close();
@@ -704,7 +1090,7 @@ suite("OCI family controller policy with a simulated CLI", () => {
   });
   it("can close during output without deadlocking active admission", async () => {
     const family = await fixture();
-    let closing: Promise<void> | undefined;
+    let closing: Promise<{ readonly retained: boolean }> | undefined;
     const execution = family.execute(
       family.sourceId,
       { argv: ["/bin/true"] },
@@ -766,6 +1152,41 @@ suite("OCI family controller policy with a simulated CLI", () => {
     }
     await expect(stat(retained.statePath)).rejects.toMatchObject({ code: "ENOENT" });
   });
+  it("releases the controller claim if the atomic cold receipt claim is refused", async () => {
+    const family = await fixture();
+    await family.retainForColdReopen();
+    const staleClaim = path.join(family.statePath, "cold-claimed.json");
+    await writeFile(staleClaim, "existing receipt claim", { mode: 0o600 });
+    await expect(reopenSmolvmOciFamily({ statePath: family.statePath })).rejects.toMatchObject({
+      code: "EEXIST",
+    });
+    await expect(stat(path.join(family.statePath, "controller.claim"))).rejects.toMatchObject({
+      code: "ENOENT",
+    });
+    expect(mocks.names.get(family.sourceId)?.state).toBe("stopped");
+    await unlink(staleClaim);
+    const reopened = await reopenSmolvmOciFamily({ statePath: family.statePath });
+    await reopened.close();
+  });
+  it("keeps the recovery journal bounded through repeated branch/delete and cold-reopen cycles", async () => {
+    let family = await fixture({ namePrefix: "s".repeat(31) });
+    const statePath = family.statePath;
+    const initialSize = (await stat(path.join(statePath, "recovery.json"))).size;
+    for (let generation = 0; generation < 4; generation++) {
+      for (let index = 0; index < 40; index++) {
+        const child = await family.branch(family.sourceId, {
+          branchable: false,
+          namePrefix: "c".repeat(31),
+        });
+        await family.removeMachine(child);
+      }
+      expect((await readSmolvmOciFamily({ statePath })).machines).toHaveLength(1);
+      expect((await stat(path.join(statePath, "recovery.json"))).size).toBe(initialSize);
+      await family.retainForColdReopen();
+      family = await reopenSmolvmOciFamily({ statePath });
+    }
+    await family.close();
+  }, 30000);
   it("retains and repeatedly reopens a writable child-free original", async () => {
     let family = await fixture();
     const originalPath = family.statePath;
@@ -827,7 +1248,9 @@ suite("OCI family controller policy with a simulated CLI", () => {
       });
       expect((await family.execute(child, { argv: ["/bin/true"] })).exitCode).toBe(0);
       await family.removeMachine(child);
-      expect(await family.branch(family.sourceId, { branchable: false })).toBe("branch-16");
+      expect(await family.branch(family.sourceId, { branchable: false })).toMatch(
+        /^pi-[a-f0-9]{32}$/u,
+      );
     } finally {
       await family.close();
     }
@@ -867,7 +1290,9 @@ suite("OCI family controller policy with a simulated CLI", () => {
       expect(error.errors[0]).toBe(startup);
       expect(error.errors[1]).toBeInstanceOf(AggregateError);
       expect((error.errors[1] as AggregateError).errors).toEqual([
-        expect.objectContaining({ message: "stop not confirmed" }),
+        expect.objectContaining({
+          message: expect.stringContaining("cleanup_uncertain") as unknown,
+        }),
       ]);
       expect((await stat(mocks.lastStatePath)).isDirectory()).toBe(true);
     },

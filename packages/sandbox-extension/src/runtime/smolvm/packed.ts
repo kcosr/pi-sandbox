@@ -12,7 +12,7 @@ import { LINUX_TOOL_COMMANDS, REQUIRED_SANDBOX_EXECUTABLES } from "../tool-comma
 import { AdmissionQueue } from "./admission.js";
 import { SMOLVM_GUEST_COMMAND } from "./guest-command.js";
 import { hostControlPaths } from "./host-control-paths.js";
-import { SmolvmCli, createStateEnvironment } from "./cli.js";
+import { SmolvmCli } from "./cli.js";
 import {
   assertMachineAlive,
   captureMachineIdentity,
@@ -26,7 +26,12 @@ import { removeStoppedPrivateState } from "./private-state.js";
 import { resolveSmolvmLimits, smolvmEnvironment, smolvmRequest } from "./request.js";
 import { SMOLVM_VERSION, verifySmolvmRuntime } from "./runtime-release.js";
 
-const NAME = "workspace";
+import {
+  createSmolvmEnvironment,
+  registryIdentity,
+  uniqueMachineName,
+  validateSmolvmSocketPaths,
+} from "./registry.js";
 
 /** Host project mode: one mount, disposable guest root, in-process ownership. */
 export async function createSmolvmExecutor(
@@ -43,17 +48,24 @@ export async function createSmolvmExecutor(
   if (
     !stateStat.isDirectory() ||
     stateStat.uid !== process.getuid?.() ||
-    (stateStat.mode & 0o077) !== 0 ||
-    Buffer.byteLength(options.stateDirectory) > 48
+    (stateStat.mode & 0o077) !== 0
   )
-    throw new Error("smolvm_state_requires_short_private_owned_directory");
-  for (const control of await hostControlPaths()) {
+    throw new Error("smolvm_state_requires_private_owned_directory");
+  const environment = createSmolvmEnvironment();
+  validateSmolvmSocketPaths(environment);
+  const registry = await registryIdentity(environment);
+  for (const control of [
+    ...(await hostControlPaths()),
+    registry.dataDirectory,
+    registry.cacheDirectory,
+    registry.configFile,
+  ]) {
     if (isWithin(options.cwd, control) || isWithin(control, options.cwd))
       throw new Error("smolvm_workspace_exposes_host_control_state");
   }
   await validateSmolvmPack(options.imagePath, options.imageSha256, options.resources);
   const state = await mkdtemp(path.join(options.stateDirectory, "vm-"));
-  const executor = new PackedExecutor(options, state);
+  const executor = new PackedExecutor(options, state, environment);
   try {
     await executor.start();
     return executor;
@@ -77,18 +89,26 @@ class PackedExecutor implements SandboxExecutor {
   readonly #limits;
   readonly #environment;
   #identity: MachineIdentity | undefined;
+  readonly #name = uniqueMachineName("pi");
   #created = false;
+  #createAttempted = false;
+  #running = false;
   #closing: Promise<void> | undefined;
   #closed = false;
 
   constructor(
     private readonly options: CreateSmolvmExecutorOptions,
     private readonly state: string,
+    nativeEnvironment: Readonly<Record<string, string>>,
   ) {
     this.cwd = options.cwd;
     this.#limits = resolveSmolvmLimits(options.limits);
     this.#environment = smolvmEnvironment(options.environment);
-    this.#cli = new SmolvmCli({ smolvmPath: options.smolvmPath, stateDirectory: state });
+    this.#cli = new SmolvmCli({
+      smolvmPath: options.smolvmPath,
+      stateDirectory: state,
+      nativeEnvironment,
+    });
   }
   async #command(argv: readonly [string, ...string[]]): Promise<SandboxCommandResult> {
     const result = await this.#cli.run({ argv, timeoutMs: 180000, maxOutputBytes: 4 * 1048576 });
@@ -105,9 +125,9 @@ class PackedExecutor implements SandboxExecutor {
         runtime: this.options.smolvmPath,
         runtimeVersion: SMOLVM_VERSION,
         imageSha256: this.options.imageSha256,
-        machine: NAME,
-        environment: createStateEnvironment(this.state),
-        cleanup: ["machine", "stop", "--name", NAME],
+        machine: this.#name,
+        environment: this.#cli.environment,
+        cleanup: ["machine", "stop", "--name", this.#name],
       }) + "\n",
       { mode: 0o600 },
     );
@@ -116,13 +136,13 @@ class PackedExecutor implements SandboxExecutor {
       throw new Error("smolvm_version_mismatch");
     const r = this.options.resources;
     // Treat an interrupted create as potentially having made a record. Cleanup
-    // consults the actual private registry before deleting any host state.
-    this.#created = true;
+    // consults the shared registry before deleting controller metadata.
+    this.#createAttempted = true;
     await this.#command([
       "machine",
       "create",
       "--name",
-      NAME,
+      this.#name,
       "--from",
       this.options.imagePath,
       "--cpus",
@@ -136,8 +156,11 @@ class PackedExecutor implements SandboxExecutor {
       "-v",
       `${this.cwd}:${this.cwd}:${this.options.cwdWritable === false ? "ro" : "rw"}`,
     ]);
-    await this.#command(["machine", "start", "--name", NAME]);
-    this.#identity = await captureMachineIdentity(this.#cli, NAME);
+    this.#created = true;
+    this.#identity = await captureMachineIdentity(this.#cli, this.#name, false);
+    await this.#command(["machine", "start", "--name", this.#name]);
+    this.#identity = await captureMachineIdentity(this.#cli, this.#name);
+    this.#running = true;
     await this.probe();
   }
   async probe(signal?: AbortSignal): Promise<void> {
@@ -179,7 +202,7 @@ class PackedExecutor implements SandboxExecutor {
     const release = await this.#queue.acquire({ ...options, deadline });
     try {
       if (this.#closed || !this.#identity) throw new SandboxExecutionError("sandbox_closed");
-      await assertMachineAlive(this.#identity);
+      await assertMachineAlive(this.#cli, this.#identity);
       if (this.#closed) throw new SandboxExecutionError("sandbox_closed");
       const timeoutMs = Math.ceil(deadline - performance.now());
       if (timeoutMs <= 0) throw new SandboxExecutionError("sandbox_timeout");
@@ -190,7 +213,7 @@ class PackedExecutor implements SandboxExecutor {
             "exec",
             "--interactive",
             "--name",
-            NAME,
+            this.#name,
             "--",
             "/usr/bin/node",
             "-e",
@@ -204,7 +227,7 @@ class PackedExecutor implements SandboxExecutor {
         options,
       );
       if (result.signal !== null) throw new SandboxExecutionError("sandbox_process_failed");
-      await assertMachineAlive(this.#identity);
+      await assertMachineAlive(this.#cli, this.#identity);
       if (this.#closed) throw new SandboxExecutionError("sandbox_closed");
       if (options.signal?.aborted) throw new SandboxExecutionError("sandbox_aborted");
       if (performance.now() >= deadline) throw new SandboxExecutionError("sandbox_timeout");
@@ -239,9 +262,11 @@ class PackedExecutor implements SandboxExecutor {
     try {
       await this.#cli.cancelActive();
       await this.#queue.idle();
-      if (this.#created) {
-        await stopMachine(this.#cli, NAME, this.#identity);
-        await deleteStoppedMachine(this.#cli, NAME);
+      if (this.#createAttempted && (!this.#created || !this.#running || !this.#identity))
+        throw new Error(`smolvm_start_uncertain: ${this.#name}`);
+      if (this.#created && this.#identity) {
+        await stopMachine(this.#cli, this.#name, this.#identity);
+        await deleteStoppedMachine(this.#cli, this.#name, this.#identity);
       }
       await this.#cli.dispose();
       await removeStoppedPrivateState(this.state);

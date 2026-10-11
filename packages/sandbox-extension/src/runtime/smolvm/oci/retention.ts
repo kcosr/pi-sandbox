@@ -2,10 +2,13 @@ import { createHash } from "node:crypto";
 import { createReadStream } from "node:fs";
 import { constants, link, lstat, open, unlink } from "node:fs/promises";
 import path from "node:path";
+import { validateMachineIdentity, type MachineIdentity } from "../lifecycle.js";
+import { validateRegistryIdentity } from "../registry.js";
 import type { SmolvmOciFamilyOptions, SmolvmOciRetainedFamily } from "./types.js";
 
 export interface ColdRecord extends SmolvmOciRetainedFamily {
   readonly options: SmolvmOciFamilyOptions;
+  readonly sourceIdentity: MachineIdentity;
   readonly runtimeIdentity: string;
   readonly mountIdentities: readonly { dev: number; ino: number }[];
 }
@@ -56,8 +59,8 @@ export async function readColdRecord(statePath: string): Promise<ColdRecord> {
     if (
       !value ||
       Object.keys(value).sort().join(",") !==
-        "cwd,imageSha256,mode,mountIdentities,options,runtimeIdentity,statePath,version" ||
-      value.version !== 1 ||
+        "cwd,imageSha256,mode,mountIdentities,options,registry,runtimeIdentity,sourceId,sourceIdentity,statePath,version" ||
+      value.version !== 2 ||
       value.mode !== "cold" ||
       value.statePath !== statePath ||
       typeof value.runtimeIdentity !== "string" ||
@@ -72,6 +75,10 @@ export async function readColdRecord(statePath: string): Promise<ColdRecord> {
           !Number.isSafeInteger((m as { ino: number }).ino),
       )
     )
+      throw fail();
+    validateRegistryIdentity(value.registry);
+    validateMachineIdentity(value.sourceIdentity);
+    if (value.sourceId !== value.sourceIdentity.name || value.sourceIdentity.parent !== null)
       throw fail();
     return value as unknown as ColdRecord;
   } finally {

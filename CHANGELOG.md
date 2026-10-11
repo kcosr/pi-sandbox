@@ -4,10 +4,12 @@
 
 ### Breaking changes
 
+- Use the ordinary smolvm account registry/cache and unique owned machine names. Controller state now contains metadata only; old private-registry cold receipts are not accepted. ([#25](https://github.com/kcosr/pi-sandbox/pull/25))
 - Require smolvm 1.26.1 for Linux VM execution. Install the matching distribution and rebuild plain tool images; retained state continues to require its recorded runtime. ([#24](https://github.com/kcosr/pi-sandbox/pull/24))
 
 ### Changed
 
+- Update sandbox extension to 0.5.0 with recorded family ownership, CLI-managed deletion and explicit retention results. Shared-cache pruning remains an operator action. ([#25](https://github.com/kcosr/pi-sandbox/pull/25))
 - Update the reusable sandbox extension to 0.4.1 with the verified smolvm 1.26.1 runtime inventory. ([#24](https://github.com/kcosr/pi-sandbox/pull/24))
 
 ## 0.7.0 - 2026-10-10

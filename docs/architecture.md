@@ -215,7 +215,7 @@ Before applying the effective environment or starting executors, operational
 startup expands bare `~`, leading `~/`, and account macros in configured scoped
 environment values and hidden paths using the invoking effective OS account.
 The same lookup expands account macros in the absolute `smolvm.state_directory`
-template, giving each account private VM state while keeping the image path fixed.
+template, giving each account private controller metadata while keeping the image path fixed.
 Expansion follows the broker merge and is independent of `$HOME` and CWD.
 Expanded values retain the existing environment bounds and filesystem checks.
 Installation validation checks syntax without expanding the installer's home.
@@ -510,6 +510,14 @@ Linux guest; only the launch directory is host-mounted. Runtime startup validate
 the external distribution and image before tool execution. No extra process
 supervisor is introduced. Normal shutdown requests VM cleanup; an abrupt owner
 exit can require manual cleanup with smolvm's CLI.
+
+Both packed VMs and OCI families use smolvm’s ordinary account registry/cache.
+The controller captures those paths and gives each owned machine a unique name.
+Its separate state directory contains only ownership metadata and sockets.
+Named stop/delete commands manage native storage; the application never removes
+VM disks recursively or sweeps the shared registry. Lifecycle decisions check
+recorded ownership and CLI state, without a process observer or watcher.
+Ambiguous failed starts remain available for operator recovery.
 
 The host admits up to four executions concurrently, with at most 64 outstanding
 requests including queued calls. Each uses its own short-lived CLI connection to

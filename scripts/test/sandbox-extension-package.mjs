@@ -2,12 +2,13 @@ import assert from "node:assert/strict";
 import { Buffer } from "node:buffer";
 import { execFileSync, spawn } from "node:child_process";
 import { createHash } from "node:crypto";
-import { mkdtemp, mkdir, readFile, readdir, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, mkdir, readFile, readdir, writeFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { setTimeout as delay } from "node:timers/promises";
 import { testParallelTools } from "./parallel-tools-smoke.mjs";
 import { installExtensionArtifacts } from "./extension-artifacts.mjs";
+import { removeSmolvmFixture } from "./remove-smolvm-fixture.mjs";
 
 const root = dirname(dirname(dirname(fileURLToPath(import.meta.url))));
 execFileSync(process.execPath, [join(root, "scripts/build-extensions.mjs")], {
@@ -17,6 +18,14 @@ const temp = await mkdtemp("/var/tmp/pie-");
 const children = new Set();
 const vmStates = [];
 const families = [];
+// One disposable account registry for the whole fixture, shared by all VM cases.
+const registryEnvironment = {
+  XDG_DATA_HOME: join(temp, "account-data"),
+  XDG_CACHE_HOME: join(temp, "account-cache"),
+  SMOLVM_CONFIG: join(temp, "smolvm-config.toml"),
+};
+await writeFile(registryEnvironment.SMOLVM_CONFIG, "");
+Object.assign(process.env, registryEnvironment);
 try {
   const artifacts = await installExtensionArtifacts(root, temp, ["sandbox-extension"]);
   const packed = artifacts["sandbox-extension"];
@@ -124,6 +133,7 @@ try {
           env: {
             PATH: process.env.PATH,
             HOME: home,
+            ...registryEnvironment,
             PI_CODING_AGENT_DIR: join(home, "agent"),
             NO_COLOR: "1",
           },
@@ -262,5 +272,22 @@ try {
   for (const state of vmStates) if ((await readdir(state)).length) retained.push(state);
   if (retained.length)
     console.error(`Preserving failed VM fixture state for scoped recovery: ${retained.join(", ")}`);
-  else await rm(temp, { recursive: true, force: true });
+  else {
+    let emptyRegistry = true;
+    if (process.env.PI_SANDBOX_SMOLVM_BIN) {
+      try {
+        const listed = JSON.parse(
+          execFileSync(process.env.PI_SANDBOX_SMOLVM_BIN, ["machine", "ls", "--json"], {
+            env: process.env,
+            encoding: "utf8",
+          }),
+        );
+        emptyRegistry = Array.isArray(listed) && listed.length === 0;
+      } catch {
+        emptyRegistry = false;
+      }
+    }
+    if (emptyRegistry) await removeSmolvmFixture(temp);
+    else console.error(`Preserving nonempty or uncertain fixture registry: ${temp}`);
+  }
 }
