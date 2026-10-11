@@ -117,8 +117,9 @@ Use the same version-4 configuration, replacing `backend` with:
 }
 ```
 
-Create `stateDirectory` as an owned private directory (0700). Its canonical path
-must be at most 48 bytes for the controller socket. This directory holds only
+Create `stateDirectory` as an owned private directory (0700). OCI controllers
+check the derived attachment socket length; all VM modes check smolvm’s derived
+shared-cache socket path before creation. This directory holds only
 application metadata and attachment sockets, not VM disks or smolvm caches.
 smolvm uses the account’s ordinary registry and cache, captured from the host
 HOME/XDG environment at creation. Keep these locations, the runtime, image and
