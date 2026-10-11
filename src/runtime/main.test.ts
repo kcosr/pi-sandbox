@@ -31,14 +31,22 @@ import {
 } from "./main.js";
 
 const temporaryDirectories: string[] = [];
+const originalPlatform = Object.getOwnPropertyDescriptor(process, "platform")!;
 
 afterEach(async () => {
+  Object.defineProperty(process, "platform", originalPlatform);
   await Promise.all(
     temporaryDirectories.splice(0).map((directory) => rm(directory, { recursive: true })),
   );
 });
 
-async function createRoot(modelsFile = "/etc/pi-sandbox/models.json"): Promise<string> {
+async function createRoot(
+  modelsFile = "/etc/pi-sandbox/models.json",
+  platform: NodeJS.Platform = "linux",
+): Promise<string> {
+  // These policy fixtures exercise Linux Bubblewrap/broker rules without starting
+  // an executor. Select their platform explicitly, independently of the test host.
+  Object.defineProperty(process, "platform", { value: platform });
   const root = await mkdtemp(join(tmpdir(), "pi-sandbox-admin-config-"));
   temporaryDirectories.push(root);
   const configDirectory = join(root, "etc/pi-sandbox");
@@ -406,6 +414,27 @@ describe("administrative configuration", () => {
     await expect(validateAdministrativeConfiguration(root)).rejects.toThrow();
   });
 
+  it("validates Darwin direct policy without launching host tools", async () => {
+    const root = await createRoot(undefined, "darwin");
+    const configPath = rooted(root, SYSTEM_CONFIG_PATH);
+    const source = await readFile(configPath, "utf8");
+    await writeFile(
+      configPath,
+      source
+        .replace('backend = "bubblewrap"', 'backend = "direct"')
+        .replace('mode = "none"', 'mode = "host"'),
+    );
+    await writeFile(rooted(root, "/etc/pi-sandbox/models.json"), '{"providers":{}}');
+    await expect(validateAdministrativeConfiguration(root)).resolves.toMatchObject({
+      execution: { backend: "direct", processLifetime: "command" },
+      network: { mode: "host" },
+    });
+    await writeFile(configPath, source);
+    await expect(validateAdministrativeConfiguration(root)).rejects.toThrow(
+      "Bubblewrap execution is supported only on Linux",
+    );
+  });
+
   it("keeps home-relative policy unresolved during installation validation", async () => {
     const root = await createRoot();
     const configPath = rooted(root, SYSTEM_CONFIG_PATH);
@@ -423,7 +452,7 @@ describe("administrative configuration", () => {
     expect(config.environment.pi.PI_CODING_AGENT_DIR).toBe("~/.pi/agent");
   });
 
-  it("uses the OS account home for effective policy and preserves the caller environment", async () => {
+  it("uses the resolved account home for effective policy and preserves the caller environment", async () => {
     const root = await createRoot();
     const configPath = rooted(root, SYSTEM_CONFIG_PATH);
     const source = await readFile(configPath, "utf8");
@@ -439,9 +468,16 @@ describe("administrative configuration", () => {
     );
     await writeFile(rooted(root, "/etc/pi-sandbox/models.json"), '{"providers":{}}');
     const callerEnvironment = { HOME: "/caller-home", INHERITED: "~/literal" };
-    const home = userInfo().homedir;
+    const account = userInfo();
+    const home = account.homedir;
 
-    const effective = await resolveEffectiveAdministrativeConfiguration(root, callerEnvironment);
+    const effective = await resolveEffectiveAdministrativeConfiguration(
+      root,
+      callerEnvironment,
+      undefined,
+      SYSTEM_CONFIG_PATH,
+      () => ({ username: account.username, uid: account.uid, homeDirectory: home }),
+    );
     expect(effective.config.filesystem.hiddenPaths).toEqual([join(home, ".ssh")]);
     expect(effective.identityEnvironment).toEqual({
       pi: { HOME: "/policy-home", PI_CODING_AGENT_DIR: join(home, "agent") },
