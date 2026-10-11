@@ -323,7 +323,9 @@ export function assertExecutionPlatform(
     if (layout.smolvm === undefined)
       throw new Error("This distribution does not include a smolvm execution provider");
     if (config.smolvm === undefined)
-      throw new Error("smolvm execution requires a configured image and controller metadata directory");
+      throw new Error(
+        "smolvm execution requires a configured image and controller metadata directory",
+      );
     if (config.network.mode !== "none")
       throw new Error("smolvm execution requires network.mode = none");
     if (config.execution.processLifetime !== "sandbox")
