@@ -49,6 +49,7 @@ import {
   registryIdentity,
   uniqueMachineName,
   validateNamePrefix,
+  validateSmolvmSocketPaths,
   type SmolvmRegistryIdentity,
 } from "../registry.js";
 import {
@@ -166,7 +167,7 @@ async function validateHostOptions(
   const stateStat = await lstat(options.stateDirectory);
   if (stateStat.uid !== process.getuid?.() || (stateStat.mode & 0o077) !== 0)
     throw new Error("smolvm_oci_state_directory_not_private");
-  if (Buffer.byteLength(options.stateDirectory) > 48)
+  if (Buffer.byteLength(path.join(options.stateDirectory, "family-XXXXXX/control.sock")) > 100)
     throw new Error("smolvm_oci_state_path_too_long");
   const protectedPaths = [
     options.stateDirectory,
@@ -197,6 +198,7 @@ export async function createSmolvmOciFamily(
   )
     throw fail();
   const environment = createSmolvmEnvironment();
+  validateSmolvmSocketPaths(environment);
   const registry = await registryIdentity(environment);
   await validateHostOptions(options, registry);
   const runtimeFingerprint = await verifySmolvmRuntime(options.smolvmPath);
@@ -263,6 +265,7 @@ async function loadBoundJournal(statePath: string): Promise<FamilyJournal> {
   const journal = await readJournal(statePath);
   validateOciFamilyOptions(journal.options);
   const environment = createSmolvmEnvironment();
+  validateSmolvmSocketPaths(environment);
   const registry = await registryIdentity(environment);
   if (
     journal.runtimeVersion !== SMOLVM_VERSION ||

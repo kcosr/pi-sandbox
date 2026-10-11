@@ -26,7 +26,12 @@ import { removeStoppedPrivateState } from "./private-state.js";
 import { resolveSmolvmLimits, smolvmEnvironment, smolvmRequest } from "./request.js";
 import { SMOLVM_VERSION, verifySmolvmRuntime } from "./runtime-release.js";
 
-import { createSmolvmEnvironment, registryIdentity, uniqueMachineName } from "./registry.js";
+import {
+  createSmolvmEnvironment,
+  registryIdentity,
+  uniqueMachineName,
+  validateSmolvmSocketPaths,
+} from "./registry.js";
 
 /** Host project mode: one mount, disposable guest root, in-process ownership. */
 export async function createSmolvmExecutor(
@@ -43,11 +48,11 @@ export async function createSmolvmExecutor(
   if (
     !stateStat.isDirectory() ||
     stateStat.uid !== process.getuid?.() ||
-    (stateStat.mode & 0o077) !== 0 ||
-    Buffer.byteLength(options.stateDirectory) > 48
+    (stateStat.mode & 0o077) !== 0
   )
-    throw new Error("smolvm_state_requires_short_private_owned_directory");
+    throw new Error("smolvm_state_requires_private_owned_directory");
   const environment = createSmolvmEnvironment();
+  validateSmolvmSocketPaths(environment);
   const registry = await registryIdentity(environment);
   for (const control of [
     ...(await hostControlPaths()),

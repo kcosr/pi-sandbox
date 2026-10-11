@@ -57,16 +57,28 @@ export async function registryIdentity(
     process.platform === "darwin"
       ? path.join(home, "Library/Application Support")
       : (environment.XDG_DATA_HOME ?? path.join(home, ".local/share"));
-  const cache =
-    process.platform === "darwin"
-      ? path.join(home, "Library/Caches")
-      : (environment.XDG_CACHE_HOME ?? path.join(home, ".cache"));
   return {
     home: await resolvedPath(home),
     dataDirectory: await resolvedPath(path.join(data, "smolvm")),
-    cacheDirectory: await resolvedPath(cache),
+    cacheDirectory: await resolvedPath(nativeCacheDirectory(environment)),
     configFile: await resolvedPath(environment.SMOLVM_CONFIG!),
   };
+}
+
+function nativeCacheDirectory(environment: Readonly<Record<string, string>>): string {
+  return process.platform === "darwin"
+    ? path.join(environment.HOME!, "Library/Caches")
+    : (environment.XDG_CACHE_HOME ?? path.join(environment.HOME!, ".cache"));
+}
+
+/** Names hash to sixteen ASCII bytes; check the actual upstream socket budget. */
+export function validateSmolvmSocketPaths(environment: Readonly<Record<string, string>>): void {
+  const socket = path.join(
+    nativeCacheDirectory(environment),
+    "smolvm/vms/0000000000000000/control.sock",
+  );
+  if (Buffer.byteLength(socket) > (process.platform === "darwin" ? 103 : 107))
+    throw new Error("smolvm_native_socket_path_too_long");
 }
 
 export function validateNamePrefix(prefix: unknown): asserts prefix is string {
