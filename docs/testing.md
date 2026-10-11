@@ -52,10 +52,13 @@ packaged executable diagnostic checks as distinct observable steps. A supported 
 host must execute the Bubblewrap suites rather than accepting a skip caused by
 unavailable namespaces.
 
-### Required Linux smolvm release lane
+### Required native smolvm release lane
 
-A source release that includes smolvm must also pass this lane on Linux x86-64
-with usable KVM. Ordinary development commands may skip unavailable VM tests;
+A source release that includes smolvm must also pass this lane on each supported
+native target: Linux x86-64 with usable KVM, or macOS arm64 on macOS 26.0+.
+Darwin runtime integration and qualification remain pending; passing managed
+configuration tests alone does not qualify that target.
+Ordinary development commands may skip unavailable VM tests;
 this command may not. Provide the complete pinned smolvm distribution, a
 prepared plain tools pack, an OCI tools archive, their verified SHA-256 values,
 and Bun 1.3.14 or newer on `PATH`. `PI_SANDBOX_TEST_BUN` can additionally select
@@ -73,6 +76,11 @@ path = "/opt/smolvm-1.26.1/smolvm"
 version = "1.26.1"
 ```
 
+On macOS arm64, use `[platforms.darwin.smolvm]` and the complete official Darwin
+runtime at the selected path. Supply arm64 plain and OCI tools images. Runtime
+inventory and trusted disk-tool integration must be complete before running the
+native lane; Linux images and release inventory do not qualify Darwin.
+
 Then run, using the same runtime path in both places:
 
 ```sh
@@ -86,7 +94,7 @@ env -u NODE_ENV npm run verify:release:smolvm -- \
   --out /absolute/path/review-artifacts
 ```
 
-The preflight rejects missing inputs, unsupported hosts, inaccessible KVM,
+The preflight rejects missing inputs, unsupported hosts, inaccessible KVM on Linux,
 invalid digest syntax, or a distribution that would skip managed VM acceptance.
 The existing native tests verify the runtime inventory and actual image digests.
 This lane runs the full verifier with `PI_SANDBOX_REQUIRE_SMOLVM=1`: owned tools,
@@ -332,7 +340,9 @@ release test remains offline.
 Linux release testing runs locally with Node.js 24, Rust/Cargo 1.85 or newer,
 and Bubblewrap through `npm run verify:release`. macOS release testing runs on
 the target architecture with Node.js 24, Bun, and the Homebrew prerequisites;
-it builds and validates the native direct-mode archive. Generated artifacts are
+it builds and validates the native archive. Default macOS policy stays direct;
+the required smolvm lane additionally exercises the extracted sandbox package and
+compiled managed VM fixture. Generated artifacts are
 not committed.
 
 If a test must skip because the developer host lacks Bubblewrap or user
@@ -379,8 +389,21 @@ Managed unit checks cover schema 11 image/resource validation, fixed VM lifetime
 identity backend transitions, refusal of identity image overrides, VM-aware
 mount/policy diagnostics and the `smolvm` audit boundary. Distribution checks
 cover the optional fixed external 1.26.1 provider without requiring an installed
-runtime during cross-build/staged validation. Real VM tests must additionally
-use a verified full runtime and trusted tools image on Linux x86-64 with KVM;
+runtime during cross-build/staged validation. The platform matrix admits Linux
+x86-64 and macOS arm64, rejects a provider on Linux arm64 and macOS x86-64, and
+retains direct mode on both Mac architectures. Darwin policy checks reject
+Bubblewrap, broker identity, audit, online VM networking and hidden paths while
+preserving read-only launch-directory policy.
+
+Darwin is currently a managed configuration/distribution integration lane, with
+an initial macOS 26.0+ target. Native runtime verification, matching arm64 tools
+images, platform-specific release inventory, managed/package VM tests and normal
+shutdown/manual-recovery checks remain required before deployment. Passing the
+`verify:release:smolvm` lane on Linux does not qualify Darwin. No full native or
+release run is implied by the focused managed tests.
+
+Real VM tests must additionally use a verified full runtime and trusted tools
+image for the native host architecture;
 ordinary host-only tests are not evidence of VM confinement or cleanup.
 
 Set `PI_SANDBOX_SMOLVM_BIN` to the official distribution's wrapper,
@@ -404,7 +427,7 @@ Abrupt owner death remains a documented
 manual-recovery case, not a tested automatic-cleanup guarantee.
 
 For the compiled managed application, run the following against an extracted
-Linux x86-64 review build with `allow_config_override = true`, the Git extension
+Linux x86-64 or macOS arm64 review build with `allow_config_override = true`, the Git extension
 included, and its build-selected external smolvm distribution available:
 
 ```sh

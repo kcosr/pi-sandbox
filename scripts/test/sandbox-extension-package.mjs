@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { Buffer } from "node:buffer";
 import { execFileSync, spawn } from "node:child_process";
 import { createHash } from "node:crypto";
-import { mkdtemp, mkdir, readFile, readdir, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, mkdir, readFile, readdir, realpath, rm, writeFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { setTimeout as delay } from "node:timers/promises";
@@ -13,7 +13,7 @@ const root = dirname(dirname(dirname(fileURLToPath(import.meta.url))));
 execFileSync(process.execPath, [join(root, "scripts/build-extensions.mjs")], {
   stdio: "inherit",
 });
-const temp = await mkdtemp("/var/tmp/pie-");
+const temp = await realpath(await mkdtemp("/var/tmp/pie-"));
 const children = new Set();
 const vmStates = [];
 const families = [];
@@ -21,9 +21,12 @@ try {
   const artifacts = await installExtensionArtifacts(root, temp, ["sandbox-extension"]);
   const packed = artifacts["sandbox-extension"];
   const archive = packed.archive;
-  if (process.platform !== "linux")
-    throw new Error("This package acceptance requires Linux Bubblewrap");
-  const runtimes = [process.execPath, execFileSync("which", ["bun"], { encoding: "utf8" }).trim()];
+  if (process.platform !== "linux" && process.platform !== "darwin")
+    throw new Error("Package acceptance requires Linux or macOS");
+  const runtimes =
+    process.platform === "linux"
+      ? [process.execPath, execFileSync("which", ["bun"], { encoding: "utf8" }).trim()]
+      : [];
   const cases = runtimes.map((runtime) => ({ kind: "bubblewrap", runtime }));
   if (
     process.env.PI_SANDBOX_SMOLVM_BIN &&
@@ -41,6 +44,7 @@ try {
     cases.push({ kind: "attached", runtime: process.env.PI_SANDBOX_SMOLVM_BIN });
   else if (process.env.PI_SANDBOX_REQUIRE_SMOLVM === "1")
     throw new Error("Required package attachment fixture needs OCI image and digest");
+  assert(cases.length > 0, "macOS sandbox package acceptance requires smolvm fixtures");
   const { createSmolvmOciFamily } = await import(
     pathToFileURL(join(packed.directory, "dist/controller.js")).href
   );

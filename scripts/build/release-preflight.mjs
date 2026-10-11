@@ -15,8 +15,8 @@ export function releaseArguments(argv, environment) {
 
 /** Validate the release lane before any build or native test starts. */
 export function validateSmolvmReleaseInputs(environment, distribution, extensions, platform, arch) {
-  if (platform !== "linux" || arch !== "x64")
-    throw new Error("The required smolvm release lane needs Linux x86-64 with KVM");
+  if (!((platform === "linux" && arch === "x64") || (platform === "darwin" && arch === "arm64")))
+    throw new Error("The required smolvm release lane needs Linux x86-64 or macOS arm64");
   for (const name of [
     "PI_SANDBOX_SMOLVM_BIN",
     "PI_SANDBOX_SMOLVM_IMAGE",
@@ -79,7 +79,7 @@ export async function preflightSmolvmRelease(buildArguments, environment) {
       name === "PI_SANDBOX_SMOLVM_BIN" ? constants.R_OK | constants.X_OK : constants.R_OK,
     );
   }
-  await access("/dev/kvm", constants.R_OK | constants.W_OK);
+  if (process.platform === "linux") await access("/dev/kvm", constants.R_OK | constants.W_OK);
   // Package acceptance uses PATH's Bun; the PTY fixture may select another one.
   for (const executable of new Set(["bun", environment.PI_SANDBOX_TEST_BUN].filter(Boolean))) {
     const version = execFileSync(executable, ["--version"], {

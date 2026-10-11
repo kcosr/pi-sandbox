@@ -20,3 +20,9 @@ libexec_dir = "/usr/local/libexec/pi-sandbox"
 launcher_path = "/usr/local/bin/pi-sandbox"
 identity_socket_path = "/run/pi-sandbox-identity/broker.sock"
 audit_socket_path = "/run/pi-sandbox-audit/collector.sock"
+
+# Optional on macOS arm64 only, with a complete external runtime on macOS 26.0+.
+# Native runtime integration and qualification are required before deployment.
+# [platforms.darwin.smolvm]
+# path = "/opt/smolvm-1.26.1/smolvm"
+# version = "1.26.1"

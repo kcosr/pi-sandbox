@@ -22,6 +22,41 @@ const extensions = [{ metadata: { kind: "managed", id: "git", tools: ["git_clone
 const validate = (env = environment, selected = distribution, tools = extensions) =>
   validateSmolvmReleaseInputs(env, selected, tools, "linux", "x64");
 
+for (const [platform, architecture] of [
+  ["linux", "x64"],
+  ["darwin", "arm64"],
+]) {
+  test(`native release prerequisites are required on ${platform} ${architecture}`, () => {
+    assert.doesNotThrow(() =>
+      validateSmolvmReleaseInputs(environment, distribution, extensions, platform, architecture),
+    );
+    for (const name of Object.keys(environment)) {
+      const missing = { ...environment };
+      delete missing[name];
+      assert.throws(
+        () =>
+          validateSmolvmReleaseInputs(missing, distribution, extensions, platform, architecture),
+        new RegExp(name),
+      );
+    }
+    assert.throws(
+      () =>
+        validateSmolvmReleaseInputs(
+          environment,
+          { ...distribution, layout: { allowConfigOverride: false } },
+          extensions,
+          platform,
+          architecture,
+        ),
+      /review distribution/,
+    );
+    assert.throws(
+      () => validateSmolvmReleaseInputs(environment, distribution, [], platform, architecture),
+      /managed Git extension/,
+    );
+  });
+}
+
 test("release lane selection preserves ordinary build arguments", () => {
   const args = ["--distribution", "/review.toml", "--out", "/artifacts"];
   assert.deepEqual(releaseArguments(args, {}), { requireSmolvm: false, buildArguments: args });

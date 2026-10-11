@@ -821,10 +821,11 @@ async function main() {
       buildVersion,
       platform,
       architecture: process.arch,
-      executionBackends:
-        os === "linux"
-          ? ["bubblewrap", "direct", ...(distribution.smolvm === undefined ? [] : ["smolvm"])]
-          : ["direct"],
+      executionBackends: [
+        ...(os === "linux" ? ["bubblewrap"] : []),
+        "direct",
+        ...(distribution.smolvm === undefined ? [] : ["smolvm"]),
+      ],
       identityBroker: os === "linux",
       bubblewrap: os === "linux" ? distribution.bubblewrap.release : null,
       smolvm: smolvmRelease,
@@ -880,10 +881,11 @@ async function main() {
         buildVersion,
         platform,
         architecture: process.arch,
-        executionBackends:
-          os === "linux"
-            ? ["bubblewrap", "direct", ...(distribution.smolvm === undefined ? [] : ["smolvm"])]
-            : ["direct"],
+        executionBackends: [
+          ...(os === "linux" ? ["bubblewrap"] : []),
+          "direct",
+          ...(distribution.smolvm === undefined ? [] : ["smolvm"]),
+        ],
         identityBroker: os === "linux",
         bubblewrap: os === "linux" ? distribution.bubblewrap.release : null,
         smolvm: smolvmRelease,
@@ -911,23 +913,23 @@ async function main() {
         ],
         { env: cleanEnvironment },
       );
-      if (
-        distribution.smolvm !== undefined &&
-        distribution.layout.allowConfigOverride &&
-        (cleanEnvironment.PI_SANDBOX_SMOLVM_IMAGE ||
-          cleanEnvironment.PI_SANDBOX_REQUIRE_SMOLVM === "1")
-      ) {
-        process.stdout.write("Testing managed smolvm through the packaged executable\n");
-        await run(
-          process.execPath,
-          [
-            join(repositoryRoot, "scripts/test/smolvm-managed-smoke.mjs"),
-            join(extractedRelease, "payload/pi-sandbox/pi-sandbox"),
-            join(extractedRelease, "payload/pi-sandbox/defaults"),
-          ],
-          { env: cleanEnvironment },
-        );
-      }
+    }
+    if (
+      distribution.smolvm !== undefined &&
+      distribution.layout.allowConfigOverride &&
+      (cleanEnvironment.PI_SANDBOX_SMOLVM_IMAGE ||
+        cleanEnvironment.PI_SANDBOX_REQUIRE_SMOLVM === "1")
+    ) {
+      process.stdout.write("Testing managed smolvm through the packaged executable\n");
+      await run(
+        process.execPath,
+        [
+          join(repositoryRoot, "scripts/test/smolvm-managed-smoke.mjs"),
+          join(extractedRelease, "payload/pi-sandbox/pi-sandbox"),
+          join(extractedRelease, "payload/pi-sandbox/defaults"),
+        ],
+        { env: cleanEnvironment },
+      );
     }
     const archiveSha256 = await sha256(archive);
     await writeFile(join(options.out, "SHA256SUMS"), `${archiveSha256}  ${archiveName}\n`, {

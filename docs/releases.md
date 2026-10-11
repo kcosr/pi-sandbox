@@ -51,7 +51,7 @@ omitting empty sections. Put required administrator actions first under
    for that version, retaining PR links and noting configuration changes.
    Leave an `Unreleased` section for subsequent work.
 2. Complete the applicable checks in [testing](testing.md), including the
-   [required Linux smolvm lane](testing.md#required-linux-smolvm-release-lane)
+   [required native smolvm lane](testing.md#required-native-smolvm-release-lane)
    for a release that includes smolvm. Record the exact source commit, runtime
    version, image digests and check outcomes. Review the change,
    and merge the release changes. Create the matching product tag on the final

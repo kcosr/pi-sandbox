@@ -427,8 +427,10 @@ may contain sensitive information. Bash commands are truncated, not redacted.
 
 ## smolvm boundary and lifecycle
 
-The optional Linux x86-64 smolvm backend uses the fixed 1.26.1 runtime and a
-SHA-256-selected trusted image. Only the launch project is host-mounted, at the
+The optional smolvm backend selects the fixed 1.26.1 runtime on Linux x86-64
+or macOS arm64 and a SHA-256-selected trusted image. Darwin native runtime
+validation and qualification remain integration gates. macOS continues to
+reject Bubblewrap, broker identity and audit logging. Only the launch project is host-mounted, at the
 same absolute path and with the configured write access. The rest of the guest
 filesystem is private and writable. The VM has no host/external networking;
 guest loopback is available. This mode does not reproduce Bubblewrap's broad

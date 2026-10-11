@@ -18,8 +18,11 @@ if (process.argv.length !== 4) {
   console.error("usage: smolvm-managed-smoke.mjs EXECUTABLE DEFAULTS_DIRECTORY");
   process.exit(2);
 }
-assert.equal(process.platform, "linux");
-assert.equal(process.arch, "x64");
+assert(
+  (process.platform === "linux" && process.arch === "x64") ||
+    (process.platform === "darwin" && process.arch === "arm64"),
+  "Managed smolvm acceptance requires Linux x86-64 or macOS arm64",
+);
 const executable = await realpath(resolve(process.argv[2]));
 const defaults = await realpath(resolve(process.argv[3]));
 const release = JSON.parse(
@@ -31,7 +34,7 @@ assert.equal(typeof release.smolvm.path, "string");
 const image = await realpath(process.env.PI_SANDBOX_SMOLVM_IMAGE ?? "");
 const imageSha256 = process.env.PI_SANDBOX_SMOLVM_IMAGE_SHA256;
 assert.match(imageSha256 ?? "", /^[a-f0-9]{64}$/u);
-const temporary = await mkdtemp("/var/tmp/pim-");
+const temporary = await realpath(await mkdtemp("/var/tmp/pim-"));
 const account = userInfo();
 const userState = await mkdtemp(join(account.homedir, ".pi-smolvm-smoke-"));
 const state = join(temporary, "state");
@@ -271,6 +274,27 @@ function shell(value) {
   return `'${value.replaceAll("'", "'\\''")}'`;
 }
 async function processAlive(pid) {
+  // Test-only liveness evidence; runtime ownership and cleanup use the native verifier.
+  if (process.platform === "darwin") {
+    try {
+      const state = execFileSync("/bin/ps", ["-p", String(pid), "-o", "stat="], {
+        encoding: "utf8",
+        env: { PATH: "/usr/bin:/bin:/usr/sbin:/sbin", LANG: "C" },
+        stdio: "pipe",
+        timeout: 5000,
+        maxBuffer: 4096,
+      }).trim();
+      return state.length > 0 && !["Z", "X"].includes(state[0]);
+    } catch (error) {
+      if (
+        error.status === 1 &&
+        String(error.stdout ?? "").trim() === "" &&
+        String(error.stderr ?? "").trim() === ""
+      )
+        return false;
+      throw error;
+    }
+  }
   try {
     const stat = await readFile(`/proc/${pid}/stat`, "utf8");
     return !["Z", "X"].includes(stat.slice(stat.lastIndexOf(")") + 2).split(" ")[0]);

@@ -13,11 +13,14 @@ the fixed GNU utilities used by typed tools.
 The build and installer validate required Bubblewrap options, including
 `--remount-ro` for directory masks and `--ro-bind-data` for empty file masks.
 
-macOS supports direct mode only and requires Homebrew `coreutils`, `findutils`,
+macOS direct mode requires Homebrew `coreutils`, `findutils`,
 `grep`, `gawk`, `fd`, and `ripgrep`, plus system Bash, `sh`, and `file`. The
 runtime resolves the Homebrew prefix for Apple silicon or Intel and fails
 closed if a GNU command is missing. A macOS release build additionally requires
 Homebrew GNU tar (`gtar`) for reproducible archives.
+macOS arm64 also admits a build-selected external smolvm provider; its initial
+host target is macOS 26.0+. Native runtime integration and qualification remain
+pending. macOS x86-64 remains direct-only.
 
 Configured home-directory expansion requires `/usr/bin/getent` on Linux or
 the system `/usr/bin/dscacheutil` on macOS. The runtime queries the effective
@@ -604,8 +607,12 @@ adapters and preserves administrator-selected permissions and audit controls.
 
 ## Optional external smolvm runtime
 
-Linux x86-64 distributions may opt into smolvm by setting
-`platforms.linux.smolvm.path` and `version = "1.26.1"` in the build manifest.
+Linux x86-64 distributions may opt into smolvm through `[platforms.linux.smolvm]`;
+macOS arm64 distributions use `[platforms.darwin.smolvm]`. Both tables require
+an absolute `path` and `version = "1.26.1"` in the build manifest. macOS x86-64
+and Linux arm64 reject the provider. The initial Darwin host target is macOS
+26.0+, imposed by the pinned libkrunfw runtime. Darwin native verification,
+platform-specific release inventory and qualification remain integration gates.
 Keep the official wrapper, binary, libraries and guest rootfs together at that
 fixed path. A wrapper copied by itself is insufficient. Pi verifies the pinned
 complete runtime inventory at VM startup. The generated release manifest records
@@ -617,13 +624,14 @@ policy table. Follow the [image preparation guide](smolvm-images.md) for the
 public recipe, upstream CLI steps, and offline verification. The default packaged configuration remains Bubblewrap on Linux
 and direct execution on macOS. Config validation and staged installation do not
 start VMs or require the external runtime/image paths to exist. VM startup
-requires Linux x86-64, usable `/dev/kvm`, the pinned external distribution,
-the configured image and a private state directory outside the launch project.
+requires host virtualization support (usable `/dev/kvm` on Linux), the pinned
+external distribution for that host, a matching guest architecture in the
+configured image and a private state directory outside the launch project.
 Provision each account's expanded `smolvm.state_directory` with that account as
 owner and mode `0700`; `/var/tmp/pi-vm-{{uid}}` keeps paths short and accounts
 separate. Its canonical expanded path must occupy at most 48 bytes. Startup does
 not create this directory or repair its ownership or permissions.
-Host e2fsprogs is needed during image preparation and when the separate OCI
+On Linux, host e2fsprogs is needed during image preparation and when the separate OCI
 controller creates disks smaller than smolvm's bundled templates. Make
 `resize2fs` available in a system directory searched by the fixed launcher
 environment (`/usr/bin`, `/bin`, `/usr/sbin` or `/sbin`). The prepared plain-pack

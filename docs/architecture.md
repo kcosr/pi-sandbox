@@ -62,7 +62,7 @@ trusted host
         selected built-in executor
           -> Bubblewrap process-lifetime worker and framed pipe IPC (Linux)
           -> or bounded direct host child (Linux/macOS)
-          -> or smolvm tools in a private Linux guest (Linux x86-64)
+          -> or smolvm tools in a private Linux guest (Linux x86-64; macOS arm64 integration)
 ```
 
 Allowing a tool call never delegates to Pi's stock host implementation. The
@@ -502,8 +502,9 @@ it is not an execution backend and does not run tool operations.
 
 ## Optional smolvm tool executor
 
-On Linux x86-64, the same extracted tool factory can use a smolvm 1.26.1
-executor. The managed application still owns one executor for its lifetime and
+The managed application admits a build-selected smolvm 1.26.1 executor on Linux
+x86-64 or macOS arm64. Darwin native runtime validation and qualification remain
+integration gates. The managed application still owns one executor for its lifetime and
 keeps configuration, permissions, audit and host MCP outside it. A fixed
 build-selected runtime plus administrator-selected image creates the private
 Linux guest; only the launch directory is host-mounted. Runtime startup validates

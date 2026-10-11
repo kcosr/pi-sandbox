@@ -2,7 +2,7 @@
 
 This project provides a policy-gated execution boundary in a managed Pi
 distribution. Linux supports Bubblewrap, optional smolvm on x86-64, and explicit direct execution; macOS
-supports direct execution only.
+supports direct execution and optional smolvm on arm64.
 
 The current product contract is split by subject across `docs/`:
 
@@ -30,12 +30,15 @@ reimplemented rather than mechanically reapplied.
 ## End-state invariants
 
 - Support Linux x86-64/arm64 with `bubblewrap` or `direct` execution and macOS
-  x86-64/arm64 with `direct` execution only. Never silently substitute one
+  x86-64/arm64 with `direct` execution. Never silently substitute one
   backend for another. The build-selected Linux distribution must choose either
   an absolute system Bubblewrap executable or a verified bundled executable;
   runtime configuration cannot change that provider.
-- Optional smolvm supports Linux x86-64 using a build-selected external complete
-  1.26.1 distribution and administrator-selected image/resource policy. Mount only
+- Optional smolvm selection supports Linux x86-64 and macOS arm64 using a build-selected external complete
+  1.26.1 distribution and administrator-selected image/resource policy. The initial
+  macOS runtime target is 26.0+; Darwin native validation and release qualification
+  remain integration gates. Keep Bubblewrap, broker identity and audit Linux-only.
+  Mount only
   the launch directory at its host path, require offline networking and no hidden
   paths, and keep its fixed VM process lifetime. Normal shutdown cleans up; abrupt
   owner death can require manual smolvm cleanup. Add no guardian or watcher.

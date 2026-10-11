@@ -8,6 +8,7 @@
 
 ### Changed
 
+- Allow build-selected managed smolvm on macOS arm64, retaining offline policy and Linux-only broker/audit restrictions; native qualification remains pending.
 - Update the reusable sandbox extension to 0.4.1 with the verified smolvm 1.26.1 runtime inventory. ([#24](https://github.com/kcosr/pi-sandbox/pull/24))
 
 ## 0.7.0 - 2026-10-10

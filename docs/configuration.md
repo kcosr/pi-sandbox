@@ -46,9 +46,11 @@ The required `execution` table selects `bubblewrap`, `direct`, or `smolvm`. Bubb
 available only on Linux. Direct execution is available on Linux and macOS and
 runs approved built-in operations with the invoking user's ordinary host
 filesystem and process authority. It is an explicit operating mode, never a
-fallback after a sandbox failure. macOS requires `identity.mode = disabled`.
-The optional smolvm backend supports Linux x86-64 and requires a provider selected
-at build time. It mounts only the launch directory from the host.
+fallback after a sandbox failure. macOS requires `identity.mode = disabled`
+and `audit.enabled = false` for every backend.
+The optional smolvm provider can be selected on Linux x86-64 or macOS arm64
+at build time. Intel Macs remain direct-only. It mounts only the launch directory
+from the host. Darwin native runtime qualification remains pending.
 
 The required `network` table selects `none`, `local`, or `host` for built-in tools and
 shell commands. Bubblewrap supports all three. smolvm requires `none`, which
@@ -771,8 +773,8 @@ function record tool identity, permission decisions, and outcomes only.
 
 ## smolvm image and runtime selection
 
-The optional Linux x86-64 backend uses a complete, fixed smolvm **1.26.1**
-distribution. The distribution manifest, not runtime configuration or an
+The optional backend selects a complete, fixed smolvm **1.26.1** distribution
+on Linux x86-64 or macOS arm64. The distribution manifest, not runtime configuration or an
 identity rule, selects its absolute wrapper path:
 
 ```toml
@@ -780,6 +782,12 @@ identity rule, selects its absolute wrapper path:
 path = "/opt/smolvm-1.26.1/smolvm"
 version = "1.26.1"
 ```
+
+For macOS arm64, use `[platforms.darwin.smolvm]` with the same `path` and
+`version` fields. The initial minimum host version is macOS 26.0, required by
+the pinned libkrunfw runtime. Darwin native runtime verification and qualification
+remain integration gates; accepting a distribution or policy does not prove the
+VM can start. macOS x86-64 and Linux arm64 reject a smolvm provider.
 
 This extends distribution format 3. The runtime, adjacent libraries and guest
 rootfs are external prerequisites, not included in the Pi archive. Startup
