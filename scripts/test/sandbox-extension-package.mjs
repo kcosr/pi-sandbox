@@ -2,12 +2,13 @@ import assert from "node:assert/strict";
 import { Buffer } from "node:buffer";
 import { execFileSync, spawn } from "node:child_process";
 import { createHash } from "node:crypto";
-import { mkdtemp, mkdir, readFile, readdir, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, mkdir, readFile, readdir, writeFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { setTimeout as delay } from "node:timers/promises";
 import { testParallelTools } from "./parallel-tools-smoke.mjs";
 import { installExtensionArtifacts } from "./extension-artifacts.mjs";
+import { removeSmolvmFixture } from "./remove-smolvm-fixture.mjs";
 
 const root = dirname(dirname(dirname(fileURLToPath(import.meta.url))));
 execFileSync(process.execPath, [join(root, "scripts/build-extensions.mjs")], {
@@ -286,7 +287,7 @@ try {
         emptyRegistry = false;
       }
     }
-    if (emptyRegistry) await rm(temp, { recursive: true, force: true });
+    if (emptyRegistry) await removeSmolvmFixture(temp);
     else console.error(`Preserving nonempty or uncertain fixture registry: ${temp}`);
   }
 }

@@ -13,6 +13,7 @@ import { setTimeout as delay } from "node:timers/promises";
 import { URL } from "node:url";
 import { parse as parseToml, stringify as stringifyToml } from "@iarna/toml";
 import { testManagedMcpCodemode } from "./mcp-codemode-smoke.mjs";
+import { removeSmolvmFixture } from "./remove-smolvm-fixture.mjs";
 
 if (process.argv.length !== 4) {
   console.error("usage: smolvm-managed-smoke.mjs EXECUTABLE DEFAULTS_DIRECTORY");
@@ -273,7 +274,7 @@ try {
   if (forced || children.size || remaining.length || !registryEmpty) {
     console.error(`Preserving uncertain fixture state: ${temporary}; Pi state: ${userState}`);
   } else {
-    await rm(temporary, { recursive: true, force: true });
+    await removeSmolvmFixture(temporary);
     await rm(userState, { recursive: true, force: true });
   }
 }
