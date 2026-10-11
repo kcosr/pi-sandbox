@@ -1,10 +1,11 @@
-import { spawn } from "node:child_process";
+import { execFileSync, spawn } from "node:child_process";
 import { once } from "node:events";
-import { mkdir, mkdtemp, readFile, readdir, realpath, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, readdir, realpath, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
-import { pathToFileURL } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
+import { removeSmolvmFixture } from "../../scripts/test/remove-smolvm-fixture.mjs";
 import { SmolvmCli } from "../../packages/sandbox-extension/src/runtime/smolvm/cli.js";
 import {
   captureMachineIdentity,
@@ -29,6 +30,7 @@ import {
 
 const enabled =
   process.env.PI_SANDBOX_REQUIRE_SMOLVM === "1" || !!process.env.PI_SANDBOX_SMOLVM_OCI_IMAGE;
+const repositoryRoot = fileURLToPath(new URL("../../", import.meta.url));
 let root: string;
 let cli: SmolvmCli;
 let environment: Record<string, string>;
@@ -42,6 +44,12 @@ beforeAll(async () => {
     "PI_SANDBOX_SMOLVM_OCI_SHA256",
   ])
     if (!process.env[key]) throw new Error(`Missing required native fixture input: ${key}`);
+  // The owner subprocess imports the public package entry, including on a fresh checkout.
+  execFileSync("node", [path.join(repositoryRoot, "scripts/build-extensions.mjs")], {
+    cwd: repositoryRoot,
+    timeout: 120000,
+    stdio: "inherit",
+  });
   root = await realpath(await mkdtemp("/tmp/reg-test-"));
   for (const [key, name] of Object.entries({
     HOME: "h",
@@ -63,14 +71,14 @@ beforeAll(async () => {
     stateDirectory: root,
     nativeEnvironment: environment,
   });
-});
+}, 150000);
 afterAll(async () => {
   if (!enabled) return;
   try {
     expect(await listMachines(cli)).toEqual([]);
     assertNoFixtureLayerAttachments(root);
     await cli.dispose();
-    await rm(root, { recursive: true, force: true });
+    await removeSmolvmFixture(root);
   } catch (error) {
     console.error("Shared account fixture retained", root);
     throw error;
@@ -170,7 +178,7 @@ describe.skipIf(!enabled)("native shared registry isolation and manual recovery"
         resources: { cpus: 1, memoryMiB: 512, storageGiB: 1, overlayGiB: 1 },
       };
       const runtime = pathToFileURL(
-        path.resolve("packages/sandbox-extension/dist/runtime.js"),
+        path.join(repositoryRoot, "packages/sandbox-extension/dist/runtime.js"),
       ).href;
       const source = `import {createSmolvmExecutor} from ${JSON.stringify(runtime)};const vm=await createSmolvmExecutor(JSON.parse(process.argv[1]));await vm.execute({argv:['/bin/bash','-c','(while :; do printf x >>heartbeat; sleep .05; done) >/dev/null 2>&1 &']});process.stdout.write('READY\\n');setInterval(()=>{},1000);`;
       const owner = spawn(
