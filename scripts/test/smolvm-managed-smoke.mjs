@@ -26,7 +26,7 @@ const release = JSON.parse(
   await readFile(join(dirname(executable), "release-manifest.json"), "utf8"),
 );
 assert.equal(release.layout.allowConfigOverride, true, "Use a review build accepting --config");
-assert.equal(release.smolvm?.version, "1.25.4");
+assert.equal(release.smolvm?.version, "1.26.1");
 assert.equal(typeof release.smolvm.path, "string");
 const image = await realpath(process.env.PI_SANDBOX_SMOLVM_IMAGE ?? "");
 const imageSha256 = process.env.PI_SANDBOX_SMOLVM_IMAGE_SHA256;

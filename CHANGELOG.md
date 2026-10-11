@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+### Breaking changes
+
+- Require smolvm 1.26.1 for Linux VM execution. Install the matching distribution and rebuild plain tool images; retained state continues to require its recorded runtime. ([#24](https://github.com/kcosr/pi-sandbox/pull/24))
+
+### Changed
+
+- Update the reusable sandbox extension to 0.4.1 with the verified smolvm 1.26.1 runtime inventory. ([#24](https://github.com/kcosr/pi-sandbox/pull/24))
+
 ## 0.7.0 - 2026-10-10
 
 ### Breaking changes

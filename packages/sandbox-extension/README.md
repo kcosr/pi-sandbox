@@ -93,7 +93,7 @@ command-scoped cleanup.
 
 ## Linux smolvm
 
-smolvm **1.25.4** is supported on Linux x86-64 with `/dev/kvm`. Install the complete
+smolvm **1.26.1** is supported on Linux x86-64 with `/dev/kvm`. Install the complete
 official distribution outside the project. The package verifies its pinned
 executable, library and guest-rootfs inventory before launching anything.
 Provision a trusted plain Linux tools pack separately with the required GNU
@@ -107,7 +107,7 @@ Use the same version-4 configuration, replacing `backend` with:
 ```json
 {
   "kind": "smolvm",
-  "executable": "/opt/smolvm-1.25.4/smolvm",
+  "executable": "/opt/smolvm-1.26.1/smolvm",
   "image": "/opt/pi-images/tools.smolmachine",
   "imageSha256": "<64 lowercase hexadecimal characters>",
   "stateDirectory": "/home/alice/.local/state/pi-vm",

@@ -1,5 +1,5 @@
-// Generated from the verified official v1.25.4 linux-x86_64 release archive.
-// Archive SHA256: 5a470d2db922290f17918bb8cee35820a389690b7c741570d8944f500bc04bc9
+// Generated from the verified official v1.26.1 linux-x86_64 release archive.
+// Archive SHA256: bcae519f7dad3cead2deaa0362a42a1ad7bffce73ea7a28161dea6822c559654
 // Includes every executable, library and guest-rootfs entry; no local paths.
 export const RELEASE_INVENTORY: readonly (readonly [string, string, string])[] = [
   ["agent-rootfs", "directory", ""],
@@ -926,14 +926,14 @@ export const RELEASE_INVENTORY: readonly (readonly [string, string, string])[] =
   ],
   ["agent-rootfs/lib/security/pam_filter", "directory", ""],
   [
-    "agent-rootfs/lib/security/pam_filter.so",
-    "file",
-    "5baac5889c682a102b3ccf3352fb1d3945a1576b7ad8244303b9a5118c44f39a",
-  ],
-  [
     "agent-rootfs/lib/security/pam_filter/upperLOWER",
     "file",
     "3d48d6fa860ad89b3fca3a7e5e5c1ca375b4cb5ec1016e26914fc926932c2064",
+  ],
+  [
+    "agent-rootfs/lib/security/pam_filter.so",
+    "file",
+    "5baac5889c682a102b3ccf3352fb1d3945a1576b7ad8244303b9a5118c44f39a",
   ],
   [
     "agent-rootfs/lib/security/pam_ftp.so",
@@ -1945,12 +1945,12 @@ export const RELEASE_INVENTORY: readonly (readonly [string, string, string])[] =
   [
     "agent-rootfs/usr/local/bin/smolvm-agent",
     "file",
-    "2a8fd633d96a26cf37cc6d3d193ef2a4789848f62e3bd94251131405d7564e68",
+    "5800e6ed4dab0962d763b8001a15a8baece313cd4f51f1805fb82fb467aea746",
   ],
   [
     "agent-rootfs/usr/local/bin/smolvm-cuda-run",
     "file",
-    "42ee7537df83c066d29b135c5a377fb3b93aac9abe93d18d2cc1a70a304328aa",
+    "7c9aa9609dc39c76a1a3052c02c8b01d87dd7e4319f71e05256f6fa49a638e94",
   ],
   ["agent-rootfs/usr/local/lib", "directory", ""],
   ["agent-rootfs/usr/local/lib/smolvm-cuda", "directory", ""],
@@ -1964,12 +1964,12 @@ export const RELEASE_INVENTORY: readonly (readonly [string, string, string])[] =
   [
     "agent-rootfs/usr/local/lib/smolvm-cuda/libcuda.so.1",
     "file",
-    "4611d173ae907d6595def1d5b8471b57d3c802a4ba13fa1f323fc6a815ad888c",
+    "dd845a1a31ecfd8f0f3399a5eaa7df0495b596d7aef3c8f7524474dfcdd4c1d4",
   ],
   [
     "agent-rootfs/usr/local/lib/smolvm-cuda/libcudart-shim.so",
     "file",
-    "1e3f472f7d91edcdc84391ec2de55781bb25a52935a19bd7b21769ff1d8245ea",
+    "d674cb0a93a80148fcf7a35d7ebe75848623246412734b0c91dd1305cf70374b",
   ],
   ["agent-rootfs/usr/local/lib/smolvm-cuda/libcudart.so", "symlink", "libcudart-shim.so"],
   ["agent-rootfs/usr/local/lib/smolvm-cuda/libcudart.so.11.0", "symlink", "libcudart-shim.so"],
@@ -2693,7 +2693,7 @@ export const RELEASE_INVENTORY: readonly (readonly [string, string, string])[] =
   ["agent-rootfs/var/spool/mail", "symlink", "/var/mail"],
   ["agent-rootfs/var/tmp", "directory", ""],
   ["lib", "directory", ""],
-  ["lib/libkrun.so", "file", "5ee75430cd8cddfdd4d6dd938ff8aa8d0b5bd80fff67da4e0c85e732822b9109"],
+  ["lib/libkrun.so", "file", "bdec0ae78b98e5c3e9c2c13a10d05ea6ace8d622be659069a89d777c065c1045"],
   ["lib/libkrun.so.2", "symlink", "libkrun.so"],
   ["lib/libkrunfw.so", "symlink", "libkrunfw.so.5"],
   ["lib/libkrunfw.so.5", "symlink", "libkrunfw.so.5.5.0"],
@@ -2705,13 +2705,13 @@ export const RELEASE_INVENTORY: readonly (readonly [string, string, string])[] =
   [
     "overlay-template.ext4.zst",
     "file",
-    "f5e16a098bf1e3d73adc1291c1a08cfb5b62c249665995020ccdbc5ae931fa92",
+    "06d98e36f4a9f566538b83926607a048870ae723c1e159a830a3e1f25f846a73",
   ],
   ["smolvm", "file", "b67b25f363403e19deceb6897e5a4d94be30a079f8cb751372782f17fc99003a"],
-  ["smolvm-bin", "file", "1f54e15443b6ce8406307160fe1218f6083902381442ae00aa78660c45fd902d"],
+  ["smolvm-bin", "file", "62ed0353d664c2d6d78bd87ecf3213c64464003f51cb58506b87b187b1a6494a"],
   [
     "storage-template.ext4.zst",
     "file",
-    "6ec1dd5bfc92b1d3d3a7c303fdfac41a89d3a2384a12a04dc66c24e6fada147e",
+    "cd1670e0cb2739fd5bedfaad0e4956935a7fbc7f94c27abe730e19dbabc653b2",
   ],
 ];

@@ -21,7 +21,7 @@ function manifest() {
     mode: "vm",
     platform: "linux/amd64",
     host_platform: "linux/amd64",
-    smolvm_version: "1.25.4",
+    smolvm_version: "1.26.1",
     network: false,
     gpu: false,
     cuda: false,

@@ -771,14 +771,14 @@ function record tool identity, permission decisions, and outcomes only.
 
 ## smolvm image and runtime selection
 
-The optional Linux x86-64 backend uses a complete, fixed smolvm **1.25.4**
+The optional Linux x86-64 backend uses a complete, fixed smolvm **1.26.1**
 distribution. The distribution manifest, not runtime configuration or an
 identity rule, selects its absolute wrapper path:
 
 ```toml
 [platforms.linux.smolvm]
-path = "/opt/smolvm-1.25.4/smolvm"
-version = "1.25.4"
+path = "/opt/smolvm-1.26.1/smolvm"
+version = "1.26.1"
 ```
 
 This extends distribution format 3. The runtime, adjacent libraries and guest
