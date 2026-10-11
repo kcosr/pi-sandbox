@@ -202,6 +202,8 @@ execution failure retires the entire family. Cancelling a queued attachment
 request leaves other work intact.
 Each family uses an explicit ownership journal and unique random-suffixed machine
 names. `namePrefix` labels the source; branch options can label child roles.
+Prefixes allow up to 31 ASCII characters, keeping the generated name within
+Linux's 64-byte hostname limit used by OCI branches.
 The journal is written before creation; `onPrepared` lets an orchestrator record
 the family before native startup. Shared-registry machines outside this journal
 are never adopted or removed. External children block parent deletion.
