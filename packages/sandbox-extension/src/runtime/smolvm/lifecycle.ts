@@ -22,13 +22,14 @@ export interface MachineRecord {
 }
 const fail = (message: string) =>
   new SandboxExecutionError("sandbox_process_failed", { cause: new Error(message) });
+const commandFailure = (result: SandboxCommandResult) =>
+  fail(`smolvm_command_failed: ${result.stderr.toString().slice(-2000)}`);
 export async function checkedCommand(
   cli: SmolvmCli,
   argv: readonly [string, ...string[]],
 ): Promise<SandboxCommandResult> {
   const result = await cli.run({ argv, timeoutMs: 180_000, maxOutputBytes: 4 * 1_048_576 });
-  if (result.exitCode !== 0 || result.signal !== null)
-    throw fail(`smolvm_command_failed: ${result.stderr.toString().slice(-2000)}`);
+  if (result.exitCode !== 0 || result.signal !== null) throw commandFailure(result);
   return result;
 }
 export async function listMachines(cli: SmolvmCli): Promise<readonly MachineRecord[]> {
@@ -38,30 +39,49 @@ export async function listMachines(cli: SmolvmCli): Promise<readonly MachineReco
   if (!Array.isArray(raw)) throw fail("smolvm_machine_list_invalid");
   const names = new Set<string>();
   return raw.map((item: unknown) => {
-    if (!item || typeof item !== "object") throw fail("smolvm_machine_list_invalid");
-    const r = item as Record<string, unknown>;
-    if (
-      !validMachineName(r.name) ||
-      names.has(r.name) ||
-      typeof r.state !== "string" ||
-      !(
-        r.pid === null ||
-        (typeof r.pid === "number" && Number.isSafeInteger(r.pid) && r.pid > 0)
-      ) ||
-      !(r.parent_machine === null || validMachineName(r.parent_machine)) ||
-      !Number.isSafeInteger(r.created_at) ||
-      (r.created_at as number) < 0
-    )
-      throw fail("smolvm_machine_list_invalid");
-    names.add(r.name);
-    return {
-      name: r.name,
-      state: r.state,
-      pid: r.pid,
-      parent: r.parent_machine,
-      createdAt: r.created_at as number,
-    };
+    const record = parseMachineRecord(item);
+    if (names.has(record.name)) throw fail("smolvm_machine_list_invalid");
+    names.add(record.name);
+    return record;
   });
+}
+function parseMachineRecord(item: unknown): MachineRecord {
+  if (!item || typeof item !== "object") throw fail("smolvm_machine_record_invalid");
+  const r = item as Record<string, unknown>;
+  if (
+    !validMachineName(r.name) ||
+    typeof r.state !== "string" ||
+    !(r.pid === null || (typeof r.pid === "number" && Number.isSafeInteger(r.pid) && r.pid > 0)) ||
+    !(r.parent_machine === null || validMachineName(r.parent_machine)) ||
+    !Number.isSafeInteger(r.created_at) ||
+    (r.created_at as number) < 0
+  )
+    throw fail("smolvm_machine_record_invalid");
+  return {
+    name: r.name,
+    state: r.state,
+    pid: r.pid,
+    parent: r.parent_machine,
+    createdAt: r.created_at as number,
+  };
+}
+/** A live check probes only this machine, never unrelated shared-registry guests. */
+async function machineStatus(cli: SmolvmCli, name: string): Promise<MachineRecord | undefined> {
+  const result = await cli.run({
+    argv: ["machine", "status", "--name", name, "--json"],
+    timeoutMs: 180_000,
+    maxOutputBytes: 4 * 1_048_576,
+  });
+  if (result.signal !== null) throw commandFailure(result);
+  if (result.exitCode !== 0) {
+    // Stock status has no structured not-found result. Confirm absence before
+    // treating a failed command as an already removed owned record.
+    if (!(await listMachines(cli)).some((record) => record.name === name)) return undefined;
+    throw commandFailure(result);
+  }
+  const record = parseMachineRecord(JSON.parse(result.stdout.toString()));
+  if (record.name !== name) throw fail("smolvm_machine_identity_changed");
+  return record;
 }
 export function validateMachineIdentity(value: unknown): asserts value is MachineIdentity {
   if (
@@ -90,9 +110,17 @@ export async function captureMachineIdentity(
   name: string,
   running = true,
 ): Promise<MachineIdentity> {
-  const record = (await listMachines(cli)).find((r) => r.name === name);
+  const record = await machineStatus(cli, name);
   if (!record || (running && !["running", "frozen"].includes(record.state)))
     throw fail("smolvm_machine_not_running");
+  return captureRecordIdentity(cli, record, running);
+}
+async function captureRecordIdentity(
+  cli: SmolvmCli,
+  record: MachineRecord,
+  running: boolean,
+): Promise<MachineIdentity> {
+  const name = record.name;
   const reportedDirectory = (
     await checkedCommand(cli, ["machine", "data-dir", "--name", name])
   ).stdout
@@ -140,12 +168,12 @@ export async function assertMachineIdentity(
   cli: SmolvmCli,
   identity: MachineIdentity,
 ): Promise<MachineRecord | undefined> {
-  const record = (await listMachines(cli)).find((r) => r.name === identity.name);
+  const record = await machineStatus(cli, identity.name);
   if (!record) return undefined;
   if (record.createdAt !== identity.createdAt || record.parent !== identity.parent)
     throw fail("smolvm_machine_identity_changed");
   if (identity.dataDirectory !== null) {
-    const current = await captureMachineIdentity(cli, identity.name, false);
+    const current = await captureRecordIdentity(cli, record, false);
     if (
       current.dataDirectory !== identity.dataDirectory ||
       current.dev !== identity.dev ||

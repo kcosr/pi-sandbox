@@ -8,7 +8,18 @@ import {
   type SandboxExecutionOptions,
 } from "../../contracts.js";
 import { createHash } from "node:crypto";
-import { mkdir, mkdtemp, readFile, realpath, rm, stat, symlink, writeFile } from "node:fs/promises";
+import {
+  mkdir,
+  mkdtemp,
+  readFile,
+  realpath,
+  rename,
+  rm,
+  stat,
+  symlink,
+  unlink,
+  writeFile,
+} from "node:fs/promises";
 import type {
   SmolvmOciFamilyOptions,
   SmolvmOciFamilyHooks,
@@ -18,6 +29,7 @@ import type {
 import { SmolvmOciTerminalCleanupError } from "./types.js";
 import { attachSmolvmOciMachine } from "./transport.js";
 import { createSmolvmEnvironment } from "../registry.js";
+import { readJournal } from "./journal.js";
 import { createConnection } from "node:net";
 import { once } from "node:events";
 import path from "node:path";
@@ -35,6 +47,8 @@ const mocks = vi.hoisted(() => ({
   createFailure: false,
   branchFailure: false,
   failDelete: false,
+  failList: false,
+  runtimeIdentity: "b".repeat(64),
   calls: [] as string[][],
   failClose: false,
   recoveryPresentAtCreate: false,
@@ -61,7 +75,7 @@ vi.mock("node:fs/promises", async (importActual) => {
   };
 });
 vi.mock("../runtime-release.js", () => ({
-  verifySmolvmRuntime: () => Promise.resolve("b".repeat(64)),
+  verifySmolvmRuntime: () => Promise.resolve(mocks.runtimeIdentity),
   SMOLVM_VERSION: "1.26.1",
 }));
 vi.mock("./transport.js", async (importActual) => {
@@ -144,17 +158,28 @@ vi.mock("../cli.js", () => {
             }
           }
         } else if (argv[1] === "data-dir") out = nativeDir;
-        else if (argv[1] === "ls")
-          out = JSON.stringify(
-            [...this.names].map(([name, r]) => ({
-              name,
-              pid: ["stopped", "created", "failed"].includes(r.state) ? null : 123,
-              state: r.state,
-              parent_machine: r.parent,
-              created_at: r.createdAt,
-            })),
-          );
-        else if (argv[1] === "branch") {
+        else if (argv[1] === "ls" || argv[1] === "status") {
+          if (argv[1] === "ls" && mocks.failList) throw Error("foreign probe blocked");
+          const records = [...this.names].map(([name, r]) => ({
+            name,
+            pid: ["stopped", "created", "failed"].includes(r.state) ? null : 123,
+            state: r.state,
+            parent_machine: r.parent,
+            created_at: r.createdAt,
+          }));
+          if (argv[1] === "ls") out = JSON.stringify(records);
+          else {
+            const record = records.find((r) => r.name === value("--name"));
+            if (!record)
+              return {
+                exitCode: 1,
+                signal: null,
+                stdout: Buffer.alloc(0),
+                stderr: Buffer.from("not found"),
+              };
+            out = JSON.stringify(record);
+          }
+        } else if (argv[1] === "branch") {
           mocks.events.push(`branch:${value("--from")}`);
           this.names.get(value("--from"))!.state = "frozen";
           if (mocks.branchFailure)
@@ -258,6 +283,8 @@ beforeEach(async () => {
   mocks.createFailure = false;
   mocks.branchFailure = false;
   mocks.failDelete = false;
+  mocks.failList = false;
+  mocks.runtimeIdentity = "b".repeat(64);
 });
 afterEach(async () => {
   vi.restoreAllMocks();
@@ -449,6 +476,38 @@ suite("OCI family controller policy with a simulated CLI", () => {
       "uncertain",
     );
   });
+  it("cleans known siblings after a failed branch while preserving its uncertain intent and parent", async () => {
+    const family = await fixture();
+    const sibling = await family.branch(family.sourceId, { branchable: false });
+    mocks.names.set("foreign", { state: "running", parent: null, createdAt: 9 });
+    mocks.calls = [];
+    mocks.branchFailure = true;
+    await expect(family.branch(family.sourceId, { branchable: false })).rejects.toThrow(
+      "cleanup_unconfirmed",
+    );
+    expect(mocks.names.has(sibling)).toBe(false);
+    expect(mocks.names.get(family.sourceId)?.state).toBe("frozen");
+    expect(mocks.names.get("foreign")?.state).toBe("running");
+    const journal = await readSmolvmOciFamily({ statePath: family.statePath });
+    expect(journal.machines.map((m) => m.status)).toEqual(["running", "uncertain"]);
+    expect(
+      mocks.calls
+        .filter((argv) => ["stop", "delete"].includes(argv[1]!))
+        .every((argv) => argv.includes(sibling)),
+    ).toBe(true);
+  });
+  it("does not probe foreign machines during healthy guest calls", async () => {
+    const family = await fixture();
+    mocks.names.set("foreign", { state: "unreachable", parent: null, createdAt: 9 });
+    mocks.failList = true;
+    try {
+      expect((await family.execute(family.sourceId, { argv: ["/bin/true"] })).exitCode).toBe(0);
+      expect(() => family.attachment(family.sourceId)).not.toThrow();
+    } finally {
+      mocks.failList = false;
+      await family.close();
+    }
+  });
   it("refuses replacement under a captured name before any lifecycle mutation", async () => {
     const family = await fixture();
     mocks.names.get(family.sourceId)!.createdAt++;
@@ -463,6 +522,87 @@ suite("OCI family controller policy with a simulated CLI", () => {
     await deleteSmolvmOciFamily({ statePath: family.statePath });
     expect([...mocks.names.keys()]).toEqual(["foreign"]);
     await expect(stat(family.statePath)).rejects.toMatchObject({ code: "ENOENT" });
+  });
+  it("releases its delete claim after failure so exact stopped cleanup can be retried", async () => {
+    const family = await fixture();
+    await family.close({ retainState: true });
+    mocks.failDelete = true;
+    await expect(deleteSmolvmOciFamily({ statePath: family.statePath })).rejects.toThrow();
+    await expect(stat(path.join(family.statePath, "controller.claim"))).rejects.toMatchObject({
+      code: "ENOENT",
+    });
+    expect((await readSmolvmOciFamily({ statePath: family.statePath })).machines[0]?.status).toBe(
+      "stopped",
+    );
+    mocks.failDelete = false;
+    await deleteSmolvmOciFamily({ statePath: family.statePath });
+    expect(mocks.names.has(family.sourceId)).toBe(false);
+  });
+  it("never releases another controller's claim after acquisition is refused", async () => {
+    const family = await fixture();
+    await family.close({ retainState: true });
+    const claim = path.join(family.statePath, "controller.claim");
+    await writeFile(claim, "other controller", { mode: 0o600 });
+    await expect(deleteSmolvmOciFamily({ statePath: family.statePath })).rejects.toMatchObject({
+      code: "EEXIST",
+    });
+    expect(await readFile(claim, "utf8")).toBe("other controller");
+    await unlink(claim);
+    await deleteSmolvmOciFamily({ statePath: family.statePath });
+  });
+  it("releases its delete claim even when native deletion and CLI disposal both fail", async () => {
+    const family = await fixture();
+    await family.close({ retainState: true });
+    mocks.failDelete = true;
+    mocks.failCliDispose = true;
+    await expect(deleteSmolvmOciFamily({ statePath: family.statePath })).rejects.toBeInstanceOf(
+      AggregateError,
+    );
+    await expect(stat(path.join(family.statePath, "controller.claim"))).rejects.toMatchObject({
+      code: "ENOENT",
+    });
+    mocks.failDelete = false;
+    mocks.failCliDispose = false;
+    await deleteSmolvmOciFamily({ statePath: family.statePath });
+  });
+  it.each(["image", "mount"])(
+    "deletes stopped disks after the original %s input disappears or changes",
+    async (input) => {
+      const mount = await mkdtemp("/var/tmp/oci-mount-");
+      dirs.push(mount, mount + "-old");
+      const family = await fixture({
+        mounts: [{ hostPath: mount, guestPath: "/inputs", readOnly: true }],
+      });
+      await family.retainForColdReopen();
+      const journal = await readJournal(family.statePath);
+      if (input === "image") await unlink(journal.options.imageArchive);
+      else {
+        await rename(mount, mount + "-old");
+        await mkdir(mount);
+      }
+      await expect(reopenSmolvmOciFamily({ statePath: family.statePath })).rejects.toThrow();
+      await deleteSmolvmOciFamily({ statePath: family.statePath });
+      expect(mocks.names.has(family.sourceId)).toBe(false);
+    },
+  );
+  it("still requires the captured runtime and machine identity when deleting stopped disks", async () => {
+    const family = await fixture();
+    await family.close({ retainState: true });
+    mocks.calls = [];
+    mocks.runtimeIdentity = "c".repeat(64);
+    await expect(deleteSmolvmOciFamily({ statePath: family.statePath })).rejects.toThrow(
+      "runtime_binding_changed",
+    );
+    expect(mocks.calls).toEqual([]);
+    mocks.runtimeIdentity = "b".repeat(64);
+    mocks.names.get(family.sourceId)!.createdAt++;
+    await expect(deleteSmolvmOciFamily({ statePath: family.statePath })).rejects.toMatchObject({
+      cause: { message: "smolvm_machine_identity_changed" },
+    });
+    expect(mocks.calls.some((argv) => argv[1] === "delete")).toBe(false);
+    await expect(stat(path.join(family.statePath, "controller.claim"))).rejects.toMatchObject({
+      code: "ENOENT",
+    });
   });
   it("lets native dependency protection preserve externally created descendants", async () => {
     const family = await fixture();
@@ -970,6 +1110,41 @@ suite("OCI family controller policy with a simulated CLI", () => {
     }
     await expect(stat(retained.statePath)).rejects.toMatchObject({ code: "ENOENT" });
   });
+  it("releases the controller claim if the atomic cold receipt claim is refused", async () => {
+    const family = await fixture();
+    await family.retainForColdReopen();
+    const staleClaim = path.join(family.statePath, "cold-claimed.json");
+    await writeFile(staleClaim, "existing receipt claim", { mode: 0o600 });
+    await expect(reopenSmolvmOciFamily({ statePath: family.statePath })).rejects.toMatchObject({
+      code: "EEXIST",
+    });
+    await expect(stat(path.join(family.statePath, "controller.claim"))).rejects.toMatchObject({
+      code: "ENOENT",
+    });
+    expect(mocks.names.get(family.sourceId)?.state).toBe("stopped");
+    await unlink(staleClaim);
+    const reopened = await reopenSmolvmOciFamily({ statePath: family.statePath });
+    await reopened.close();
+  });
+  it("keeps the recovery journal bounded through repeated branch/delete and cold-reopen cycles", async () => {
+    let family = await fixture({ namePrefix: "s".repeat(95) });
+    const statePath = family.statePath;
+    const initialSize = (await stat(path.join(statePath, "recovery.json"))).size;
+    for (let generation = 0; generation < 4; generation++) {
+      for (let index = 0; index < 40; index++) {
+        const child = await family.branch(family.sourceId, {
+          branchable: false,
+          namePrefix: "c".repeat(95),
+        });
+        await family.removeMachine(child);
+      }
+      expect((await readSmolvmOciFamily({ statePath })).machines).toHaveLength(1);
+      expect((await stat(path.join(statePath, "recovery.json"))).size).toBe(initialSize);
+      await family.retainForColdReopen();
+      family = await reopenSmolvmOciFamily({ statePath });
+    }
+    await family.close();
+  }, 30000);
   it("retains and repeatedly reopens a writable child-free original", async () => {
     let family = await fixture();
     const originalPath = family.statePath;

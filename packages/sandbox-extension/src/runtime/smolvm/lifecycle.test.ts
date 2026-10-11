@@ -39,11 +39,25 @@ async function fixture(state = "running") {
       created_at: 43,
     },
   ];
-  const behavior = { failStop: false, failDelete: false, acknowledgeOnly: false };
+  const behavior = {
+    failStop: false,
+    failDelete: false,
+    failStatus: false,
+    failList: false,
+    acknowledgeOnly: false,
+  };
   const run = vi.fn(({ argv }: { argv: readonly string[] }) => {
     let out = "";
     let exitCode = 0;
-    if (argv[1] === "ls") out = JSON.stringify(records);
+    if (argv[1] === "ls") {
+      if (behavior.failList) throw Error("foreign machine probe blocked");
+      out = JSON.stringify(records);
+    }
+    if (argv[1] === "status") {
+      const record = records.find((r) => r.name === argv[argv.indexOf("--name") + 1]);
+      if (!record || behavior.failStatus) exitCode = 1;
+      else out = JSON.stringify(record);
+    }
     if (argv[1] === "data-dir") out = directory;
     if (argv[1] === "stop") {
       if (behavior.failStop) exitCode = 1;
@@ -75,6 +89,29 @@ async function fixture(state = "running") {
   return { cli, run, records, behavior, directory };
 }
 describe("stock CLI lifecycle ownership", () => {
+  it("uses one named status for each live check without probing unrelated machines", async () => {
+    const { cli, run, behavior } = await fixture();
+    behavior.failList = true;
+    const identity = await captureMachineIdentity(cli, "candidate");
+    run.mockClear();
+    await assertMachineAlive(cli, identity);
+    expect(run.mock.calls.filter(([r]) => r.argv[1] === "status")).toEqual([
+      [expect.objectContaining({ argv: ["machine", "status", "--name", "candidate", "--json"] })],
+    ]);
+    expect(run.mock.calls.some(([r]) => r.argv[1] === "ls")).toBe(false);
+  });
+  it("does not mistake a failed named status for absence of an existing owned machine", async () => {
+    const { cli, run, behavior, records } = await fixture();
+    const identity = await captureMachineIdentity(cli, "candidate");
+    behavior.failStatus = true;
+    await expect(stopMachine(cli, "candidate", identity)).rejects.toMatchObject({
+      code: "sandbox_process_failed",
+    });
+    expect(run.mock.calls.some(([r]) => r.argv[1] === "stop")).toBe(false);
+    records.splice(0, 1);
+    await stopMachine(cli, "candidate", identity);
+    expect(run.mock.calls.some(([r]) => r.argv[1] === "stop")).toBe(false);
+  });
   it("checks exact record/directory identity, acknowledges stop and confirms deletion without touching foreign machines", async () => {
     const { cli, run, records } = await fixture();
     const identity = await captureMachineIdentity(cli, "candidate");

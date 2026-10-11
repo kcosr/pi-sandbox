@@ -29,6 +29,18 @@ export interface FamilyJournal {
   readonly mountIdentities: readonly { dev: number; ino: number }[];
   readonly machines: readonly OwnedMachine[];
 }
+/** Forget acknowledged deleted leaves, retaining every still-referenced ancestor. */
+export function compactOwnedMachines(
+  machines: readonly OwnedMachine[],
+  sourceId: string,
+): OwnedMachine[] {
+  const keep = new Set([sourceId]);
+  for (const machine of [...machines].reverse()) {
+    if (machine.status !== "deleted") keep.add(machine.name);
+    if (keep.has(machine.name) && machine.parent !== null) keep.add(machine.parent);
+  }
+  return machines.filter((machine) => keep.has(machine.name));
+}
 const invalid = () => new Error("smolvm_oci_journal_invalid");
 export async function assertPrivateState(statePath: string): Promise<void> {
   const stat = await lstat(statePath);
