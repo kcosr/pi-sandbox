@@ -93,7 +93,7 @@ command-scoped cleanup.
 
 ## smolvm on Linux and macOS
 
-smolvm **1.26.1** is supported on Linux x86-64 with `/dev/kvm` and macOS 26+
+smolvm **1.27.0** is supported on Linux x86-64 with `/dev/kvm` and macOS 26+
 arm64 with `kern.hv_support=1`. The macOS minimum comes from the bundled guest
 firmware. Use a native arm64 guest on macOS. Install the complete
 [qualified fork distribution](../../docs/smolvm-runtime.md) outside the project.
@@ -110,7 +110,7 @@ Use the same version-4 configuration, replacing `backend` with:
 ```json
 {
   "kind": "smolvm",
-  "executable": "/opt/smolvm-1.26.1/smolvm",
+  "executable": "/opt/smolvm-1.27.0/smolvm",
   "image": "/opt/pi-images/tools.smolmachine",
   "imageSha256": "<64 lowercase hexadecimal characters>",
   "stateDirectory": "/home/alice/.local/state/pi-vm",
@@ -271,7 +271,7 @@ Failed deletion releases its controller claim so the operation can be retried.
 Abrupt owner death may require manual recovery with the recorded names.
 
 The ordinary cache can reuse upstream image data subject to smolvm’s eligibility
-rules. In 1.26.1, OCI image seeds require at least 20 GiB of storage, so small
+rules. In 1.27.0, OCI image seeds require at least 20 GiB of storage, so small
 fixtures do not demonstrate that optimization. Cache pruning is an explicit
 operator action, not family cleanup. `pack prune` and `machine prune` serve
 different purposes; the latter can start a stopped VM.

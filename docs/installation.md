@@ -607,7 +607,7 @@ adapters and preserves administrator-selected permissions and audit controls.
 ## Optional external smolvm runtime
 
 Linux x86-64 and macOS 26+ arm64 distributions may opt into smolvm by setting
-`platforms.linux.smolvm.path` or `platforms.darwin.smolvm.path` and `version = "1.26.1"` in the build manifest.
+`platforms.linux.smolvm.path` or `platforms.darwin.smolvm.path` and `version = "1.27.0"` in the build manifest.
 Use the [qualified prepared-machine runtime](smolvm-runtime.md), including its
 wrapper, binary, libraries and guest rootfs together at that fixed path. A wrapper copied by itself is insufficient. Pi verifies the pinned
 complete runtime inventory at VM startup. The generated release manifest records

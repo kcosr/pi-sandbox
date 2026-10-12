@@ -90,7 +90,7 @@ vi.mock("../host-tools.js", async (importActual) => ({
 }));
 vi.mock("../runtime-release.js", () => ({
   verifySmolvmRuntime: () => Promise.resolve(mocks.runtimeIdentity),
-  SMOLVM_VERSION: "1.26.1",
+  SMOLVM_VERSION: "1.27.0",
 }));
 vi.mock("./transport.js", async (importActual) => {
   const actual = await importActual<typeof Transport>();
@@ -1097,7 +1097,7 @@ suite("OCI family controller policy with a simulated CLI", () => {
       const recovery = JSON.parse(
         await readFile(path.join(family.statePath, "recovery.json"), "utf8"),
       ) as Record<string, unknown>;
-      expect(recovery.runtimeVersion).toBe("1.26.1");
+      expect(recovery.runtimeVersion).toBe("1.27.0");
       expect(recovery.runtimeIdentity).toBe("b".repeat(64));
       expect(recovery.environment).toMatchObject({
         HOME: process.env.HOME,

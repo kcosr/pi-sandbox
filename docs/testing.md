@@ -20,7 +20,7 @@ The OCI interactive controller test also requires Bun 1.3.14 or newer (optionall
 selected with `PI_SANDBOX_TEST_BUN`). Run
 `packages/sandbox-extension/src/runtime/smolvm/oci/terminal.native.test.ts` with
 `PI_SANDBOX_SMOLVM_BIN`, `PI_SANDBOX_SMOLVM_OCI_IMAGE` and
-`PI_SANDBOX_SMOLVM_OCI_SHA256` set to a verified 1.26.1 distribution and provisioned
+`PI_SANDBOX_SMOLVM_OCI_SHA256` set to a verified 1.27.0 distribution and provisioned
 Linux tool image matching the host architecture. It checks actual guest PTY startup, resize, Ctrl-C,
 streaming beyond 1 MiB, simultaneous tools and independent shells, exact reviewer
 branch access, scoped closure and repeated writable-original cold retention.
@@ -69,8 +69,8 @@ absolute path to this checkout's
 
 ```toml
 [platforms.linux.smolvm]
-path = "/opt/smolvm-1.26.1/smolvm"
-version = "1.26.1"
+path = "/opt/smolvm-1.27.0/smolvm"
+version = "1.27.0"
 ```
 
 On macOS select `[platforms.darwin.smolvm]` instead, use arm64 images, and set
@@ -82,7 +82,7 @@ need the documented direct-mode GNU tools and GNU tar for their other checks.
 Then run, using the same runtime path in both places:
 
 ```sh
-PI_SANDBOX_SMOLVM_BIN=/opt/smolvm-1.26.1/smolvm \
+PI_SANDBOX_SMOLVM_BIN=/opt/smolvm-1.27.0/smolvm \
 PI_SANDBOX_SMOLVM_IMAGE=/absolute/path/tools.smolmachine \
 PI_SANDBOX_SMOLVM_IMAGE_SHA256=REPLACE_WITH_VERIFIED_PLAIN_IMAGE_SHA256 \
 PI_SANDBOX_SMOLVM_OCI_IMAGE=/absolute/path/tools.tar \
@@ -384,7 +384,7 @@ provider and local MCP servers; it never contacts a live model provider. Project
 Managed unit checks cover schema 11 image/resource validation, fixed VM lifetime,
 identity backend transitions, refusal of identity image overrides, VM-aware
 mount/policy diagnostics and the `smolvm` audit boundary. Distribution checks
-cover the optional fixed external 1.26.1 provider without requiring an installed
+cover the optional fixed external 1.27.0 provider without requiring an installed
 runtime during cross-build/staged validation. Real VM tests must additionally
 use a verified full runtime and trusted tools image on Linux x86-64 with KVM
 or macOS 26+ arm64 with Hypervisor.framework;

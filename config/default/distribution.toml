@@ -23,8 +23,8 @@ audit_socket_path = "/run/pi-sandbox-audit/collector.sock"
 
 # Optional external complete runtime, selected separately for each target.
 # [platforms.linux.smolvm]
-# path = "/opt/smolvm-1.26.1/smolvm"
-# version = "1.26.1"
+# path = "/opt/smolvm-1.27.0/smolvm"
+# version = "1.27.0"
 # [platforms.darwin.smolvm]
-# path = "/opt/smolvm-1.26.1/smolvm"
-# version = "1.26.1"
+# path = "/opt/smolvm-1.27.0/smolvm"
+# version = "1.27.0"

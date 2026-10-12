@@ -502,7 +502,7 @@ it is not an execution backend and does not run tool operations.
 
 ## Optional smolvm tool executor
 
-The reusable extension supports smolvm 1.26.1 on Linux x86-64 and macOS 26+
+The reusable extension supports smolvm 1.27.0 on Linux x86-64 and macOS 26+
 arm64. The managed application owns one executor for its lifetime and
 keeps configuration, permissions, audit and host MCP outside it. A fixed
 build-selected runtime plus administrator-selected image creates the private

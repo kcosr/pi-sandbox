@@ -1,11 +1,11 @@
-// Qualified fork host at 91fc3281 with unchanged official 1.26.1 libraries/guest.
-// Archive SHA256: c7896652d08e24010e576c48a108d8f8cf1bcc7dce1968185e589b749218f1b1
+// Qualified two-fix fork host at cb9d4879 with official 1.27.0 libraries/guest.
+// Archive SHA256: 4f260be0500ad5a12c8d766347f56de6583e5fb1d4d4b667fc773529a6b73ed0
 // Complete shipped inventory; generated disk templates remain CLI-managed.
 export const RELEASE_INVENTORY: readonly (readonly [string, string, string])[] = [
   [
     "BUILD-PROVENANCE.json",
     "file",
-    "3119eedbf16a7e500d29a6f51a112831cfa18b7749daa202235580f71e1afe8b",
+    "ead55016e966ee3fd4938e92ac4cdef2d9ddc26bd52cf99cd8a1692c9bb11f6d",
   ],
   ["README.txt", "file", "f487be283557e3566cfcb962a561471c2f188533cec17860f149557e45813dc5"],
   ["agent-rootfs", "directory", ""],
@@ -1951,12 +1951,12 @@ export const RELEASE_INVENTORY: readonly (readonly [string, string, string])[] =
   [
     "agent-rootfs/usr/local/bin/smolvm-agent",
     "file",
-    "5800e6ed4dab0962d763b8001a15a8baece313cd4f51f1805fb82fb467aea746",
+    "788ad8e74f0f4963067e03bf4dc976d645975298bb12605690c97712d603d641",
   ],
   [
     "agent-rootfs/usr/local/bin/smolvm-cuda-run",
     "file",
-    "7c9aa9609dc39c76a1a3052c02c8b01d87dd7e4319f71e05256f6fa49a638e94",
+    "8edc1c9ce4445c554f79847dd1e8340d8ea38c6bb4eeea334c3075115772decc",
   ],
   ["agent-rootfs/usr/local/lib", "directory", ""],
   ["agent-rootfs/usr/local/lib/smolvm-cuda", "directory", ""],
@@ -1970,12 +1970,12 @@ export const RELEASE_INVENTORY: readonly (readonly [string, string, string])[] =
   [
     "agent-rootfs/usr/local/lib/smolvm-cuda/libcuda.so.1",
     "file",
-    "dd845a1a31ecfd8f0f3399a5eaa7df0495b596d7aef3c8f7524474dfcdd4c1d4",
+    "3fdd91415fec945d32aa895cb781aae4e56a5d82df2d6978a78234528cf06946",
   ],
   [
     "agent-rootfs/usr/local/lib/smolvm-cuda/libcudart-shim.so",
     "file",
-    "d674cb0a93a80148fcf7a35d7ebe75848623246412734b0c91dd1305cf70374b",
+    "15c6aefe6c8dd9ceb7537eb7f3ecb0006a3bdf3b590701c9a428abc6e3caaccd",
   ],
   ["agent-rootfs/usr/local/lib/smolvm-cuda/libcudart.so", "symlink", "libcudart-shim.so"],
   ["agent-rootfs/usr/local/lib/smolvm-cuda/libcudart.so.11.0", "symlink", "libcudart-shim.so"],
@@ -2698,11 +2698,11 @@ export const RELEASE_INVENTORY: readonly (readonly [string, string, string])[] =
   ["agent-rootfs/var/spool/cron/crontabs", "symlink", "/etc/crontabs"],
   ["agent-rootfs/var/spool/mail", "symlink", "/var/mail"],
   ["agent-rootfs/var/tmp", "directory", ""],
-  ["checksums.txt", "file", "ea754cf69058a8300da06deb1672b1bdb0ba616c584ace4270423232a993665f"],
+  ["checksums.txt", "file", "7725a4c82e264960dd8ec7c4a2305c2ccdb48dc5d33d8ba9abc10c2f748c867d"],
   [
     "containerd-shim-smolvm-v2",
     "file",
-    "8f7d9702a4b715a2e399873d28d1af854ef5c928ccd5503c8f426b8a517c5f1e",
+    "020e949e304daae060a704dc47322cb6d3fa26d83a21532c45f49b729e594908",
   ],
   ["kubernetes", "directory", ""],
   [
@@ -2721,25 +2721,25 @@ export const RELEASE_INVENTORY: readonly (readonly [string, string, string])[] =
     "2999ffe3a69e96f65414aa79dfda79e2a4d710b6553922a6b6ac95d534d39c44",
   ],
   ["lib", "directory", ""],
-  ["lib/libkrun.so", "file", "bdec0ae78b98e5c3e9c2c13a10d05ea6ace8d622be659069a89d777c065c1045"],
+  ["lib/libkrun.so", "file", "0add070c014348fb41617be3cfb9aca149af457d84b4a38e69f9d469109a9769"],
   ["lib/libkrun.so.2", "symlink", "libkrun.so"],
   ["lib/libkrunfw.so", "symlink", "libkrunfw.so.5"],
   ["lib/libkrunfw.so.5", "symlink", "libkrunfw.so.5.5.0"],
   [
     "lib/libkrunfw.so.5.5.0",
     "file",
-    "55551f064c961b51954df4be7103b5c8232d1c8231140afb55ac2e748ec1ceb1",
+    "21bba7777e8340803addae112094858e7ca56dca8476bb15f4938b931238d133",
   ],
   [
     "overlay-template.ext4.zst",
     "file",
-    "06d98e36f4a9f566538b83926607a048870ae723c1e159a830a3e1f25f846a73",
+    "5ce09c6685a7cc632805d9e6f919e06cf0859de83b71efdb97de19f85a7f2ceb",
   ],
   ["smolvm", "file", "b67b25f363403e19deceb6897e5a4d94be30a079f8cb751372782f17fc99003a"],
-  ["smolvm-bin", "file", "5fbd0be5ff21ba68ccace27084d6c3ab49bf2f4df64c597aef17ba6012cd23c6"],
+  ["smolvm-bin", "file", "6b5c8176739a13a2e6ed36b63a06e9d70097e330dbaf9bf6df8cfd8b88a13828"],
   [
     "storage-template.ext4.zst",
     "file",
-    "cd1670e0cb2739fd5bedfaad0e4956935a7fbc7f94c27abe730e19dbabc653b2",
+    "263512f3aae3543d3d4fdb6720256fb1939ceed03698dd758eabfc906c675f72",
   ],
 ];

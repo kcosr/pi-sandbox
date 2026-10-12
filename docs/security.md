@@ -427,7 +427,7 @@ may contain sensitive information. Bash commands are truncated, not redacted.
 
 ## smolvm boundary and lifecycle
 
-The optional smolvm backend uses the fixed 1.26.1 runtime and a
+The optional smolvm backend uses the fixed 1.27.0 runtime and a
 SHA-256-selected trusted image. Shared extension support includes Linux x86-64
 and macOS 26+ arm64, including the managed application.
 Both verify the complete platform-specific official distribution inventory.
