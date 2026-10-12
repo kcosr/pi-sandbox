@@ -28,9 +28,17 @@ import {
 } from "../lifecycle.js";
 import { serveOciFamily } from "./transport.js";
 import { verifyOciDiskCapacity } from "./disk-capacity.js";
+import {
+  assertAncestors,
+  assertNoDependents,
+  captureAncestor,
+  MAX_OCI_DEPTH,
+  type BorrowedAncestor,
+} from "./ancestry.js";
 import { TerminalSessions, validateTerminalOptions } from "./terminals.js";
 import type {
   SmolvmOciAttachment,
+  SmolvmOciCopyOptions,
   SmolvmOciFamily,
   SmolvmOciFamilyOptions,
   SmolvmOciFamilyHooks,
@@ -44,6 +52,7 @@ import {
   mountIdentities,
   publishColdRecord,
   readColdRecord,
+  type ColdRecord,
 } from "./retention.js";
 
 import {
@@ -306,12 +315,15 @@ export async function readSmolvmOciFamily(input: { readonly statePath: string })
   if (!input || Object.keys(input).join(",") !== "statePath") throw fail();
   const record = await loadBoundJournal(input.statePath);
   return {
-    version: 2 as const,
+    version: 3 as const,
     sourceId: record.sourceId,
     statePath: record.statePath,
     runtime: record.runtime,
     registry: record.registry,
     environment: record.environment,
+    depth: record.borrowedAncestors.length,
+    configuration: structuredClone(record.options),
+    borrowedAncestors: structuredClone(record.borrowedAncestors),
     machines: record.machines.map(({ name, parent, status }) => ({ name, parent, status })),
   };
 }
@@ -335,15 +347,10 @@ async function validateRetainedBinding(record: FamilyJournal): Promise<void> {
     throw new Error("smolvm_oci_cold_binding_changed");
 }
 
-/** Cold boot a stopped original. Foreign registry machines are irrelevant. */
-export async function reopenSmolvmOciFamily(input: {
-  readonly statePath: string;
-}): Promise<SmolvmOciFamily> {
-  if (!input || Object.keys(input).join(",") !== "statePath") throw fail();
-  await assertPrivateState(input.statePath);
-  const journal = await loadBoundJournal(input.statePath);
-  const record = await readColdRecord(input.statePath);
-  await validateRetainedBinding(journal);
+function validateColdJournal(
+  journal: FamilyJournal,
+  record: ColdRecord,
+): OwnedMachine & { identity: MachineIdentity } {
   if (
     record.sourceId !== journal.sourceId ||
     record.cwd !== journal.options.cwd ||
@@ -352,7 +359,8 @@ export async function reopenSmolvmOciFamily(input: {
     record.hostToolsIdentity !== journal.hostToolsIdentity ||
     JSON.stringify(record.registry) !== JSON.stringify(journal.registry) ||
     JSON.stringify(record.options) !== JSON.stringify(journal.options) ||
-    JSON.stringify(record.mountIdentities) !== JSON.stringify(journal.mountIdentities)
+    JSON.stringify(record.mountIdentities) !== JSON.stringify(journal.mountIdentities) ||
+    JSON.stringify(record.borrowedAncestors) !== JSON.stringify(journal.borrowedAncestors)
   )
     throw new Error("smolvm_oci_cold_binding_changed");
   const source = journal.machines.find((m) => m.name === journal.sourceId);
@@ -363,6 +371,19 @@ export async function reopenSmolvmOciFamily(input: {
     JSON.stringify(source.identity) !== JSON.stringify(record.sourceIdentity)
   )
     throw new Error("smolvm_oci_cold_source_not_stopped");
+  return source as OwnedMachine & { identity: MachineIdentity };
+}
+
+/** Cold boot a stopped original. Foreign registry machines are irrelevant. */
+export async function reopenSmolvmOciFamily(input: {
+  readonly statePath: string;
+}): Promise<SmolvmOciFamily> {
+  if (!input || Object.keys(input).join(",") !== "statePath") throw fail();
+  await assertPrivateState(input.statePath);
+  const journal = await loadBoundJournal(input.statePath);
+  const record = await readColdRecord(input.statePath);
+  await validateRetainedBinding(journal);
+  const source = validateColdJournal(journal, record);
   const cli = new SmolvmCli({
     smolvmPath: journal.runtime,
     stateDirectory: input.statePath,
@@ -370,11 +391,22 @@ export async function reopenSmolvmOciFamily(input: {
   });
   let claimed = false;
   try {
+    await assertAncestors(cli, journal.borrowedAncestors);
     const target = await assertMachineIdentity(cli, source.identity);
-    if (!target || target.state !== "stopped" || target.pid !== null || target.parent !== null)
+    if (
+      !target ||
+      target.state !== "stopped" ||
+      target.pid !== null ||
+      target.parent !== (journal.borrowedAncestors.at(-1)?.identity.name ?? null)
+    )
       throw new Error("smolvm_oci_cold_source_not_stopped");
     await claimController(input.statePath);
     claimed = true;
+    if (
+      JSON.stringify(await loadBoundJournal(input.statePath)) !== JSON.stringify(journal) ||
+      JSON.stringify(await readColdRecord(input.statePath)) !== JSON.stringify(record)
+    )
+      throw new Error("smolvm_oci_cold_binding_changed");
     await claimColdRecord(input.statePath);
   } catch (error) {
     return rejectAfterCleanup(
@@ -393,12 +425,95 @@ export async function reopenSmolvmOciFamily(input: {
     journal.registry,
     journal.hostToolsIdentity,
     journal.machines,
+    journal.borrowedAncestors,
   );
   try {
     await family.start(true);
     return family;
   } catch (error) {
     return rejectAfterCleanup(error, () => family.close({ retainState: true }), input.statePath);
+  }
+}
+
+/** Change only the stopped original's network topology. A failed or interrupted
+ * update consumes its cold receipt and retains uncertainty for manual recovery. */
+export async function configureSmolvmOciFamily(input: {
+  readonly statePath: string;
+  readonly networkMode: "none" | "host";
+}): Promise<SmolvmOciRetainedFamily> {
+  if (
+    !input ||
+    Object.keys(input).sort().join(",") !== "networkMode,statePath" ||
+    !["none", "host"].includes(input.networkMode)
+  )
+    throw fail();
+  const journal = await loadBoundJournal(input.statePath);
+  await validateRuntimeBinding(journal);
+  const cli = new SmolvmCli({
+    smolvmPath: journal.runtime,
+    stateDirectory: input.statePath,
+    nativeEnvironment: journal.environment,
+  });
+  let claimed = false;
+  try {
+    await claimController(input.statePath);
+    claimed = true;
+    const current = await loadBoundJournal(input.statePath);
+    if (JSON.stringify(current) !== JSON.stringify(journal))
+      throw new Error("smolvm_oci_cold_binding_changed");
+    const record = await readColdRecord(input.statePath);
+    const source = validateColdJournal(current, record);
+    await assertAncestors(cli, current.borrowedAncestors);
+    const target = await assertMachineIdentity(cli, source.identity);
+    if (!target || target.state !== "stopped" || target.pid !== null)
+      throw new Error("smolvm_oci_cold_source_not_stopped");
+    await claimColdRecord(input.statePath);
+    source.status = "uncertain";
+    await writeJournal(current);
+    await checkedCommand(cli, [
+      "machine",
+      "update",
+      "--name",
+      source.name,
+      input.networkMode === "host" ? "--net" : "--no-net",
+    ]);
+    const after = await assertMachineIdentity(cli, source.identity);
+    const status: unknown = JSON.parse(
+      (
+        await checkedCommand(cli, ["machine", "status", "--name", source.name, "--json"])
+      ).stdout.toString(),
+    );
+    if (
+      !after ||
+      after.state !== "stopped" ||
+      after.pid !== null ||
+      !status ||
+      typeof status !== "object" ||
+      (status as { network?: unknown }).network !== (input.networkMode === "host")
+    )
+      throw new Error("smolvm_oci_network_update_unconfirmed");
+    source.status = "stopped";
+    const options = { ...current.options, networkMode: input.networkMode };
+    await writeJournal({ ...current, options });
+    const next = { ...record, options };
+    await publishColdRecord(next);
+    await disposeCliClaim(cli, input.statePath, true);
+    return {
+      version: 3,
+      sourceId: record.sourceId,
+      registry: record.registry,
+      mode: "cold",
+      statePath: record.statePath,
+      imageSha256: record.imageSha256,
+      cwd: record.cwd,
+    };
+  } catch (error) {
+    return rejectAfterCleanup(
+      error,
+      () => disposeCliClaim(cli, input.statePath, claimed),
+      input.statePath,
+      "configure",
+    );
   }
 }
 
@@ -425,6 +540,7 @@ export async function deleteSmolvmOciFamily(input: { readonly statePath: string 
       if (machine.status === "deleted") continue;
       if (machine.status !== "stopped" || !machine.identity)
         throw new Error("smolvm_oci_cleanup_uncertain");
+      await assertNoDependents(cli, machine.name);
       await deleteStoppedMachine(cli, machine.name, machine.identity);
       machine.status = "deleted";
       journal = { ...journal, machines: compactOwnedMachines(journal.machines, journal.sourceId) };
@@ -456,6 +572,7 @@ class Family implements SmolvmOciFamily {
   readonly #limits;
   readonly #queue;
   readonly #terminals = new TerminalSessions();
+  readonly #pendingCopies = new Set<Family>();
   #stopServer?: () => Promise<void>;
   #closing?: Promise<{ readonly retained: boolean }>;
   #sealing = false;
@@ -470,18 +587,30 @@ class Family implements SmolvmOciFamily {
     readonly registry: SmolvmRegistryIdentity,
     readonly hostToolsIdentity?: string,
     inventory?: readonly OwnedMachine[],
+    readonly borrowedAncestors: readonly BorrowedAncestor[] = [],
   ) {
     for (const entry of inventory ?? [
-      { name: sourceId, parent: null, status: "intent", identity: null },
+      {
+        name: sourceId,
+        parent: borrowedAncestors.at(-1)?.identity.name ?? null,
+        status: "intent",
+        identity: null,
+      },
     ])
       this.#inventory.set(entry.name, structuredClone(entry));
     this.#limits = ociLimits(options.limits);
     this.#queue = new AdmissionQueue();
   }
+  get depth(): number {
+    return this.borrowedAncestors.length;
+  }
+  get configuration(): SmolvmOciFamilyOptions {
+    return structuredClone(this.options);
+  }
   async persist(): Promise<void> {
     const machines = compactOwnedMachines([...this.#inventory.values()], this.sourceId);
     await writeJournal({
-      version: 2,
+      version: 3,
       kind: "oci-family",
       sourceId: this.sourceId,
       statePath: this.statePath,
@@ -494,6 +623,7 @@ class Family implements SmolvmOciFamily {
       mountIdentities: this.mountFingerprint,
       ...(this.hostToolsIdentity ? { hostToolsIdentity: this.hostToolsIdentity } : {}),
       machines,
+      borrowedAncestors: this.borrowedAncestors,
     });
     const retained = new Set(machines.map((machine) => machine.name));
     for (const name of this.#inventory.keys())
@@ -539,6 +669,12 @@ class Family implements SmolvmOciFamily {
     owned.identity = await captureMachineIdentity(this.cli, this.sourceId);
     owned.status = "running";
     await this.persist();
+    await this.activateSource();
+  }
+  private async activateSource(): Promise<void> {
+    const owned = this.#inventory.get(this.sourceId)!;
+    if (!owned.identity) throw new Error("smolvm_oci_source_identity_invalid");
+    const r = this.options.resources;
     const dataDir = owned.identity.dataDirectory;
     if (!dataDir) throw new Error("smolvm_oci_data_directory_invalid");
     await verifyOciDiskCapacity(dataDir, r);
@@ -724,6 +860,112 @@ class Family implements SmolvmOciFamily {
       release();
     }
   }
+  async copyFamily(
+    input: SmolvmOciCopyOptions = {},
+    hooks: SmolvmOciFamilyHooks = {},
+  ): Promise<SmolvmOciFamily> {
+    if (
+      !input ||
+      Object.keys(input).some((key) => !["stateDirectory", "namePrefix"].includes(key)) ||
+      !hooks ||
+      Object.keys(hooks).some((key) => key !== "onPrepared") ||
+      (hooks.onPrepared !== undefined && typeof hooks.onPrepared !== "function")
+    )
+      throw fail();
+    const options = structuredClone({ ...this.options, ...input });
+    validateOciFamilyOptions(options);
+    const release = await this.#queue.acquire({ exclusive: true });
+    let child: Family | undefined;
+    let nativeStarted = false;
+    try {
+      const source = this.#machines.get(this.sourceId);
+      if (!source || this.#closed) throw new SandboxExecutionError("sandbox_closed");
+      if (source.frozen || !source.branchable || this.depth >= MAX_OCI_DEPTH) throw fail();
+      await this.#terminals.waitFor(this.sourceId);
+      if (this.#closed) throw new SandboxExecutionError("sandbox_closed");
+      await this.assertAlive();
+      await assertAncestors(this.cli, this.borrowedAncestors);
+      const ancestors = [
+        ...this.borrowedAncestors,
+        await captureAncestor(this.cli, source.identity),
+      ];
+      await validateHostOptions(options, this.registry);
+      if (
+        (await verifySmolvmRuntime(options.smolvmPath)) !== this.runtimeFingerprint ||
+        (await verifyHostTools(
+          options,
+          (options.mounts ?? []).map((m) => m.hostPath),
+        )) !== this.hostToolsIdentity ||
+        JSON.stringify(await mountIdentities(options)) !== JSON.stringify(this.mountFingerprint)
+      )
+        throw new Error("smolvm_oci_copy_binding_changed");
+      const state = await mkdtemp(path.join(options.stateDirectory, "family-"));
+      const sourceId = uniqueMachineName(options.namePrefix);
+      child = new Family(
+        options,
+        state,
+        new SmolvmCli({
+          smolvmPath: options.smolvmPath,
+          stateDirectory: state,
+          nativeEnvironment: this.cli.environment,
+        }),
+        this.runtimeFingerprint,
+        this.mountFingerprint,
+        sourceId,
+        this.registry,
+        this.hostToolsIdentity,
+        undefined,
+        ancestors,
+      );
+      this.#pendingCopies.add(child);
+      await claimController(state);
+      await child.persist();
+      await hooks.onPrepared?.({ statePath: state, sourceId });
+      if (this.#closed) throw new SandboxExecutionError("sandbox_closed");
+      if ((await listMachines(child.cli)).some((m) => m.name === sourceId))
+        throw new Error("smolvm_oci_machine_name_collision");
+      const owned = child.#inventory.get(sourceId)!;
+      owned.status = "uncertain";
+      await child.persist();
+      if (this.#closed) throw new SandboxExecutionError("sandbox_closed");
+      nativeStarted = true;
+      await child.command([
+        "machine",
+        "branch",
+        "--from",
+        this.sourceId,
+        "--name",
+        sourceId,
+        "--branchable",
+      ]);
+      owned.identity = await captureMachineIdentity(child.cli, sourceId);
+      if (owned.identity.parent !== this.sourceId)
+        throw new Error("smolvm_oci_branch_identity_invalid");
+      owned.status = "running";
+      await child.persist();
+      await child.activateSource();
+      if (this.#closed) throw new SandboxExecutionError("sandbox_closed");
+      return child;
+    } catch (error) {
+      if (!child) throw error;
+      // A failed copy owns only its new name and journal. Never retire its source
+      // or delete a colliding/unidentified machine. Preserve ambiguous starts.
+      return await rejectAfterCleanup(
+        error,
+        nativeStarted
+          ? () => child!.close({ retainState: false })
+          : async () => {
+              await child!.cli.dispose();
+              await removeStoppedPrivateState(child!.statePath);
+            },
+        child.statePath,
+        "copy",
+      );
+    } finally {
+      if (child) this.#pendingCopies.delete(child);
+      release();
+    }
+  }
   async branch(
     machineId: string,
     options: { readonly branchable: boolean; readonly namePrefix?: string },
@@ -740,6 +982,14 @@ class Family implements SmolvmOciFamily {
       const source = this.#machines.get(machineId);
       if (!source || this.#closed) throw new SandboxExecutionError("sandbox_closed");
       if (!source.branchable) throw fail();
+      let depth = this.depth + 1;
+      for (let current = machineId; current !== this.sourceId;) {
+        const parent = this.#inventory.get(current)?.parent;
+        if (!parent) throw fail();
+        current = parent;
+        depth++;
+      }
+      if (depth > MAX_OCI_DEPTH) throw fail();
       if (this.#machines.size >= 16) throw new SandboxExecutionError("sandbox_invalid_request");
       await this.#terminals.waitFor(machineId);
       if (this.#closed) throw new SandboxExecutionError("sandbox_closed");
@@ -812,6 +1062,7 @@ class Family implements SmolvmOciFamily {
       const owned = this.#inventory.get(machineId)!;
       owned.status = "stopped";
       await this.persist();
+      await assertNoDependents(this.cli, machineId);
       await deleteStoppedMachine(this.cli, machineId, this.#machines.get(machineId)!.identity);
       owned.status = "deleted";
       await this.persist();
@@ -843,7 +1094,7 @@ class Family implements SmolvmOciFamily {
       release();
       await closing;
       const descriptor: SmolvmOciRetainedFamily = {
-        version: 2,
+        version: 3,
         sourceId: this.sourceId,
         registry: this.registry,
         mode: "cold",
@@ -855,6 +1106,7 @@ class Family implements SmolvmOciFamily {
         ...descriptor,
         options: this.options,
         sourceIdentity: this.#inventory.get(this.sourceId)!.identity!,
+        borrowedAncestors: this.borrowedAncestors,
         runtimeIdentity: this.runtimeFingerprint,
         mountIdentities: this.mountFingerprint,
         ...(this.hostToolsIdentity ? { hostToolsIdentity: this.hostToolsIdentity } : {}),
@@ -884,6 +1136,9 @@ class Family implements SmolvmOciFamily {
     // owned by its recorded name until normal shutdown is confirmed.
     try {
       await this.cli.cancelActive();
+      // A copy is not handed to its caller until its admitted operation finishes.
+      // Interrupt only these in-flight starts, never previously returned copies.
+      for (const child of this.#pendingCopies) await child.cli.cancelActive();
       // A caller may be between an identity read and a CLI phase. Let that
       // admitted operation unwind before starting lifecycle cleanup itself.
       await this.#queue.idle();
@@ -903,6 +1158,7 @@ class Family implements SmolvmOciFamily {
           owned.status = "stopped";
           await this.persist();
           if (owned.name !== this.sourceId || !retain) {
+            await assertNoDependents(this.cli, owned.name);
             await deleteStoppedMachine(this.cli, owned.name, owned.identity);
             owned.status = "deleted";
             await this.persist();

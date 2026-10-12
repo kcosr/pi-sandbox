@@ -38,17 +38,23 @@ import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   createSmolvmOciFamily,
+  configureSmolvmOciFamily,
   reopenSmolvmOciFamily,
   deleteSmolvmOciFamily,
   readSmolvmOciFamily,
 } from "./family.js";
 
 const mocks = vi.hoisted(() => ({
-  names: new Map<string, { state: string; parent: string | null; createdAt: number }>(),
+  names: new Map<
+    string,
+    { state: string; parent: string | null; createdAt: number; image?: string; network?: boolean }
+  >(),
   cache: "",
   hostToolsIdentity: "d".repeat(64),
   createFailure: false,
   branchFailure: false,
+  updateFailure: false,
+  updateNoop: false,
   failDelete: false,
   failList: false,
   runtimeIdentity: "b".repeat(64),
@@ -149,7 +155,12 @@ vi.mock("../cli.js", () => {
               stdout: Buffer.alloc(0),
               stderr: Buffer.from("create collision"),
             };
-          this.names.set(value("--name"), { state: "created", parent: null, createdAt: 42 });
+          this.names.set(value("--name"), {
+            state: "created",
+            parent: null,
+            createdAt: 42,
+            network: argv.includes("--net"),
+          });
         } else if (argv[1] === "start") {
           if (mocks.startFailure) throw mocks.startFailure;
           await fs.mkdir(nativeDir, { recursive: true });
@@ -174,6 +185,8 @@ vi.mock("../cli.js", () => {
             state: r.state,
             parent_machine: r.parent,
             created_at: r.createdAt,
+            image: r.image ?? "fixture-image",
+            network: r.network ?? false,
           }));
           if (argv[1] === "ls") out = JSON.stringify(records);
           else {
@@ -189,7 +202,7 @@ vi.mock("../cli.js", () => {
           }
         } else if (argv[1] === "branch") {
           mocks.events.push(`branch:${value("--from")}`);
-          this.names.get(value("--from"))!.state = "frozen";
+          if (argv.includes("--freeze-source")) this.names.get(value("--from"))!.state = "frozen";
           if (mocks.branchFailure)
             return {
               exitCode: 1,
@@ -202,9 +215,24 @@ vi.mock("../cli.js", () => {
             state: "running",
             parent: value("--from"),
             createdAt: 42,
+            network: this.names.get(value("--from"))!.network ?? false,
           });
+          for (const [name, size] of [
+            ["storage.raw", 2],
+            ["overlay.raw", 1],
+          ] as const) {
+            const file = await fs.open(path.join(nativeDir, name), "a");
+            await file.truncate(size * 1024 ** 3);
+            await file.close();
+          }
+        } else if (argv[1] === "update") {
+          if (mocks.updateFailure) throw Error("native update failed");
+          if (!mocks.updateNoop) this.names.get(value("--name"))!.network = argv.includes("--net");
         } else if (argv[1] === "stop") {
-          if ([...this.names.values()].some((r) => r.parent === value("--name")))
+          if (
+            this.names.get(value("--name"))!.state === "frozen" &&
+            [...this.names.values()].some((r) => r.parent === value("--name"))
+          )
             return {
               exitCode: 1,
               signal: null,
@@ -295,6 +323,8 @@ beforeEach(async () => {
   mocks.calls = [];
   mocks.createFailure = false;
   mocks.branchFailure = false;
+  mocks.updateFailure = false;
+  mocks.updateNoop = false;
   mocks.failDelete = false;
   mocks.failList = false;
   mocks.runtimeIdentity = "b".repeat(64);
@@ -686,7 +716,7 @@ suite("OCI family controller policy with a simulated CLI", () => {
   it("reopens cold sources among foreign machines and refuses registry drift", async () => {
     const family = await fixture();
     const retained = await family.retainForColdReopen();
-    expect(retained.version).toBe(2);
+    expect(retained.version).toBe(3);
     expect(retained.sourceId).toBe(family.sourceId);
     mocks.names.set("foreign", { state: "running", parent: null, createdAt: 9 });
     vi.stubEnv("XDG_DATA_HOME", process.env.XDG_DATA_HOME + "-changed");
@@ -1341,5 +1371,371 @@ suite("OCI family controller policy with a simulated CLI", () => {
     expect(mocks.cliDisposeCalls).toBe(1);
     expect((await stat(family.statePath)).isDirectory()).toBe(true);
     await expect(stat(descriptor.socketPath)).rejects.toMatchObject({ code: "ENOENT" });
+  });
+});
+
+describe("independently owned prepared families", () => {
+  it("copies nested continuing sources with separate capabilities, journals and inherited topology", async () => {
+    const root = await fixture({ networkMode: "host" });
+    const prepared = vi.fn(async ({ statePath }: { statePath: string }) => {
+      const journal = await readJournal(statePath);
+      expect(journal.machines[0]?.status).toBe("intent");
+      expect(mocks.names.has(journal.sourceId)).toBe(false);
+    });
+    const child = await root.copyFamily({ namePrefix: "prepared" }, { onPrepared: prepared });
+    const sibling = await root.copyFamily();
+    const candidate = await child.copyFamily({ namePrefix: "candidate" });
+    try {
+      expect(prepared).toHaveBeenCalledOnce();
+      expect([root.depth, child.depth, candidate.depth]).toEqual([0, 1, 2]);
+      expect(child.configuration).toEqual({ ...root.configuration, namePrefix: "prepared" });
+      const altered = child.configuration;
+      (altered.resources as { cpus: number }).cpus = 6;
+      expect(child.configuration.resources.cpus).toBe(1);
+      expect(mocks.names.get(root.sourceId)?.state).toBe("running");
+      expect(mocks.names.get(child.sourceId)?.state).toBe("running");
+      expect(
+        mocks.calls.filter((a) => a[1] === "branch").every((a) => !a.includes("--freeze-source")),
+      ).toBe(true);
+      const parentJournal = await readJournal(root.statePath);
+      const journal = await readJournal(candidate.statePath);
+      expect(parentJournal.machines.map((m) => m.name)).toEqual([root.sourceId]);
+      expect(journal.machines.map((m) => m.name)).toEqual([candidate.sourceId]);
+      expect(journal.borrowedAncestors.map((a) => a.identity.name)).toEqual([
+        root.sourceId,
+        child.sourceId,
+      ]);
+      const rootAttachment = root.attachment(root.sourceId);
+      const childAttachment = child.attachment(child.sourceId);
+      expect(childAttachment.socketPath).not.toBe(rootAttachment.socketPath);
+      expect(childAttachment.token).not.toBe(rootAttachment.token);
+      const judge = await candidate.branch(candidate.sourceId, { branchable: false });
+      await candidate.removeMachine(judge);
+      await candidate.close();
+      expect(mocks.names.get(child.sourceId)?.state).toBe("running");
+      expect(mocks.names.get(sibling.sourceId)?.state).toBe("running");
+      await expect(root.execute(root.sourceId, { argv: ["/bin/true"] })).resolves.toMatchObject({
+        exitCode: 0,
+      });
+    } finally {
+      await candidate.close();
+      await sibling.close();
+      await child.close();
+      await root.close();
+    }
+  });
+  it("retains parents with independent descendants and reopens a deep original while ancestors stay stopped", async () => {
+    const root = await fixture();
+    const child = await root.copyFamily();
+    const candidate = await child.copyFamily();
+    const leaf = await candidate.retainForColdReopen();
+    await child.retainForColdReopen();
+    await root.retainForColdReopen();
+    await expect(deleteSmolvmOciFamily({ statePath: root.statePath })).rejects.toThrow(
+      "dependencies_pending",
+    );
+    expect(mocks.calls.some((a) => a[1] === "delete" && a.includes(root.sourceId))).toBe(false);
+    const reopened = await reopenSmolvmOciFamily({ statePath: leaf.statePath });
+    expect(reopened.depth).toBe(2);
+    expect(mocks.names.get(root.sourceId)?.state).toBe("stopped");
+    expect(mocks.names.get(child.sourceId)?.state).toBe("stopped");
+    await reopened.close();
+    await deleteSmolvmOciFamily({ statePath: child.statePath });
+    await deleteSmolvmOciFamily({ statePath: root.statePath });
+    expect(mocks.names.size).toBe(0);
+  });
+  it.each(["creation", "image", "parent", "missing"])(
+    "rejects a changed borrowed ancestor's %s before consuming the cold receipt",
+    async (change) => {
+      const root = await fixture();
+      const child = await root.copyFamily();
+      const retained = await child.retainForColdReopen();
+      const original = { ...mocks.names.get(root.sourceId)! };
+      if (change === "creation") mocks.names.get(root.sourceId)!.createdAt++;
+      if (change === "image") mocks.names.get(root.sourceId)!.image = "different-image";
+      if (change === "parent") mocks.names.get(root.sourceId)!.parent = "foreign";
+      if (change === "missing") mocks.names.delete(root.sourceId);
+      await expect(reopenSmolvmOciFamily({ statePath: retained.statePath })).rejects.toThrow();
+      await expect(stat(path.join(retained.statePath, "cold-ready.json"))).resolves.toBeDefined();
+      mocks.names.set(root.sourceId, original);
+      const reopened = await reopenSmolvmOciFamily({ statePath: retained.statePath });
+      await reopened.close();
+      await root.close();
+    },
+  );
+  it("refuses ancestor-directory replacement but permits cleanup of the owned child", async () => {
+    const root = await fixture();
+    const child = await root.copyFamily();
+    await child.retainForColdReopen();
+    const ancestor = (await readJournal(child.statePath)).borrowedAncestors[0]!.identity;
+    const directory = ancestor.dataDirectory!;
+    await rename(directory, directory + ".saved");
+    await mkdir(directory);
+    try {
+      await expect(reopenSmolvmOciFamily({ statePath: child.statePath })).rejects.toThrow();
+      await deleteSmolvmOciFamily({ statePath: child.statePath });
+      expect(mocks.names.has(root.sourceId)).toBe(true);
+    } finally {
+      await rm(directory, { recursive: true });
+      await rename(directory + ".saved", directory);
+      await root.close();
+    }
+  });
+  it("rejects a broken ancestry chain before any native operation", async () => {
+    const root = await fixture();
+    const child = await root.copyFamily();
+    const grandchild = await child.copyFamily();
+    await grandchild.retainForColdReopen();
+    const file = path.join(grandchild.statePath, "recovery.json");
+    const original = await readFile(file, "utf8");
+    const journal = await readJournal(grandchild.statePath);
+    const altered = structuredClone(journal);
+    (altered.borrowedAncestors[1]!.identity as { parent: string | null }).parent = null;
+    await writeFile(file, JSON.stringify(altered));
+    const calls = mocks.calls.length;
+    await expect(reopenSmolvmOciFamily({ statePath: grandchild.statePath })).rejects.toThrow(
+      "ancestor_binding_invalid",
+    );
+    expect(mocks.calls).toHaveLength(calls);
+    await writeFile(file, original);
+    await deleteSmolvmOciFamily({ statePath: grandchild.statePath });
+    await child.close();
+    await root.close();
+  });
+  it("refuses changed host boot bindings before copying without stopping the source", async () => {
+    const root = await fixture();
+    mocks.runtimeIdentity = "e".repeat(64);
+    await expect(root.copyFamily()).rejects.toThrow("copy_binding_changed");
+    expect(mocks.calls.some((a) => a[1] === "branch")).toBe(false);
+    expect(mocks.names.get(root.sourceId)?.state).toBe("running");
+    mocks.runtimeIdentity = "b".repeat(64);
+    await root.close();
+  });
+  it("allows ancestor cold boots and network edits without invalidating an existing child", async () => {
+    const root = await fixture();
+    const child = await root.copyFamily();
+    await child.retainForColdReopen();
+    await root.retainForColdReopen();
+    await configureSmolvmOciFamily({ statePath: root.statePath, networkMode: "host" });
+    const parent = await reopenSmolvmOciFamily({ statePath: root.statePath });
+    const reopened = await reopenSmolvmOciFamily({ statePath: child.statePath });
+    expect(reopened.configuration.networkMode).toBe("none");
+    expect(parent.configuration.networkMode).toBe("host");
+    await reopened.close();
+    await parent.close();
+  });
+  it("rejects copy topology overrides and frozen sources without retiring the parent", async () => {
+    const root = await fixture();
+    await expect(root.copyFamily({ networkMode: "host" } as never)).rejects.toThrow(
+      "sandbox_invalid_request",
+    );
+    const reviewer = await root.branch(root.sourceId, { branchable: false });
+    await expect(root.copyFamily()).rejects.toThrow("sandbox_invalid_request");
+    await root.removeMachine(reviewer);
+    await root.close();
+  });
+  it("keeps a failed native copy's uncertain journal separate and leaves parent and sibling alive", async () => {
+    const root = await fixture();
+    const sibling = await root.copyFamily();
+    let failedPath = "";
+    mocks.branchFailure = true;
+    await expect(
+      root.copyFamily(
+        {},
+        {
+          onPrepared: ({ statePath }) => {
+            failedPath = statePath;
+          },
+        },
+      ),
+    ).rejects.toThrow("copy_failed");
+    mocks.branchFailure = false;
+    const failed = await readJournal(failedPath);
+    expect(failed.machines).toMatchObject([
+      { status: "uncertain", parent: root.sourceId, identity: null },
+    ]);
+    expect(mocks.names.get(root.sourceId)?.state).toBe("running");
+    expect(mocks.names.get(sibling.sourceId)?.state).toBe("running");
+    await root.execute(root.sourceId, { argv: ["/bin/true"] });
+    await sibling.close();
+    await root.close();
+  });
+  it("does not start a copy after parent close races its preparation hook", async () => {
+    const root = await fixture();
+    const entered = deferred<void>();
+    const proceed = deferred<void>();
+    let copiedPath = "";
+    const pending = root.copyFamily(
+      {},
+      {
+        onPrepared: async ({ statePath }) => {
+          copiedPath = statePath;
+          entered.resolve();
+          await proceed.promise;
+        },
+      },
+    );
+    const rejected = expect(pending).rejects.toThrow("sandbox_closed");
+    await entered.promise;
+    const close = root.close();
+    proceed.resolve();
+    await rejected;
+    await close;
+    expect(mocks.calls.some((a) => a[1] === "branch")).toBe(false);
+    expect(mocks.names.size).toBe(0);
+    await expect(stat(copiedPath)).rejects.toMatchObject({ code: "ENOENT" });
+  });
+  it("cleans a newly running copy before resolving parent close and never hands it off", async () => {
+    const root = await fixture();
+    const entered = deferred<void>();
+    const proceed = deferred<void>();
+    mocks.exec = async () => {
+      entered.resolve();
+      await proceed.promise;
+      return "ready";
+    };
+    const pending = root.copyFamily();
+    const rejected = expect(pending).rejects.toThrow();
+    await entered.promise;
+    const close = root.close();
+    proceed.resolve();
+    await rejected;
+    await close;
+    expect(mocks.names.size).toBe(0);
+  });
+  it("cancels a copied family without retiring the source or sibling", async () => {
+    const root = await fixture();
+    const child = await root.copyFamily();
+    const sibling = await root.copyFamily();
+    const started = deferred<void>();
+    mocks.exec = async (_r, { signal }) => {
+      started.resolve();
+      await new Promise<void>((resolve) =>
+        signal!.addEventListener("abort", () => resolve(), { once: true }),
+      );
+      throw new SandboxExecutionError("sandbox_aborted");
+    };
+    const abort = new AbortController();
+    const execution = child.execute(
+      child.sourceId,
+      { argv: ["/bin/sleep", "10"] },
+      { signal: abort.signal },
+    );
+    const rejected = expect(execution).rejects.toThrow("sandbox_aborted");
+    await started.promise;
+    abort.abort();
+    await rejected;
+    mocks.exec = undefined;
+    expect(mocks.names.get(root.sourceId)?.state).toBe("running");
+    expect(mocks.names.get(sibling.sourceId)?.state).toBe("running");
+    await sibling.close();
+    // Cancellation retains the child's stopped forensic record until explicit deletion.
+    await deleteSmolvmOciFamily({ statePath: child.statePath });
+    await root.close();
+  });
+  it("accounts for borrowed ancestors in the native depth limit for copies and reviewers", async () => {
+    const root = await fixture();
+    const tree = [root];
+    try {
+      for (let i = 1; i <= 32; i++) tree.push(await tree.at(-1)!.copyFamily());
+      expect(tree.at(-1)!.depth).toBe(32);
+      const branches = mocks.calls.filter((a) => a[1] === "branch").length;
+      await expect(tree.at(-1)!.copyFamily()).rejects.toThrow("sandbox_invalid_request");
+      await expect(
+        tree.at(-1)!.branch(tree.at(-1)!.sourceId, { branchable: false }),
+      ).rejects.toThrow("sandbox_invalid_request");
+      expect(mocks.calls.filter((a) => a[1] === "branch")).toHaveLength(branches);
+    } finally {
+      for (const f of tree.reverse()) await f.close();
+    }
+  }, 20000);
+  it("refuses old journal and receipt shapes without altering either", async () => {
+    const root = await fixture();
+    await root.retainForColdReopen();
+    const journalPath = path.join(root.statePath, "recovery.json");
+    const readyPath = path.join(root.statePath, "cold-ready.json");
+    const journal = await readFile(journalPath, "utf8");
+    const receipt = await readFile(readyPath, "utf8");
+    await writeFile(journalPath, JSON.stringify({ ...JSON.parse(journal), version: 2 }));
+    await expect(readSmolvmOciFamily({ statePath: root.statePath })).rejects.toThrow(
+      "journal_invalid",
+    );
+    expect((JSON.parse(await readFile(journalPath, "utf8")) as { version: unknown }).version).toBe(
+      2,
+    );
+    await writeFile(journalPath, journal);
+    await writeFile(readyPath, JSON.stringify({ ...JSON.parse(receipt), version: 2 }));
+    await expect(reopenSmolvmOciFamily({ statePath: root.statePath })).rejects.toThrow(
+      "cold_state_invalid",
+    );
+    expect((JSON.parse(await readFile(readyPath, "utf8")) as { version: unknown }).version).toBe(2);
+    await writeFile(readyPath, receipt);
+    await deleteSmolvmOciFamily({ statePath: root.statePath });
+  });
+});
+
+describe("stopped family network configuration", () => {
+  it("switches online preparation to offline copying without a temporary online candidate", async () => {
+    const root = await fixture({ networkMode: "host" });
+    await root.retainForColdReopen();
+    const descriptor = await configureSmolvmOciFamily({
+      statePath: root.statePath,
+      networkMode: "none",
+    });
+    expect(descriptor.version).toBe(3);
+    expect(mocks.names.get(root.sourceId)).toMatchObject({ state: "stopped", network: false });
+    const parent = await reopenSmolvmOciFamily({ statePath: root.statePath });
+    const candidate = await parent.copyFamily();
+    expect(candidate.configuration.networkMode).toBe("none");
+    expect(mocks.names.get(candidate.sourceId)?.network).toBe(false);
+    await candidate.close();
+    await parent.close();
+  });
+  it("refuses a live controller and unsupported overrides without updating native settings", async () => {
+    const root = await fixture();
+    await expect(
+      configureSmolvmOciFamily({ statePath: root.statePath, networkMode: "host" }),
+    ).rejects.toThrow();
+    await root.retainForColdReopen();
+    await expect(
+      configureSmolvmOciFamily({
+        statePath: root.statePath,
+        networkMode: "host",
+        cpus: 2,
+      } as never),
+    ).rejects.toThrow("sandbox_invalid_request");
+    expect(mocks.calls.some((a) => a[1] === "update")).toBe(false);
+    await deleteSmolvmOciFamily({ statePath: root.statePath });
+  });
+  it("requires the native stopped status to confirm a successful update", async () => {
+    const root = await fixture();
+    await root.retainForColdReopen();
+    mocks.updateNoop = true;
+    await expect(
+      configureSmolvmOciFamily({ statePath: root.statePath, networkMode: "host" }),
+    ).rejects.toThrow("network_update_unconfirmed");
+    expect((await readJournal(root.statePath)).machines[0]?.status).toBe("uncertain");
+    await expect(stat(path.join(root.statePath, "cold-ready.json"))).rejects.toMatchObject({
+      code: "ENOENT",
+    });
+  });
+  it("withdraws the receipt and records uncertainty if native update fails", async () => {
+    const root = await fixture();
+    await root.retainForColdReopen();
+    mocks.updateFailure = true;
+    await expect(
+      configureSmolvmOciFamily({ statePath: root.statePath, networkMode: "host" }),
+    ).rejects.toThrow("native update failed");
+    const record = await readJournal(root.statePath);
+    expect(record.machines[0]?.status).toBe("uncertain");
+    expect(record.options.networkMode).toBe("none");
+    await expect(stat(path.join(root.statePath, "cold-ready.json"))).rejects.toMatchObject({
+      code: "ENOENT",
+    });
+    await expect(stat(path.join(root.statePath, "cold-claimed.json"))).resolves.toBeDefined();
+    await expect(reopenSmolvmOciFamily({ statePath: root.statePath })).rejects.toThrow();
+    await expect(deleteSmolvmOciFamily({ statePath: root.statePath })).rejects.toThrow(
+      "cleanup_uncertain",
+    );
   });
 });

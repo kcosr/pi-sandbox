@@ -31,6 +31,11 @@ describe("OCI attachment capability", () => {
       let producing = false;
       let signal: AbortSignal | undefined;
       const family: SmolvmOciFamily = {
+        depth: 0,
+        get configuration(): never {
+          throw Error("not used");
+        },
+        copyFamily: () => Promise.reject(Error("not used")),
         sourceId: "candidate",
         statePath: dir,
         attachment: () => descriptor,
@@ -165,6 +170,11 @@ describe("OCI attachment capability", () => {
     const started = deferred();
     const aborted = deferred();
     const family: SmolvmOciFamily = {
+      depth: 0,
+      get configuration(): never {
+        throw Error("not used");
+      },
+      copyFamily: () => Promise.reject(Error("not used")),
       sourceId: "candidate",
       statePath: dir,
       attachment: () => descriptor,
@@ -248,6 +258,11 @@ describe("OCI attachment capability", () => {
         writes.map(([stream, bytes]) => Buffer.alloc(bytes.length, stream === "stdout" ? 0 : 1)),
       );
       const family: SmolvmOciFamily = {
+        depth: 0,
+        get configuration(): never {
+          throw Error("not used");
+        },
+        copyFamily: () => Promise.reject(Error("not used")),
         sourceId: "candidate",
         statePath: dir,
         attachment: () => descriptor,
@@ -369,6 +384,11 @@ describe("OCI attachment capability", () => {
       home: "/root",
     };
     const family: SmolvmOciFamily = {
+      depth: 0,
+      get configuration(): never {
+        throw Error("not used");
+      },
+      copyFamily: () => Promise.reject(Error("not used")),
       sourceId: "candidate",
       statePath: dir,
       attachment: (id) => {

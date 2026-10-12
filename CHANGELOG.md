@@ -4,10 +4,12 @@
 
 ### Added
 
+- Add independently owned prepared OCI family copies, ancestry depth and effective configuration inspection, and stopped-family network configuration.
 - Add macOS 26+ arm64 smolvm to the reusable extension and managed application, with ordinary account registry cleanup and optional trusted disk tools. ([#26](https://github.com/kcosr/pi-sandbox/pull/26))
 
 ### Breaking changes
 
+- Require version 3 OCI ownership journals and cold receipts with exact borrowed-ancestor bindings; older test state is rejected without migration.
 - Use the ordinary smolvm account registry/cache and unique owned machine names. Controller state now contains metadata only; old private-registry cold receipts are not accepted. ([#25](https://github.com/kcosr/pi-sandbox/pull/25))
 - Require smolvm 1.26.1 for Linux VM execution. Install the matching distribution and rebuild plain tool images; retained state continues to require its recorded runtime. ([#24](https://github.com/kcosr/pi-sandbox/pull/24))
 
