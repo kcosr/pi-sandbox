@@ -1,7 +1,13 @@
-// Generated from the verified official v1.26.1 linux-x86_64 release archive.
-// Archive SHA256: bcae519f7dad3cead2deaa0362a42a1ad7bffce73ea7a28161dea6822c559654
-// Includes every executable, library and guest-rootfs entry; no local paths.
+// Qualified fork host at 91fc3281 with unchanged official 1.26.1 libraries/guest.
+// Archive SHA256: c7896652d08e24010e576c48a108d8f8cf1bcc7dce1968185e589b749218f1b1
+// Complete shipped inventory; generated disk templates remain CLI-managed.
 export const RELEASE_INVENTORY: readonly (readonly [string, string, string])[] = [
+  [
+    "BUILD-PROVENANCE.json",
+    "file",
+    "3119eedbf16a7e500d29a6f51a112831cfa18b7749daa202235580f71e1afe8b",
+  ],
+  ["README.txt", "file", "f487be283557e3566cfcb962a561471c2f188533cec17860f149557e45813dc5"],
   ["agent-rootfs", "directory", ""],
   ["agent-rootfs/bin", "directory", ""],
   ["agent-rootfs/bin/arch", "symlink", "/bin/busybox"],
@@ -2692,6 +2698,28 @@ export const RELEASE_INVENTORY: readonly (readonly [string, string, string])[] =
   ["agent-rootfs/var/spool/cron/crontabs", "symlink", "/etc/crontabs"],
   ["agent-rootfs/var/spool/mail", "symlink", "/var/mail"],
   ["agent-rootfs/var/tmp", "directory", ""],
+  ["checksums.txt", "file", "ea754cf69058a8300da06deb1672b1bdb0ba616c584ace4270423232a993665f"],
+  [
+    "containerd-shim-smolvm-v2",
+    "file",
+    "8f7d9702a4b715a2e399873d28d1af854ef5c928ccd5503c8f426b8a517c5f1e",
+  ],
+  ["kubernetes", "directory", ""],
+  [
+    "kubernetes/example-pod.yaml",
+    "file",
+    "a5db9cf5e3746852df1c1de5c67d2ca8cb8c60e3b6db33ec4ede7b9c1d4b80ec",
+  ],
+  [
+    "kubernetes/install-k8s-runtime.sh",
+    "file",
+    "698ca2b46d68bf2a07a999062c25102d6c883b4c1702a5b1a3c099f202e9ef74",
+  ],
+  [
+    "kubernetes/runtimeclass.yaml",
+    "file",
+    "2999ffe3a69e96f65414aa79dfda79e2a4d710b6553922a6b6ac95d534d39c44",
+  ],
   ["lib", "directory", ""],
   ["lib/libkrun.so", "file", "bdec0ae78b98e5c3e9c2c13a10d05ea6ace8d622be659069a89d777c065c1045"],
   ["lib/libkrun.so.2", "symlink", "libkrun.so"],
@@ -2708,7 +2736,7 @@ export const RELEASE_INVENTORY: readonly (readonly [string, string, string])[] =
     "06d98e36f4a9f566538b83926607a048870ae723c1e159a830a3e1f25f846a73",
   ],
   ["smolvm", "file", "b67b25f363403e19deceb6897e5a4d94be30a079f8cb751372782f17fc99003a"],
-  ["smolvm-bin", "file", "62ed0353d664c2d6d78bd87ecf3213c64464003f51cb58506b87b187b1a6494a"],
+  ["smolvm-bin", "file", "5fbd0be5ff21ba68ccace27084d6c3ab49bf2f4df64c597aef17ba6012cd23c6"],
   [
     "storage-template.ext4.zst",
     "file",

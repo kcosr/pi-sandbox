@@ -15,6 +15,8 @@
 
 ### Changed
 
+- Update sandbox extension to 0.6.0 and pin the qualified smolvm two-fix fork for independent prepared-machine families.
+
 - Update sandbox extension to 0.5.0 with recorded family ownership, CLI-managed deletion and explicit retention results. Shared-cache pruning remains an operator action. ([#25](https://github.com/kcosr/pi-sandbox/pull/25))
 - Update the reusable sandbox extension to 0.4.1 with the verified smolvm 1.26.1 runtime inventory. ([#24](https://github.com/kcosr/pi-sandbox/pull/24))
 

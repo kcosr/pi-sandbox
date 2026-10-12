@@ -1,6 +1,11 @@
-// Generated from verified official smolvm 1.26.1 Darwin arm64 archive.
-// SHA256: 3aee6c92aa0552754159494c2f073d5f99cf1c2a12ecc022a08976bd8a1fc5bb
+// Qualified fork host at 91fc3281 with unchanged official 1.26.1 libraries/guest.
+// Archive SHA256: a9d070ce98979690a75db67f3d05dbaaf85e92af8f046943031cd0cc1099d7ab
 export const DARWIN_RELEASE_INVENTORY: readonly (readonly [string, string, string])[] = [
+  [
+    "BUILD-PROVENANCE.json",
+    "file",
+    "1740334078bf4310d5cf57312f9ee9e1e27d34e544e7dca5d75773f57e606ce0",
+  ],
   ["README.txt", "file", "f487be283557e3566cfcb962a561471c2f188533cec17860f149557e45813dc5"],
   ["agent-rootfs", "directory", ""],
   ["agent-rootfs/bin", "directory", ""],
@@ -2710,7 +2715,7 @@ export const DARWIN_RELEASE_INVENTORY: readonly (readonly [string, string, strin
   ["agent-rootfs/var/spool/cron/crontabs", "symlink", "/etc/crontabs"],
   ["agent-rootfs/var/spool/mail", "symlink", "/var/mail"],
   ["agent-rootfs/var/tmp", "directory", ""],
-  ["checksums.txt", "file", "92bd9d09273da5a41a96d330ac2b4fbf34d9e29c4932b6f0a3efcff7602e3876"],
+  ["checksums.txt", "file", "6fe2ada17bfece6fecdebb2eb6da5f0b69995a1d994a82c3a701865a5d31af57"],
   ["lib", "directory", ""],
   [
     "lib/libMoltenVK.dylib",
@@ -2740,7 +2745,7 @@ export const DARWIN_RELEASE_INVENTORY: readonly (readonly [string, string, strin
     "956b6f3a9ec3c4702cbca5eb26befacec3cffc10257208dfa08db091ceb98f37",
   ],
   ["smolvm", "file", "b67b25f363403e19deceb6897e5a4d94be30a079f8cb751372782f17fc99003a"],
-  ["smolvm-bin", "file", "1f4b258df63bd9ef12295d33121702985267b2e753017feeab71aef56807c6aa"],
+  ["smolvm-bin", "file", "842241284019a6b373f9310388fe1b613aac15cb491c5b4eaa4b89b1aa5a151d"],
   [
     "storage-template.ext4.zst",
     "file",

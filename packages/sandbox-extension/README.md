@@ -96,7 +96,8 @@ command-scoped cleanup.
 smolvm **1.26.1** is supported on Linux x86-64 with `/dev/kvm` and macOS 26+
 arm64 with `kern.hv_support=1`. The macOS minimum comes from the bundled guest
 firmware. Use a native arm64 guest on macOS. Install the complete
-official distribution outside the project. The package verifies its pinned
+[qualified fork distribution](../../docs/smolvm-runtime.md) outside the project.
+The package verifies its pinned
 executable, library and guest-rootfs inventory before launching anything.
 Provision a trusted plain Linux tools pack separately with the required GNU
 commands and Node. The image must be offline, without an imported workload,

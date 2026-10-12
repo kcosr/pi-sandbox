@@ -23,7 +23,7 @@ Prepare these prerequisites first:
 - A Linux x86-64 host with usable `/dev/kvm`, or a macOS 26+ arm64 host with
   `sysctl -n kern.hv_support` reporting `1`, and enough free disk space for the
   builder, packed image, and offline verification copy.
-- The complete official [smolvm 1.26.1 distribution](https://github.com/smol-machines/smolvm/releases/tag/v1.26.1),
+- The complete [qualified smolvm 1.26.1 fork distribution](smolvm-runtime.md),
   verified against its release checksums. Keep its wrapper, executable, libraries,
   and guest rootfs together in an operator-controlled directory.
 - Host `resize2fs` from e2fsprogs to shrink the bundled templates to the
@@ -179,8 +179,8 @@ and cannot request smaller capacities in our backend.
 
 ## macOS arm64 image preparation
 
-Use the complete official Darwin arm64 1.26.1 distribution. Its archive SHA-256
-is `3aee6c92aa0552754159494c2f073d5f99cf1c2a12ecc022a08976bd8a1fc5bb`.
+Use the complete [qualified Darwin arm64 runtime](smolvm-runtime.md), which
+keeps the official 1.26.1 libraries and guest alongside the reviewed fork host.
 The plain recipe above also produces an arm64 pack. Use a short canonical
 `/private/tmp/...` builder account and provision both `resize2fs` and `e2fsck`.
 For a nonstandard installation, add only the trusted directory to the builder's

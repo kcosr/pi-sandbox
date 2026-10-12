@@ -594,7 +594,7 @@ when using dependency scanners.
 
 ## Ordinary Pi extension packages
 
-The release build creates `kcosr-pi-sandbox-extension-0.5.0.tgz` and
+The release build creates `kcosr-pi-sandbox-extension-0.6.0.tgz` and
 `kcosr-pi-git-extension-0.1.0.tgz`, each with a SHA256 sidecar. They are independent
 standard extensions for ordinary Pi 1.1.0. Sandbox includes its runtime and
 Bubblewrap worker; Git includes its bounded host runner. Neither needs a permissions
@@ -608,8 +608,8 @@ adapters and preserves administrator-selected permissions and audit controls.
 
 Linux x86-64 and macOS 26+ arm64 distributions may opt into smolvm by setting
 `platforms.linux.smolvm.path` or `platforms.darwin.smolvm.path` and `version = "1.26.1"` in the build manifest.
-Keep the official wrapper, binary, libraries and guest rootfs together at that
-fixed path. A wrapper copied by itself is insufficient. Pi verifies the pinned
+Use the [qualified prepared-machine runtime](smolvm-runtime.md), including its
+wrapper, binary, libraries and guest rootfs together at that fixed path. A wrapper copied by itself is insufficient. Pi verifies the pinned
 complete runtime inventory at VM startup. The generated release manifest records
 the external path/version and lists smolvm among supported execution backends;
 the Pi archive does not bundle those external files.
