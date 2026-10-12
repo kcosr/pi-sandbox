@@ -22,7 +22,6 @@ import { afterEach, afterAll, beforeAll, describe, expect, it, vi } from "vitest
 import type { SandboxCommandRequest } from "../../contracts.js";
 import {
   createSmolvmOciFamily,
-  configureSmolvmOciFamily,
   reopenSmolvmOciFamily,
   deleteSmolvmOciFamily,
   readSmolvmOciFamily,
@@ -158,7 +157,7 @@ async function diskFiles(
 }
 afterEach(async () => {
   let failed = false;
-  for (const f of families.splice(0).reverse()) {
+  for (const f of families.splice(0)) {
     try {
       const disposition = await f.close();
       if (disposition.retained) {
@@ -438,7 +437,7 @@ suite("OCI native family", () => {
     await f.removeMachine(child);
     const retained = await f.retainForColdReopen();
     expect(retained).toEqual({
-      version: 3,
+      version: 2,
       sourceId: f.sourceId,
       registry: (await readSmolvmOciFamily({ statePath: f.statePath })).registry,
       mode: "cold",
@@ -701,75 +700,4 @@ suite("OCI native family", () => {
     await f.removeMachine(implementer);
     await f.close();
   }, 180000);
-  it("copies prepared trees into independent families, retains ancestors and reopens a deep candidate", async () => {
-    const root = await make();
-    const write = (family: SmolvmOciFamily, value: string) =>
-      family.execute(family.sourceId, {
-        argv: ["/bin/bash", "-c", `printf '%s' '${value}' >/workspace/prepared-marker`],
-      });
-    const read = async (family: SmolvmOciFamily, id = family.sourceId) =>
-      (
-        await family.execute(id, { argv: ["/bin/cat", "/workspace/prepared-marker"] })
-      ).stdout.toString();
-    const copy = async (source: SmolvmOciFamily) => {
-      const next = await source.copyFamily();
-      families.push(next);
-      return next;
-    };
-    await write(root, "root");
-    const prepared = await copy(root);
-    await write(prepared, "prepared");
-    const sibling = await copy(root);
-    await write(root, "later-root");
-    expect(await read(prepared)).toBe("prepared");
-    expect(await read(sibling)).toBe("root");
-    // A cold preparation boundary drops transient preparation processes. Network
-    // topology is selected while stopped and inherited by every later copy.
-    await prepared.retainForColdReopen();
-    await configureSmolvmOciFamily({ statePath: prepared.statePath, networkMode: "host" });
-    await configureSmolvmOciFamily({ statePath: prepared.statePath, networkMode: "none" });
-    const reopenedPrepared = await reopenSmolvmOciFamily({ statePath: prepared.statePath });
-    families.push(reopenedPrepared);
-    const candidate = await copy(reopenedPrepared);
-    expect(candidate.depth).toBe(2);
-    expect(candidate.configuration.networkMode).toBe("none");
-    const statusCli = new SmolvmCli({
-      smolvmPath: options.smolvmPath,
-      stateDirectory: candidate.statePath,
-    });
-    try {
-      const status: unknown = JSON.parse(
-        (
-          await checkedCommand(statusCli, [
-            "machine",
-            "status",
-            "--name",
-            candidate.sourceId,
-            "--json",
-          ])
-        ).stdout.toString(),
-      );
-      expect(status).toMatchObject({ network: false });
-    } finally {
-      await statusCli.dispose();
-    }
-    await write(candidate, "candidate");
-    const judge = await candidate.branch(candidate.sourceId, { branchable: false });
-    expect(await read(candidate, judge)).toBe("candidate");
-    await candidate.execute(judge, {
-      argv: ["/bin/bash", "-c", "echo judge >/workspace/prepared-marker"],
-    });
-    await candidate.removeMachine(judge);
-    await candidate.retainForColdReopen();
-    await reopenedPrepared.retainForColdReopen();
-    await sibling.retainForColdReopen();
-    await root.retainForColdReopen();
-    await expect(deleteSmolvmOciFamily({ statePath: root.statePath })).rejects.toThrow(
-      "dependencies_pending",
-    );
-    const reopened = await reopenSmolvmOciFamily({ statePath: candidate.statePath });
-    families.push(reopened);
-    expect(await read(reopened)).toBe("candidate");
-    await reopened.close();
-  }, 300000);
 });

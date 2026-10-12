@@ -1,10 +1,8 @@
-/** Reviewed two-fix fork host with official 1.27.0 libraries and guest.
- * Source: https://github.com/kcosr/smolvm/tree/integration-prepared-vm-tree-1.27
- * These digests identify qualified fork archives, not upstream releases. */
-export const SMOLVM_VERSION = "1.27.0";
-export const SMOLVM_SOURCE_COMMIT = "cb9d4879a31d50341d2cc2db8e9723eec1ecbf5b";
+/** Shared by runtime verification and Node 24+ release tooling. */
+export const SMOLVM_VERSION = "1.26.1";
+export const SMOLVM_SOURCE_COMMIT = "093852e8f527ce7db5f96195b909de15fef82251";
 export const SMOLVM_RELEASE_SHA256 =
-  "4f260be0500ad5a12c8d766347f56de6583e5fb1d4d4b667fc773529a6b73ed0";
+  "bcae519f7dad3cead2deaa0362a42a1ad7bffce73ea7a28161dea6822c559654";
 
 /** Explicit build-target selection; the existing constant remains the Linux pin. */
 export function smolvmReleaseForPlatform(platform: string, architecture: string) {
@@ -18,7 +16,7 @@ export function smolvmReleaseForPlatform(platform: string, architecture: string)
     return {
       platform: "darwin/arm64",
       guestPlatform: "linux/arm64",
-      sha256: "fc14c9879bb34e62c4b0d3182594f0f87d8a96453ce0741b43f546cc56fa2bd5",
+      sha256: "3aee6c92aa0552754159494c2f073d5f99cf1c2a12ecc022a08976bd8a1fc5bb",
     } as const;
   throw new Error("smolvm_unsupported_platform");
 }

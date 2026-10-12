@@ -20,8 +20,7 @@ async function fixture() {
 }
 function record(statePath: string): ColdRecord {
   return {
-    version: 3,
-    borrowedAncestors: [],
+    version: 2,
     sourceId: "pi-source",
     registry: {
       home: "/home/test",

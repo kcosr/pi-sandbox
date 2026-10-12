@@ -6,7 +6,6 @@ import {
   validMachineName,
   type SmolvmRegistryIdentity,
 } from "../registry.js";
-import { MAX_OCI_DEPTH, validateAncestors, type BorrowedAncestor } from "./ancestry.js";
 import type { SmolvmOciFamilyOptions } from "./types.js";
 
 export type OwnedStatus = "intent" | "created" | "running" | "stopped" | "deleted" | "uncertain";
@@ -17,7 +16,7 @@ export interface OwnedMachine {
   identity: MachineIdentity | null;
 }
 export interface FamilyJournal {
-  readonly version: 3;
+  readonly version: 2;
   readonly kind: "oci-family";
   readonly sourceId: string;
   readonly statePath: string;
@@ -30,7 +29,6 @@ export interface FamilyJournal {
   readonly options: SmolvmOciFamilyOptions;
   readonly mountIdentities: readonly { dev: number; ino: number }[];
   readonly machines: readonly OwnedMachine[];
-  readonly borrowedAncestors: readonly BorrowedAncestor[];
 }
 /** Forget acknowledged deleted leaves, retaining every still-referenced ancestor. */
 export function compactOwnedMachines(
@@ -87,8 +85,8 @@ export async function readJournal(statePath: string): Promise<FamilyJournal> {
         .filter((key) => key !== "hostToolsIdentity")
         .sort()
         .join(",") !==
-        "borrowedAncestors,environment,kind,machines,mountIdentities,options,registry,runtime,runtimeIdentity,runtimeVersion,sourceId,statePath,version" ||
-      value.version !== 3 ||
+        "environment,kind,machines,mountIdentities,options,registry,runtime,runtimeIdentity,runtimeVersion,sourceId,statePath,version" ||
+      value.version !== 2 ||
       (value.hostToolsIdentity !== undefined &&
         (typeof value.hostToolsIdentity !== "string" ||
           !/^[a-f0-9]{64}$/u.test(value.hostToolsIdentity))) ||
@@ -131,11 +129,7 @@ export async function readJournal(statePath: string): Promise<FamilyJournal> {
     )
       throw invalid();
     validateRegistryIdentity(value.registry);
-    validateAncestors(value.borrowedAncestors);
-    const sourceParent = value.borrowedAncestors.at(-1)?.identity.name ?? null;
-    const ancestorNames = new Set(value.borrowedAncestors.map((a) => a.identity.name));
     const names = new Set<string>();
-    const depths = new Map<string, number>();
     const machines: readonly OwnedMachine[] = value.machines;
     for (const machine of machines) {
       if (
@@ -143,19 +137,12 @@ export async function readJournal(statePath: string): Promise<FamilyJournal> {
         Object.keys(machine).sort().join(",") !== "identity,name,parent,status" ||
         !validMachineName(machine.name) ||
         names.has(machine.name) ||
-        ancestorNames.has(machine.name) ||
-        (names.size === 0
-          ? machine.name !== value.sourceId || machine.parent !== sourceParent
-          : machine.parent === null || !names.has(machine.parent)) ||
+        !(machine.parent === null || names.has(machine.parent)) ||
         !["intent", "created", "running", "stopped", "deleted", "uncertain"].includes(
           machine.status,
         )
       )
         throw invalid();
-      const depth =
-        names.size === 0 ? value.borrowedAncestors.length : depths.get(machine.parent!)! + 1;
-      if (depth > MAX_OCI_DEPTH) throw invalid();
-      depths.set(machine.name, depth);
       names.add(machine.name);
       if (machine.identity !== null) {
         validateMachineIdentity(machine.identity);
@@ -163,8 +150,7 @@ export async function readJournal(statePath: string): Promise<FamilyJournal> {
           throw invalid();
       } else if (!["intent", "created", "uncertain"].includes(machine.status)) throw invalid();
     }
-    if (machines[0]?.name !== value.sourceId || machines[0].parent !== sourceParent)
-      throw invalid();
+    if (machines[0]?.name !== value.sourceId || machines[0].parent !== null) throw invalid();
     return value;
   } finally {
     await file.close();

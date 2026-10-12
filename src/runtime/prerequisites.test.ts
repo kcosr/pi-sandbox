@@ -10,7 +10,7 @@ describe("host prerequisites", () => {
         assertExecutionPrerequisites(
           "smolvm",
           {
-            smolvm: { path: "/bin/sh", version: "1.27.0" },
+            smolvm: { path: "/bin/sh", version: "1.26.1" },
           },
           [],
         ),
@@ -19,7 +19,7 @@ describe("host prerequisites", () => {
         assertExecutionPrerequisites(
           "smolvm",
           {
-            smolvm: { path: "/definitely-missing/smolvm", version: "1.27.0" },
+            smolvm: { path: "/definitely-missing/smolvm", version: "1.26.1" },
           },
           ["/definitely-missing/git"],
         ),

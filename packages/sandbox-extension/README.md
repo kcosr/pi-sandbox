@@ -93,11 +93,10 @@ command-scoped cleanup.
 
 ## smolvm on Linux and macOS
 
-smolvm **1.27.0** is supported on Linux x86-64 with `/dev/kvm` and macOS 26+
+smolvm **1.26.1** is supported on Linux x86-64 with `/dev/kvm` and macOS 26+
 arm64 with `kern.hv_support=1`. The macOS minimum comes from the bundled guest
 firmware. Use a native arm64 guest on macOS. Install the complete
-[qualified fork distribution](../../docs/smolvm-runtime.md) outside the project.
-The package verifies its pinned
+official distribution outside the project. The package verifies its pinned
 executable, library and guest-rootfs inventory before launching anything.
 Provision a trusted plain Linux tools pack separately with the required GNU
 commands and Node. The image must be offline, without an imported workload,
@@ -110,7 +109,7 @@ Use the same version-4 configuration, replacing `backend` with:
 ```json
 {
   "kind": "smolvm",
-  "executable": "/opt/smolvm-1.27.0/smolvm",
+  "executable": "/opt/smolvm-1.26.1/smolvm",
   "image": "/opt/pi-images/tools.smolmachine",
   "imageSha256": "<64 lowercase hexadecimal characters>",
   "stateDirectory": "/home/alice/.local/state/pi-vm",
@@ -189,42 +188,10 @@ independently writable leaf. Use `branchable: true` only for a child that must
 later be branched itself. It incurs additional RAM-backing work. Native Linux
 qcow2 overlays share the immutable source disks. macOS uses native raw-disk CoW
 clones. Host mounts are not snapshotted.
-Remove owned reviewer leaves before retaining their source. The original source,
-including one copied from another family, can be explicitly cold-reopened on the same host; cold reopening
+Remove child leaves before their source. A child-free original source
+can be retained and explicitly cold-reopened on the same host; cold reopening
 restores disks, not running processes or RAM. The source may be frozen or writable;
 edits to a reopened original are saved by another clean `retainForColdReopen()`.
-
-`await family.copyFamily({ namePrefix, stateDirectory }, { onPrepared })` copies
-its writable source into a separately owned, branchable family and lets the source
-continue. Both arguments are optional. Each result has its own queue, attachment
-capabilities, journal and shutdown; cancelling it does not retire its ancestors or
-siblings. The source takes exclusive admission while copying, so close its
-terminals first. The child's intent is recorded before the native branch starts.
-A failed or ambiguous copy preserves its own recovery record.
-
-Copies inherit the source's image, mounts, resources, working directory and network
-mode. These cannot be overridden by `copyFamily`; `family.configuration` returns
-a defensive copy of the effective controller options. `family.depth` counts
-native ancestors: root depth is zero and the maximum is 32. Orchestrators must
-reserve levels for later candidates and reviewers. Existing copies never acquire
-later parent edits. Host mounts remain live external inputs rather than snapshots.
-
-A live copy also inherits running guest processes. To create a prepared copy
-without transient preparation jobs, first call `retainForColdReopen()`, then
-`reopenSmolvmOciFamily({ statePath })`, then `copyFamily()`. Normal boot services
-and startup writes are part of that new source state; this is not an immutable
-disk-only checkpoint. Continuing ancestors can remain stopped while a retained
-descendant reopens. Their names, creation identity, parent links, image identity
-and native directory identities must still match. Ancestor cold boots and approved
-network changes do not invalidate existing descendants.
-
-To change internet access, stop and retain the family, call
-`configureSmolvmOciFamily({ statePath, networkMode: "none" | "host" })`, then reopen
-it. This changes only that original; existing copies keep their own network
-settings. Configure an online preparation source offline before copying offline
-candidates. The operation claims the cold receipt before the native update. A
-failed update keeps an uncertain journal and cannot publish a reopenable receipt.
-It supports no mount or resource edits.
 
 A trusted orchestrator writes this private configuration for ordinary Pi:
 
@@ -259,11 +226,8 @@ Normal controller close stops owned machines and uses smolvm to delete disposabl
 machines. `close()` returns `{ retained }`; callers must not infer retention from
 the metadata directory’s existence. `readSmolvmOciFamily({ statePath })` provides
 recovery metadata, and `deleteSmolvmOciFamily({ statePath })` deletes a stopped
-family through named CLI operations. Cold receipts and ownership journals use
-version 3 and bind the source, registry and complete borrowed ancestry. Older
-shapes are rejected without migration or modification. Independent continuing
-copies can remain while their parent is stopped and retained. Deletion refuses
-all native dependents, including copies owned by other controllers.
+family through named CLI operations. Cold receipts use version 2 and bind the
+recorded source and registry. Earlier private-registry receipts are not accepted.
 Deleting a stopped family needs its recorded runtime, registry and machine
 identity, but does not need the original image archive, read-only input mounts,
 or selected disk-tool files. Reopening revalidates all those boot inputs.
@@ -271,7 +235,7 @@ Failed deletion releases its controller claim so the operation can be retried.
 Abrupt owner death may require manual recovery with the recorded names.
 
 The ordinary cache can reuse upstream image data subject to smolvm’s eligibility
-rules. In 1.27.0, OCI image seeds require at least 20 GiB of storage, so small
+rules. In 1.26.1, OCI image seeds require at least 20 GiB of storage, so small
 fixtures do not demonstrate that optimization. Cache pruning is an explicit
 operator action, not family cleanup. `pack prune` and `machine prune` serve
 different purposes; the latter can start a stopped VM.

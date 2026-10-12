@@ -502,7 +502,7 @@ it is not an execution backend and does not run tool operations.
 
 ## Optional smolvm tool executor
 
-The reusable extension supports smolvm 1.27.0 on Linux x86-64 and macOS 26+
+The reusable extension supports smolvm 1.26.1 on Linux x86-64 and macOS 26+
 arm64. The managed application owns one executor for its lifetime and
 keeps configuration, permissions, audit and host MCP outside it. A fixed
 build-selected runtime plus administrator-selected image creates the private
@@ -551,26 +551,7 @@ exclusive transitions. Family shutdown actively closes every terminal before
 stopping VMs. The launch handshake consumes a guest marker after smolvm enters
 raw mode, avoiding input loss from its startup terminal flush.
 
-An original without owned reviewer children can be cleanly retained whether
-frozen or writable, so administrative edits made after cold reopening persist
-on the next cold boot. Independent continuing copies may remain.
+A child-free original can be cleanly retained whether frozen or writable, so
+administrative edits made after cold reopening persist on the next cold boot.
 Terminal-client cleanup failure preserves forensic state and prevents publishing
 a clean cold receipt. Terminal exit does not prove all guest descendants exited.
-
-Prepared OCI sources use `copyFamily()` to create independently owned families
-through native continuing branches. Each copy has separate admission, controller
-metadata, capabilities and teardown. Its immutable ancestor bindings identify
-native records and directories, not VMM PIDs or ancestor network settings. A
-parent can stop and retain without deleting copies; deletion refuses every native
-dependent, including foreign family roots. Cold receipts and journals use strict
-version 3. The controller exposes ancestry depth and cloned effective options so
-orchestrators can reserve candidate/reviewer depth and reject unsupported topology
-overrides. Existing `branch()` still freezes a source for its owned reviewers.
-
-Publication can stop preparation, configure its network through the claimed
-cold receipt, then cold boot before copying. This clears prior guest processes;
-boot services and startup writes remain accepted source state. Network updates
-change only the stopped original and republish matching journal/receipt settings
-after native acknowledgement and status verification. Failed updates retain an
-uncertain journal with no ready receipt. No daemon, observer or separate registry
-is introduced.

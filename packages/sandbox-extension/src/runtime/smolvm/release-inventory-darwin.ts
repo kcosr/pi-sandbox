@@ -1,11 +1,6 @@
-// Qualified two-fix fork host at cb9d4879 with official 1.27.0 libraries/guest.
-// Archive SHA256: fc14c9879bb34e62c4b0d3182594f0f87d8a96453ce0741b43f546cc56fa2bd5
+// Generated from verified official smolvm 1.26.1 Darwin arm64 archive.
+// SHA256: 3aee6c92aa0552754159494c2f073d5f99cf1c2a12ecc022a08976bd8a1fc5bb
 export const DARWIN_RELEASE_INVENTORY: readonly (readonly [string, string, string])[] = [
-  [
-    "BUILD-PROVENANCE.json",
-    "file",
-    "443e00f506c5d9efed48a26835615d52c0253d0888b0de4d7760f8dc723dddf4",
-  ],
   ["README.txt", "file", "f487be283557e3566cfcb962a561471c2f188533cec17860f149557e45813dc5"],
   ["agent-rootfs", "directory", ""],
   ["agent-rootfs/bin", "directory", ""],
@@ -1948,12 +1943,12 @@ export const DARWIN_RELEASE_INVENTORY: readonly (readonly [string, string, strin
   [
     "agent-rootfs/usr/local/bin/smolvm-agent",
     "file",
-    "4db49b9516d438834e40cc66e3410580bc3285a0d34104d435550bd0e9590c1f",
+    "689e3972b15ad025b1b42df75abc4caf748a6337a11190c12d970561b88de6da",
   ],
   [
     "agent-rootfs/usr/local/bin/smolvm-cuda-run",
     "file",
-    "a50e05c4939d308f7dabf3a6aa8a7a50e20f4845245a5fd2e30fef88de05ab87",
+    "7dc3897ee2ce876bc390d6982774a2d1d912e5eeafefec8861042b5a01542212",
   ],
   ["agent-rootfs/usr/local/lib", "directory", ""],
   ["agent-rootfs/usr/local/lib/smolvm-cuda", "directory", ""],
@@ -1967,12 +1962,12 @@ export const DARWIN_RELEASE_INVENTORY: readonly (readonly [string, string, strin
   [
     "agent-rootfs/usr/local/lib/smolvm-cuda/libcuda.so.1",
     "file",
-    "28a0e0eb5960755bb18b09f843ee31fed78c1b258528d40dbfd3a7af1eb97c14",
+    "cb17cb973a78a5351ba8809c3c90addd191134b76f8b10231651a49cea72fc99",
   ],
   [
     "agent-rootfs/usr/local/lib/smolvm-cuda/libcudart-shim.so",
     "file",
-    "bbf82e01d2d0a94f8ff4e937c55282bfcc0917d9cb6483b14a2f3cf55b065b2a",
+    "47b34b322b9a39a27d8a39633aa1aa37df257668557ee40240cecb1b925e195d",
   ],
   ["agent-rootfs/usr/local/lib/smolvm-cuda/libcudart.so", "symlink", "libcudart-shim.so"],
   ["agent-rootfs/usr/local/lib/smolvm-cuda/libcudart.so.11.0", "symlink", "libcudart-shim.so"],
@@ -2715,7 +2710,7 @@ export const DARWIN_RELEASE_INVENTORY: readonly (readonly [string, string, strin
   ["agent-rootfs/var/spool/cron/crontabs", "symlink", "/etc/crontabs"],
   ["agent-rootfs/var/spool/mail", "symlink", "/var/mail"],
   ["agent-rootfs/var/tmp", "directory", ""],
-  ["checksums.txt", "file", "dacd2d47ecdf9d09851cc9a458aa312dc62a9575b715eba1163822738c548afa"],
+  ["checksums.txt", "file", "92bd9d09273da5a41a96d330ac2b4fbf34d9e29c4932b6f0a3efcff7602e3876"],
   ["lib", "directory", ""],
   [
     "lib/libMoltenVK.dylib",
@@ -2727,11 +2722,11 @@ export const DARWIN_RELEASE_INVENTORY: readonly (readonly [string, string, strin
     "file",
     "4907b7a0cf4ef3515bde843dc187f22482d142898f6c44f2859b59c6298e3324",
   ],
-  ["lib/libkrun.dylib", "file", "d806627159f2a77e14a430eaaff7f187d3cb7344ec20d3040b32e50aa5864950"],
+  ["lib/libkrun.dylib", "file", "7a0a08749380fb73347ae99d0c45280ff7906b013517e88b88d1495db23ad203"],
   [
     "lib/libkrunfw.5.dylib",
     "file",
-    "20d5f512eac69499f623953d920d5df8d560a7444faa653f7ab86cc5e8a13fa1",
+    "40ba40241ee6a2e4083ffecb8fabe314a50841d3ecf4a0fd2bfb4955dc18904c",
   ],
   ["lib/libkrunfw.dylib", "symlink", "libkrunfw.5.dylib"],
   [
@@ -2742,13 +2737,13 @@ export const DARWIN_RELEASE_INVENTORY: readonly (readonly [string, string, strin
   [
     "overlay-template.ext4.zst",
     "file",
-    "2899a5fae40683d5194072d8c9524081c519590ba8246758119fbfe9b5dce735",
+    "956b6f3a9ec3c4702cbca5eb26befacec3cffc10257208dfa08db091ceb98f37",
   ],
   ["smolvm", "file", "b67b25f363403e19deceb6897e5a4d94be30a079f8cb751372782f17fc99003a"],
-  ["smolvm-bin", "file", "939a112e1ba4617800c1f4ae69e6629537d26bdf83bd0a757ea71f89ab8462b8"],
+  ["smolvm-bin", "file", "1f4b258df63bd9ef12295d33121702985267b2e753017feeab71aef56807c6aa"],
   [
     "storage-template.ext4.zst",
     "file",
-    "3a70cc67a6af740a34a1e7526f257cd7a5116f85ec17aa865fc80b387ff0ebf9",
+    "00ad811a560e8f09426a4e6f1382a2130b0e4f6ea4f08b6b50eadad7bb1899d0",
   ],
 ];

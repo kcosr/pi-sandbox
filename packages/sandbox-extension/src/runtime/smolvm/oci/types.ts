@@ -50,7 +50,7 @@ export interface SmolvmOciMachine extends SandboxExecutor {
 }
 
 export interface SmolvmOciRetainedFamily {
-  readonly version: 3;
+  readonly version: 2;
   readonly sourceId: string;
   readonly registry: SmolvmRegistryIdentity;
   readonly mode: "cold";
@@ -109,27 +109,9 @@ export interface SmolvmOciTerminalOptions {
   readonly signal?: AbortSignal;
 }
 
-/** Copies inherit all guest topology and resources; only controller metadata and naming differ. */
-export interface SmolvmOciCopyOptions {
-  readonly stateDirectory?: string;
-  readonly namePrefix?: string;
-}
-
 export interface SmolvmOciFamily {
   readonly sourceId: string;
   readonly statePath: string;
-  /** Native ancestor count; reserve remaining depth for candidate and reviewer branches. */
-  readonly depth: number;
-  /** Snapshot of the inherited configuration, safe for the caller to inspect or mutate. */
-  readonly configuration: SmolvmOciFamilyOptions;
-  /** Copy the writable source into a separately owned, continuing family. Parent
-   * and copies keep their own queues, tokens, journals and teardown. Existing
-   * copies never inherit later source edits. Live processes are copied too; cold
-   * reopen the source first when preparation processes must not carry over. */
-  copyFamily(
-    options?: SmolvmOciCopyOptions,
-    hooks?: SmolvmOciFamilyHooks,
-  ): Promise<SmolvmOciFamily>;
   execute(
     machineId: string,
     request: SandboxCommandRequest,
@@ -148,8 +130,8 @@ export interface SmolvmOciFamily {
   ): Promise<string>;
   /** Delete a leaf reviewer/collector. Sources with dependent children are refused. */
   removeMachine(machineId: string): Promise<void>;
-  /** Retain a source without owned reviewers, frozen or writable, after acknowledged shutdown
-   * for explicit same-host cold boot. Independent continuing copies may remain. Close its terminals first. Running
+  /** Retain a child-free source, frozen or writable, after acknowledged shutdown
+   * for explicit same-host cold boot. Close its terminals first. Running
    * processes/RAM are not restored; edits to a reopened original are preserved. */
   retainForColdReopen(): Promise<SmolvmOciRetainedFamily>;
   /** Ask stock smolvm to stop owned machines and delete their records/disks unless

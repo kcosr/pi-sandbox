@@ -1,4 +1,4 @@
-# Trusted build recipe for the pinned smolvm 1.27.0 Linux x86_64 tools image.
+# Trusted build recipe for the pinned smolvm 1.26.1 Linux x86_64 tools image.
 cpus = 2
 memory = 1024
 storage = 1

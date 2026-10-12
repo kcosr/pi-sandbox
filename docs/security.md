@@ -427,7 +427,7 @@ may contain sensitive information. Bash commands are truncated, not redacted.
 
 ## smolvm boundary and lifecycle
 
-The optional smolvm backend uses the fixed 1.27.0 runtime and a
+The optional smolvm backend uses the fixed 1.26.1 runtime and a
 SHA-256-selected trusted image. Shared extension support includes Linux x86-64
 and macOS 26+ arm64, including the managed application.
 Both verify the complete platform-specific official distribution inventory.
@@ -480,17 +480,6 @@ never cleanup targets. Random name suffixes avoid accidental collisions; they do
 not defend against a hostile same-account host process replacing records between
 checks and a CLI command. The host account and smolvm installation remain trusted.
 Guest mounts cannot expose the captured registry/cache/config paths.
-
-Prepared-family copies borrow ancestor identities without acquiring ownership of
-those ancestors. Their queues, capabilities, recovery records and cancellation
-boundaries remain independent. Native dependency checks prevent deleting a parent
-while any copy still references it. Cold reopen checks every ancestor's immutable
-record and directory identity; it deliberately ignores ancestor PID, mutable
-network configuration and subsequent guest writes. Copies inherit topology;
-host mounts are live inputs and are not snapshotted. A live branch also inherits
-guest processes. Orchestrators requiring a clean preparation boundary must stop
-and cold reopen the source before copying. Stopped network changes consume the
-old cold receipt before native mutation and leave uncertainty on failure.
 
 ## Ordinary Pi extensions
 

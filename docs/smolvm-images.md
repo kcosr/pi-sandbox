@@ -8,13 +8,13 @@ project's `Smolfile`, `Dockerfile`, image build scripts, or registry references.
 ## Plain tools image for a mounted host project
 
 Plain packs must match the runtime version exactly. Rebuild an older tools image
-with 1.27.0 before selecting this runtime; changing the configured checksum does
+with 1.26.1 before selecting this runtime; changing the configured checksum does
 not upgrade the image. Keep the previous distribution available for any retained
 VM state bound to it, and finish or recover those machines before switching their
 configuration. Do not rewrite old image manifests or retention receipts.
 
 [examples/smolvm/Smolfile](../examples/smolvm/Smolfile) records the small Alpine
-tools recipe qualified with smolvm **1.27.0** on Linux x86-64 and macOS arm64. The commands below
+tools recipe qualified with smolvm **1.26.1** on Linux x86-64 and macOS arm64. The commands below
 apply its resource values and installation steps explicitly through the upstream
 CLI. No private repository or custom builder is required.
 
@@ -23,7 +23,7 @@ Prepare these prerequisites first:
 - A Linux x86-64 host with usable `/dev/kvm`, or a macOS 26+ arm64 host with
   `sysctl -n kern.hv_support` reporting `1`, and enough free disk space for the
   builder, packed image, and offline verification copy.
-- The complete [qualified smolvm 1.27.0 fork distribution](smolvm-runtime.md),
+- The complete official [smolvm 1.26.1 distribution](https://github.com/smol-machines/smolvm/releases/tag/v1.26.1),
   verified against its release checksums. Keep its wrapper, executable, libraries,
   and guest rootfs together in an operator-controlled directory.
 - Host `resize2fs` from e2fsprogs to shrink the bundled templates to the
@@ -37,7 +37,7 @@ Run these steps from one shell, stopping if any command fails. Set the executabl
 and a new output directory to your actual absolute paths:
 
 ```sh
-smolvm_bin=/opt/smolvm-1.27.0/smolvm
+smolvm_bin=/opt/smolvm-1.26.1/smolvm
 image_output=/absolute/operator-owned/tools-image
 test -x "$smolvm_bin"
 test -x /usr/sbin/resize2fs
@@ -61,7 +61,7 @@ smol() (
 smol --version
 ```
 
-Expect `smolvm 1.27.0`. The private, short state path avoids Unix socket path
+Expect `smolvm 1.26.1`. The private, short state path avoids Unix socket path
 limits and separates this builder from your usual smolvm machines. Preserve this
 environment when inspecting or cleaning up the builder, including after an
 interrupted shell.
@@ -179,8 +179,8 @@ and cannot request smaller capacities in our backend.
 
 ## macOS arm64 image preparation
 
-Use the complete [qualified Darwin arm64 runtime](smolvm-runtime.md), which
-keeps the official 1.27.0 libraries and guest alongside the reviewed fork host.
+Use the complete official Darwin arm64 1.26.1 distribution. Its archive SHA-256
+is `3aee6c92aa0552754159494c2f073d5f99cf1c2a12ecc022a08976bd8a1fc5bb`.
 The plain recipe above also produces an arm64 pack. Use a short canonical
 `/private/tmp/...` builder account and provision both `resize2fs` and `e2fsck`.
 For a nonstandard installation, add only the trusted directory to the builder's
@@ -189,7 +189,7 @@ Upstream searches fixed Homebrew/system directories before PATH. A conflicting
 higher-priority tool is rejected when an explicit directory is configured.
 
 Use `/usr/bin/shasum -a 256` in place of `sha256sum` on macOS. Inspect actual
-block-device capacities: smolvm 1.27.0 can warn about missing `resize2fs` and still
+block-device capacities: smolvm 1.26.1 can warn about missing `resize2fs` and still
 succeed with bundled 20/10 GiB disks after a 1/1 GiB request. Do not accept resource
 labels as proof. The integration checks capacities before serving tools.
 

@@ -4,13 +4,11 @@ import { constants, link, lstat, open, unlink } from "node:fs/promises";
 import path from "node:path";
 import { validateMachineIdentity, type MachineIdentity } from "../lifecycle.js";
 import { validateRegistryIdentity } from "../registry.js";
-import { validateAncestors, type BorrowedAncestor } from "./ancestry.js";
 import type { SmolvmOciFamilyOptions, SmolvmOciRetainedFamily } from "./types.js";
 
 export interface ColdRecord extends SmolvmOciRetainedFamily {
   readonly options: SmolvmOciFamilyOptions;
   readonly sourceIdentity: MachineIdentity;
-  readonly borrowedAncestors: readonly BorrowedAncestor[];
   readonly runtimeIdentity: string;
   readonly hostToolsIdentity?: string;
   readonly mountIdentities: readonly { dev: number; ino: number }[];
@@ -65,8 +63,8 @@ export async function readColdRecord(statePath: string): Promise<ColdRecord> {
         .filter((key) => key !== "hostToolsIdentity")
         .sort()
         .join(",") !==
-        "borrowedAncestors,cwd,imageSha256,mode,mountIdentities,options,registry,runtimeIdentity,sourceId,sourceIdentity,statePath,version" ||
-      value.version !== 3 ||
+        "cwd,imageSha256,mode,mountIdentities,options,registry,runtimeIdentity,sourceId,sourceIdentity,statePath,version" ||
+      value.version !== 2 ||
       (value.hostToolsIdentity !== undefined &&
         (typeof value.hostToolsIdentity !== "string" ||
           !/^[a-f0-9]{64}$/u.test(value.hostToolsIdentity))) ||
@@ -87,12 +85,7 @@ export async function readColdRecord(statePath: string): Promise<ColdRecord> {
       throw fail();
     validateRegistryIdentity(value.registry);
     validateMachineIdentity(value.sourceIdentity);
-    validateAncestors(value.borrowedAncestors);
-    if (
-      value.sourceId !== value.sourceIdentity.name ||
-      value.borrowedAncestors.some((a) => a.identity.name === value.sourceId) ||
-      value.sourceIdentity.parent !== (value.borrowedAncestors.at(-1)?.identity.name ?? null)
-    )
+    if (value.sourceId !== value.sourceIdentity.name || value.sourceIdentity.parent !== null)
       throw fail();
     return value as unknown as ColdRecord;
   } finally {
