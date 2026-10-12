@@ -4,15 +4,19 @@
 
 ### Added
 
+- Add independently owned prepared OCI family copies, ancestry depth and effective configuration inspection, and stopped-family network configuration. ([#27](https://github.com/kcosr/pi-sandbox/pull/27))
 - Add macOS 26+ arm64 smolvm to the reusable extension and managed application, with ordinary account registry cleanup and optional trusted disk tools. ([#26](https://github.com/kcosr/pi-sandbox/pull/26))
 
 ### Breaking changes
 
+- Require the qualified smolvm 1.27.0 distribution and rebuilt plain tool images; retained families remain bound to their recorded runtime. ([#27](https://github.com/kcosr/pi-sandbox/pull/27))
+- Require version 3 OCI ownership journals and cold receipts with exact borrowed-ancestor bindings; older test state is rejected without migration. ([#27](https://github.com/kcosr/pi-sandbox/pull/27))
 - Use the ordinary smolvm account registry/cache and unique owned machine names. Controller state now contains metadata only; old private-registry cold receipts are not accepted. ([#25](https://github.com/kcosr/pi-sandbox/pull/25))
 - Require smolvm 1.26.1 for Linux VM execution. Install the matching distribution and rebuild plain tool images; retained state continues to require its recorded runtime. ([#24](https://github.com/kcosr/pi-sandbox/pull/24))
 
 ### Changed
 
+- Update sandbox extension to 0.6.0 and pin the qualified smolvm 1.27.0 two-fix fork for independent prepared-machine families. ([#27](https://github.com/kcosr/pi-sandbox/pull/27))
 - Update sandbox extension to 0.5.0 with recorded family ownership, CLI-managed deletion and explicit retention results. Shared-cache pruning remains an operator action. ([#25](https://github.com/kcosr/pi-sandbox/pull/25))
 - Update the reusable sandbox extension to 0.4.1 with the verified smolvm 1.26.1 runtime inventory. ([#24](https://github.com/kcosr/pi-sandbox/pull/24))
 

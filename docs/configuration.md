@@ -771,14 +771,14 @@ function record tool identity, permission decisions, and outcomes only.
 
 ## smolvm image and runtime selection
 
-The optional Linux x86-64 and macOS 26+ arm64 backend uses a complete, fixed smolvm **1.26.1**
+The optional Linux x86-64 and macOS 26+ arm64 backend uses a complete, fixed smolvm **1.27.0**
 distribution. The distribution manifest, not runtime configuration or an
 identity rule, selects its absolute wrapper path:
 
 ```toml
 [platforms.linux.smolvm]
-path = "/opt/smolvm-1.26.1/smolvm"
-version = "1.26.1"
+path = "/opt/smolvm-1.27.0/smolvm"
+version = "1.27.0"
 ```
 
 For macOS arm64, use `[platforms.darwin.smolvm]` with the complete Darwin arm64 distribution. Intel macOS and Linux arm64 are not supported by this VM backend.

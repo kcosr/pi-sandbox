@@ -28,7 +28,7 @@ vi.mock("node:fs/promises", async (importActual) => {
 });
 vi.mock("./runtime-release.js", () => ({
   verifySmolvmRuntime: () => Promise.resolve("a".repeat(64)),
-  SMOLVM_VERSION: "1.26.1",
+  SMOLVM_VERSION: "1.27.0",
 }));
 vi.mock("./pack.js", () => ({ validateSmolvmPack: async () => {} }));
 vi.mock("./host-control-paths.js", () => ({ hostControlPaths: () => Promise.resolve([]) }));
@@ -56,7 +56,7 @@ vi.mock("./cli.js", () => {
       readonly active = new Set<{ controller: AbortController; done: Promise<void> }>();
       async run(request: SandboxCommandRequest, options: SandboxExecutionOptions = {}) {
         let stdout = "";
-        if (request.argv[0] === "--version") stdout = "smolvm 1.26.1";
+        if (request.argv[0] === "--version") stdout = "smolvm 1.27.0";
         else if (request.argv[1] === "exec") {
           const guest = JSON.parse(
             Buffer.from(request.argv.at(-1)!, "base64").toString(),

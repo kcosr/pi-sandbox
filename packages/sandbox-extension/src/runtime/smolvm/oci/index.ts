@@ -1,5 +1,6 @@
 export {
   createSmolvmOciFamily,
+  configureSmolvmOciFamily,
   deleteSmolvmOciFamily,
   readSmolvmOciFamily,
   reopenSmolvmOciFamily,
@@ -11,6 +12,7 @@ export type {
   SmolvmOciAttachment,
   SmolvmOciFamily,
   SmolvmOciFamilyOptions,
+  SmolvmOciCopyOptions,
   SmolvmOciFamilyHooks,
   SmolvmOciMachine,
   SmolvmOciRetainedFamily,

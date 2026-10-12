@@ -32,7 +32,7 @@ function manifest() {
     mode: "vm",
     platform: smolvmReleaseForPlatform(process.platform, process.arch).guestPlatform,
     host_platform: smolvmReleaseForPlatform(process.platform, process.arch).platform,
-    smolvm_version: "1.26.1",
+    smolvm_version: "1.27.0",
     network: false,
     gpu: false,
     cuda: false,
