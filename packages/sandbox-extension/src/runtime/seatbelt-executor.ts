@@ -11,6 +11,7 @@ import {
   type ToolCommandPaths,
 } from "./contracts.js";
 import { resolveDirectToolCommands } from "./direct-executor.js";
+import { assertToolBundlePlacement, snapshotToolBundle, toolBundlePath } from "./tool-bundle.js";
 import { SeatbeltAdmissionQueue } from "./seatbelt/admission.js";
 import {
   canonicalizeSeatbeltDirectory,
@@ -87,6 +88,7 @@ export async function createSeatbeltExecutor(
     const basePolicy = seatbeltBasePolicy(options);
     const limits = resolveSeatbeltLimits(options.limits);
     const environment = seatbeltEnvironment(options.environment);
+    const toolBundle = snapshotToolBundle(options.toolBundle);
     if (process.platform !== "darwin" || !["arm64", "x64"].includes(process.arch))
       throw new Error("sandbox_seatbelt_platform_unsupported");
     if (process.getuid?.() === 0) throw new Error("sandbox_root_unsupported");
@@ -102,7 +104,7 @@ export async function createSeatbeltExecutor(
         return canonical;
       }),
     );
-    const commands = await resolveDirectToolCommands("darwin");
+    const commands = await resolveDirectToolCommands("darwin", toolBundle);
     const executables: string[] = [];
     for (const executable of [...SEATBELT_REQUIRED_EXECUTABLES, ...Object.values(commands)]) {
       const resolved = await realpath(executable);
@@ -115,6 +117,7 @@ export async function createSeatbeltExecutor(
     // mkdtemp gives an owned 0700 parent. Ambient HOME/TMPDIR cannot relocate it.
     const root = await canonicalizeSeatbeltDirectory(await mkdtemp("/private/tmp/pi-sandbox-"));
     runtime = await identity(root);
+    assertToolBundlePlacement(toolBundle, cwd, basePolicy.workspaceWritable, denied, [root]);
     const writable: CanonicalSeatbeltDirectory[] = [];
     for (const name of ["home", "tmp", "cache", "config", "state"]) {
       const directory = path.join(root, name);
@@ -141,7 +144,10 @@ export async function createSeatbeltExecutor(
       Object.freeze(executables),
       Object.freeze({
         ...environment,
-        PATH: "/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin",
+        PATH: toolBundlePath(
+          toolBundle,
+          "/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin",
+        ),
         LANG: "C.UTF-8",
         HOME: writable[0]!,
         TMPDIR: writable[1]!,

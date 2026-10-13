@@ -13,12 +13,20 @@ the fixed GNU utilities used by typed tools.
 The build and installer validate required Bubblewrap options, including
 `--remount-ro` for directory masks and `--ro-bind-data` for empty file masks.
 
-macOS direct and Seatbelt modes require Homebrew `coreutils`, `findutils`,
+By default, macOS direct and Seatbelt modes require Homebrew `coreutils`, `findutils`,
 `grep`, `gawk`, `fd`, and `ripgrep`, plus system Bash, `sh`, and `file`. The
 runtime resolves the Homebrew prefix for Apple silicon or Intel and fails
 closed if a GNU command is missing. The macOS installer validates the selected
 administrative backend before checking these GNU prerequisites. Seatbelt also requires the fixed system `/usr/bin/sandbox-exec`. A macOS release build additionally requires
 Homebrew GNU tar (`gtar`) for reproducible archives.
+
+A build-selected macOS tool bundle can supply any of those tool commands,
+including host `fd` and `rg`, with its required libraries. Selected bundled
+commands replace only their corresponding system prerequisites. System Bash,
+`sh`, `file`, and fixed `/usr/bin/sandbox-exec` remain required unless the first
+three are themselves selected. The bundle records its architecture and minimum
+macOS version; each target needs native qualification. GNU tar remains a build
+dependency and is not a runtime bundle command.
 
 Configured home-directory expansion requires `/usr/bin/getent` on Linux or
 the system `/usr/bin/dscacheutil` on macOS. The runtime queries the effective
@@ -224,6 +232,68 @@ reported version, and required command-line options, then installs it at
 `libexec_dir/bwrap` with mode `0755`. The license is packaged beside the other
 third-party notices. System mode packages no Bubblewrap binary and leaves the
 selected absolute path unmanaged.
+
+macOS can additionally select a prepared native tool artifact:
+
+```toml
+[platforms.darwin.tool_bundle]
+directory = "./build-inputs/tools-darwin-arm64"
+inventory_sha256 = "<lowercase SHA-256 of inventory.json>"
+commands = ["awk", "cat", "chmod", "fd", "find", "grep", "head", "mkdir", "mv", "rg", "rm", "sha256sum", "sort", "tail", "test", "wc"]
+```
+
+This optional table contains exactly those three fields. Omitting it retains
+system command selection. `directory` resolves relative to the manifest and
+must be a canonical directory with no symlink components. Supported command
+names are `bash`, `sh`, `cat`, `chmod`, `mkdir`, `mv`, `rm`, `grep`, `file`,
+`find`, `awk`, `head`, `sha256sum`, `sort`, `tail`, `test`, `wc`, `fd`, and `rg`.
+The selection must exactly match its `bin/` entries. This first bundle validator
+supports native Darwin builds only; Linux continues using its existing providers.
+
+The strict `inventory.json` has version `1`, platform `"darwin"`, architecture
+`"arm64"` or `"x64"`, `minimumOS` such as `"26.0"`, and `files` and `sources`
+arrays. Every file entry has `path`, final `sha256`, `mode`, byte `size`, and
+`source`. Native entries also have `originalSha256`, recording the bytes before
+relocation or signing. Native paths are `bin/<command>` or `lib/<name>.dylib`
+with mode `"0755"`; license files reside below `licenses/` with mode `"0644"`.
+Every source has `name`, `version`, `license`, `sourceUrl`, `sourceSha256`,
+`binaryUrl`, `binarySha256`, and nonempty `licenseFiles` naming its packaged
+notices. URLs are HTTPS and digests lowercase SHA-256. Original/source digests
+are provenance supplied by the artifact producer; the builder verifies the
+pinned inventory and every final file, not remote source archives.
+
+Unlisted files/directories, missing files, symlinks, traversal, unknown fields,
+incorrect modes or hashes are rejected. Native builds inspect each executable
+and dylib's actual architecture, minimum OS, loader imports and signature.
+Dependencies must resolve to system libraries or inventoried libraries via
+`@loader_path`; external Homebrew paths and `LC_RPATH` are rejected. Artifact
+producers must relocate dependent dylibs, sign changed native files, preserve
+licenses and record original/final hashes before pinning the inventory. The
+builder does not download or repair tool artifacts.
+Artifact producers must retain corresponding source archives, patches and build
+recipes and fulfill the bundled components' license and redistribution terms;
+an inventory of source URLs and digests does not itself supply those materials.
+
+Managed releases copy the complete artifact to `libexec_dir/tools`, preserve
+native executable modes during installation, and include its identity and
+source/file hashes in the release manifest and SBOM. Runtime paths are anchored
+beside the real managed executable, allowing extracted archives to relocate
+together. Selected host `fd`/`rg` paths precede Pi's cache and PATH lookup; a
+missing selected file fails without fallback or download. No TOML runtime,
+standalone JSON, or environment setting can replace this build selection.
+
+`node scripts/build-extensions.mjs --distribution FILE` and
+`node scripts/pack-extensions.mjs OUTPUT --distribution FILE` use the same
+verified input for the standalone sandbox package. Its tools reside under
+`dist/native-tools`, resolve relative to the extracted package, and are recorded in
+package provenance. Ordinary builds remain JavaScript-only. A bundle-bearing
+package is specific to its recorded OS/architecture/minimum version; consumers
+that rebundle its JavaScript must preserve that tools layout or construct an
+executor with their own trusted `toolBundle` metadata. Neither path creates an
+administrator tool-directory policy.
+Stock Pi's own interactive `fd`/`rg` helpers retain stock Pi's cache/PATH
+selection; the managed host-tool seam is not part of the standalone extension.
+The standalone package's immutable selection governs its executor commands.
 
 Each strict JSON extension manifest has `"manifestVersion": 1`, kind
 `"managed"` or `"pi-tool"`, API version 3, a lowercase hyphenated identifier,

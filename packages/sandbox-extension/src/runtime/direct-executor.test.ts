@@ -1,3 +1,4 @@
+import { selectedTestToolBundle } from "../../../../tests/support/tool-bundle.js";
 import { mkdtemp, realpath, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -5,6 +6,9 @@ import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 
 import { createDirectExecutor, resolveDirectToolCommands } from "./direct-executor.js";
+
+const toolBundle = selectedTestToolBundle();
+const selectedTools = toolBundle === undefined ? {} : { toolBundle };
 
 const temporaryDirectories: string[] = [];
 
@@ -25,6 +29,7 @@ describe("direct executor", () => {
     const cwd = await temporaryCwd();
     const executor = await createDirectExecutor({
       cwd,
+      ...selectedTools,
       ambientEnvironment: {
         HOME: "/Users/alice",
         AMBIENT_VALUE: "ambient",
@@ -50,7 +55,7 @@ describe("direct executor", () => {
   });
 
   it("preserves bounded execution errors", async () => {
-    const executor = await createDirectExecutor({ cwd: await temporaryCwd() });
+    const executor = await createDirectExecutor({ cwd: await temporaryCwd(), ...selectedTools });
     try {
       await expect(
         executor.execute({
@@ -70,7 +75,7 @@ describe("direct executor", () => {
   });
 
   it("rejects per-command context overrides", async () => {
-    const executor = await createDirectExecutor({ cwd: await temporaryCwd() });
+    const executor = await createDirectExecutor({ cwd: await temporaryCwd(), ...selectedTools });
     try {
       for (const context of [{ cwd: "/" }, { environment: { VALUE: "override" } }]) {
         await expect(

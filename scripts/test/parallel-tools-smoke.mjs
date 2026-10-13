@@ -19,11 +19,19 @@ export async function testParallelTools({
   launch,
   modelsPath,
   workspace,
+  serialCommands = false,
   workspaceFiles = {
     write: (name, content) => writeFile(join(workspace, name), content),
     read: (name) => readFile(join(workspace, name), "utf8"),
   },
 }) {
+  // Seatbelt accepts concurrent tool requests but admits their commands serially.
+  // The directory mutex fails if those commands overlap; parallel backends keep
+  // the peer barrier that requires simultaneous execution.
+  const command = serialCommands
+    ? (prefix, side) =>
+        `mkdir ${prefix}-active || exit 71; printf ready > ${prefix}-${side}; sleep 0.05; rmdir ${prefix}-active; printf ${prefix}-${side}-ok`
+    : barrier;
   const originalModels = await readFile(modelsPath, "utf8").catch((error) => {
     if (error.code === "ENOENT") return undefined;
     throw error;
@@ -31,8 +39,8 @@ export async function testParallelTools({
   await workspaceFiles.write("parallel-edit.txt", "alpha\nbeta\ngamma\ndelta\n");
   const nestedScript = `
 for (const result of await Promise.all([
-  tools.bash({command:${JSON.stringify(barrier("nested", "left"))}}),
-  tools.bash({command:${JSON.stringify(barrier("nested", "right"))}})
+  tools.bash({command:${JSON.stringify(command("nested", "left"))}}),
+  tools.bash({command:${JSON.stringify(command("nested", "right"))}})
 ])) text(result);
 for (const result of await Promise.all([
   tools.edit({path:"parallel-edit.txt",edits:[{oldText:"gamma",newText:"third"}]}),
@@ -45,8 +53,8 @@ text(await tools.read({path:"parallel-queued.txt"}));
 text("NESTED_PARALLEL_OK");`;
   const batches = [
     [
-      { name: "bash", args: { command: barrier("ordinary", "left") } },
-      { name: "bash", args: { command: barrier("ordinary", "right") } },
+      { name: "bash", args: { command: command("ordinary", "left") } },
+      { name: "bash", args: { command: command("ordinary", "right") } },
     ],
     [
       {

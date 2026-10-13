@@ -8,6 +8,20 @@ and starts stock Pi 1.1.0 against independently extracted artifacts. Sandbox is
 installed without Git or permissions; Git is installed alone and with sandbox.
 No workspace package links are admitted. Provenance includes Git's bundled runner.
 
+To exercise a bundle-bearing artifact, run each package script with the same
+build input:
+
+```sh
+node scripts/test/sandbox-extension-package.mjs --distribution /path/to/distribution.toml
+node scripts/test/git-extension-package.mjs --distribution /path/to/distribution.toml
+```
+
+`verify:release -- --distribution FILE` propagates that selection to both
+package tests and the managed release. It supplies the verified directory to
+native test fixtures through test-only `PI_SANDBOX_TEST_TOOL_BUNDLE`; product
+runtime code does not read this variable. Package paths must be outside writable
+workspaces, and Node/Bun acceptance must test the extracted package.
+
 Linux sandbox acceptance requires Bubblewrap, Node 24 and Bun 1.3.14+ and checks
 both worker runtimes, conversation replacement and persistent background jobs.
 Direct acceptance also exercises ordinary and nested parallel tool calls.
@@ -48,7 +62,8 @@ unavailable namespaces.
 On macOS the verifier requires real Seatbelt controls and both Node/Bun runtime
 fixtures. It selects Bun from `PI_SANDBOX_TEST_BUN`, `PI_SANDBOX_BUN`, or the
 test host's `PATH`, in that order; use the verified release toolchain. Genuine
-documented GNU prerequisites are required for direct and Seatbelt tests.
+documented GNU prerequisites or the distribution's verified tool bundle are
+required for direct and Seatbelt tests.
 
 Linux real-Bubblewrap tests also require Python 3 for offline socket-family and
 namespace probes. This is a test-host dependency, not an application runtime
@@ -246,7 +261,8 @@ Direct-executor tests separately prove Linux direct execution, host-home path
 resolution, ambient-plus-scoped environment construction, direct-argv request
 bounds, cancellation/error mapping, and unsupported-platform failure. Config
 tests prove direct mode requires explicit host networking. macOS command-profile
-tests and native release validation require the declared Homebrew GNU tools;
+tests and native release validation require the declared Homebrew GNU tools or
+the selected, pinned native tool bundle;
 they never substitute BSD utility semantics.
 
 Host fixtures use a disposable parent with separate `workspace` and
@@ -320,7 +336,8 @@ release test remains offline.
 
 Linux release testing runs locally with Node.js 24, Rust/Cargo 1.85 or newer,
 and Bubblewrap through `npm run verify:release`. macOS release testing runs on
-the target architecture with Node.js 24, Bun, and the Homebrew prerequisites;
+the target architecture with Node.js 24, Bun, and the system prerequisites or
+selected native tool bundle;
 it builds and validates the native direct-mode archive. Generated artifacts are
 not committed.
 

@@ -11,6 +11,7 @@
 
 ### Added
 
+- Add build-selected macOS tool bundles with pinned native dependency inventories, packaged licenses, relocatable managed/standalone paths, and no runtime tool-directory override.
 - Add opt-in macOS Seatbelt execution with directory denials, read-only CWD policy, none/host networking, and serial bounded commands. Process-group cleanup while the direct child is active is best effort; background descendants may survive normal completion with their original grants.
 
 ## 0.7.0 - 2026-10-10

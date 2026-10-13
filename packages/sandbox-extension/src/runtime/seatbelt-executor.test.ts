@@ -1,3 +1,4 @@
+import { selectedTestToolBundle } from "../../../../tests/support/tool-bundle.js";
 import { execFile, spawn } from "node:child_process";
 import { once } from "node:events";
 import { promisify } from "node:util";
@@ -25,11 +26,12 @@ import type { SandboxExecutor } from "./contracts.js";
 
 const node = await realpath(process.execPath);
 const bun = process.env.PI_SANDBOX_TEST_BUN;
+const toolBundle = selectedTestToolBundle();
 const prerequisite = await (async () => {
   if (process.platform !== "darwin") return "requires native macOS";
   try {
     await access("/usr/bin/sandbox-exec", constants.X_OK);
-    await resolveDirectToolCommands("darwin");
+    await resolveDirectToolCommands("darwin", toolBundle);
     if (bun !== undefined) {
       if (!path.isAbsolute(bun)) return "PI_SANDBOX_TEST_BUN must be an absolute verified Bun path";
       await access(bun, constants.X_OK);
@@ -99,7 +101,12 @@ describe.skipIf(prerequisite !== undefined)("native Seatbelt executor", () => {
     await rm(root, { recursive: true, force: true });
   });
   async function create(options: Partial<CreateSeatbeltExecutorOptions> = {}) {
-    const executor = await createSeatbeltExecutor({ cwd, deniedPaths: [secret], ...options });
+    const executor = await createSeatbeltExecutor({
+      cwd,
+      deniedPaths: [secret],
+      ...(toolBundle === undefined ? {} : { toolBundle }),
+      ...options,
+    });
     executors.push(executor);
     return executor;
   }
@@ -131,7 +138,9 @@ describe.skipIf(prerequisite !== undefined)("native Seatbelt executor", () => {
         expect(env.cwd).toBe(cwd);
         expect(env.home).toBe(executor.home);
         expect(env.temp).toMatch(/^\/private\/tmp\/pi-sandbox-[^/]+\/tmp$/u);
-        expect(env.path).toBe("/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin");
+        expect(env.path).toBe(
+          `${toolBundle === undefined ? "" : `${toolBundle.root}/bin:`}/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin`,
+        );
         const input = Buffer.from([0, 255, 12, 127, 0]);
         const chunks: Buffer[] = [];
         const binary = await executor.execute(
@@ -252,6 +261,37 @@ describe.skipIf(prerequisite !== undefined)("native Seatbelt executor", () => {
     }
   });
 
+  it("resolves localhost through the host resolver in both network modes", async () => {
+    const source =
+      "require('node:dns').lookup('localhost',{all:true},(e,a)=>{if(e)throw e;console.log(JSON.stringify(a.map(x=>x.address)))})";
+    const host = await executeHost(node, ["-e", source], { timeout: 3000 });
+    expect(JSON.parse(host.stdout)).toContain("127.0.0.1");
+    for (const networkMode of ["none", "host"] as const) {
+      const executor = await create({ networkMode });
+      const result = await executor.execute({ argv: [node, "-e", source], timeoutMs: 3000 });
+      expect(result.exitCode, result.stderr.toString()).toBe(0);
+      expect(JSON.parse(result.stdout.toString())).toContain("127.0.0.1");
+    }
+  });
+
+  // Explicit opt-in keeps the ordinary suite offline. This resolves a public
+  // documentation domain only; it never connects to a provider or web server.
+  it.skipIf(process.env.PI_SANDBOX_TEST_PUBLIC_DNS !== "1")(
+    "resolves a public hostname in host mode when the host resolver succeeds",
+    async () => {
+      const source =
+        "require('node:dns').lookup('example.com',{all:true},(e,a)=>{if(e)throw e;console.log(JSON.stringify(a.map(x=>x.address)))})";
+      const host = await executeHost(node, ["-e", source], { timeout: 3000 });
+      expect(JSON.parse(host.stdout)).toEqual(expect.arrayContaining([expect.any(String)]));
+      const executor = await create({ networkMode: "host" });
+      const result = await executor.execute({ argv: [node, "-e", source], timeoutMs: 3000 });
+      expect(result.exitCode, result.stderr.toString()).toBe(0);
+      expect(JSON.parse(result.stdout.toString())).toEqual(
+        expect.arrayContaining([expect.any(String)]),
+      );
+    },
+  );
+
   it.each(["cancel", "timeout", "close", "overflow"] as const)(
     "attempts active process-group cleanup on %s",
     async (mode) => {
@@ -316,7 +356,7 @@ describe.skipIf(prerequisite !== undefined)("native Seatbelt executor", () => {
       const survivor = `setTimeout(()=>{const fs=require('node:fs');let denied=false;try{fs.readFileSync(${JSON.stringify(path.join(secret, "marker"))})}catch(e){denied=e.code==='EPERM'}fs.writeFileSync(${JSON.stringify(marker)},denied?'confined-after-owner-death':'FAILED')},900)`;
       const launch = `const p=require('node:child_process').spawn(process.execPath,['-e',${JSON.stringify(survivor)}],{detached:true,stdio:'ignore'});p.unref();`;
       const script = `import {createSeatbeltExecutor} from ${JSON.stringify(hostBundle)};
-      const e=await createSeatbeltExecutor({cwd:${JSON.stringify(cwd)},deniedPaths:[${JSON.stringify(secret)}]});
+      const e=await createSeatbeltExecutor({cwd:${JSON.stringify(cwd)},deniedPaths:[${JSON.stringify(secret)}],toolBundle:${JSON.stringify(toolBundle)}});
       const r=await e.execute({argv:[${JSON.stringify(runtime)},'-e',${JSON.stringify(launch)}]});
       if(r.exitCode!==0)throw Error(r.stderr.toString());console.log(JSON.stringify({home:e.home}));setInterval(()=>{},1000);`;
       const child = spawn(runtime, ["--input-type=module", "-e", script], {
@@ -401,7 +441,7 @@ describe.skipIf(prerequisite !== undefined)("native Seatbelt executor", () => {
       const descriptor = await open(path.join(secret, "marker"), "r");
       const source = `import fs from 'node:fs';import {createSeatbeltExecutor} from ${JSON.stringify(hostBundle)};
       if(fs.readFileSync(57,'utf8')!=='protected')throw Error('positive descriptor control');
-      const e=await createSeatbeltExecutor({cwd:${JSON.stringify(cwd)},deniedPaths:[${JSON.stringify(secret)}]});
+      const e=await createSeatbeltExecutor({cwd:${JSON.stringify(cwd)},deniedPaths:[${JSON.stringify(secret)}],toolBundle:${JSON.stringify(toolBundle)}});
       try{const r=await e.execute({argv:[${JSON.stringify(runtime)},'-e',"try{require('node:fs').fstatSync(57);throw Error('inherited')}catch(e){if(e.code!=='EBADF')throw e;console.log('closed')}"]});
       if(r.exitCode!==0||r.stdout.toString().trim()!=='closed')throw Error('descriptor leaked '+r.stderr);console.log('descriptor-ok')}finally{await e.close()}`;
       const stdio: ("ignore" | "pipe" | number)[] = Array.from(

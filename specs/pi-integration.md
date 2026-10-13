@@ -265,6 +265,14 @@ provides these seams:
    and the TUI header, falling back to Pi's own version when it is absent. The
    managed entry point supplies its build identity; ordinary Pi behavior and
    Pi's internal version remain unchanged.
+10. `0008-build-selected-host-tools.patch` binds optional host `fd` and `rg`
+    selections through build-time `PI_SANDBOX_HOST_TOOLS` literals. Resolve bundled
+    `tools/bin/<name>` paths relative to the compiled executable. Check selected
+    files before user-cache or PATH discovery; a missing or non-executable selected
+    tool fails without downloading or falling back. Unselected tools preserve Pi's
+    ordinary discovery. No policy, environment variable, or model-facing runtime
+    option may replace a build-selected path. Qualify conflicting cache/PATH tools,
+    missing selections and relocated package paths containing spaces.
 
 Pi 1.0's resource loader separates built-in factories from ordinary inline
 factories. The forced `--no-extensions` flag disables the built-in factories and

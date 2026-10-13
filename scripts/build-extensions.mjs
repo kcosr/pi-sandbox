@@ -5,8 +5,15 @@ import { dirname, join, relative, resolve } from "node:path";
 import { tmpdir } from "node:os";
 import { fileURLToPath } from "node:url";
 import { build } from "esbuild";
+import { loadDistribution } from "./build/distribution.mjs";
+import { copyToolBundle, validateNativeToolBundle } from "./build/tool-bundle.mjs";
 
 const root = dirname(dirname(fileURLToPath(import.meta.url)));
+const args = process.argv.slice(2);
+if (args.length !== 0 && (args.length !== 2 || args[0] !== "--distribution" || !args[1]))
+  throw new Error("usage: node scripts/build-extensions.mjs [--distribution FILE]");
+const distribution = args.length ? await loadDistribution(resolve(args[1])) : undefined;
+validateNativeToolBundle(distribution?.toolBundle);
 for (const name of ["sandbox-extension", "git-extension"]) {
   const pkg = join(root, "packages", name);
   const metadata = JSON.parse(await readFile(join(pkg, "package.json"), "utf8"));
@@ -59,12 +66,22 @@ for (const name of ["sandbox-extension", "git-extension"]) {
       [join(root, "node_modules/typescript/bin/tsc"), "-p", join(pkg, "tsconfig.build.json")],
       { stdio: "inherit" },
     );
+    if (distribution?.toolBundle) {
+      const bundle = distribution.toolBundle;
+      await copyToolBundle(bundle, join(pkg, "dist/native-tools"));
+      await writeFile(
+        join(pkg, "dist/build-tools.js"),
+        `import { realpathSync } from "node:fs";\nimport { fileURLToPath } from "node:url";\nimport { join } from "node:path";\nconst root = realpathSync(fileURLToPath(new URL("./native-tools", import.meta.url)));\nexport const builtToolBundle = Object.freeze({root, commands:Object.freeze(Object.fromEntries(${JSON.stringify(Object.keys(bundle.layout.toolBundle.commands))}.map(name => [name, join(root,"bin",name)])))});\n`,
+      );
+    }
   }
   await cp(join(root, "LICENSE"), join(pkg, "LICENSE"));
   const digest = createHash("sha256");
   sourceFiles.add(join(pkg, "package.json"));
   sourceFiles.add(join(pkg, "tsconfig.build.json"));
   sourceFiles.add(fileURLToPath(import.meta.url));
+  sourceFiles.add(join(root, "scripts/build/distribution.mjs"));
+  sourceFiles.add(join(root, "scripts/build/tool-bundle.mjs"));
   const inputs = [...sourceFiles].sort();
   for (const file of inputs)
     digest
@@ -74,7 +91,7 @@ for (const name of ["sandbox-extension", "git-extension"]) {
       .update("\0");
   await writeFile(
     join(pkg, "provenance.json"),
-    `${JSON.stringify({ name: metadata.name, version: metadata.version, sourceCommit: execFileSync("git", ["rev-parse", "HEAD"], { cwd: root, encoding: "utf8" }).trim(), piVersion: pin.version, sourceSha256: digest.digest("hex"), sourceInputs: inputs.map((file) => relative(root, file)) }, null, 2)}\n`,
+    `${JSON.stringify({ name: metadata.name, version: metadata.version, sourceCommit: execFileSync("git", ["rev-parse", "HEAD"], { cwd: root, encoding: "utf8" }).trim(), piVersion: pin.version, sourceSha256: digest.digest("hex"), sourceInputs: inputs.map((file) => relative(root, file)), ...(name === "sandbox-extension" && distribution?.toolBundle ? { toolBundle: distribution.toolBundle.release } : {}) }, null, 2)}\n`,
   );
   await mkdir(join(root, "release"), { recursive: true });
   console.log(`Built ${metadata.name}@${metadata.version}`);

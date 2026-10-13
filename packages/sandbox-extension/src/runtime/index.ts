@@ -30,4 +30,5 @@ export {
   type SandboxResourceLimits,
   type ToolCommandName,
   type ToolCommandPaths,
+  type ToolBundle,
 } from "./contracts.js";

@@ -19,8 +19,10 @@ import {
   type SandboxResourceLimits,
   type ToolCommandName,
   type ToolCommandPaths,
+  type ToolBundle,
 } from "./contracts.js";
 import { LINUX_TOOL_COMMANDS } from "./tool-commands.js";
+import { snapshotToolBundle, toolBundlePath, validateToolBundle } from "./tool-bundle.js";
 
 export interface CreateDirectExecutorOptions {
   readonly cwd: string;
@@ -28,6 +30,7 @@ export interface CreateDirectExecutorOptions {
   readonly ambientEnvironment?: NodeJS.ProcessEnv;
   readonly limits?: SandboxResourceLimits;
   readonly platform?: NodeJS.Platform;
+  readonly toolBundle?: ToolBundle;
 }
 
 const DARWIN_PREFIXES = Object.freeze(["/opt/homebrew", "/usr/local"]);
@@ -53,20 +56,36 @@ async function isExecutable(candidate: string): Promise<boolean> {
 
 export async function resolveDirectToolCommands(
   platform: NodeJS.Platform = process.platform,
+  toolBundle?: ToolBundle,
 ): Promise<ToolCommandPaths> {
-  if (platform === "linux") return LINUX_TOOL_COMMANDS;
-  if (platform !== "darwin") {
+  let selected: ToolBundle | undefined;
+  if (platform !== "darwin" && platform !== "linux") {
     throw new SandboxExecutionError("sandbox_start_failed", {
       cause: new Error(`direct_execution_platform_unsupported: ${platform}`),
     });
   }
 
+  try {
+    selected = snapshotToolBundle(toolBundle);
+    await validateToolBundle(selected);
+  } catch (cause) {
+    throw new SandboxExecutionError("sandbox_start_failed", { cause });
+  }
+  if (platform === "linux")
+    return selected === undefined
+      ? LINUX_TOOL_COMMANDS
+      : Object.freeze({ ...LINUX_TOOL_COMMANDS, ...selected.commands });
+
   const resolved = {} as Record<ToolCommandName, string>;
   const missing: string[] = [];
   for (const name of TOOL_COMMAND_NAMES) {
-    const selected = await firstExecutable(darwinCandidates(name));
-    if (selected === undefined) missing.push(name);
-    else resolved[name] = selected;
+    if (selected?.commands[name] !== undefined) {
+      resolved[name] = selected.commands[name];
+      continue;
+    }
+    const candidate = await firstExecutable(darwinCandidates(name));
+    if (candidate === undefined) missing.push(name);
+    else resolved[name] = candidate;
   }
   if (missing.length > 0) {
     throw new SandboxExecutionError("sandbox_start_failed", {
@@ -88,6 +107,12 @@ async function firstExecutable(candidates: readonly string[]): Promise<string | 
 export async function createDirectExecutor(
   options: CreateDirectExecutorOptions,
 ): Promise<SandboxExecutor> {
+  let toolBundle: ToolBundle | undefined;
+  try {
+    toolBundle = snapshotToolBundle(options.toolBundle);
+  } catch (cause) {
+    throw new SandboxExecutionError("sandbox_start_failed", { cause });
+  }
   const cwd = path.normalize(options.cwd);
   if (!path.isAbsolute(options.cwd) || cwd !== options.cwd || options.cwd.includes("\0")) {
     throw new SandboxExecutionError("sandbox_start_failed", {
@@ -106,11 +131,13 @@ export async function createDirectExecutor(
     });
   }
 
-  const commands = await resolveDirectToolCommands(options.platform);
+  const commands = await resolveDirectToolCommands(options.platform, toolBundle);
   const environment = {
     ...(options.ambientEnvironment ?? process.env),
     ...options.environment,
   };
+  if (toolBundle !== undefined)
+    environment.PATH = toolBundlePath(toolBundle, environment.PATH ?? "/usr/bin:/bin");
   const home = path.normalize(environment.HOME ?? homedir());
   if (!path.isAbsolute(home) || home.includes("\0")) {
     throw new SandboxExecutionError("sandbox_start_failed", {

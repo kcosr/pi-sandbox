@@ -223,10 +223,10 @@ Installation validation checks syntax without expanding the installer's home.
 
 The distribution manifest fixes the config directory, libexec directory,
 launcher path, identity and event-collector sockets, Linux systemd unit directory, and Linux
-Bubblewrap provider at build time. A system provider names an unmanaged
+Bubblewrap provider and optional macOS tool bundle at build time. A system provider names an unmanaged
 absolute executable. A bundled provider supplies a verified native binary that
 is installed under the root-owned libexec directory and selected by the
-compiled runtime. macOS packages only the application; the Linux-only broker is not
+compiled runtime. macOS packages the application and any selected native tools; the Linux-only broker is not
 included. Keeping the product executable behind its configured launcher path provides a canonical command,
 but does not constitute access control against the logged-in user.
 
@@ -332,12 +332,21 @@ and gawk) plus system Bash, `sh`, and `file`, and fails startup if any command i
 missing. This preserves one typed-tool implementation instead of silently
 changing semantics between GNU and BSD utilities.
 
+An optional build-only tool inventory replaces selected command paths with
+verified packaged executables and their dependent libraries. Shared executor
+constructors accept trusted `toolBundle: { root, commands }` metadata and retain
+the backend-neutral public executor interface. Managed metadata derives from
+the executable's real directory; standalone metadata derives from its package.
+No runtime policy or environment field selects a bundle. Unselected command
+names keep their existing system paths. Selected host `fd` and `rg` use the
+pinned Pi build seam before its cache or PATH search.
+
 ## Seatbelt executor
 
 Opt-in macOS `seatbelt` execution uses the fixed system `/usr/bin/sandbox-exec`
 launcher. The same seven-tool factory and user shell adapter supply direct argv,
 bounded input/output, cancellation and output callbacks through the backend-neutral
-executor. It uses the existing macOS GNU command profile. The host application,
+executor. It uses the existing macOS GNU command profile or selected bundled commands. The host application,
 provider traffic, MCP and managed host tools remain outside this policy.
 
 Seatbelt shares host namespaces. Ordinary host files are readable and read-only;

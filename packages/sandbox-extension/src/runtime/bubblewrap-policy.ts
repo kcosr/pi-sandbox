@@ -1,6 +1,7 @@
 import path from "node:path";
 
-import type { NetworkMode } from "./contracts.js";
+import type { NetworkMode, ToolBundle } from "./contracts.js";
+import { assertToolBundlePlacement, snapshotToolBundle, toolBundlePath } from "./tool-bundle.js";
 
 import {
   PRIVATE_SANDBOX_SYSTEM_PATHS,
@@ -72,6 +73,7 @@ export function buildBubblewrapArguments(
   environment: Readonly<Record<string, string>> = {},
   cwdWritable = true,
   hiddenMasks: readonly HiddenPathMask[] = [],
+  toolBundle?: ToolBundle,
 ): readonly string[] {
   assertSandboxCwd(cwd, cwdWritable);
   const masks = planHiddenPaths(
@@ -81,6 +83,14 @@ export function buildBubblewrapArguments(
   const kinds = new Map(hiddenMasks.map(({ target, kind }) => [target, kind]));
   assertNetworkMode(networkMode);
   const customEnvironment = validateSandboxEnvironment(environment);
+  const bundle = snapshotToolBundle(toolBundle);
+  assertToolBundlePlacement(
+    bundle,
+    cwd,
+    cwdWritable,
+    hiddenMasks.map(({ target }) => target),
+    [...PRIVATE_SANDBOX_SYSTEM_PATHS, "/tmp"],
+  );
   if (!path.isAbsolute(argv[0])) {
     throw new Error("sandbox_executable_not_absolute");
   }
@@ -151,7 +161,7 @@ export function buildBubblewrapArguments(
     if (kinds.get(target) === "directory") args.push("--remount-ro", target);
   }
   for (const [key, value] of Object.entries(SAFE_ENVIRONMENT)) {
-    args.push("--setenv", key, value);
+    args.push("--setenv", key, key === "PATH" ? toolBundlePath(bundle, value) : value);
   }
   for (const [key, value] of customEnvironment) {
     args.push("--setenv", key, value);

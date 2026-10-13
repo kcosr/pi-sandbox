@@ -108,6 +108,9 @@ flowchart LR
   extensions additionally use Pi Sandbox's bounded host-command contract. On
   Linux it also selects either an unmanaged system Bubblewrap path or a
   verified Bubblewrap binary bundled beneath Pi Sandbox's libexec directory.
+  On macOS an optional pinned tool bundle supplies selected GNU utilities and
+  host `fd`/`rg` with their dependent libraries. Selection is fixed at build time;
+  ordinary distributions keep system tools.
 - Every model tool has an explicit `allow`, `ask`, `deny`, or `disabled`
   policy. Optional session grants are memory-only and independently configurable
   for each tool.

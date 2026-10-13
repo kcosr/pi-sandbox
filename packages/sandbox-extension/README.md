@@ -156,5 +156,21 @@ Built artifacts include declarations, the worker, license and provenance. Run
 tarball with stock Pi under Node/Bun, using Bubblewrap on Linux, Seatbelt on macOS, and direct execution.
 The package includes ordinary tool UI rendering, command output streaming and
 cancellation. It does not provide interactive terminal sessions or a VM controller.
-The package is JavaScript-only; no compiler, Python or native runtime helper is
-required to use it.
+The default package is JavaScript-only; no compiler, Python or native runtime
+helper is required to use it. A build may select a pinned native macOS tool
+bundle with `node scripts/build-extensions.mjs --distribution FILE`. That
+artifact includes executables, dependent dylibs, licenses and an inventory under
+`dist/native-tools`, with package-relative immutable selection recorded in provenance.
+It requires the inventory's OS, architecture and minimum OS version. Missing
+selected tools fail closed; runtime JSON and environment variables cannot change
+the selection. Unselected commands keep the ordinary system prerequisites.
+Stock Pi's interactive `fd`/`rg` helpers retain their own cache/PATH behavior;
+the managed application's exact host-tool selection is not injected into stock Pi.
+
+Install bundled packages outside the writable workspace: confined executors
+reject bundle/workspace overlap and exclusions hiding selected prerequisites.
+Embedding applications can pass trusted `toolBundle: { root, commands }` to an
+executor constructor. `root` and selected command paths must be canonical and
+existing; command paths remain beneath that root. Applications that rebundle
+the default entry must preserve its adjacent tools layout. See the repository's
+installation documentation for the strict build artifact schema.

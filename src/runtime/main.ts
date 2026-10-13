@@ -239,6 +239,7 @@ async function createProbedExecutor(
         processLifetime: config.execution.processLifetime,
         cwdWritable: config.filesystem.cwdWritable,
         hiddenPaths: config.filesystem.hiddenPaths,
+        ...(buildLayout.toolBundle ? { toolBundle: buildLayout.toolBundle } : {}),
         environment,
       });
     } else if (config.execution.backend === "seatbelt") {
@@ -248,11 +249,17 @@ async function createProbedExecutor(
         cwd,
         cwdWritable: config.filesystem.cwdWritable,
         deniedPaths: config.filesystem.deniedPaths,
+        ...(buildLayout.toolBundle ? { toolBundle: buildLayout.toolBundle } : {}),
         networkMode: config.network.mode,
         environment,
       });
     } else if (config.execution.backend === "direct") {
-      executor = await createDirectExecutor({ cwd, environment, ambientEnvironment });
+      executor = await createDirectExecutor({
+        cwd,
+        environment,
+        ambientEnvironment,
+        ...(buildLayout.toolBundle ? { toolBundle: buildLayout.toolBundle } : {}),
+      });
     } else throw new Error("Unsupported execution backend");
   } catch (error) {
     const detail = actionableErrorMessage(error);

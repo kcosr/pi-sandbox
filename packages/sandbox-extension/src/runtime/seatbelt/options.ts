@@ -4,7 +4,9 @@ import {
   SandboxExecutionError,
   type SandboxCommandRequest,
   type SandboxResourceLimits,
+  type ToolBundle,
 } from "../contracts.js";
+import { assertToolBundlePlacement, snapshotToolBundle } from "../tool-bundle.js";
 import {
   assertSeatbeltPath,
   isSeatbeltPathWithin,
@@ -20,6 +22,7 @@ export interface CreateSeatbeltExecutorOptions {
   readonly networkMode?: "none" | "host";
   readonly environment?: Readonly<Record<string, string>>;
   readonly limits?: SandboxResourceLimits;
+  readonly toolBundle?: ToolBundle;
 }
 
 export const SEATBELT_LAUNCHER = "/usr/bin/sandbox-exec";
@@ -56,9 +59,15 @@ export function validateSeatbeltOptions(options: CreateSeatbeltExecutorOptions):
     Array.isArray(options) ||
     Object.keys(options).some(
       (key) =>
-        !["cwd", "cwdWritable", "deniedPaths", "networkMode", "environment", "limits"].includes(
-          key,
-        ),
+        ![
+          "cwd",
+          "cwdWritable",
+          "deniedPaths",
+          "networkMode",
+          "environment",
+          "limits",
+          "toolBundle",
+        ].includes(key),
     )
   )
     throw new Error("sandbox_seatbelt_options_invalid");
@@ -78,6 +87,8 @@ export function validateSeatbeltOptions(options: CreateSeatbeltExecutorOptions):
     throw new Error("sandbox_denied_paths_invalid");
   const policy = seatbeltBasePolicy(options);
   buildSeatbeltProfile(policy);
+  const toolBundle = snapshotToolBundle(options.toolBundle);
+  assertToolBundlePlacement(toolBundle, options.cwd, policy.workspaceWritable, options.deniedPaths);
   resolveSeatbeltLimits(options.limits);
   seatbeltEnvironment(options.environment);
   for (const executable of SEATBELT_REQUIRED_EXECUTABLES)

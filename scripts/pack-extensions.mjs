@@ -7,8 +7,14 @@ import { fileURLToPath } from "node:url";
 
 const root = dirname(dirname(fileURLToPath(import.meta.url)));
 const out = resolve(process.argv[2] ?? join(root, "release"));
+const buildArgs = process.argv.slice(3);
+if (
+  buildArgs.length !== 0 &&
+  (buildArgs.length !== 2 || buildArgs[0] !== "--distribution" || !buildArgs[1])
+)
+  throw new Error("usage: node scripts/pack-extensions.mjs [OUTPUT] [--distribution FILE]");
 await mkdir(out, { recursive: true });
-execFileSync(process.execPath, [join(root, "scripts/build-extensions.mjs")], {
+execFileSync(process.execPath, [join(root, "scripts/build-extensions.mjs"), ...buildArgs], {
   stdio: "inherit",
 });
 for (const name of ["sandbox-extension", "git-extension"]) {

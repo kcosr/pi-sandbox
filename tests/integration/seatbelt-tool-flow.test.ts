@@ -1,3 +1,4 @@
+import { selectedTestToolBundle } from "../support/tool-bundle.js";
 import { mkdir, mkdtemp, realpath, readFile, readdir, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -17,13 +18,16 @@ import {
   type SandboxExecutor,
 } from "../../packages/sandbox-extension/src/runtime/index.js";
 
+const toolBundle = selectedTestToolBundle();
+const selectedTools = toolBundle === undefined ? {} : { toolBundle };
+
 describe.skipIf(process.platform !== "darwin")("typed tools through Seatbelt", () => {
   let cwd: string;
   let executor: SandboxExecutor;
 
   beforeAll(async () => {
     cwd = await realpath(await mkdtemp(join(tmpdir(), "pi-sandbox-seatbelt-tools-")));
-    executor = await createSeatbeltExecutor({ cwd });
+    executor = await createSeatbeltExecutor({ cwd, ...selectedTools });
     await executor.probe();
   });
 

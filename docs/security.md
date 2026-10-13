@@ -105,6 +105,17 @@ binary is trusted installation code. A bundled binary is digest-checked at
 build and by the release inventory, installed non-setuid beneath the root-owned
 libexec directory, and never selected by runtime configuration.
 
+Optional native tool bundles are also trusted installation code selected only
+at build time. The builder verifies a pinned complete inventory and the native
+loader dependency closure; source/original hashes record artifact provenance.
+The installed bundle and libraries must remain protected from untrusted writes.
+Bubblewrap and Seatbelt reject overlap between the bundle and writable CWD, and
+reject filesystem exclusions covering selected tools or the bundle. A standalone
+package should therefore be installed outside its writable project workspace.
+Direct execution provides no filesystem protection for the package. Runtime
+configuration, environment and Pi's host-tool cache cannot replace a selected
+bundled executable, and a missing selected executable does not trigger fallback.
+
 ## MCP and code-mode authority
 
 Administrator-enabled HTTP MCP clients and stdio MCP servers run outside the

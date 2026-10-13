@@ -202,6 +202,48 @@ async function verifyExecutionBackends(root) {
     await expectMissing(layout.libexecDir);
     await expectMissing(join(layout.configDir, "config.toml"));
   }
+  const toolNames = [
+    "awk",
+    "cat",
+    "chmod",
+    "find",
+    "grep",
+    "head",
+    "mkdir",
+    "mv",
+    "rm",
+    "sha256sum",
+    "sort",
+    "tail",
+    "test",
+    "wc",
+  ];
+  const bundleRoot = join(layout.libexecDir, "tools");
+  const bundledLayout = {
+    ...layout,
+    toolBundle: {
+      root: bundleRoot,
+      commands: Object.fromEntries(toolNames.map((name) => [name, join(bundleRoot, "bin", name)])),
+    },
+    hostTools: { fd: join(bundleRoot, "bin/fd"), rg: join(bundleRoot, "bin/rg") },
+  };
+  const bundledRelease = join(root, "bundled tools release");
+  await createRelease(bundledRelease, { layout: bundledLayout, homebrewPrefix: missingTools });
+  run(join(bundledRelease, "install.sh"), [], environment);
+  for (const name of [...toolNames, "fd", "rg"])
+    if (((await lstat(join(bundleRoot, "bin", name))).mode & 0o777) !== 0o755)
+      throw new Error(`bundled executable mode was lost: ${name}`);
+  if (((await lstat(join(bundleRoot, "lib/libfixture.dylib"))).mode & 0o777) !== 0o755)
+    throw new Error("bundled library mode was lost");
+  if (((await lstat(join(bundleRoot, "licenses/COPYING"))).mode & 0o777) !== 0o644)
+    throw new Error("bundled license mode was lost");
+  await chmod(join(bundledRelease, "payload/pi-sandbox/tools/bin/rg"), 0o644);
+  expectFailure(
+    join(bundledRelease, "install.sh"),
+    [],
+    environment,
+    "selected bundled executable is missing or invalid: rg",
+  );
   const unknownRelease = join(root, "unknown-backend-release");
   await createRelease(unknownRelease, { backend: "unknown" });
   expectFailure(
@@ -264,6 +306,19 @@ esac
     join(payload, "sbom.cdx.json"),
     '{"bomFormat":"CycloneDX","specVersion":"1.6","version":1,"components":[]}\n',
   );
+  if (layout?.toolBundle) {
+    for (const directory of ["bin", "lib", "licenses"])
+      await mkdir(join(payload, "tools", directory), { recursive: true });
+    for (const name of [
+      ...Object.keys(layout.toolBundle.commands),
+      ...Object.keys(layout.hostTools ?? {}),
+    ])
+      await writeFile(join(payload, "tools/bin", name), "#!/bin/sh\nexit 0\n", { mode: 0o755 });
+    await writeFile(join(payload, "tools/lib/libfixture.dylib"), "fixture library\n", {
+      mode: 0o755,
+    });
+    await writeFile(join(payload, "tools/licenses/COPYING"), "fixture license\n", { mode: 0o644 });
+  }
   const files = await regularFiles(payload);
   const checksums = await Promise.all(
     files.map(async (file) => {

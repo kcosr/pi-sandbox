@@ -1,4 +1,8 @@
 import { describe, expect, it, vi } from "vitest";
+import { spawnSync } from "node:child_process";
+import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import path from "node:path";
 
 import { LINUX_TOOL_COMMANDS, type SandboxExecutor } from "../runtime/index.js";
 import {
@@ -47,6 +51,54 @@ function result(stdout: Buffer | string, exitCode = 0, stderr = "") {
 }
 
 describe("extension-owned tool semantics", () => {
+  it("quotes selected executable paths in shell bodies and cleanup traps", async () => {
+    const root = await mkdtemp(path.join(tmpdir(), "pi-tools-"));
+    const bin = path.join(root, "quote' space $(false) `false`");
+    const log = path.join(root, "calls");
+    try {
+      await mkdir(bin);
+      const commands = { ...LINUX_TOOL_COMMANDS };
+      for (const name of ["mkdir", "chmod", "cat", "mv", "rm"] as const) {
+        commands[name] = path.join(bin, name);
+        await writeFile(
+          commands[name],
+          `#!/bin/sh\nprintf '%s\\n' '${name}' >> "$BUNDLE_TEST_LOG"\n${name === "cat" ? "exec /bin/cat" : name === "mv" ? "exit 31" : "exit 0"}\n`,
+          { mode: 0o755 },
+        );
+      }
+      await writeFile(path.join(root, "target"), "original");
+      const executor = createExecutor((request) => {
+        const executed = spawnSync(request.argv[0], request.argv.slice(1), {
+          cwd: root,
+          input: request.stdin,
+          env: { PATH: "/usr/bin:/bin", BUNDLE_TEST_LOG: log },
+        });
+        if (executed.error) throw executed.error;
+        return Promise.resolve({
+          exitCode: executed.status,
+          signal: executed.signal,
+          stdout: executed.stdout,
+          stderr: executed.stderr,
+        });
+      });
+      Object.assign(executor, { cwd: root, commands });
+      await expect(
+        executeWrite(executor, { path: "target", content: "replacement" }, root),
+      ).rejects.toThrow("31");
+      expect((await readFile(log, "utf8")).trim().split("\n")).toEqual([
+        "mkdir",
+        "cat",
+        "chmod",
+        "mv",
+        "rm",
+        "rm",
+      ]);
+      expect(await readFile(path.join(root, "target"), "utf8")).toBe("original");
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
   it("translates structured operation commands through the executor profile", async () => {
     const executor = createExecutor((request) => result(request.argv.join("\n")));
     const portableCommands = Object.fromEntries(

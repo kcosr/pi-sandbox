@@ -9,7 +9,13 @@ import { testParallelTools } from "./parallel-tools-smoke.mjs";
 import { installExtensionArtifacts } from "./extension-artifacts.mjs";
 
 const root = dirname(dirname(dirname(fileURLToPath(import.meta.url))));
-execFileSync(process.execPath, [join(root, "scripts/build-extensions.mjs")], {
+const buildArgs = process.argv.slice(2);
+if (
+  buildArgs.length !== 0 &&
+  (buildArgs.length !== 2 || buildArgs[0] !== "--distribution" || !buildArgs[1])
+)
+  throw new Error("usage: node scripts/test/sandbox-extension-package.mjs [--distribution FILE]");
+execFileSync(process.execPath, [join(root, "scripts/build-extensions.mjs"), ...buildArgs], {
   stdio: "inherit",
 });
 const temp = await realpath(
@@ -172,6 +178,7 @@ try {
       launch: (args) => launch(["-e", "builtin:codemode", ...args]),
       modelsPath: join(home, "agent/models.json"),
       workspace,
+      serialCommands: selected.kind === "seatbelt",
     });
     console.log(`PASS ${selected.kind} ordinary Pi under ${selected.piRuntime}`);
   }

@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
-import { mkdir, readFile, readdir, symlink } from "node:fs/promises";
+import { createHash } from "node:crypto";
+import { lstat, mkdir, readFile, readdir, symlink } from "node:fs/promises";
 import { dirname, isAbsolute, join, resolve, sep } from "node:path";
 import { pathToFileURL } from "node:url";
 import ts from "typescript";
@@ -58,6 +59,35 @@ export async function installExtensionArtifacts(
       await import(pathToFileURL(join(directory, target)).href);
     }
     const provenance = JSON.parse(await readFile(join(directory, "provenance.json"), "utf8"));
+    if (provenance.toolBundle) {
+      const nativeRoot = join(directory, "dist/native-tools");
+      const inventoryBytes = await readFile(join(nativeRoot, "inventory.json"));
+      assert.equal(
+        createHash("sha256").update(inventoryBytes).digest("hex"),
+        provenance.toolBundle.inventorySha256,
+      );
+      const inventory = JSON.parse(inventoryBytes);
+      for (const file of inventory.files) {
+        assert(
+          entries.includes(`package/dist/native-tools/${file.path}`),
+          `Missing packaged native input: ${file.path}`,
+        );
+        const path = join(nativeRoot, file.path);
+        assert.equal(
+          createHash("sha256")
+            .update(await readFile(path))
+            .digest("hex"),
+          file.sha256,
+        );
+        assert.equal((await lstat(path)).mode & 0o7777, Number.parseInt(file.mode, 8));
+      }
+      const generated = await readFile(join(directory, "dist/build-tools.js"), "utf8");
+      assert.match(generated, /new URL\("\.\/native-tools", import\.meta\.url\)/u);
+      assert(
+        entries.includes("package/dist/tools/executor-operations.js"),
+        "Native tools must not replace executor JavaScript modules",
+      );
+    }
     if (name === "git-extension")
       assert(
         provenance.sourceInputs.includes(

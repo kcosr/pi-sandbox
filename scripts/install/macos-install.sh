@@ -1,5 +1,7 @@
 #!/bin/sh
 set -eu
+bundled_commands=''
+bundle_has() { case " $bundled_commands " in *" $1 "*) return 0 ;; *) return 1 ;; esac; }
 
 usage() {
   echo "usage: install.sh [--replace-config]" >&2
@@ -68,6 +70,11 @@ checksum_count=$(wc -l < "$checksums")
   echo "release payload checksum verification failed" >&2
   exit 1
 }
+for command in $bundled_commands; do
+  [ -f "$payload/tools/bin/$command" ] && [ -x "$payload/tools/bin/$command" ] && [ ! -L "$payload/tools/bin/$command" ] || {
+    echo "selected bundled executable is missing or invalid: $command" >&2; exit 1;
+  }
+done
 
 root_prefix=${destdir:-}
 install_base="$root_prefix/usr/local/libexec/pi-sandbox"
@@ -77,7 +84,7 @@ bin_target=${launcher%/*}
 etc_target="$root_prefix/etc/pi-sandbox"
 config="$etc_target/config.toml"
 models="$etc_target/models.json"
-expected_link=../libexec/pi-sandbox/pi-sandbox
+expected_link="../libexec/pi-sandbox/pi-sandbox"
 path_exists() { [ -e "$1" ] || [ -L "$1" ]; }
 require_regular() { [ -f "$1" ] && [ ! -L "$1" ] || { echo "$2 must be a regular file" >&2; exit 1; }; }
 
@@ -182,14 +189,17 @@ $brew_prefix/bin/gawk
     missing=" /usr/bin/sandbox-exec"
   fi
   for executable in $required; do
+    command=${executable##*/}
+    [ "$command" != gawk ] || command=awk
+    if bundle_has "$command"; then executable="$payload/tools/bin/$command"; fi
     [ -x "$executable" ] || missing="$missing $executable"
   done
-  command -v fd >/dev/null 2>&1 || missing="$missing fd"
-  command -v rg >/dev/null 2>&1 || missing="$missing rg"
+  bundle_has fd || command -v fd >/dev/null 2>&1 || missing="$missing fd"
+  bundle_has rg || command -v rg >/dev/null 2>&1 || missing="$missing rg"
   if [ -n "$missing" ]; then
     echo "missing required host executables:" >&2
     for executable in $missing; do echo "  $executable" >&2; done
-    echo "install Homebrew coreutils, findutils, grep, gawk, fd, and ripgrep, then retry" >&2
+    echo "install the missing system tools or select them in the build distribution, then retry" >&2
     exit 1
   fi
 fi
@@ -199,6 +209,9 @@ cp -R "$payload/." "$stage/"
 find "$stage" -type d -exec chmod 0755 {} \;
 find "$stage" -type f -exec chmod 0644 {} \;
 chmod 0755 "$stage/pi-sandbox"
+for native_dir in "$stage/tools/bin" "$stage/tools/lib"; do
+  if [ -d "$native_dir" ]; then find "$native_dir" -type f -exec chmod 0755 {} \;; fi
+done
 install_defaults=0
 if [ "$config_present" -eq 0 ] || [ "$replace_config" -eq 1 ]; then
   install_defaults=1

@@ -60,11 +60,12 @@ describe("Seatbelt command pipe lifecycle", () => {
   });
   it("continues draining background output until both streams are quiet", async () => {
     // This deliberately records that successful foreground exit does not kill
-    // background descendants. The fixture self-terminates after finite output.
+    // background descendants. Wait for readiness so Node startup time is not
+    // mistaken for a post-exit idle period. The descendant emits finite output.
     const script =
-      "let i=0;const t=setInterval(()=>{console.log(++i);if(i===5)clearInterval(t)},40)";
+      'let i=1;console.log(i);process.send("ready");const t=setInterval(()=>{console.log(++i);if(i===5)clearInterval(t)},40)';
     const child = run(
-      `require('node:child_process').spawn(process.execPath,['-e',${JSON.stringify(script)}],{stdio:['ignore',1,2]}); process.exit(0)`,
+      `require('node:child_process').spawn(process.execPath,['-e',${JSON.stringify(script)}],{stdio:['ignore',1,2,'ipc']}).once('message',()=>process.exit(0))`,
     );
     expect((await child.result).stdout.toString().trim().split("\n")).toEqual([
       "1",

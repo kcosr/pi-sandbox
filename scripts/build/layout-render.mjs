@@ -20,6 +20,10 @@ export function layoutReplacements(layout, os) {
         };
   const replacements = [
     [
+      "bundled_commands=''",
+      `bundled_commands='${[...Object.keys(layout.toolBundle?.commands ?? {}), ...Object.keys(layout.hostTools ?? {})].sort().join(" ")}'`,
+    ],
+    [
       "../libexec/pi-sandbox/pi-sandbox",
       relative(dirname(layout.launcherPath), join(layout.libexecDir, "pi-sandbox")),
     ],
@@ -60,7 +64,15 @@ export function layoutReplacements(layout, os) {
 }
 
 export function renderLayoutText(contents, layout, os) {
-  const replacements = new Map(layoutReplacements(layout, os));
+  const shell = contents.startsWith("#!/bin/sh");
+  const replacements = new Map(
+    layoutReplacements(layout, os).map(([from, to]) => [
+      from,
+      shell && !["bundled_commands=''", "bubblewrap_mode=system"].includes(from)
+        ? to.replace(/[\\$`"]/gu, "\\$&")
+        : to,
+    ]),
+  );
   const pattern = new RegExp(
     [...replacements.keys()]
       .sort((left, right) => right.length - left.length)
