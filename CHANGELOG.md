@@ -4,8 +4,8 @@
 
 ### Breaking changes
 
-- Remove smolvm execution, VM controllers and interactive VM terminals; managed Linux execution supports Bubblewrap or direct mode.
-- Release reusable sandbox extension 0.8.0 with a backend-neutral executor interface and no VM/controller exports. Embedding applications own external execution and cleanup.
+- Remove smolvm execution, VM controllers and interactive VM terminals; managed Linux execution supports Bubblewrap or direct mode. ([#28](https://github.com/kcosr/pi-sandbox/pull/28))
+- Release reusable sandbox extension 0.8.0 with a backend-neutral executor interface and no VM/controller exports. Embedding applications own external execution and cleanup. ([#28](https://github.com/kcosr/pi-sandbox/pull/28))
 
 ## 0.7.0 - 2026-10-10
 
