@@ -257,8 +257,8 @@ provides these seams:
    invoke this hook.
 8. `0006-graceful-shutdown-status.patch` preserves a nonzero `process.exitCode`
    on normal RPC or interactive quit. Explicit signal status is unchanged.
-   Managed cleanup sets failure status and reports underlying errors, including
-   the retained VM-state path, before Pi reports an extension shutdown error.
+   Managed cleanup sets failure status and reports underlying errors before Pi
+   reports an extension shutdown error.
    Cleanup still attempts and awaits every owned resource.
 9. `0007-application-version-display.patch` accepts an optional `displayVersion`
    in `main()` and interactive-mode options. Use it only for CLI version output

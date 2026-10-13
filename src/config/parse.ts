@@ -15,7 +15,6 @@ import {
   type FilesystemConfig,
   type NetworkConfig,
   type SandboxConfig,
-  type SmolvmConfig,
   type SessionsConfig,
   type ToolPolicy,
   type ToolPolicies,
@@ -351,11 +350,6 @@ function parseExecution(value: unknown, issues: string[]): ExecutionConfig | und
     "config.execution.backend",
     issues,
   );
-  if (backend === "smolvm" && Object.hasOwn(value, "process_lifetime")) {
-    issues.push(
-      "config.execution.process_lifetime is not supported by smolvm; its processes live with the VM",
-    );
-  }
   const processLifetime = Object.hasOwn(value, "process_lifetime")
     ? enumValue(
         value.process_lifetime,
@@ -363,99 +357,10 @@ function parseExecution(value: unknown, issues: string[]): ExecutionConfig | und
         "config.execution.process_lifetime",
         issues,
       )
-    : backend === "smolvm"
-      ? "sandbox"
-      : "command";
+    : "command";
   return backend === undefined || processLifetime === undefined
     ? undefined
     : Object.freeze({ backend, processLifetime });
-}
-
-function validSmolvmPath(value: unknown): value is string {
-  return isNormalizedAbsoluteFilePath(value) && !value.includes(":");
-}
-
-function parseSmolvm(value: unknown, issues: string[]): SmolvmConfig | undefined {
-  if (value === undefined) return undefined;
-  if (!isRecord(value)) {
-    issues.push("config.smolvm must be a table");
-    return undefined;
-  }
-  inspectKeys(
-    value,
-    [
-      "image",
-      "image_sha256",
-      "state_directory",
-      ...(Object.hasOwn(value, "e2fsprogs_directory") ? ["e2fsprogs_directory"] : []),
-      "cpus",
-      "memory_mib",
-      "storage_gib",
-      "overlay_gib",
-    ],
-    "config.smolvm",
-    issues,
-  );
-  const image = own(value, "image");
-  const stateDirectory = own(value, "state_directory");
-  const e2fsprogsDirectory = own(value, "e2fsprogs_directory");
-  if (e2fsprogsDirectory !== undefined && !validSmolvmPath(e2fsprogsDirectory))
-    issues.push("config.smolvm.e2fsprogs_directory must be a normalized absolute path below /");
-  const imageSha256 = own(value, "image_sha256");
-  if (!validSmolvmPath(image))
-    issues.push("config.smolvm.image must be a normalized absolute path");
-  if (!validSmolvmPath(stateDirectory))
-    issues.push("config.smolvm.state_directory must be a normalized absolute path below /");
-  if (typeof stateDirectory === "string") {
-    try {
-      validateAccountTemplate(stateDirectory);
-    } catch {
-      issues.push("config.smolvm.state_directory has invalid account macro syntax");
-    }
-    if (!stateDirectory.includes("{{") && Buffer.byteLength(stateDirectory) > 48)
-      issues.push("config.smolvm.state_directory must be at most 48 bytes");
-  }
-  if (typeof imageSha256 !== "string" || !/^[0-9a-f]{64}$/u.test(imageSha256))
-    issues.push("config.smolvm.image_sha256 must be a lowercase SHA-256 digest");
-  const bounded = (key: string, minimum: number, maximum: number): number | undefined => {
-    const input = own(value, key);
-    if (
-      typeof input !== "number" ||
-      !Number.isSafeInteger(input) ||
-      input < minimum ||
-      input > maximum
-    ) {
-      issues.push(`config.smolvm.${key} must be an integer from ${minimum} to ${maximum}`);
-      return undefined;
-    }
-    return input;
-  };
-  const cpus = bounded("cpus", 1, 32);
-  const memoryMiB = bounded("memory_mib", 256, 65536);
-  const storageGiB = bounded("storage_gib", 1, 64);
-  const overlayGiB = bounded("overlay_gib", 1, 64);
-  if (
-    !validSmolvmPath(image) ||
-    !validSmolvmPath(stateDirectory) ||
-    (e2fsprogsDirectory !== undefined && !validSmolvmPath(e2fsprogsDirectory)) ||
-    typeof imageSha256 !== "string" ||
-    !/^[0-9a-f]{64}$/u.test(imageSha256) ||
-    cpus === undefined ||
-    memoryMiB === undefined ||
-    storageGiB === undefined ||
-    overlayGiB === undefined
-  )
-    return undefined;
-  return Object.freeze({
-    image,
-    imageSha256,
-    stateDirectory,
-    ...(e2fsprogsDirectory === undefined ? {} : { e2fsprogsDirectory }),
-    cpus,
-    memoryMiB,
-    storageGiB,
-    overlayGiB,
-  });
 }
 
 export function parseConfig(
@@ -475,13 +380,7 @@ export function parseConfig(
   }
 
   const issues: string[] = [];
-  // Backend-specific image configuration is optional for ordinary distributions.
-  inspectKeys(
-    Object.fromEntries(Object.entries(parsed).filter(([key]) => key !== "smolvm")),
-    ROOT_KEYS,
-    "config",
-    issues,
-  );
+  inspectKeys(parsed, ROOT_KEYS, "config", issues);
 
   const configVersion = own(parsed, "config_version");
   if (configVersion !== 11) {
@@ -510,7 +409,6 @@ export function parseConfig(
   const sessions = parseSessions(own(parsed, "sessions"), issues);
   const identity = parseIdentity(own(parsed, "identity"), issues);
   const execution = parseExecution(own(parsed, "execution"), issues);
-  const smolvm = parseSmolvm(own(parsed, "smolvm"), issues);
   const filesystem = parseFilesystem(own(parsed, "filesystem"), issues);
   const network = parseNetwork(own(parsed, "network"), issues);
   let environment;
@@ -547,16 +445,6 @@ export function parseConfig(
     issues.push(
       'config.filesystem.hidden_paths must be empty when config.execution.backend is "direct"',
     );
-  }
-  if (execution?.backend === "smolvm") {
-    if (smolvm === undefined)
-      issues.push("config.smolvm is required when config.execution.backend is smolvm");
-    if (network?.mode !== "none")
-      issues.push('config.network.mode must be "none" when config.execution.backend is "smolvm"');
-    if (filesystem !== undefined && filesystem.hiddenPaths.length > 0)
-      issues.push(
-        'config.filesystem.hidden_paths must be empty when config.execution.backend is "smolvm"',
-      );
   }
   const extensions = parseExtensions(own(parsed, "extensions"), catalog, issues);
   validateExtensionEnvironment(environment, extensions, catalog, issues);
@@ -598,7 +486,6 @@ export function parseConfig(
     sessions,
     modelsFile,
     execution,
-    ...(smolvm === undefined ? {} : { smolvm }),
     identity,
     network,
     filesystem,

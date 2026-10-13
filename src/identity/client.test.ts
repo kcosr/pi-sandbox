@@ -81,6 +81,7 @@ describe("broker response", () => {
       { process_lifetime: "session" },
       { process_lifetime: null },
       { backend: null },
+      { backend: "smolvm" },
       { processLifetime: "sandbox" },
     ]) {
       expect(() => parseBrokerResponse(response(execution))).toThrow(

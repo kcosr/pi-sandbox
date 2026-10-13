@@ -14,10 +14,6 @@ export interface CompiledLayout {
     readonly mode: "system" | "bundled";
     readonly path: string;
   };
-  readonly smolvm?: {
-    readonly path: string;
-    readonly version: "1.26.1";
-  };
 }
 
 export const buildLayout: CompiledLayout = compiledLayout;

@@ -26,7 +26,6 @@ function fixture() {
   const executor: SandboxExecutor = {
     cwd: "/work",
     home: "/home/agent",
-    backend: "smolvm",
     commands: LINUX_TOOL_COMMANDS,
     probe: () => Promise.resolve(),
     execute,
@@ -42,7 +41,7 @@ describe("process-owned managed executor", () => {
     const pending = deferred<void>();
     const failure = new AggregateError(
       [new Error("stop failed")],
-      "retained state: /private/vm-123",
+      "retained state: /private/worker-123",
     );
     const close = vi.fn(() => Promise.reject(failure));
     const otherClose = vi.fn(() => pending.promise);
@@ -53,7 +52,7 @@ describe("process-owned managed executor", () => {
       const second = cleanup();
       expect(first).toBe(second);
       const rejected = expect(first).rejects.toThrow(
-        "retained state: /private/vm-123; stop failed",
+        "retained state: /private/worker-123; stop failed",
       );
       await Promise.resolve();
       expect(process.exitCode).toBeUndefined();
@@ -67,11 +66,10 @@ describe("process-owned managed executor", () => {
     }
   });
 
-  it("does not start a VM for metadata or CLI error exits", async () => {
+  it("does not start an executor for metadata or CLI error exits", async () => {
     const { create } = fixture();
-    const managed = createManagedExecutor({ cwd: "/work", backend: "smolvm", create });
+    const managed = createManagedExecutor({ cwd: "/work", create });
     expect(managed.cwd).toBe("/work");
-    expect(managed.backend).toBe("smolvm");
     await managed.close();
     await expect(managed.probe()).rejects.toThrow("sandbox_closed");
     expect(create).not.toHaveBeenCalled();
@@ -79,7 +77,7 @@ describe("process-owned managed executor", () => {
 
   it("shares one probed backend across concurrent and replacement-session initialization", async () => {
     const { create, execute, close } = fixture();
-    const managed = createManagedExecutor({ cwd: "/work", backend: "smolvm", create });
+    const managed = createManagedExecutor({ cwd: "/work", create });
     expect(() => managed.execute({ argv: ["true"] })).toThrow("sandbox_closed");
     await Promise.all([managed.probe(), managed.probe()]);
     await managed.probe();
@@ -100,7 +98,6 @@ describe("process-owned managed executor", () => {
     close.mockReturnValue(stopping.promise);
     const managed = createManagedExecutor({
       cwd: "/work",
-      backend: "smolvm",
       create: () => starting.promise,
     });
     const initialized = expect(managed.probe()).rejects.toThrow("sandbox_closed");
@@ -119,10 +116,10 @@ describe("process-owned managed executor", () => {
   });
 
   it("retains initialization failures without retry or fallback", async () => {
-    const create = vi.fn(() => Promise.reject(new Error("bad image")));
-    const managed = createManagedExecutor({ cwd: "/work", backend: "smolvm", create });
-    await expect(managed.probe()).rejects.toThrow("bad image");
-    await expect(managed.probe()).rejects.toThrow("bad image");
+    const create = vi.fn(() => Promise.reject(new Error("bad worker")));
+    const managed = createManagedExecutor({ cwd: "/work", create });
+    await expect(managed.probe()).rejects.toThrow("bad worker");
+    await expect(managed.probe()).rejects.toThrow("bad worker");
     await managed.close();
     expect(create).toHaveBeenCalledTimes(1);
   });

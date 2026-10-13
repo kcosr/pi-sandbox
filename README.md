@@ -33,26 +33,18 @@ server controls that govern other software run by the logged-in user.
 
 ## Execution backends and reusable extensions
 
-| Backend              | Supported hosts                                                  | Tool filesystem                                                           | Tool networking                               |
-| -------------------- | ---------------------------------------------------------------- | ------------------------------------------------------------------------- | --------------------------------------------- |
-| Bubblewrap (default) | Linux x86-64 / arm64                                             | Host read-only, selected launch directory writable, optional masks        | None, private loopback, or host               |
-| smolvm (optional)    | Linux x86-64 with KVM; macOS 26+ arm64 with Hypervisor.framework | Disposable Linux guest plus the launch directory mounted at its host path | Offline; guest-local sockets remain available |
-| Direct (explicit)    | Linux and macOS x86-64 / arm64                                   | Ordinary host access                                                      | Host                                          |
-
-The managed smolvm backend uses an administrator-selected, digest-pinned plain
-`.smolmachine` tools image and a build-selected smolvm distribution. It does not
-import an arbitrary OCI workload or treat a project's Smolfile as policy.
-See [image preparation](docs/smolvm-images.md) and
-[smolvm configuration](docs/configuration.md#smolvm-image-and-runtime-selection).
+| Backend              | Supported hosts                | Tool filesystem                                                    | Tool networking                 |
+| -------------------- | ------------------------------ | ------------------------------------------------------------------ | ------------------------------- |
+| Bubblewrap (default) | Linux x86-64 / arm64           | Host read-only, selected launch directory writable, optional masks | None, private loopback, or host |
+| Direct (explicit)    | Linux and macOS x86-64 / arm64 | Ordinary host access                                               | Host                            |
 
 Ordinary Pi can load the same [sandbox tools](packages/sandbox-extension/README.md)
 or the independent [Git extension](packages/git-extension/README.md). These
 standard extensions do not impose the managed application's permission policy.
-The sandbox package also exposes an OCI family controller for trusted host
-applications; that separate API supports guest-owned workspaces and branching.
-VMs use unique names in the account’s normal smolvm registry with shared caches.
-The owner calls stock stop/delete on its recorded machines. After a crash, those
-names remain available for manual CLI recovery; no watcher is installed.
+The sandbox package's public tool factory also accepts an application-supplied
+executor. Its interface describes command execution and lifecycle operations,
+without naming a backend or providing container management. The embedding
+application owns the implementation, isolation boundary and cleanup.
 
 ## Isolation at a glance
 
@@ -142,7 +134,7 @@ inactive unless configured:
 pi-sandbox
   -> managed Pi
      -> forced Pi Sandbox extension and approval policy
-     -> selected Bubblewrap worker, smolvm guest, or direct executor
+     -> selected Bubblewrap worker or direct executor
         -> bounded tool operations with backend-specific lifecycle
 ```
 
@@ -160,9 +152,7 @@ env -u NODE_ENV npm ci
 env -u NODE_ENV npm run verify:release
 ```
 
-This verifies and builds the default distribution. Release maintainers must also
-complete the [required smolvm release lane](docs/testing.md#required-smolvm-release-lane).
-The archive is written under `release/`. Extract it on the target host, review
+This verifies and builds the default distribution. The archive is written under `release/`. Extract it on the target host, review
 its packaged policy, and run these commands **from its extracted directory**:
 
 ```sh
@@ -245,8 +235,7 @@ These subject documents collectively describe the current product behavior.
 - [User and group environment and overrides](docs/identity-broker.md)
 - [Installation and operation](docs/installation.md)
 - [Versions and releases](docs/releases.md)
-- [smolvm image preparation](docs/smolvm-images.md)
-- [Standalone sandbox extension and OCI controller](packages/sandbox-extension/README.md)
+- [Standalone sandbox extension](packages/sandbox-extension/README.md)
 - [Standalone Git extension](packages/git-extension/README.md)
 - [Security model](docs/security.md)
 - [Testing](docs/testing.md)
@@ -264,8 +253,6 @@ Pi Sandbox builds on several open-source projects:
   used by the managed application and standalone extensions.
 - [Bubblewrap](https://github.com/containers/bubblewrap), the default Linux
   sandboxing backend.
-- [smolvm](https://github.com/smol-machines/smolvm), the optional virtual-machine
-  backend and its VM branching capabilities.
 
 Pi Sandbox incorporates a pinned, minimally modified build of
 [Pi](https://github.com/earendil-works/pi), Copyright (c) 2025 Mario Zechner,

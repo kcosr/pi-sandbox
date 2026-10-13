@@ -566,7 +566,7 @@ text("MCP_REMOVAL_OK");`,
       if (serverFailure) throw serverFailure;
     }
 
-    if (["bubblewrap", "smolvm"].includes(config.execution.backend)) {
+    if (config.execution.backend === "bubblewrap") {
       const parallelConfig = JSON.parse(JSON.stringify(config));
       if (config.execution.backend === "bubblewrap")
         parallelConfig.execution.process_lifetime = "sandbox";

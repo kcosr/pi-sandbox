@@ -49,11 +49,10 @@ Local repositories, remote helpers, unsupported protocols, URL passwords,
 queries and fragments are rejected.
 
 Clone executes **on the host**, outside sandbox filesystem and networking
-restrictions. Managed Bubblewrap and smolvm mount the launch directory at the
-same path, so sandbox tools can use the checkout there. A read-only sandbox
-mount does not prevent the host clone. For an externally attached guest,
-visibility depends on the owner's mounts; Git does not copy into guest-only
-paths or discover VM attachments.
+restrictions. Managed Bubblewrap mounts the launch directory at the same path,
+so sandbox tools can use the checkout there. A read-only sandbox mount does not
+prevent the host clone. For an application-supplied executor, visibility depends
+on the owner's filesystem configuration; Git does not copy into that environment.
 
 Git uses fixed absolute executables, fixed arguments and a bounded host runner
 with a default 120-second timeout and combined 1 MiB output limit. It removes

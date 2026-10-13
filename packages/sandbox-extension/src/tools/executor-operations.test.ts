@@ -26,7 +26,6 @@ function createExecutor(
   return {
     cwd: "/work/project",
     home: "/run/pi-sandbox/home",
-    backend: "bubblewrap",
     commands: LINUX_TOOL_COMMANDS,
     calls,
     probe: () => Promise.resolve(),

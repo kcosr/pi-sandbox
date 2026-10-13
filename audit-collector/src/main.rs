@@ -304,7 +304,7 @@ fn valid_event(e: &Event) -> bool {
     if e.command.is_some() && e.tool.as_deref() != Some("bash") {
         return false;
     }
-    one_of(&e.boundary, &["bubblewrap", "direct", "smolvm", "host"])
+    one_of(&e.boundary, &["bubblewrap", "direct", "host"])
         && one_of(&e.approval_source, &["policy", "prompt", "session_grant"])
         && one_of(
             &e.reason,
@@ -486,10 +486,10 @@ mod tests {
         serde_json::json!({"version":2,"event":{"event":"tool_execution_intent","pi_session_id":"pi-1","tool":"bash","invocation_id":"call-1","boundary":"bubblewrap","approval_source":"prompt","command":"printf 'hello\\n'","command_truncated":false}})
     }
     #[test]
-    fn accepts_smolvm_tool_boundary_without_allowing_guest_mcp() {
+    fn rejects_removed_vm_boundary() {
         let mut request = tool();
         request["event"]["boundary"] = serde_json::json!("smolvm");
-        assert!(read_frame(&mut Cursor::new(lines(&[request]))).is_ok());
+        assert!(read_frame(&mut Cursor::new(lines(&[request]))).is_err());
         let mut request = mcp("stdio");
         request["event"]["boundary"] = serde_json::json!("smolvm");
         assert!(read_frame(&mut Cursor::new(lines(&[request]))).is_err());

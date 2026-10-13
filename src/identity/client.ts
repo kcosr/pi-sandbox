@@ -174,7 +174,6 @@ export function applyIdentityOverrides(
     sessions: base.sessions,
     modelsFile: overrides.modelsFile ?? base.modelsFile,
     execution: applyExecutionOverride(base.execution, overrides.execution),
-    ...(base.smolvm === undefined ? {} : { smolvm: base.smolvm }),
     identity: base.identity,
     network: overrides.network ?? base.network,
     filesystem: Object.freeze({ ...base.filesystem, ...overrides.filesystem }),
@@ -189,15 +188,7 @@ function applyExecutionOverride(
   override?: Partial<ExecutionConfig>,
 ): ExecutionConfig {
   const backend = override?.backend ?? base.backend;
-  if (backend === "smolvm") {
-    if (override?.processLifetime !== undefined)
-      throw new Error("smolvm does not support execution.process_lifetime overrides");
-    return Object.freeze({ backend, processLifetime: "sandbox" });
-  }
-  // A VM's fixed lifetime is not a Bubblewrap preference. Explicitly switching
-  // away from it selects the destination's ordinary command default.
-  const processLifetime =
-    override?.processLifetime ?? (base.backend === "smolvm" ? "command" : base.processLifetime);
+  const processLifetime = override?.processLifetime ?? base.processLifetime;
   return Object.freeze({ backend, processLifetime });
 }
 
@@ -223,8 +214,6 @@ function parseIdentityOverrides(value: unknown): IdentityOverrides {
       Object.hasOwn(fields, "backend") &&
       !EXECUTION_BACKENDS.includes(fields.backend as ExecutionConfig["backend"])
     )
-      throw invalidResponse();
-    if (fields.backend === "smolvm" && Object.hasOwn(fields, "process_lifetime"))
       throw invalidResponse();
     if (
       Object.hasOwn(fields, "process_lifetime") &&

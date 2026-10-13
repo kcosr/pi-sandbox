@@ -3,7 +3,6 @@
 import { spawn } from "node:child_process";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { preflightSmolvmRelease, releaseArguments } from "./build/release-preflight.mjs";
 
 const repositoryRoot = dirname(dirname(fileURLToPath(import.meta.url)));
 const nodeMajor = Number.parseInt(process.versions.node.split(".", 1)[0] ?? "", 10);
@@ -16,11 +15,7 @@ if (!Number.isInteger(nodeMajor) || nodeMajor < 24) {
 
 const environment = { ...process.env };
 delete environment.NODE_ENV;
-const { requireSmolvm, buildArguments } = releaseArguments(process.argv.slice(2), environment);
-if (requireSmolvm) {
-  environment.PI_SANDBOX_REQUIRE_SMOLVM = "1";
-  await preflightSmolvmRelease(buildArguments, environment);
-}
+const buildArguments = process.argv.slice(2);
 if (process.platform === "linux") environment.PI_SANDBOX_REQUIRE_BWRAP = "1";
 environment.PI_SANDBOX_TEST_TMPDIR ??= "/var/tmp";
 
@@ -31,7 +26,6 @@ const commonChecks = [
   ["npm", ["run", "test:build-composition"]],
   ["npm", ["run", "test:distribution"]],
   ["npm", ["run", "test:version"]],
-  ["npm", ["run", "test:release-preflight"]],
   [process.execPath, ["--test", "scripts/test/sbom.mjs"]],
   ["npm", ["run", "test:unit"]],
   ["npm", ["run", "test:integration"]],
@@ -49,14 +43,7 @@ const platformChecks =
       ]
     : process.platform === "darwin"
       ? [
-          ...(requireSmolvm
-            ? [
-                [
-                  process.execPath,
-                  [join(repositoryRoot, "scripts/test/sandbox-extension-package.mjs")],
-                ],
-              ]
-            : []),
+          ["npm", ["run", "test:extension"]],
           ["npm", ["run", "build:application"]],
           ["npm", ["run", "test:install:macos"]],
         ]

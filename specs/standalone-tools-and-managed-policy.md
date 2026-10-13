@@ -1,7 +1,7 @@
 # Standalone sandbox and Git, with managed permissions
 
 Status: implemented on `feat/standalone-tool-extensions` from main at `f821ca9`,
-after merging the Bubblewrap and smolvm concurrency changes. The design was
+after merging the Bubblewrap concurrency changes. The design was
 reviewed against `feat/separate-permissions` at `98faae2`. This replaces the earlier standalone-permissions
 and standard-extension-framework proposals, and the sandbox-only scope draft.
 
@@ -16,8 +16,8 @@ Do not publish a permissions extension. Do not introduce a shared coordination
 or contracts package. The application owns authorization directly; the standalone
 extensions do not discover or negotiate with a permission provider.
 
-The sandbox remains independently usable by the evaluator, which supplies its
-own tool admission and does not need the managed permission engine or UI.
+The sandbox remains independently usable by embedding applications that supply
+their own tool admission without the managed permission engine or UI.
 Arbitrary third-party extension loading in Pi Sandbox remains future work.
 
 ## Ownership and dependencies
@@ -26,7 +26,7 @@ Arbitrary third-party extension loading in Pi Sandbox remains future work.
 ordinary Pi ──> sandbox entry ──> sandbox tools and backends
             └─> Git entry ─────> Git clone implementation
 
-evaluator ────> sandbox factory/runtime
+embedding app > sandbox factory/runtime
 
 Pi Sandbox ───> TOML, broker, internal permissions and audit
             ├─> sandbox adapter ──> sandbox factory/runtime
@@ -87,8 +87,9 @@ non-function callback when constructing the factory, including JavaScript use.
 The immutable factory `tools` list remains the registration ceiling. Preserve
 existing Pi tool activation/exclusion behavior and managed CLI restrictions.
 `userBash` remains a separate choice, including preventing host-shell fallback
-when disabled. No changes to executor/controller signatures, owned/attached VM
-contracts, queues, process lifetime, output drain, cancellation or shutdown.
+when disabled. Preserve command execution, process lifetime, output drain,
+cancellation and shutdown behavior. The public executor has no backend-name field;
+applications own execution implementation and lifecycle.
 
 In Pi Sandbox, the callback prepares an internal approval request from the
 snapshot, creates the preview, evaluates policy, awaits the decision audit, and
@@ -99,16 +100,17 @@ brand crosses the package boundary, and there is exactly one authorization
 decision for each operation, including nested Code Mode operations.
 
 The standalone entry supplies an explicit no-op authorization callback after
-its existing readiness checks. The evaluator supplies its own callback, or an
-explicit no-op behind its fixed tool ceiling. Neither path initializes the
+its existing readiness checks. An embedding application supplies its own callback,
+or an explicit no-op behind its fixed tool ceiling. Neither path initializes the
 managed permission engine.
 
 ### Standalone configuration and packaging
 
 Remove provider discovery, tool delegation, provider initialization/teardown,
 and the `requirePermissions` switch. Accept a single new standalone JSON schema
-version, version 4, with `version`, `mode`, `userBash`, and either `backend` or
-`attachment`. Preserve the current backend/attachment fields and validation.
+version, version 4, with `version`, `mode = "owned"`, `userBash`, and `backend`.
+The backend selects Bubblewrap or direct execution with strict fields for that
+choice. Reject removed VM execution and attachment fields.
 Reject old versions and obsolete fields; add no compatibility parser.
 
 Retain `--sandbox-config`, explicit private config-file ownership/mode/size
@@ -161,12 +163,10 @@ repository: https://github.com/example/widget.git
 destination: /home/user/work/widget
 ```
 
-Bubblewrap and managed smolvm share that launch directory at the identical path;
-there is no second guest destination or copy step. Standalone Git also works
-without a sandbox. When combined with an externally attached VM, visibility
-depends on the owner's mounts: Git does not discover attachments, copy into a
-guest-only workspace, or promise that arbitrary attached guest paths exist on
-the host.
+Bubblewrap shares that launch directory at the identical path. Standalone Git
+also works without a sandbox. When an application supplies another executor,
+workspace visibility depends on that application's mounts. Git does not discover
+external execution environments or copy files into their workspaces.
 
 Preserve absolute `/usr/bin/git` and `/usr/bin/ssh`, scheme restrictions,
 environment sanitization, disabled global/system Git config and disabled
@@ -257,8 +257,8 @@ uses the existing application cleanup owner. No extra watcher or daemon.
 
 ### Reuse the bounded host runner without a new package
 
-The existing Node-only host-command runner is also used by sandbox direct and
-smolvm execution. Keep one canonical implementation and its tests. At build time,
+The existing Node-only host-command runner is also used by sandbox direct
+execution. Keep one canonical implementation and its tests. At build time,
 bundle its required code into the Git artifact as private implementation code;
 leave sandbox's existing use intact. Do not maintain a handwritten second runner,
 move general execution ownership into Git, or add a runtime sandbox dependency.
@@ -335,9 +335,8 @@ not the abandoned descriptor-unification proposal.
    asynchronous startup fails.
 6. Keep all tests offline: use an injected host port for deterministic Git core
    tests and a local test HTTP Git server for actual clone coverage. Verify host
-   destination and guest visibility with managed Bubblewrap/smolvm, without
-   claiming visibility into an arbitrary attached guest. Preserve evaluator
-   owned/attached contracts and concurrency/cancellation/shutdown checks.
+   destination and visibility with managed Bubblewrap. Preserve shared factory
+   authorization and concurrency/cancellation/shutdown checks.
    Run applicable checks from `docs/testing.md`, including package/build/install
    smoke tests and native backend qualification, before implementation release.
 

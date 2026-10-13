@@ -10,7 +10,7 @@ import {
   type ExtensionFactory,
 } from "@earendil-works/pi-coding-agent";
 
-import { buildLayout, type CompiledLayout } from "../build-layout/index.js";
+import { buildLayout } from "../build-layout/index.js";
 import { DISPLAY_VERSION } from "../version.js";
 import { connectAuditClient, type AuditClient } from "../audit/client.js";
 import { loadConfig } from "../config/index.js";
@@ -44,7 +44,6 @@ import {
 import {
   createBubblewrapExecutor,
   createDirectExecutor,
-  createSmolvmExecutor,
   type SandboxExecutor,
 } from "../../packages/sandbox-extension/src/runtime/index.js";
 import {
@@ -202,14 +201,12 @@ export async function resolveEffectiveAdministrativeConfiguration(
     overridden.filesystem,
     combinedEnvironment,
     getAccountIdentity,
-    overridden.smolvm,
   );
   const effectiveEnvironment = expanded.environment;
   const config = Object.freeze({
     ...overridden,
     filesystem: expanded.filesystem,
     environment: effectiveEnvironment,
-    ...(expanded.smolvm === undefined ? {} : { smolvm: expanded.smolvm }),
   });
   const lease = applyManagedEnvironment(effectiveEnvironment.pi, environment);
   try {
@@ -243,28 +240,6 @@ async function createProbedExecutor(
         hiddenPaths: config.filesystem.hiddenPaths,
         environment,
       });
-    } else if (config.execution.backend === "smolvm") {
-      if (buildLayout.smolvm === undefined || config.smolvm === undefined) {
-        throw new Error("This distribution and policy must configure a smolvm provider and image");
-      }
-      executor = await createSmolvmExecutor({
-        cwd,
-        cwdWritable: config.filesystem.cwdWritable,
-        environment,
-        smolvmPath: buildLayout.smolvm.path,
-        imagePath: config.smolvm.image,
-        imageSha256: config.smolvm.imageSha256,
-        stateDirectory: config.smolvm.stateDirectory,
-        ...(config.smolvm.e2fsprogsDirectory === undefined
-          ? {}
-          : { e2fsprogsDirectory: config.smolvm.e2fsprogsDirectory }),
-        resources: {
-          cpus: config.smolvm.cpus,
-          memoryMiB: config.smolvm.memoryMiB,
-          storageGiB: config.smolvm.storageGiB,
-          overlayGiB: config.smolvm.overlayGiB,
-        },
-      });
     } else {
       executor = await createDirectExecutor({ cwd, environment, ambientEnvironment });
     }
@@ -297,41 +272,18 @@ async function createProbedExecutor(
 function executionStartupMessage(config: SandboxConfig): string {
   if (config.execution.backend === "bubblewrap")
     return "Bubblewrap could not establish the required sandbox; verify unprivileged user namespaces and Bubblewrap compatibility";
-  if (config.execution.backend === "smolvm")
-    return "smolvm could not start the VM; verify host virtualization support, the pinned complete runtime distribution, the image digest, and controller metadata directory";
   return "Direct execution could not establish its bounded command runner; verify the documented host prerequisites";
 }
 
 export function assertExecutionPlatform(
   config: SandboxConfig,
   platform: NodeJS.Platform = process.platform,
-  layout: Pick<CompiledLayout, "smolvm"> = buildLayout,
-  architecture: string = process.arch,
 ): void {
   if (platform !== "linux" && platform !== "darwin") {
     throw new Error(`Unsupported operating system: ${platform}`);
   }
   if (config.execution.backend === "bubblewrap" && platform !== "linux") {
     throw new Error("Bubblewrap execution is supported only on Linux");
-  }
-  if (config.execution.backend === "smolvm") {
-    if (!(
-      (platform === "linux" && architecture === "x64") ||
-      (platform === "darwin" && architecture === "arm64")
-    ))
-      throw new Error("smolvm execution requires Linux x86-64 or macOS arm64");
-    if (layout.smolvm === undefined)
-      throw new Error("This distribution does not include a smolvm execution provider");
-    if (config.smolvm === undefined)
-      throw new Error(
-        "smolvm execution requires a configured image and controller metadata directory",
-      );
-    if (config.network.mode !== "none")
-      throw new Error("smolvm execution requires network.mode = none");
-    if (config.execution.processLifetime !== "sandbox")
-      throw new Error("smolvm execution has a fixed sandbox process lifetime");
-    if (config.filesystem.hiddenPaths.length > 0)
-      throw new Error("smolvm execution requires filesystem.hidden_paths = []");
   }
   if (config.execution.backend === "direct" && config.network.mode !== "host") {
     throw new Error("Direct execution requires network.mode = host");
@@ -513,7 +465,6 @@ export async function runPiSandbox({ piArgs: args, configPath }: SandboxArgument
   await assertExecutionPrerequisites(config.execution.backend, buildLayout, managedExecutables);
   const executor = createManagedExecutor({
     cwd,
-    backend: config.execution.backend,
     create: () =>
       createProbedExecutor(cwd, config, identityEnvironment.sandbox, ambientHostEnvironment),
   });

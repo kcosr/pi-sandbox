@@ -69,19 +69,19 @@ describe("execution startup diagnostics", () => {
       cause: new AggregateError(
         [
           new SandboxExecutionError("sandbox_process_failed", {
-            cause: new Error("smolvm_command_failed: KVM permission denied"),
+            cause: new Error("worker_command_failed: user namespace permission denied"),
           }),
-          new Error("smolvm_cleanup_uncertain; use owner.json for scoped CLI recovery", {
+          new Error("worker_cleanup_failed; inspect worker stderr", {
             cause: new Error("stop not confirmed"),
           }),
         ],
-        "smolvm_start_failed; retained state: /private/vm-state/vm-example",
+        "worker_start_failed; retained diagnostics: /private/worker-example",
       ),
     });
     const message = actionableErrorMessage(failure);
-    expect(message).toContain("KVM permission denied");
-    expect(message).toContain("retained state: /private/vm-state/vm-example");
-    expect(message).toContain("owner.json");
+    expect(message).toContain("user namespace permission denied");
+    expect(message).toContain("retained diagnostics: /private/worker-example");
+    expect(message).toContain("worker stderr");
     expect(message).toContain("stop not confirmed");
   });
 
@@ -96,10 +96,10 @@ describe("execution startup diagnostics", () => {
   it("bounds noisy diagnostics and preserves the generic startup fallback", () => {
     const failure = new AggregateError(
       Array.from({ length: 100 }, (_, index) => new Error(`${index}: ${"x".repeat(10000)}`)),
-      "retained state: /private/vm-state/vm-example",
+      "retained diagnostics: /private/worker-example",
     );
     const message = actionableErrorMessage(failure);
-    expect(message).toContain("retained state: /private/vm-state/vm-example");
+    expect(message).toContain("retained diagnostics: /private/worker-example");
     expect(message.length).toBeLessThanOrEqual(4096);
     expect(actionableErrorMessage(new SandboxExecutionError("sandbox_start_failed"))).toBe(
       "sandbox_start_failed",
@@ -207,20 +207,16 @@ describe("administrative configuration", () => {
     expect(() => assertExecutionPlatform(config, "darwin")).toThrow(
       "Bubblewrap execution is supported only on Linux",
     );
-    for (const architecture of ["x64", "arm64"]) {
-      expect(() =>
-        assertExecutionPlatform(
-          {
-            ...config,
-            execution: { backend: "direct", processLifetime: "command" },
-            network: { mode: "host" },
-          },
-          "darwin",
-          {},
-          architecture,
-        ),
-      ).not.toThrow();
-    }
+    expect(() =>
+      assertExecutionPlatform(
+        {
+          ...config,
+          execution: { backend: "direct", processLifetime: "command" },
+          network: { mode: "host" },
+        },
+        "darwin",
+      ),
+    ).not.toThrow();
     expect(() =>
       assertExecutionPlatform(
         {
@@ -638,34 +634,6 @@ describe("administrative configuration", () => {
     await expect(validateAdministrativeConfiguration(root)).rejects.toThrow(
       "Failed to parse models.json",
     );
-  });
-
-  it("resolves the smolvm state template before applying managed HOME", async () => {
-    const root = await createRoot();
-    const configPath = rooted(root, "/etc/pi-sandbox/config.toml");
-    const source = await readFile(configPath, "utf8");
-    await writeFile(rooted(root, "/etc/pi-sandbox/models.json"), JSON.stringify({ providers: {} }));
-    await writeFile(
-      configPath,
-      source.replace("[environment.pi]", '[environment.pi]\nHOME = "/managed/home"') +
-        `\n[smolvm]\nimage = "/opt/images/tools.smolmachine"\nimage_sha256 = "${"a".repeat(64)}"\nstate_directory = "/var/tmp/pi-vm-{{uid}}"\ncpus = 2\nmemory_mib = 1024\nstorage_gib = 1\noverlay_gib = 1\n`,
-    );
-    const environment = { HOME: "/ambient/home", USER: "wrong-user", UID: "9000" };
-    const getIdentity = vi.fn(() => {
-      expect(environment.HOME).toBe("/ambient/home");
-      return { username: "alice", uid: 1001, homeDirectory: "/accounts/alice" };
-    });
-    const effective = await resolveEffectiveAdministrativeConfiguration(
-      root,
-      environment,
-      undefined,
-      SYSTEM_CONFIG_PATH,
-      getIdentity,
-    );
-    expect(effective.config.smolvm?.stateDirectory).toBe("/var/tmp/pi-vm-1001");
-    expect(effective.config.environment.pi.HOME).toBe("/managed/home");
-    expect(getIdentity).toHaveBeenCalledTimes(1);
-    expect(environment.HOME).toBe("/ambient/home");
   });
 
   it("loads only the broker-selected model catalog and applies its tool overrides", async () => {

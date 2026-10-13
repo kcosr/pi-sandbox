@@ -1,35 +1,8 @@
-import { describe, expect, it, vi } from "vitest";
+import { describe, expect, it } from "vitest";
 
-import { assertExecutionPrerequisites, assertHostPrerequisites } from "./prerequisites.js";
+import { assertHostPrerequisites } from "./prerequisites.js";
 
 describe("host prerequisites", () => {
-  it("checks the selected smolvm wrapper and host tools without requiring guest tools on PATH", async () => {
-    vi.stubEnv("PATH", "");
-    try {
-      await expect(
-        assertExecutionPrerequisites(
-          "smolvm",
-          {
-            smolvm: { path: "/bin/sh", version: "1.26.1" },
-          },
-          [],
-        ),
-      ).resolves.toBeUndefined();
-      await expect(
-        assertExecutionPrerequisites(
-          "smolvm",
-          {
-            smolvm: { path: "/definitely-missing/smolvm", version: "1.26.1" },
-          },
-          ["/definitely-missing/git"],
-        ),
-      ).rejects.toThrow(
-        "Missing required host executables:\n- /definitely-missing/git\n- /definitely-missing/smolvm",
-      );
-    } finally {
-      vi.unstubAllEnvs();
-    }
-  });
   it("accepts fixed executables and alternative command names", async () => {
     await expect(
       assertHostPrerequisites({

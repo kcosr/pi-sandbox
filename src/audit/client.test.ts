@@ -82,7 +82,7 @@ describe("audit client", () => {
     expect(received).toEqual([{ version: 2, event }]);
   });
 
-  it("preserves smolvm as the tool execution boundary", async () => {
+  it("preserves Bubblewrap as the tool execution boundary", async () => {
     const received: unknown[] = [];
     const path = await listen((socket) =>
       socket.on("data", (data) => {
@@ -96,7 +96,7 @@ describe("audit client", () => {
       pi_session_id: "pi-1",
       invocation_id: "call-1",
       tool: "bash",
-      boundary: "smolvm",
+      boundary: "bubblewrap",
     };
     await client.submit(call);
     expect(received).toEqual([{ version: 2, event: call }]);

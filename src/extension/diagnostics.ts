@@ -85,11 +85,9 @@ export function formatSandboxSummary(input: SandboxSummaryInput): string {
     ["Lifetime", "pi-sandbox process"],
     [
       "Processes",
-      input.execution.backend === "smolvm"
-        ? "persist until VM shutdown; a crashed owner may need manual cleanup"
-        : input.execution.processLifetime === "sandbox"
-          ? "persist until sandbox shutdown or operation failure"
-          : "cleaned up after each command",
+      input.execution.processLifetime === "sandbox"
+        ? "persist until sandbox shutdown or operation failure"
+        : "cleaned up after each command",
     ],
     [
       "Code mode",
@@ -97,7 +95,7 @@ export function formatSandboxSummary(input: SandboxSummaryInput): string {
     ],
     ["MCP servers", String(input.mcpServerCount ?? 0)],
     ["Execution", executionDisplay(input.execution)],
-    ["Network", networkDisplay(input.network, input.execution)],
+    ["Network", networkDisplay(input.network)],
     ["Config", input.configPath],
     ["Models", input.modelsFile],
     ["Extensions", input.extensions.length === 0 ? "none" : input.extensions.join(", ")],
@@ -117,15 +115,6 @@ export function formatSandboxMounts(
 ): string {
   if (execution.backend === "direct") {
     return "Execution mounts\n\nDirect execution uses the ordinary host filesystem as the current user.\nThere is no mount namespace or filesystem containment boundary.";
-  }
-  if (execution.backend === "smolvm") {
-    return `VM mounts (configured policy)\n\n${formatTable(
-      ["TARGET", "ACCESS", "CONTENT"],
-      [
-        [cwd, filesystem.cwdWritable ? "read/write" : "read-only", "host launch directory"],
-        ["/", "read/write", "private Linux guest filesystem"],
-      ],
-    )}\n\nThe rest of the host filesystem is not mounted. Guest-only changes are discarded on successful VM cleanup; launch-directory writes persist on the host. A crashed owner may leave its VM running until manually stopped.`;
   }
   const mounts = describeBubblewrapMounts(cwd, filesystem.cwdWritable, filesystem.hiddenPaths);
   const table = formatTable(
@@ -156,7 +145,7 @@ export function formatSandboxPolicy(
   return `Effective policy\n\n${formatTable(
     ["SUBJECT", "EXECUTION", "MODE", "SESSION OPTION", "ACTIVE GRANT"],
     rows,
-  )}\n\nNetwork: ${networkDisplay(input.config.network, input.config.execution)}.\nDisabled tools are not advertised to the model.`;
+  )}\n\nNetwork: ${networkDisplay(input.config.network)}.\nDisabled tools are not advertised to the model.`;
 }
 
 export function diagnosticSubjects(config: SandboxConfig): readonly string[] {
@@ -213,20 +202,6 @@ function subjectScope(input: PolicyDiagnosticInput, subject: string): readonly s
   if (input.config.execution.backend === "direct") {
     return [...directSubjectScope(subject), networkScope(input.config.network)];
   }
-  if (input.config.execution.backend === "smolvm") {
-    const scope = [
-      "Runs inside the Linux virtual machine.",
-      `Only the launch directory is mounted from the host, ${input.config.filesystem.cwdWritable ? "read/write" : "read-only"}.`,
-      "The private guest filesystem is writable; other host paths are not visible.",
-    ];
-    if (["read", "grep", "find", "ls"].includes(subject)) scope.push("This tool only reads files.");
-    if (subject === "bash" || subject === "user_shell")
-      scope.push("Structured tool policies do not further restrict an approved shell command.");
-    scope.push(
-      "External and host networking are disabled; guest-local services can communicate over loopback.",
-    );
-    return scope;
-  }
   return [
     ...sandboxSubjectScope(subject, input.config.filesystem.cwdWritable),
     ...(input.config.filesystem.hiddenPaths.length > 0
@@ -271,14 +246,12 @@ function directSubjectScope(subject: string): readonly string[] {
 }
 
 function executionDisplay(execution: ExecutionConfig): string {
-  if (execution.backend === "smolvm") return "smolvm Linux virtual machine";
   return execution.backend === "bubblewrap"
     ? "Bubblewrap sandbox"
     : "direct host execution (uncontained)";
 }
 
-function networkDisplay(network: NetworkConfig, execution: ExecutionConfig): string {
-  if (execution.backend === "smolvm") return "offline (guest loopback only)";
+function networkDisplay(network: NetworkConfig): string {
   if (network.mode === "local") return "local (sandbox loopback only)";
   return network.mode === "none" ? "disabled (private namespace)" : "host (unrestricted)";
 }

@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { Buffer } from "node:buffer";
 import { execFileSync, spawn } from "node:child_process";
-import { mkdir, mkdtemp, readFile, readdir, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, readdir, realpath, rm, writeFile } from "node:fs/promises";
 import { createServer } from "node:http";
 import { dirname, join, resolve, sep } from "node:path";
 import { createInterface } from "node:readline";
@@ -11,10 +11,20 @@ import { installExtensionArtifacts } from "./extension-artifacts.mjs";
 
 const root = dirname(dirname(dirname(fileURLToPath(import.meta.url))));
 execFileSync(process.execPath, [join(root, "scripts/build-extensions.mjs")], { stdio: "inherit" });
-const temporary = await mkdtemp("/var/tmp/pi-git-package-");
+const temporary = await realpath(
+  await mkdtemp(join(process.env.PI_SANDBOX_TEST_TMPDIR ?? "/var/tmp", "pi-git-package-")),
+);
+const backends = process.platform === "linux" ? ["bubblewrap", "direct"] : ["direct"];
+const scenarios = [
+  { variant: "git-only" },
+  { variant: "excluded" },
+  ...backends.flatMap((backend) =>
+    ["sandbox-first", "git-first"].map((variant) => ({ variant, backend })),
+  ),
+];
 try {
-  for (const variant of ["git-only", "sandbox-first", "git-first", "excluded"]) {
-    const directory = join(temporary, variant);
+  for (const { variant, backend } of scenarios) {
+    const directory = join(temporary, backend ? `${variant}-${backend}` : variant);
     await mkdir(directory);
     const combined = variant === "sandbox-first" || variant === "git-first";
     const artifacts = await installExtensionArtifacts(
@@ -26,13 +36,13 @@ try {
       (await readdir(join(directory, "node_modules/@kcosr"))).sort(),
       combined ? ["pi-git-extension", "pi-sandbox-extension"] : ["pi-git-extension"],
     );
-    await scenario(directory, variant, artifacts);
+    await scenario(directory, variant, artifacts, backend);
   }
 } finally {
   await rm(temporary, { recursive: true, force: true });
 }
 
-async function scenario(directory, variant, artifacts) {
+async function scenario(directory, variant, artifacts, backend) {
   const workspace = join(directory, "workspace");
   const home = join(directory, "home");
   const state = join(home, "agent");
@@ -78,16 +88,19 @@ async function scenario(directory, variant, artifacts) {
       version: 4,
       mode: "owned",
       userBash: false,
-      backend: {
-        kind: "bubblewrap",
-        executable: "/usr/bin/bwrap",
-        runtime: process.execPath,
-        network: "none",
-        processLifetime: "command",
-        cwdWritable: true,
-        hiddenPaths: [],
-        environment: {},
-      },
+      backend:
+        backend === "bubblewrap"
+          ? {
+              kind: "bubblewrap",
+              executable: "/usr/bin/bwrap",
+              runtime: process.execPath,
+              network: "none",
+              processLifetime: "command",
+              cwdWritable: true,
+              hiddenPaths: [],
+              environment: {},
+            }
+          : { kind: "direct", environment: {} },
     }),
     { mode: 0o600 },
   );
@@ -325,7 +338,9 @@ text("GIT_NESTED_OK");`,
     child.stdin.end();
     await waitFor(() => child.exitCode !== null || child.signalCode !== null);
     assert.equal(await ended, 0, stderr);
-    console.log(`Packed ${variant}: ordinary/nested tools and repeated sessions passed`);
+    console.log(
+      `Packed ${variant}${backend ? ` (${backend})` : ""}: ordinary/nested tools and repeated sessions passed`,
+    );
   } finally {
     lines?.close();
     if (child && child.exitCode === null && child.signalCode === null) {

@@ -145,21 +145,15 @@ license_file = "./COPYING"
     sha256: "a".repeat(64),
   });
 
-  const smolvmManifest = `${validManifest}\n[platforms.linux.smolvm]\npath = "/opt/pinned-smolvm/smolvm"\nversion = "1.26.1"\n`;
-  await writeFile(path, smolvmManifest);
-  const smolvm = await loadDistribution(path, "linux", "x64");
-  assert.deepEqual(smolvm.layout.smolvm, { path: "/opt/pinned-smolvm/smolvm", version: "1.26.1" });
-  assert.deepEqual(smolvm.smolvm, smolvm.layout.smolvm);
-  assert.match(createCompiledLayoutModule(smolvm.layout), /1\.26\.1/);
-  await assert.rejects(loadDistribution(path, "linux", "arm64"), /Linux x86-64 or macOS arm64/);
-  for (const [from, to, error] of [
-    ['version = "1.26.1"', 'version = "1.23.1"', /version must be 1.26.1/],
-    ['path = "/opt/pinned-smolvm/smolvm"', 'path = "./smolvm"', /normalized absolute path/],
-    ['version = "1.26.1"', 'version = "1.26.1"\nsha256 = "unused"', /sha256 is not recognized/],
-  ]) {
-    await writeFile(path, smolvmManifest.replace(from, to));
-    await assert.rejects(loadDistribution(path, "linux", "x64"), error);
-  }
+  await writeFile(
+    path,
+    `${validManifest}
+[platforms.linux.smolvm]
+path = "/opt/removed-runtime"
+version = "1.27.0"
+`,
+  );
+  await assert.rejects(loadDistribution(path, "linux"), /smolvm is not recognized/);
 
   const darwinManifest = validManifest
     .replaceAll("platforms.linux", "platforms.darwin")
@@ -168,36 +162,16 @@ license_file = "./COPYING"
   await writeFile(path, darwinManifest);
   for (const architecture of ["x64", "arm64"]) {
     const darwin = await loadDistribution(path, "darwin", architecture);
-    assert.equal(darwin.layout.smolvm, undefined);
     assert.equal(darwin.layout.bubblewrap, undefined);
     assert.equal(darwin.layout.serviceDir, undefined);
   }
-  const darwinSmolvmManifest = `${darwinManifest}\n[platforms.darwin.smolvm]\npath = "/opt/pinned-smolvm/smolvm"\nversion = "1.26.1"\n`;
+  const darwinSmolvmManifest = `${darwinManifest}\n[platforms.darwin.smolvm]\npath = "/opt/pinned-smolvm/smolvm"\nversion = "1.27.0"\n`;
   await writeFile(path, darwinSmolvmManifest);
-  const darwinSmolvm = await loadDistribution(path, "darwin", "arm64");
-  assert.deepEqual(darwinSmolvm.smolvm, smolvm.smolvm);
-  assert.deepEqual(darwinSmolvm.layout.smolvm, smolvm.layout.smolvm);
-  assert.match(createCompiledLayoutModule(darwinSmolvm.layout), /"smolvm":\{/u);
-  assert.equal(darwinSmolvm.layout.bubblewrap, undefined);
-  assert.equal(darwinSmolvm.layout.serviceDir, undefined);
-  await assert.rejects(loadDistribution(path, "darwin", "x64"), /Linux x86-64 or macOS arm64/);
-  for (const [from, to, error] of [
-    [
-      'version = "1.26.1"',
-      'version = "1.25.4"',
-      /platforms\.darwin\.smolvm\.version must be 1\.26\.1/u,
-    ],
-    ['path = "/opt/pinned-smolvm/smolvm"', 'path = "./smolvm"', /normalized absolute path/u],
-    [
-      'path = "/opt/pinned-smolvm/smolvm"',
-      'path = "/opt/smolvm:unsafe/smolvm"',
-      /unsupported characters/u,
-    ],
-    ['version = "1.26.1"', 'version = "1.26.1"\nsha256 = "unused"', /sha256 is not recognized/u],
-  ]) {
-    await writeFile(path, darwinSmolvmManifest.replace(from, to));
-    await assert.rejects(loadDistribution(path, "darwin", "arm64"), error);
-  }
+  for (const architecture of ["arm64", "x64"])
+    await assert.rejects(
+      loadDistribution(path, "darwin", architecture),
+      /smolvm is not recognized/,
+    );
   for (const declaration of [
     'service_dir = "/opt/example/systemd"\n',
     '[platforms.darwin.bubblewrap]\nmode = "system"\npath = "/usr/bin/bwrap"\n',

@@ -32,13 +32,6 @@ try {
   await createRelease(release2, "2");
   await createRelease(bundledRelease, "bundled", true);
 
-  const smolvmRelease = path.join(temporaryRoot, "release-smolvm");
-  const smolvmRoot = path.join(temporaryRoot, "smolvm-root");
-  await createRelease(smolvmRelease, "smolvm", false, "smolvm");
-  run(path.join(smolvmRelease, "install.sh"), [], { DESTDIR: smolvmRoot });
-  await assertMode(path.join(smolvmRoot, "usr/libexec/pi-sandbox/pi-sandbox"), 0o755);
-  run(path.join(smolvmRelease, "uninstall.sh"), [], { DESTDIR: smolvmRoot });
-
   const bundledRoot = path.join(temporaryRoot, "bundled-root");
   const bundledInstall = run(path.join(bundledRelease, "install.sh"), [], {
     DESTDIR: bundledRoot,

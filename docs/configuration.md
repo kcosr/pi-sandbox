@@ -42,17 +42,14 @@ backend, process lifetime, network mode, CWD write access, and any subset of mod
 the main configuration remains unchanged. See
 [user and group environment and overrides](identity-broker.md).
 
-The required `execution` table selects `bubblewrap`, `direct`, or `smolvm`. Bubblewrap is
+The required `execution` table selects `bubblewrap` or `direct`. Bubblewrap is
 available only on Linux. Direct execution is available on Linux and macOS and
 runs approved built-in operations with the invoking user's ordinary host
 filesystem and process authority. It is an explicit operating mode, never a
 fallback after a sandbox failure. macOS requires `identity.mode = disabled`.
-The optional smolvm backend supports Linux x86-64 and macOS 26+ arm64 and requires a provider selected
-at build time. It mounts only the launch directory from the host.
 
 The required `network` table selects `none`, `local`, or `host` for built-in tools and
-shell commands. Bubblewrap supports all three. smolvm requires `none`, which
-disables host/external access while permitting guest-local loopback. Direct execution requires `host` so a
+shell commands. Bubblewrap supports all three. Direct execution requires `host` so a
 configuration can never claim an isolation mode that the backend does not
 enforce. The Linux packaged default is Bubblewrap plus `none`; the macOS
 packaged default is direct plus `host`.
@@ -87,8 +84,6 @@ every configured value under `environment.pi`, `environment.sandbox`, and
 accept `{{username}}` and `{{uid}}` anywhere in a string. For example,
 `/srv/accounts/{{username}}` becomes `/srv/accounts/alice`, and `~/cache/{{uid}}`
 becomes `/home/alice/cache/1001` for that account.
-`smolvm.state_directory` also accepts account macros within its absolute path;
-it does not accept home-relative paths.
 
 Expansion happens once at operational startup, after broker rules are merged,
 using the invoking effective user's canonical OS account name, numeric UID,
@@ -768,108 +763,3 @@ that selects only an absolute `path` and/or repository locator from the same
 immutable arguments used for execution. The Git clone tool records its validated
 repository locator and derived destination. Other compiled tools without this
 function record tool identity, permission decisions, and outcomes only.
-
-## smolvm image and runtime selection
-
-The optional Linux x86-64 and macOS 26+ arm64 backend uses a complete, fixed smolvm **1.26.1**
-distribution. The distribution manifest, not runtime configuration or an
-identity rule, selects its absolute wrapper path:
-
-```toml
-[platforms.linux.smolvm]
-path = "/opt/smolvm-1.26.1/smolvm"
-version = "1.26.1"
-```
-
-For macOS arm64, use `[platforms.darwin.smolvm]` with the complete Darwin arm64 distribution. Intel macOS and Linux arm64 are not supported by this VM backend.
-
-This extends distribution format 3. The runtime, adjacent libraries and guest
-rootfs are external prerequisites, not included in the Pi archive. Startup
-verifies their pinned inventory before using them. Selecting smolvm without a
-build-selected provider fails; there is no fallback to another executor.
-
-Main configuration format **11** provides the image and resource policy:
-
-```toml
-[execution]
-backend = "smolvm"
-
-[network]
-mode = "none"
-
-[filesystem]
-cwd_writable = true
-hidden_paths = []
-
-[smolvm]
-image = "/opt/pi-images/tools.smolmachine"
-image_sha256 = "REPLACE_WITH_THE_IMAGE_SHA256"
-state_directory = "/var/tmp/pi-vm-{{uid}}"
-cpus = 2
-memory_mib = 1024
-storage_gib = 1
-overlay_gib = 1
-```
-
-Replace the digest with exactly 64 lowercase hexadecimal characters and choose
-a private controller-metadata path for the invoking account outside the project. The image
-path remains literal. The state directory accepts `{{uid}}` and `{{username}}`
-using the same trusted account lookup as the scoped environment, before any
-managed `HOME` takes effect. The expanded value must be a normalized absolute
-path below `/`, contain no colon and occupy at most 48 bytes. Provision this
-directory for each account before use, owned by that account with mode `0700`.
-For example, the template above selects `/var/tmp/pi-vm-1001` for UID 1001.
-This holds ownership records and attachment sockets, not VM disks. The native
-registry and caches use the invoking process’s ordinary HOME/XDG locations on Linux, or HOME/Library locations on macOS,
-captured before starting smolvm. They must also remain outside guest mounts.
-Startup verifies canonical paths, private ownership and placement outside the
-project; it does not create or change permissions on this account directory.
-CPU count is 1–32; memory is 256–65536 MiB; each disk is 1–64 GiB. The trusted
-image must supply the executor's fixed Linux tools. Host GNU tools, `fd` and
-`rg` are not prerequisites for VM tool execution; host extensions retain their
-own executable prerequisites.
-For the separate OCI controller, smaller-than-template disk capacities require
-host `resize2fs` from e2fsprogs. See the
-[runtime prerequisites](installation.md#optional-external-smolvm-runtime).
-Prepared plain packs use their already-sized templates; capacities below the
-image's logical disk sizes are rejected instead of shrinking them at launch.
-
-Optional `smolvm.e2fsprogs_directory` selects a literal, canonical trusted directory
-containing executable `resize2fs` and `e2fsck`, outside guest mounts. The launcher
-adds only that directory to its fixed PATH. Because upstream checks fixed install
-locations first, a conflicting earlier tool is rejected. This is administrator
-configuration, never supplied by the project or identity overrides. Leave it
-unset when the ordinary system tools suffice. The standalone extension and OCI
-controller expose the same option as `e2fsprogsDirectory`.
-
-The `[smolvm]` table is optional for other backends. It may be present in a
-Bubblewrap base policy when an identity rule is allowed to select smolvm.
-Identity rules cannot replace the image, digest, private state location,
-resources, disk-tool directory or pinned runtime. The complete effective configuration is validated
-after identity selection.
-
-smolvm has one fixed process lifetime: background processes survive ordinary
-tool completion until the VM stops. Do not set `execution.process_lifetime`
-for this backend. The field remains a Bubblewrap choice, while direct execution
-requires `command`. VM networking is offline, and `hidden_paths` must be empty
-because other host paths are not mounted. The launch directory remains at its
-same absolute path and follows `cwd_writable`; private guest files are writable.
-MCP and managed host extensions remain host-side and retain their policies.
-
-Up to four commands run concurrently, with a fixed limit of 64 outstanding
-requests including the queue. Per-call timeouts include queue wait. Cancelling
-or timing out a queued call leaves running work intact; active cancellation,
-timeout, output overflow or execution infrastructure failure retires the VM and
-interrupts its other calls and background processes. Further calls require a new
-executor. Ordinary nonzero exits keep the VM available. Output follows Pi's
-100 ms post-exit idle drain, resetting with each chunk; continuous background
-output can keep a call open until its timeout or output limit. Redirect background
-server output to files.
-
-Normal Pi shutdown stops and deletes the owned VM. If Pi is killed or crashes,
-a VM may remain. There is no separate watcher process. Ownership metadata records
-a unique machine name: use ordinary `smolvm machine ls --json`,
-`smolvm machine stop --name NAME` and `smolvm machine delete --name NAME --force`
-with the original account/environment. Only recorded owned names are cleaned up.
-A failed or ambiguous startup preserves metadata for recovery. Native storage is
-deleted only through smolvm, and shared caches are never automatically pruned.

@@ -1,6 +1,6 @@
 import type { ResolvedMcpServer } from "../mcp/resolve.js";
 import type { ManagedMcpPreferences } from "../mcp/preferences.js";
-import type { SandboxConfig } from "../domain/index.js";
+import type { ExecutionBackend, SandboxConfig } from "../domain/index.js";
 import type { HostCommandExecutor } from "../../packages/sandbox-extension/src/runtime/host-command/index.js";
 import type { ManagedExtensionInstance, PiToolExtension } from "../managed-extensions/sdk.js";
 import type { SandboxExecutor } from "../../packages/sandbox-extension/src/runtime/index.js";
@@ -21,6 +21,8 @@ export interface ExtensionDependencies {
   readonly onSessionStart?: (file: string | undefined) => Promise<void>;
   /** Await process-owned cleanup before Pi's normal quit path can call process.exit. */
   readonly onProcessShutdown?: () => Promise<void>;
+  /** Managed application metadata; not part of the reusable executor interface. */
+  readonly executionBackend?: ExecutionBackend;
   readonly executor: SandboxExecutor;
   readonly auditClient?: AuditClient;
   readonly managedExtensions?: readonly ManagedExtensionInstance[];

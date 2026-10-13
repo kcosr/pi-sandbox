@@ -1,9 +1,0 @@
-# Trusted build recipe for the pinned smolvm 1.26.1 Linux x86_64 tools image.
-cpus = 2
-memory = 1024
-storage = 1
-overlay = 1
-init = [
-  "apk add --no-cache bash coreutils findutils grep gawk file ripgrep fd git nodejs python3 util-linux",
-  "mkdir -p /root/.cache /root/.config /root/.local/state",
-]

@@ -153,7 +153,6 @@ function fakeExecutor(): SandboxExecutor & {
   return {
     cwd: "/work/project",
     home: "/run/pi-sandbox/home",
-    backend: "bubblewrap",
     commands: LINUX_TOOL_COMMANDS,
     calls,
     probe: vi.fn(() => Promise.resolve()),
@@ -315,6 +314,7 @@ async function start(
     configPath: "/etc/pi-sandbox/config.toml",
     userStateDir: "/home/test/.pi/agent",
     loadConfig: () => Promise.resolve(cfg),
+    executionBackend: cfg.execution.backend,
     executor,
     ...(activeTools === undefined ? {} : { toolArguments: ["--tools", activeTools.join(",")] }),
   })(fake.api);
@@ -979,7 +979,6 @@ describe("Pi Sandbox extension", () => {
   it("describes model tools with the selected execution boundary", async () => {
     const pi = fakePi();
     const executor = fakeExecutor();
-    Object.assign(executor, { backend: "direct" as const });
     await start(pi, executor, {
       ...config(),
       execution: { backend: "direct", processLifetime: "command" },

@@ -21,7 +21,6 @@ function directConfig() {
 }
 function executorFixture() {
   return {
-    backend: "direct" as const,
     cwd: "/workspace",
     home: "/home",
     commands: LINUX_TOOL_COMMANDS,
@@ -90,40 +89,9 @@ async function fixture(
   };
 }
 describe("owned backend lifecycle", () => {
-  it("rejects a smolvm config reached through an ancestor alias into the project", async () => {
-    const create = vi.fn();
-    const current = await fixture({}, create, {
-      canonical: (value) =>
-        Promise.resolve(
-          value === "/private/config.json" ? "/workspace/control/config.json" : value,
-        ),
-      readConfig: () =>
-        Promise.resolve(
-          parseSandboxConfig({
-            version: 4,
-            mode: "owned",
-            backend: {
-              kind: "smolvm",
-              executable: "/opt/smolvm/smolvm",
-              image: "/opt/images/tools.smolmachine",
-              imageSha256: "a".repeat(64),
-              stateDirectory: "/var/tmp/private-state",
-              resources: { cpus: 1, memoryMiB: 512, storageGiB: 1, overlayGiB: 1 },
-              cwdWritable: true,
-              environment: {},
-            },
-            userBash: false,
-          }),
-        ),
-    });
-    await current.emit("session_start");
-    expect(current.shutdown).toHaveBeenCalledOnce();
-    expect(create).not.toHaveBeenCalled();
-  });
   it("retains exactly one backend through new/resume and closes on quit", async () => {
     const close = vi.fn();
     const executor: SandboxExecutor = {
-      backend: "direct",
       cwd: "/workspace",
       home: "/home",
       commands: LINUX_TOOL_COMMANDS,
@@ -154,7 +122,6 @@ describe("owned backend lifecycle", () => {
     const close = vi.fn();
     const create = vi.fn((): Promise<SandboxExecutor> =>
       Promise.resolve({
-        backend: "direct",
         cwd: "/workspace",
         home: "/home",
         commands: LINUX_TOOL_COMMANDS,
@@ -191,7 +158,6 @@ describe("owned backend lifecycle", () => {
     const started = current.emit("session_start");
     const stopped = current.emit("session_shutdown", "quit");
     release({
-      backend: "direct",
       cwd: "/workspace",
       home: "/home",
       commands: LINUX_TOOL_COMMANDS,

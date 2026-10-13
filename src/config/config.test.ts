@@ -493,7 +493,16 @@ describe("parseConfig", () => {
     ).toThrow("config.execution is required");
     expect(() =>
       parseConfig(completeConfig().replace('backend = "bubblewrap"', 'backend = "container"')),
-    ).toThrow("config.execution.backend must be one of: bubblewrap, direct, smolvm");
+    ).toThrow("config.execution.backend must be one of: bubblewrap, direct");
+  });
+
+  it("rejects removed VM backend names and configuration without a fallback", () => {
+    expect(() =>
+      parseConfig(completeConfig().replace('backend = "bubblewrap"', 'backend = "smolvm"')),
+    ).toThrow("config.execution.backend must be one of: bubblewrap, direct");
+    expect(() =>
+      parseConfig(completeConfig() + '\n[smolvm]\nimage = "/images/tools.smolmachine"\n'),
+    ).toThrow("config.smolvm is not a recognized field");
   });
 
   it("defaults process lifetime to command and restricts sandbox lifetime to Bubblewrap", () => {

@@ -145,22 +145,6 @@ async function verifyPayloadIntegrityChecks(temporaryRoot) {
 }
 
 async function verifyExecutionBackends(root) {
-  const release = join(root, "smolvm-release");
-  const installRoot = join(root, "smolvm-root");
-  await createRelease(release, { backend: "smolvm" });
-  run(join(release, "install.sh"), [], { DESTDIR: installRoot });
-  const config = join(installRoot, "etc/pi-sandbox/config.toml");
-  const original = await readFile(config, "utf8");
-  if (!original.includes('backend = "smolvm"')) throw new Error("smolvm policy was not installed");
-  const directRelease = join(root, "direct-upgrade");
-  await createRelease(directRelease);
-  run(join(directRelease, "install.sh"), [], { DESTDIR: installRoot });
-  if ((await readFile(config, "utf8")) !== original)
-    throw new Error("ordinary upgrade replaced the installed smolvm policy");
-  run(join(directRelease, "install.sh"), ["--replace-config"], { DESTDIR: installRoot });
-  if (!(await readFile(config, "utf8")).includes('backend = "direct"'))
-    throw new Error("explicit replacement did not install the direct policy");
-
   const unsupportedRelease = join(root, "unsupported-backend-release");
   const unsupportedRoot = join(root, "unsupported-backend-root");
   await createRelease(unsupportedRelease, { backend: "bubblewrap" });
@@ -174,7 +158,7 @@ async function verifyExecutionBackends(root) {
   await expectMissing(join(unsupportedRoot, "etc/pi-sandbox/config.toml"));
 
   // Exercise the non-DESTDIR prerequisite branch with every installation path
-  // rendered into this disposable tree. No system paths or VM commands are used.
+  // rendered into this disposable tree. No system paths are used.
   const hostRoot = join(root, "simulated-host");
   const layout = {
     configDir: join(hostRoot, "etc/pi-sandbox"),
@@ -203,11 +187,14 @@ async function verifyExecutionBackends(root) {
   );
   await expectMissing(layout.libexecDir);
   await expectMissing(join(layout.configDir, "config.toml"));
-  const hostSmolvm = join(root, "host-smolvm-release");
-  await createRelease(hostSmolvm, { backend: "smolvm", layout, homebrewPrefix: missingTools });
-  run(join(hostSmolvm, "install.sh"), [], environment);
-  if (!(await lstat(join(layout.libexecDir, "pi-sandbox"))).isFile())
-    throw new Error("smolvm install without direct-mode host tools failed");
+  const unknownRelease = join(root, "unknown-backend-release");
+  await createRelease(unknownRelease, { backend: "unknown" });
+  expectFailure(
+    join(unknownRelease, "install.sh"),
+    [],
+    { DESTDIR: join(root, "unknown-backend-root") },
+    "unsupported macOS execution backend: unknown",
+  );
 }
 
 async function createRelease(directory, { backend = "direct", layout, homebrewPrefix } = {}) {

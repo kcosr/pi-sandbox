@@ -10,22 +10,15 @@ No workspace package links are admitted. Provenance includes Git's bundled runne
 
 Linux sandbox acceptance requires Bubblewrap, Node 24 and Bun 1.3.14+ and checks
 both worker runtimes, conversation replacement and persistent background jobs.
+Direct acceptance also exercises ordinary and nested parallel tool calls.
 Git acceptance uses local HTTP repositories and scripted local model responses
 for ordinary/nested Code Mode cloning, restrictions, exclusions and repeated
-sessions. Managed tests cover mandatory approvals, exact canonical snapshots,
+sessions. Both extension load orders run with direct execution on Linux and
+macOS, and with Bubblewrap on Linux. Temporary paths are canonicalized before
+configuring the workspace. Managed tests cover mandatory approvals, exact canonical snapshots,
 per-call cancellation, audit failure, MCP and nested Code Mode. No live provider
-is contacted. Required native smolvm checks exercise owned and attached paths.
-
-The OCI interactive controller test also requires Bun 1.3.14 or newer (optionally
-selected with `PI_SANDBOX_TEST_BUN`). Run
-`packages/sandbox-extension/src/runtime/smolvm/oci/terminal.native.test.ts` with
-`PI_SANDBOX_SMOLVM_BIN`, `PI_SANDBOX_SMOLVM_OCI_IMAGE` and
-`PI_SANDBOX_SMOLVM_OCI_SHA256` set to a verified 1.26.1 distribution and provisioned
-Linux tool image matching the host architecture. It checks actual guest PTY startup, resize, Ctrl-C,
-streaming beyond 1 MiB, simultaneous tools and independent shells, exact reviewer
-branch access, scoped closure and repeated writable-original cold retention.
-The fixture sends bounded small inputs; application-level slow-consumer and
-transport-buffer qualification belongs to the application's PTY adapter.
+is contacted. Standalone direct acceptance runs stock Pi under Node and Bun
+without requiring Bubblewrap and preserves output, cancellation and tool rendering.
 
 Pi Sandbox tests are offline. They never invoke a live model provider and never
 depend on provider credentials.
@@ -51,60 +44,6 @@ integration, real-Bubblewrap, package/install, build, archive inspection, and
 packaged executable diagnostic checks as distinct observable steps. A supported release
 host must execute the Bubblewrap suites rather than accepting a skip caused by
 unavailable namespaces.
-
-### Required smolvm release lane
-
-A source release that includes smolvm must pass this lane on each supported host:
-Linux x86-64 with usable KVM and macOS 26+ arm64 with Hypervisor.framework. Ordinary development commands may skip unavailable VM tests;
-this command may not. Provide the complete pinned smolvm distribution, a
-prepared plain tools pack, an OCI tools archive, their verified SHA-256 values,
-and Bun 1.3.14 or newer on `PATH`. `PI_SANDBOX_TEST_BUN` can additionally select
-the Bun used for the native terminal fixture. See [image preparation](smolvm-images.md).
-
-Create a review distribution manifest outside the source tree, starting from
-`config/default/distribution.toml`. Make its `extension_manifests` entry an
-absolute path to this checkout's
-`src/managed-extensions/git-clone/pi-sandbox-extension.json`, set
-`allow_config_override = true`, and add:
-
-```toml
-[platforms.linux.smolvm]
-path = "/opt/smolvm-1.26.1/smolvm"
-version = "1.26.1"
-```
-
-On macOS select `[platforms.darwin.smolvm]` instead, use arm64 images, and set
-`PI_SANDBOX_E2FSPROGS_DIRECTORY` if disk tools live outside standard locations.
-The same setting reaches the managed smoke policy. Use native canonical paths
-(`/private/var/tmp/...` rather than its `/var/tmp` alias). Release builds still
-need the documented direct-mode GNU tools and GNU tar for their other checks.
-
-Then run, using the same runtime path in both places:
-
-```sh
-PI_SANDBOX_SMOLVM_BIN=/opt/smolvm-1.26.1/smolvm \
-PI_SANDBOX_SMOLVM_IMAGE=/absolute/path/tools.smolmachine \
-PI_SANDBOX_SMOLVM_IMAGE_SHA256=REPLACE_WITH_VERIFIED_PLAIN_IMAGE_SHA256 \
-PI_SANDBOX_SMOLVM_OCI_IMAGE=/absolute/path/tools.tar \
-PI_SANDBOX_SMOLVM_OCI_SHA256=REPLACE_WITH_VERIFIED_OCI_IMAGE_SHA256 \
-env -u NODE_ENV npm run verify:release:smolvm -- \
-  --distribution /absolute/path/review-distribution.toml \
-  --out /absolute/path/review-artifacts
-```
-
-The preflight rejects missing inputs, unsupported hosts, inaccessible KVM,
-invalid digest syntax, or a distribution that would skip managed VM acceptance.
-The existing native tests verify the runtime inventory and actual image digests.
-This lane runs the full verifier with `PI_SANDBOX_REQUIRE_SMOLVM=1`: owned tools,
-OCI families, real interactive PTYs, extracted standalone packages, and the
-compiled managed smolvm/Git/MCP/Code Mode fixture all run rather than skip.
-All model responses come from offline fixtures.
-
-Record the final source commit, runtime version, both image digests and test
-outcomes with the release review. Keep this override-enabled review archive
-separate from deployment archives, whose managed configuration remains locked.
-Do not publish review artifacts as the production distribution. The source-only
-GitHub release requires no uploaded application archive.
 
 Linux real-Bubblewrap tests also require Python 3 for offline socket-family and
 namespace probes. This is a test-host dependency, not an application runtime
@@ -378,73 +317,3 @@ code VM source/call/output limits, deadlines and awaited nested cancellation.
 The packaged fixture exercises the compiled application with a local scripted
 provider and local MCP servers; it never contacts a live model provider. Project
 `.env` files must not redirect session storage through Bun environment autoload.
-
-## smolvm qualification
-
-Managed unit checks cover schema 11 image/resource validation, fixed VM lifetime,
-identity backend transitions, refusal of identity image overrides, VM-aware
-mount/policy diagnostics and the `smolvm` audit boundary. Distribution checks
-cover the optional fixed external 1.26.1 provider without requiring an installed
-runtime during cross-build/staged validation. Real VM tests must additionally
-use a verified full runtime and trusted tools image on Linux x86-64 with KVM
-or macOS 26+ arm64 with Hypervisor.framework;
-ordinary host-only tests are not evidence of VM confinement or cleanup.
-
-Set `PI_SANDBOX_SMOLVM_BIN` to the official distribution's wrapper,
-`PI_SANDBOX_SMOLVM_IMAGE` and `PI_SANDBOX_SMOLVM_IMAGE_SHA256` to a trusted packed
-tools image, and `PI_SANDBOX_SMOLVM_OCI_IMAGE` and `PI_SANDBOX_SMOLVM_OCI_SHA256`
-to a local OCI tools archive. `PI_SANDBOX_REQUIRE_SMOLVM=1` makes missing native
-prerequisites fail instead of skipping. The release verifier uses these inputs
-for owned project execution, OCI families and the standard Pi package.
-
-For macOS qualification, set `PI_SANDBOX_E2FSPROGS_DIRECTORY` to the
-canonical isolated e2fsprogs sbin directory if needed, and `PI_SANDBOX_TEST_BUN`
-(and `PI_SANDBOX_BUN` for package tests) to a trusted Bun executable. Run
-`tests/integration/smolvm-executor.test.ts` and the package's `oci.native.test.ts`
-under Node 24 and Bun with required VM inputs, then `oci-terminal-native.ts`
-under Bun and `scripts/test/sandbox-extension-package.mjs`. These fixtures use a
-short canonical temporary HOME as well as XDG paths; XDG alone would leave the
-real macOS registry exposed. Fixture-only process and layer-volume observations
-are independent test evidence, not a stronger product lifecycle guarantee.
-Before deleting a whole disposable account, confirm its registry is empty and
-no fixture layer image remains attached; never unmount unrelated host volumes.
-
-The native cases cover RW/RO project access, binary streaming, persistent guest
-processes, cancellation, timeout, output overflow and close; frozen OCI sources,
-independently writable siblings, branchable implementers, authenticated borrowed
-attachments and repeated cold reopening. Package tests launch ordinary Pi from
-the extracted tarball and check that borrowed shutdown leaves ownership with the
-controller. Barrier-based tests prove overlapping commands and separate streams,
-queued cancellation/deadlines, exclusive lifecycle admission, peer interruption,
-cleanup settlement and Pi-compatible inherited-pipe draining. The ordinary Pi
-package exercises parallel Bash and same-path write/edit queues both directly
-and through nested Code Mode, for owned and borrowed VMs. No live provider is used.
-Shared-registry tests use one disposable account registry across multiple families
-and unrelated machines, exercising collisions, retained reopen and scoped cleanup.
-No fixture sweeps the developer’s normal registry. Abrupt owner death remains a
-documented manual-recovery case, not an automatic-cleanup guarantee.
-
-For the compiled managed application, run the following against an extracted
-Linux x86-64 or macOS arm64 review build with `allow_config_override = true`, the Git extension
-included, and its build-selected external smolvm distribution available:
-
-```sh
-PI_SANDBOX_SMOLVM_IMAGE=/absolute/path/tools.smolmachine \
-PI_SANDBOX_SMOLVM_IMAGE_SHA256=REPLACE_WITH_IMAGE_SHA256 \
-node scripts/test/smolvm-managed-smoke.mjs \
-  /absolute/path/pi-sandbox /absolute/path/defaults
-```
-
-`build:release` also runs this fixture automatically for such a review build
-when `PI_SANDBOX_SMOLVM_IMAGE` is set or `PI_SANDBOX_REQUIRE_SMOLVM=1`.
-
-This fixture exercises RPC conversation replacement, persistent guest processes,
-host-project writeback, unmounted host-file isolation and VMM death on normal
-EOF. It also checks approved host `git_clone` over loopback HTTP followed by
-guest readback, then reuses the full managed MCP/Code Mode smoke suite with
-scripted loopback providers, including overlapping ordinary/nested tool calls and
-same-path mutations. No live model is called. Controller metadata, project files
-and one shared fixture registry use disposable `/var/tmp` paths; one Pi state directory under the
-invoking account's home lets the existing stdio account-identity checks run
-without changing host account records. The fixture removes its directories on
-confirmed cleanup and preserves them with reported paths after uncertain cleanup.

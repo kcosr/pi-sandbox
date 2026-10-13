@@ -43,7 +43,6 @@ describe("direct executor", () => {
       });
       expect(result.exitCode).toBe(0);
       expect(result.stdout.toString()).toBe("ambient:scoped:scoped");
-      expect(executor.backend).toBe("direct");
       expect(executor.home).toBe("/Users/alice");
     } finally {
       await executor.close();

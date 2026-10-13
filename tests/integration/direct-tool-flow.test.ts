@@ -86,7 +86,6 @@ describe("typed tools through direct execution", () => {
     const failingMoveExecutor: SandboxExecutor = {
       cwd: executor.cwd,
       home: executor.home,
-      backend: executor.backend,
       commands: { ...executor.commands, mv: rejectMove },
       probe: executor.probe.bind(executor),
       execute: executor.execute.bind(executor),

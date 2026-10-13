@@ -156,7 +156,7 @@ else
   execution_backend=$("$candidate" --print-execution-backend --root "$validation_root")
 fi
 case "$execution_backend" in
-  direct|smolvm) ;;
+  direct) ;;
   *) echo "unsupported macOS execution backend: $execution_backend" >&2; exit 1 ;;
 esac
 if [ -z "$destdir" ] && [ "$execution_backend" = direct ]; then

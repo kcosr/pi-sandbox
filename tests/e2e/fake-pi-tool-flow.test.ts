@@ -86,10 +86,6 @@ class RecordingExecutor implements SandboxExecutor {
     return this.delegate.home;
   }
 
-  get backend(): SandboxExecutor["backend"] {
-    return this.delegate.backend;
-  }
-
   get commands(): SandboxExecutor["commands"] {
     return this.delegate.commands;
   }

@@ -50,10 +50,8 @@ omitting empty sections. Put required administrator actions first under
    the completed `CHANGELOG.md` entries from `Unreleased` into a dated section
    for that version, retaining PR links and noting configuration changes.
    Leave an `Unreleased` section for subsequent work.
-2. Complete the applicable checks in [testing](testing.md), including the
-   [required Linux smolvm lane](testing.md#required-linux-smolvm-release-lane)
-   for a release that includes smolvm. Record the exact source commit, runtime
-   version, image digests and check outcomes. Review the change,
+2. Complete the applicable checks in [testing](testing.md). Record the exact
+   source commit, extension versions, payload checksums and check outcomes. Review the change,
    and merge the release changes. Create the matching product tag on the final
    merged commit, then push that tag.
 3. Publish a GitHub release for that tag using the changelog section as its

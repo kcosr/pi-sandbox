@@ -30,7 +30,6 @@ export type {
   IdentityOverrides,
   PolicyMode,
   SandboxConfig,
-  SmolvmConfig,
   SessionsConfig,
   SessionGrantPolicy,
   SubjectPolicy,

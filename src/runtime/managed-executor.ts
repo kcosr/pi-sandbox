@@ -7,7 +7,6 @@ import {
  * Pi's metadata and CLI-error exits must not create a boundary needing teardown. */
 export function createManagedExecutor(options: {
   readonly cwd: string;
-  readonly backend: SandboxExecutor["backend"];
   /** The factory must return a probed executor and clean up failed creation. */
   readonly create: () => Promise<SandboxExecutor>;
 }): SandboxExecutor {
@@ -28,7 +27,6 @@ export function createManagedExecutor(options: {
   };
   return {
     cwd: options.cwd,
-    backend: options.backend,
     get home() {
       return ready().home;
     },

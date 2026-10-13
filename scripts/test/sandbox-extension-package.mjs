@@ -1,33 +1,21 @@
 import assert from "node:assert/strict";
-import { Buffer } from "node:buffer";
 import { execFileSync, spawn } from "node:child_process";
 import { createHash } from "node:crypto";
-import { mkdtemp, realpath, mkdir, readFile, readdir, writeFile } from "node:fs/promises";
+import { mkdtemp, realpath, mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
-import { fileURLToPath, pathToFileURL } from "node:url";
+import { fileURLToPath } from "node:url";
 import { setTimeout as delay } from "node:timers/promises";
 import { testParallelTools } from "./parallel-tools-smoke.mjs";
 import { installExtensionArtifacts } from "./extension-artifacts.mjs";
-import { removeSmolvmFixture } from "./remove-smolvm-fixture.mjs";
 
 const root = dirname(dirname(dirname(fileURLToPath(import.meta.url))));
 execFileSync(process.execPath, [join(root, "scripts/build-extensions.mjs")], {
   stdio: "inherit",
 });
-const temp = await realpath(await mkdtemp("/var/tmp/pie-"));
+const temp = await realpath(
+  await mkdtemp(join(process.env.PI_SANDBOX_TEST_TMPDIR ?? "/var/tmp", "pie-")),
+);
 const children = new Set();
-const vmStates = [];
-const families = [];
-// One disposable account registry for the whole fixture, shared by all VM cases.
-const registryEnvironment = {
-  HOME: join(temp, "h"),
-  XDG_DATA_HOME: join(temp, "account-data"),
-  XDG_CACHE_HOME: join(temp, "account-cache"),
-  SMOLVM_CONFIG: join(temp, "smolvm-config.toml"),
-};
-await mkdir(registryEnvironment.HOME, { mode: 0o700 });
-await writeFile(registryEnvironment.SMOLVM_CONFIG, "");
-Object.assign(process.env, registryEnvironment);
 try {
   const artifacts = await installExtensionArtifacts(root, temp, ["sandbox-extension"]);
   const packed = artifacts["sandbox-extension"];
@@ -38,46 +26,12 @@ try {
     process.execPath,
     process.env.PI_SANDBOX_BUN ?? execFileSync("which", ["bun"], { encoding: "utf8" }).trim(),
   ];
-  const cases =
-    process.platform === "linux"
+  const cases = [
+    ...(process.platform === "linux"
       ? runtimes.map((runtime) => ({ kind: "bubblewrap", runtime, piRuntime: process.execPath }))
-      : [];
-  const hostTools = process.env.PI_SANDBOX_E2FSPROGS_DIRECTORY
-    ? { e2fsprogsDirectory: process.env.PI_SANDBOX_E2FSPROGS_DIRECTORY }
-    : {};
-  if (
-    process.env.PI_SANDBOX_SMOLVM_BIN &&
-    process.env.PI_SANDBOX_SMOLVM_IMAGE &&
-    process.env.PI_SANDBOX_SMOLVM_IMAGE_SHA256
-  )
-    cases.push(
-      ...runtimes.map((piRuntime) => ({
-        kind: "smolvm",
-        runtime: process.env.PI_SANDBOX_SMOLVM_BIN,
-        piRuntime,
-      })),
-    );
-  else if (process.env.PI_SANDBOX_REQUIRE_SMOLVM === "1")
-    throw new Error("Required package VM fixture needs runtime, image and digest");
-  if (
-    process.env.PI_SANDBOX_SMOLVM_BIN &&
-    process.env.PI_SANDBOX_SMOLVM_OCI_IMAGE &&
-    process.env.PI_SANDBOX_SMOLVM_OCI_SHA256
-  )
-    cases.push(
-      ...runtimes.map((piRuntime) => ({
-        kind: "attached",
-        runtime: process.env.PI_SANDBOX_SMOLVM_BIN,
-        piRuntime,
-      })),
-    );
-  else if (process.env.PI_SANDBOX_REQUIRE_SMOLVM === "1")
-    throw new Error("Required package attachment fixture needs OCI image and digest");
-  if (cases.length === 0)
-    throw new Error("Darwin package acceptance requires native smolvm inputs");
-  const { createSmolvmOciFamily } = await import(
-    pathToFileURL(join(packed.directory, "dist/controller.js")).href
-  );
+      : []),
+    ...runtimes.map((piRuntime) => ({ kind: "direct", piRuntime })),
+  ];
   for (const [index, selected] of cases.entries()) {
     const { runtime } = selected;
     const workspace = join(temp, `workspace-${index}`);
@@ -85,37 +39,9 @@ try {
     await mkdir(workspace);
     await mkdir(home);
     const config = join(temp, `config-${index}.json`);
-    const stateDirectory = join(temp, `state-${index}`);
-    await mkdir(stateDirectory, { mode: 0o700 });
-    if (selected.kind !== "bubblewrap") vmStates.push(stateDirectory);
-    let family;
-    if (selected.kind === "attached") {
-      family = await createSmolvmOciFamily({
-        ...hostTools,
-        smolvmPath: runtime,
-        imageArchive: process.env.PI_SANDBOX_SMOLVM_OCI_IMAGE,
-        imageSha256: process.env.PI_SANDBOX_SMOLVM_OCI_SHA256,
-        stateDirectory,
-        cwd: "/workspace",
-        networkMode: "none",
-        resources: { cpus: 1, memoryMiB: 512, storageGiB: 2, overlayGiB: 1 },
-      });
-      families.push(family);
-    }
     const backend =
-      selected.kind === "smolvm"
+      selected.kind === "bubblewrap"
         ? {
-            ...hostTools,
-            kind: "smolvm",
-            executable: runtime,
-            image: process.env.PI_SANDBOX_SMOLVM_IMAGE,
-            imageSha256: process.env.PI_SANDBOX_SMOLVM_IMAGE_SHA256,
-            stateDirectory,
-            resources: { cpus: 1, memoryMiB: 512, storageGiB: 1, overlayGiB: 1 },
-            cwdWritable: true,
-            environment: {},
-          }
-        : {
             kind: "bubblewrap",
             executable: "/usr/bin/bwrap",
             runtime,
@@ -124,14 +50,14 @@ try {
             cwdWritable: true,
             hiddenPaths: [home],
             environment: {},
-          };
+          }
+        : { kind: "direct", environment: {} };
     await writeFile(
       config,
       JSON.stringify({
         version: 4,
-        ...(family
-          ? { mode: "attached", attachment: family.attachment(family.sourceId) }
-          : { mode: "owned", backend }),
+        mode: "owned",
+        backend,
         userBash: true,
       }),
       { mode: 0o600 },
@@ -160,7 +86,8 @@ try {
           env: {
             PATH: process.env.PATH,
             HOME: home,
-            ...registryEnvironment,
+            XDG_DATA_HOME: join(home, "data"),
+            XDG_CACHE_HOME: join(home, "cache"),
             PI_CODING_AGENT_DIR: join(home, "agent"),
             NO_COLOR: "1",
           },
@@ -207,31 +134,24 @@ try {
       throw new Error(`No ${type} response: ${errors}\n${output}`);
     }
     await request("get_state");
-    const first = await request("bash", { command: "readlink /proc/self/ns/pid" });
-    assert.equal(first.data.exitCode, 0, JSON.stringify(first));
-    await request("bash", { command: "sleep 60 >background.log 2>&1 & echo $! >background.pid" });
-    await request("new_session");
-    const second = await request("bash", {
-      command: 'kill -0 "$(cat background.pid)" && readlink /proc/self/ns/pid',
-    });
-    assert.equal(second.data.exitCode, 0, JSON.stringify(second) + errors);
-    assert.equal(
-      second.data.output,
-      first.data.output,
-      "conversation replacement must reuse the namespace",
-    );
+    if (selected.kind === "bubblewrap") {
+      const first = await request("bash", { command: "readlink /proc/self/ns/pid" });
+      assert.equal(first.data.exitCode, 0, JSON.stringify(first));
+      await request("bash", { command: "sleep 60 >background.log 2>&1 & echo $! >background.pid" });
+      await request("new_session");
+      const second = await request("bash", {
+        command: 'kill -0 "$(cat background.pid)" && readlink /proc/self/ns/pid',
+      });
+      assert.equal(second.data.exitCode, 0, JSON.stringify(second) + errors);
+      assert.equal(
+        second.data.output,
+        first.data.output,
+        "conversation replacement must reuse the namespace",
+      );
+    } else await request("new_session");
     const write = await request("bash", { command: "printf package-ok > result.txt" });
     assert.equal(write.data.exitCode, 0);
-    if (family) {
-      const result = await family.execute(family.sourceId, {
-        argv: ["/bin/cat", "/workspace/result.txt"],
-      });
-      assert.equal(result.stdout.toString(), "package-ok");
-      assert(
-        !(await readdir(workspace)).includes("result.txt"),
-        "attached workspace must stay in the guest",
-      );
-    } else assert.equal(await readFile(join(workspace, "result.txt"), "utf8"), "package-ok");
+    assert.equal(await readFile(join(workspace, "result.txt"), "utf8"), "package-ok");
     child.stdin.end();
     for (let count = 0; child.exitCode === null && count < 1200; count++) await delay(25);
     assert.equal(child.exitCode, 0, errors);
@@ -244,39 +164,7 @@ try {
       launch: (args) => launch(["-e", "builtin:codemode", ...args]),
       modelsPath: join(home, "agent/models.json"),
       workspace,
-      ...(family
-        ? {
-            workspaceFiles: {
-              write: async (name, content) => {
-                const result = await family.execute(family.sourceId, {
-                  argv: ["/bin/bash", "-c", 'cat > "$1"', "fixture", `/workspace/${name}`],
-                  stdin: Buffer.from(content),
-                });
-                assert.equal(result.exitCode, 0, result.stderr.toString());
-              },
-              read: async (name) => {
-                const result = await family.execute(family.sourceId, {
-                  argv: ["/bin/cat", `/workspace/${name}`],
-                });
-                assert.equal(result.exitCode, 0, result.stderr.toString());
-                return result.stdout.toString();
-              },
-            },
-          }
-        : {}),
     });
-    if (family) {
-      const alive = await family.execute(family.sourceId, {
-        argv: ["/bin/cat", "/workspace/result.txt"],
-      });
-      assert.equal(
-        alive.stdout.toString(),
-        "package-ok",
-        "Pi EOF must only detach from an orchestrator-owned machine",
-      );
-      await family.close();
-    }
-    if (selected.kind !== "bubblewrap") assert.deepEqual(await readdir(stateDirectory), []);
     console.log(`PASS ${selected.kind} ordinary Pi under ${selected.piRuntime}`);
   }
   console.log(
@@ -289,33 +177,5 @@ try {
     child.stdin.destroy();
     child.kill("SIGKILL");
   }
-  for (const family of families) {
-    try {
-      await family.close();
-    } catch (error) {
-      console.error("Family cleanup uncertain", String(error));
-    }
-  }
-  const retained = [];
-  for (const state of vmStates) if ((await readdir(state)).length) retained.push(state);
-  if (retained.length)
-    console.error(`Preserving failed VM fixture state for scoped recovery: ${retained.join(", ")}`);
-  else {
-    let emptyRegistry = true;
-    if (process.env.PI_SANDBOX_SMOLVM_BIN) {
-      try {
-        const listed = JSON.parse(
-          execFileSync(process.env.PI_SANDBOX_SMOLVM_BIN, ["machine", "ls", "--json"], {
-            env: process.env,
-            encoding: "utf8",
-          }),
-        );
-        emptyRegistry = Array.isArray(listed) && listed.length === 0;
-      } catch {
-        emptyRegistry = false;
-      }
-    }
-    if (emptyRegistry) await removeSmolvmFixture(temp);
-    else console.error(`Preserving nonempty or uncertain fixture registry: ${temp}`);
-  }
+  await rm(temp, { recursive: true, force: true });
 }

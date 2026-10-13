@@ -24,7 +24,6 @@ function fixture() {
   const executor: SandboxExecutor = {
     cwd: "/canonical/project",
     home: "/canonical/home",
-    backend: "bubblewrap",
     commands: LINUX_TOOL_COMMANDS,
     execute,
     probe: () => Promise.resolve(),

@@ -31,50 +31,12 @@ describe("standalone sandbox configuration", () => {
     ])
       expect(() => parseSandboxConfig(input)).toThrow();
   });
-  it("accepts explicit VM ownership or a scoped attachment, never both", () => {
-    const backend = {
-      kind: "smolvm",
-      executable: "/opt/smolvm/smolvm",
-      image: "/images/tools.smolmachine",
-      imageSha256: "a".repeat(64),
-      stateDirectory: "/state",
-      resources: { cpus: 1, memoryMiB: 512, storageGiB: 1, overlayGiB: 1 },
-      cwdWritable: true,
-      environment: {},
-    };
-    expect(parseSandboxConfig({ ...config, backend }).mode).toBe("owned");
-    expect(
-      parseSandboxConfig({
-        ...config,
-        backend: { ...backend, e2fsprogsDirectory: "/trusted/sbin" },
-      }).mode,
-    ).toBe("owned");
-    for (const patch of [
-      { e2fsprogsDirectory: "/tools:bad" },
-      { darwinProcessQuery: { path: "/query", sha256: "a".repeat(64) } },
-    ])
-      expect(() => parseSandboxConfig({ ...config, backend: { ...backend, ...patch } })).toThrow();
-    const attachment = {
-      version: 1,
-      socketPath: "/private/control.sock",
-      token: "b".repeat(64),
-      machineId: "candidate",
-      cwd: "/workspace",
-      home: "/root",
-    };
-    const attached = {
-      version: 4,
-      mode: "attached",
-      attachment,
-      userBash: false,
-    };
-    expect(parseSandboxConfig(attached).mode).toBe("attached");
-    expect(() => parseSandboxConfig({ ...attached, backend })).toThrow();
+  it("rejects removed VM ownership and controller attachments", () => {
+    expect(() => parseSandboxConfig({ ...config, backend: { kind: "smolvm" } })).toThrow(
+      "Unsupported sandbox backend",
+    );
     expect(() =>
-      parseSandboxConfig({ ...config, backend: { ...backend, network: "host" } }),
-    ).toThrow();
-    expect(() =>
-      parseSandboxConfig({ ...config, backend: { ...backend, imageSha256: "unverified" } }),
+      parseSandboxConfig({ version: 4, mode: "attached", attachment: {}, userBash: false }),
     ).toThrow();
   });
   it.skipIf(process.platform === "win32")(

@@ -126,8 +126,6 @@ export async function createDirectExecutor(
 }
 
 class DirectExecutor implements SandboxExecutor {
-  public readonly backend = "direct" as const;
-
   public constructor(
     public readonly cwd: string,
     public readonly home: string,

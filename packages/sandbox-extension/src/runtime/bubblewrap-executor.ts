@@ -213,7 +213,6 @@ async function inspectHiddenPath(target: string): Promise<HiddenPathMask | undef
 }
 
 class PersistentBubblewrapExecutor implements SandboxExecutor {
-  public readonly backend = "bubblewrap" as const;
   public readonly commands = LINUX_TOOL_COMMANDS;
   public readonly home = "/run/pi-sandbox/home";
   readonly #decoder = new WorkerFrameDecoder(MAXIMUM_WORKER_RESPONSE_FRAME_BYTES);

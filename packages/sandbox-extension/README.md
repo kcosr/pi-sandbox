@@ -10,6 +10,11 @@ Other extensions and host MCP servers are outside this execution boundary.
 Pi Sandbox embeds these modules with mandatory policy, managed configuration,
 admitted MCP connections and audit logging.
 
+Applications can compose the public seven-tool factory with an application-owned
+`SandboxExecutor`. This interface supplies command execution, CWD, home, command
+paths, readiness and cleanup. It has no backend name or container-specific logic.
+The embedding application owns the execution environment and its lifecycle.
+
 ## Build and load
 
 From a Pi Sandbox source checkout with Node 24 and dependencies installed:
@@ -91,197 +96,11 @@ For explicit host execution, replace `backend` with:
 Direct mode keeps the existing platform-specific command prerequisites and
 command-scoped cleanup.
 
-## smolvm on Linux and macOS
-
-smolvm **1.26.1** is supported on Linux x86-64 with `/dev/kvm` and macOS 26+
-arm64 with `kern.hv_support=1`. The macOS minimum comes from the bundled guest
-firmware. Use a native arm64 guest on macOS. Install the complete
-official distribution outside the project. The package verifies its pinned
-executable, library and guest-rootfs inventory before launching anything.
-Provision a trusted plain Linux tools pack separately with the required GNU
-commands and Node. The image must be offline, without an imported workload,
-environment, secrets or checkpoint; its SHA-256 is mandatory.
-The public [image preparation guide](https://github.com/kcosr/pi-sandbox/blob/main/docs/smolvm-images.md)
-provides a small recipe and upstream CLI commands.
-
-Use the same version-4 configuration, replacing `backend` with:
-
-```json
-{
-  "kind": "smolvm",
-  "executable": "/opt/smolvm-1.26.1/smolvm",
-  "image": "/opt/pi-images/tools.smolmachine",
-  "imageSha256": "<64 lowercase hexadecimal characters>",
-  "stateDirectory": "/home/alice/.local/state/pi-vm",
-  "resources": { "cpus": 2, "memoryMiB": 1024, "storageGiB": 1, "overlayGiB": 1 },
-  "cwdWritable": true,
-  "environment": {}
-}
-```
-
-Create `stateDirectory` as an owned private directory (0700). OCI controllers
-check the derived attachment socket length; all VM modes check smolvm’s derived
-shared-cache socket path before creation. This directory holds only
-application metadata and attachment sockets, not VM disks or smolvm caches.
-smolvm uses the account’s ordinary registry and cache, captured from the host
-HOME/XDG environment at creation. On macOS this means
-`HOME/Library/Application Support/smolvm` and `HOME/Library/Caches/smolvm`; XDG
-data/cache overrides do not relocate those native macOS paths. `SMOLVM_CONFIG`
-selects settings separately (default `HOME/.config/smolvm/config.toml`). Deep HOME
-paths can exceed the Unix socket limit; use a short canonical account context
-for disposable qualification fixtures. Keep these locations, the runtime, image and
-configuration outside the project. The host project is mounted at the
-same absolute path, writable unless `cwdWritable` is false. Project edits persist;
-the disposable guest root does not. Other host directories are not projected into
-the guest. Host Pi keeps its providers, MCP connections, logs and credentials.
-This backend disables external guest networking. It does not prohibit guest-local
-socket operations. Background programs persist between ordinary calls.
-
-Up to four commands execute concurrently, with at most 64 outstanding requests.
-Timeouts include queue wait; queued cancellation/timeout affects only that call.
-The existing guest agent handles separate execution connections. A transient
-wrapper matches Pi's 100 ms post-exit idle drain, resetting on further output;
-redirect background output to files to allow prompt completion.
-
-The extension runs smolvm CLI commands in the Pi process's lifecycle and closes
-its VM on normal quit/reload. Active cancellation, timeout, output overflow and
-transport failures interrupt peer calls and retire the VM, including earlier
-background processes. This differs from Bubblewrap's reusable sandbox cleanup;
-smolvm does not expose an equivalent whole-workload reset. Normal nonzero command
-exits keep the VM available. There is no custom background watcher. If Pi is killed or crashes, a
-smolvm VM can remain alive. The controller records its unique machine name and
-registry locations before creation. Use the recorded runtime with ordinary
-`smolvm machine ls --json`, `machine stop --name NAME` and
-`machine delete --name NAME --force`. Use the same account and HOME/XDG settings
-as the original launch. Delete owned children before their source. A failed or
-ambiguous startup preserves its record for manual recovery. Stop results are
-smolvm CLI acknowledgements, not an independent proof that every process exited.
-The extension never recursively deletes native VM storage or prunes shared caches.
-Stock Pi can still exit successfully after reporting an extension cleanup error;
-inspect that error and the retained state instead of relying only on its exit code.
-
-## Borrowed OCI machines
-
-The `./controller` export lets an orchestrator create an OCI family from a local,
-digest-pinned `docker save` archive. The workspace and writable root live on guest
-disks, with optional explicit read-only host inputs. `networkMode` is either
-`none` or explicit `host`; the latter enables smolvm outbound networking and does
-not literally join the host kernel namespace.
-Creating OCI disks smaller than the bundled 20 GiB storage or 10 GiB overlay
-templates requires host `resize2fs` and `e2fsck` from e2fsprogs. For isolated tools,
-set optional `e2fsprogsDirectory` to their absolute canonical directory in the
-owned backend configuration or OCI controller options. It appends only that
-trusted directory to the fixed, cleared launcher PATH. A different tool selected
-by upstream's higher-priority fixed search directories is rejected. Selected
-paths, resolved targets and file hashes bind cold reopening; host system libraries
-remain trusted prerequisites. Guest mounts cannot overlap these tools. Prepared
-plain packs already contain sized templates and do not require the host shrink
-step. Actual disk capacities are still checked: upstream can warn and continue
-with oversized default templates when shrinking fails.
-
-Owned and OCI guest commands use the same fixed environment defaults, including
-`HOME=/root` and `TMPDIR=/tmp`; scoped environment cannot override those names.
-OCI commands now receive `TMPDIR` explicitly, where it was previously unset.
-
-`family.branch(id, { branchable: false })` freezes the source and makes a cheap,
-independently writable leaf. Use `branchable: true` only for a child that must
-later be branched itself. It incurs additional RAM-backing work. Native Linux
-qcow2 overlays share the immutable source disks. macOS uses native raw-disk CoW
-clones. Host mounts are not snapshotted.
-Remove child leaves before their source. A child-free original source
-can be retained and explicitly cold-reopened on the same host; cold reopening
-restores disks, not running processes or RAM. The source may be frozen or writable;
-edits to a reopened original are saved by another clean `retainForColdReopen()`.
-
-A trusted orchestrator writes this private configuration for ordinary Pi:
-
-```js
-const config = {
-  version: 4,
-  mode: "attached",
-  attachment: family.attachment(machineId),
-  userBash: false,
-};
-```
-
-The attachment is a host-only capability. Do not place it in the guest or model
-context. Pi receives only that machine's tool access. Quitting/reloading Pi closes
-the attachment; the orchestrator owns VM shutdown and retained disks. The
-controller's socket server runs inside the orchestrator, not a separate daemon.
-
-The four-active/64-outstanding limit is shared across the family and its borrowed
-attachments. Branching, removal and retention take exclusive FIFO admission;
-they wait for earlier calls and block later calls until complete. An active
-execution failure retires the entire family. Cancelling a queued attachment
-request leaves other work intact.
-Each family uses an explicit ownership journal and unique random-suffixed machine
-names. `namePrefix` labels the source; branch options can label child roles.
-Prefixes allow up to 31 ASCII characters, keeping the generated name within
-Linux's 64-byte hostname limit used by OCI branches.
-The journal is written before creation; `onPrepared` lets an orchestrator record
-the family before native startup. Shared-registry machines outside this journal
-are never adopted or removed. External children block parent deletion.
-
-Normal controller close stops owned machines and uses smolvm to delete disposable
-machines. `close()` returns `{ retained }`; callers must not infer retention from
-the metadata directory’s existence. `readSmolvmOciFamily({ statePath })` provides
-recovery metadata, and `deleteSmolvmOciFamily({ statePath })` deletes a stopped
-family through named CLI operations. Cold receipts use version 2 and bind the
-recorded source and registry. Earlier private-registry receipts are not accepted.
-Deleting a stopped family needs its recorded runtime, registry and machine
-identity, but does not need the original image archive, read-only input mounts,
-or selected disk-tool files. Reopening revalidates all those boot inputs.
-Failed deletion releases its controller claim so the operation can be retried.
-Abrupt owner death may require manual recovery with the recorded names.
-
-The ordinary cache can reuse upstream image data subject to smolvm’s eligibility
-rules. In 1.26.1, OCI image seeds require at least 20 GiB of storage, so small
-fixtures do not demonstrate that optimization. Cache pruning is an explicit
-operator action, not family cleanup. `pack prune` and `machine prune` serve
-different purposes; the latter can start a stopped VM.
-
-### Interactive controller terminals
-
-Trusted host applications can call `family.openTerminal(machineId, options)` on
-the writable source or an exact writable child. This is a controller capability,
-not an agent tool or an attachment RPC. It starts a fixed interactive Bash shell
-at the family working directory through the verified smolvm executable.
-
-Supply `terminalType`, `columns`, `rows` and a runtime-specific `launch` callback,
-plus an optional abort signal. The launcher receives the fixed argv, captured
-registry environment, control-directory cwd, dimensions, a startup marker and a scoped
-signal. It must provide a real host PTY and consume the exact startup marker
-before resolving, then return `completion`, `write`, `resize` and `close`.
-smolvm flushes early input while entering raw mode, so resolving merely when the
-host client spawns can lose the first command. The launcher owns bounded input
-and output backpressure; a rejected launch must already have cleaned up any
-partially started client. The public library does not depend on Bun, a PTY
-package, or a native helper process.
-If startup cleanup cannot be confirmed, the launcher must reject with the
-exported `SmolvmOciTerminalCleanupError`, which preserves that uncertainty for
-later family cleanup instead of treating the rejection as a clean launch failure.
-
-Each of up to 16 sessions per family has its own exec client. Long-lived terminals
-do not consume the four ordinary command slots. `write` resolves when input is
-accepted, `resize` updates the PTY, and `close` stops and reaps only that exec
-client. A normal or failed terminal exit does not automatically retire the VM or
-cancel another terminal. The completion result acknowledges host-client exit,
-not guest descendant cleanup; deliberately detached guest jobs may remain.
-
-Close a machine's terminals before awaiting its branch or removal. Those
-exclusive transitions wait for its terminal leases, while preventing new
-terminal admission. Retention waits for every terminal; family shutdown actively
-closes all of them. Failed terminal cleanup makes subsequent lifecycle work fail
-and retains state for explicit recovery. It never publishes a clean cold receipt
-after an unconfirmed cleanup. Applications should stop terminal admission and
-close their sessions before automatic collection, reviewer removal or shutdown.
-
 ## Programmatic composition
 
 - `./factory`: seven tool definitions and user-shell routing over a supplied
   executor, with required authorization of the exact normalized request.
 - `./runtime`: bounded executor contracts and explicit backend constructors.
-- `./controller`: OCI family creation, branching, attachment and cold reopening.
 - `./config`: strict standalone JSON validation and bounded private-file reading.
 - `./identity`: artifact version, source commit and source digest.
 
@@ -291,16 +110,17 @@ The factory requires an explicit authorization callback. It normalizes and freez
 arguments before calling it, passes the actual tool-call signal, and executes the
 same snapshot only after success. The standalone entry deliberately supplies a
 no-op callback. Managed Pi Sandbox supplies its internal policy/audit callback;
-an evaluator can supply its own authorization with an immutable tool ceiling.
+an embedding application can supply its own authorization with an immutable tool ceiling.
 No permissions package is installed or discovered.
 
-Importing these modules does not create a sandbox. The default extension initializes its owned backend or borrowed attachment
-at session initialization. The embedding application owns any
-executor it supplies to the factory and must close it explicitly.
+Importing these modules does not create a sandbox. The default extension initializes
+its configured Bubblewrap or direct executor at session initialization. The embedding
+application owns any executor it supplies to the factory and must close it explicitly.
 
 Built artifacts include declarations, the worker, license and provenance. Run
 `npm run test:extension` from the repository to build, inspect and exercise the
-tarball with stock Pi under Node/Bun, using Bubblewrap on Linux and configured
-owned/borrowed smolvm fixtures on Linux or macOS. The package is JavaScript-only;
-no native process observer, compiler, Python or runtime helper is required.
-Managed macOS application integration is a separate release gate.
+tarball with stock Pi under Node/Bun, using Bubblewrap on Linux and direct execution.
+The package includes ordinary tool UI rendering, command output streaming and
+cancellation. It does not provide interactive terminal sessions or a VM controller.
+The package is JavaScript-only; no compiler, Python or native runtime helper is
+required to use it.

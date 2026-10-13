@@ -29,7 +29,7 @@ export interface GitExecutionPort {
   }>;
 }
 export interface GitCloneRuntime {
-  /** Canonical host launch directory; not an arbitrary attached guest path. */
+  /** Canonical host launch directory used for host-side cloning. */
   readonly cwd: string;
   readonly config: GitCloneConfig;
   /** Borrowed executor with bounded output, timeout and cancellation support. */

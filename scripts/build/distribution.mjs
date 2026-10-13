@@ -2,7 +2,6 @@ import { readFile } from "node:fs/promises";
 import { dirname, isAbsolute, normalize, resolve } from "node:path";
 
 import { parse as parseToml } from "@iarna/toml";
-import { SMOLVM_VERSION } from "../../packages/sandbox-extension/src/runtime/smolvm/release-pin.ts";
 
 const ROOT_KEYS = new Set(["version", "allow_config_override", "extension_manifests", "platforms"]);
 const PLATFORM_KEYS = new Set([
@@ -13,7 +12,6 @@ const PLATFORM_KEYS = new Set([
   "identity_socket_path",
   "audit_socket_path",
   "bubblewrap",
-  "smolvm",
 ]);
 const SYSTEM_BUBBLEWRAP_KEYS = new Set(["mode", "path"]);
 const BUNDLED_BUBBLEWRAP_KEYS = new Set(["mode", "binary", "version", "sha256", "license_file"]);
@@ -115,32 +113,7 @@ function parseBubblewrap(value, manifestDirectory, libexecDir) {
   throw new Error("distribution platforms.linux.bubblewrap.mode must be system or bundled");
 }
 
-function parseSmolvm(value, platform, architecture) {
-  if (value === undefined) return undefined;
-  if (!(
-    (platform === "linux" && architecture === "x64") ||
-    (platform === "darwin" && architecture === "arm64")
-  )) {
-    throw new Error("smolvm execution requires Linux x86-64 or macOS arm64");
-  }
-  const description = `distribution platforms.${platform}.smolvm`;
-  const provider = object(value, description);
-  rejectUnknown(provider, new Set(["path", "version"]), description);
-  if (provider.version !== SMOLVM_VERSION)
-    throw new Error(`${description}.version must be ${SMOLVM_VERSION}`);
-  const path = absolutePath(provider.path, `${description}.path`);
-  if (/[:\r\n]/u.test(path)) throw new Error(`${description}.path contains unsupported characters`);
-  return Object.freeze({
-    path,
-    version: provider.version,
-  });
-}
-
-export async function loadDistribution(
-  path,
-  platform = process.platform,
-  architecture = process.arch,
-) {
+export async function loadDistribution(path, platform = process.platform) {
   const distributionPath = resolve(path);
   let parsed;
   try {
@@ -212,13 +185,11 @@ export async function loadDistribution(
     platform === "linux"
       ? parseBubblewrap(selected.bubblewrap, manifestDirectory, libexecDir)
       : undefined;
-  const smolvm = parseSmolvm(selected.smolvm, platform, architecture);
 
   return Object.freeze({
     path: distributionPath,
     extensionManifests: Object.freeze(extensionManifests),
     ...(bubblewrap === undefined ? {} : { bubblewrap }),
-    ...(smolvm === undefined ? {} : { smolvm }),
     layout: Object.freeze({
       allowConfigOverride: root.allow_config_override,
       configDir,
@@ -231,7 +202,6 @@ export async function loadDistribution(
       ...(bubblewrap === undefined
         ? {}
         : { bubblewrap: Object.freeze({ mode: bubblewrap.mode, path: bubblewrap.path }) }),
-      ...(smolvm === undefined ? {} : { smolvm }),
       ...(serviceDir === undefined ? {} : { serviceDir }),
     }),
   });

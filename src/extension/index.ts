@@ -357,11 +357,11 @@ export function createPiSandboxExtension(dependencies: ExtensionDependencies): E
       },
       userBash: true,
       executionScope:
-        dependencies.executor.backend === "bubblewrap"
+        (dependencies.executionBackend ?? features?.config.execution.backend) === "bubblewrap"
           ? "inside the Bubblewrap sandbox"
-          : dependencies.executor.backend === "smolvm"
-            ? "inside the smolvm Linux virtual machine"
-            : "directly on the host as the current user",
+          : (dependencies.executionBackend ?? features?.config.execution.backend) === "direct"
+            ? "directly on the host as the current user"
+            : "through the managed execution backend",
     })(
       new Proxy(pi, {
         get(target, property): unknown {
@@ -477,6 +477,7 @@ export function createPiSandboxExtension(dependencies: ExtensionDependencies): E
           );
           await state.auditor.start(ctx);
         }
+        const managedBoundary = config.execution.backend;
         const registrationApi = new Proxy(pi, {
           get(target, property): unknown {
             if (property !== "registerTool") return Reflect.get(target, property);
@@ -495,7 +496,7 @@ export function createPiSandboxExtension(dependencies: ExtensionDependencies): E
                 config.tools[definition.name]?.audit === true && state.auditor !== undefined
                   ? state.auditor.wrap(
                       definition,
-                      extension === undefined ? dependencies.executor.backend : "host",
+                      extension === undefined ? managedBoundary : "host",
                       extension,
                       auditTarget,
                     )

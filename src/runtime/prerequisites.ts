@@ -16,14 +16,12 @@ const DEFAULT_PATH_COMMANDS = Object.freeze([
 /** Only executables that run on the host belong in this check. */
 export function assertExecutionPrerequisites(
   backend: ExecutionBackend,
-  layout: Pick<CompiledLayout, "bubblewrap" | "smolvm">,
+  layout: Pick<CompiledLayout, "bubblewrap">,
   managedExecutables: readonly string[],
 ): Promise<void> {
-  const provider =
-    backend === "bubblewrap" ? layout.bubblewrap : backend === "smolvm" ? layout.smolvm : undefined;
+  const provider = backend === "bubblewrap" ? layout.bubblewrap : undefined;
   return assertHostPrerequisites({
     ...(backend !== "bubblewrap" ? { fixedExecutables: [] } : {}),
-    ...(backend === "smolvm" ? { pathCommands: [] } : {}),
     additionalFixedExecutables: [
       ...managedExecutables,
       ...(provider === undefined ? [] : [provider.path]),

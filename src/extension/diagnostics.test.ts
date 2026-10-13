@@ -31,25 +31,6 @@ function diagnosticConfig(): SandboxConfig {
 }
 
 describe("sandbox diagnostics", () => {
-  it("describes the VM mount and network without claiming the host filesystem is visible", () => {
-    const config: SandboxConfig = {
-      ...diagnosticConfig(),
-      execution: { backend: "smolvm", processLifetime: "sandbox" },
-    };
-    const mounts = formatSandboxMounts("/work/project", config.execution, config.filesystem);
-    expect(mounts).toContain("/work/project");
-    expect(mounts).toContain("The rest of the host filesystem is not mounted");
-    expect(mounts).toContain("manually stopped");
-    const policy = formatSandboxPolicy(
-      { config, hasSessionGrant: () => false, isToolActive: () => true },
-      "bash",
-    );
-    expect(policy).toContain("smolvm");
-    expect(policy).toContain("other host paths are not visible");
-    expect(policy).toContain("guest-local services");
-    expect(policy).not.toContain("May read visible host paths");
-  });
-
   it("formats the concise process summary without reading configuration again", () => {
     expect(
       formatSandboxSummary({

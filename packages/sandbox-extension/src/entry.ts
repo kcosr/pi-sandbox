@@ -1,8 +1,6 @@
 import { execFileSync } from "node:child_process";
 import { realpath } from "node:fs/promises";
 import { fileURLToPath } from "node:url";
-import { isWithin } from "./runtime/smolvm/options.js";
-import { attachSmolvmOciMachine } from "./runtime/smolvm/oci/transport.js";
 import type {
   ExtensionAPI,
   ExtensionContext,
@@ -14,7 +12,6 @@ import { TOOL_NAMES } from "./invocation.js";
 import {
   createBubblewrapExecutor,
   createDirectExecutor,
-  createSmolvmExecutor,
   type SandboxExecutor,
 } from "./runtime/index.js";
 
@@ -39,22 +36,9 @@ async function createExecutor(
   config: SandboxExtensionConfig,
   cwd: string,
 ): Promise<SandboxExecutor> {
-  if (config.mode === "attached") return attachSmolvmOciMachine(config.attachment);
   const backend = config.backend;
   if (backend.kind === "direct")
     return createDirectExecutor({ cwd, environment: backend.environment });
-  if (backend.kind === "smolvm")
-    return createSmolvmExecutor({
-      cwd,
-      cwdWritable: backend.cwdWritable,
-      environment: backend.environment,
-      smolvmPath: backend.executable,
-      imagePath: backend.image,
-      imageSha256: backend.imageSha256,
-      stateDirectory: backend.stateDirectory,
-      ...(backend.e2fsprogsDirectory ? { e2fsprogsDirectory: backend.e2fsprogsDirectory } : {}),
-      resources: backend.resources,
-    });
   const runtime = await realpath(backend.runtime);
   const version = execFileSync(runtime, ["--version"], {
     encoding: "utf8",
@@ -126,16 +110,7 @@ export function createConfiguredSandboxExtension(
           const file = pi.getFlag("sandbox-config");
           if (typeof file !== "string" || !file) throw new Error("--sandbox-config is required");
           config = await (dependencies.readConfig ?? readSandboxConfig)(file);
-          const cwd =
-            config.mode === "attached"
-              ? config.attachment.cwd
-              : await (dependencies.canonical ?? realpath)(ctx.cwd);
-          if (
-            config.mode === "owned" &&
-            config.backend.kind === "smolvm" &&
-            isWithin(cwd, await (dependencies.canonical ?? realpath)(file))
-          )
-            throw new Error("Sandbox configuration must stay outside the mounted project");
+          const cwd = await (dependencies.canonical ?? realpath)(ctx.cwd);
           const identity = JSON.stringify({ cwd, config });
           if (!slot.pending) {
             const pending = (async () => {
@@ -158,7 +133,7 @@ export function createConfiguredSandboxExtension(
             throw new Error("Reload required to change sandbox configuration or workspace");
           if (ended) return;
           active = true;
-          ctx.ui.setStatus("sandbox", `${owner.executor.backend} · ${owner.executor.cwd}`);
+          ctx.ui.setStatus("sandbox", `${config.backend.kind} · ${owner.executor.cwd}`);
         } catch {
           fail(ctx);
         }

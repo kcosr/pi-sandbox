@@ -65,7 +65,7 @@ export interface CreateBubblewrapExecutorOptions {
 export interface SandboxCommandRequest {
   /** Direct executable and arguments. A host shell is never implied. */
   readonly argv: readonly [string, ...string[]];
-  /** Optional guest context for backends supporting per-operation contexts. */
+  /** Optional execution context for executors supporting per-operation contexts. */
   readonly cwd?: string;
   readonly environment?: Readonly<Record<string, string>>;
   readonly stdin?: string | Uint8Array;
@@ -112,7 +112,6 @@ export class SandboxExecutionError extends Error {
 export interface SandboxExecutor {
   readonly cwd: string;
   readonly home: string;
-  readonly backend: "bubblewrap" | "direct" | "smolvm";
   readonly commands: ToolCommandPaths;
   probe(signal?: AbortSignal): Promise<void>;
   execute(

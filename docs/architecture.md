@@ -3,7 +3,7 @@
 ## Reusable package and managed composition
 
 `packages/sandbox-extension` contains the filesystem/shell tool adapters,
-Bubblewrap/direct/smolvm executors and worker assets. `packages/git-extension`
+Bubblewrap/direct executors and worker assets. `packages/git-extension`
 contains the reusable clone implementation and its standard Pi entry point.
 Each package installs independently. The managed application keeps its permission
 engine and approval UI in `src/permissions`, together with administrator TOML,
@@ -12,7 +12,10 @@ identity resolution, admitted MCP connections, model restrictions and audit.
 The sandbox factory accepts a required authorization callback over neutral,
 normalized immutable arguments and the actual invocation signal. The managed
 adapter constructs its private approval request, evaluates policy and awaits audit
-before execution. The sandbox executes the same canonical JSON snapshot that was
+before execution. The public executor interface describes command execution,
+working directory, command paths, probing and cleanup; it does not name a backend.
+Applications can supply their own executor. The managed application separately
+selects Bubblewrap or direct execution and owns its audit metadata. The sandbox executes the same canonical JSON snapshot that was
 approved. Branding, fingerprints and approval UI remain internal; no event-bus
 permission provider or extension hook ordering is involved.
 
@@ -47,7 +50,7 @@ terminal UI, provider credentials, provider traffic, and session state. The
 compiled Pi Sandbox extension owns tool presentation, approval, and process
 lifecycle. One Bubblewrap worker lives for the `pi-sandbox` process; each
 allowed built-in operation runs through the administrator-selected Bubblewrap
-or direct backend, or through the optional smolvm VM.
+or direct backend.
 
 ```text
 trusted host
@@ -62,7 +65,6 @@ trusted host
         selected built-in executor
           -> Bubblewrap process-lifetime worker and framed pipe IPC (Linux)
           -> or bounded direct host child (Linux/macOS)
-          -> or smolvm tools in a private Linux guest (Linux x86-64 or macOS 26+ arm64)
 ```
 
 Allowing a tool call never delegates to Pi's stock host implementation. The
@@ -214,8 +216,6 @@ broker selection, or models. Missing or invalid effective inputs abort startup.
 Before applying the effective environment or starting executors, operational
 startup expands bare `~`, leading `~/`, and account macros in configured scoped
 environment values and hidden paths using the invoking effective OS account.
-The same lookup expands account macros in the absolute `smolvm.state_directory`
-template, giving each account private controller metadata while keeping the image path fixed.
 Expansion follows the broker merge and is independent of `$HOME` and CWD.
 Expanded values retain the existing environment bounds and filesystem checks.
 Installation validation checks syntax without expanding the installer's home.
@@ -499,59 +499,3 @@ structured records to local syslog and acknowledges successful submission.
 Server logging infrastructure owns persistence, rotation, retention, and
 forwarding. This service is independent of user/group configuration resolution;
 it is not an execution backend and does not run tool operations.
-
-## Optional smolvm tool executor
-
-The reusable extension supports smolvm 1.26.1 on Linux x86-64 and macOS 26+
-arm64. The managed application owns one executor for its lifetime and
-keeps configuration, permissions, audit and host MCP outside it. A fixed
-build-selected runtime plus administrator-selected image creates the private
-Linux guest; only the launch directory is host-mounted. Runtime startup validates
-the external distribution and image before tool execution. No extra process
-supervisor is introduced. Normal shutdown requests VM cleanup; an abrupt owner
-exit can require manual cleanup with smolvm's CLI.
-
-Both packed VMs and OCI families use smolvm’s ordinary account registry/cache.
-The controller captures those paths and gives each owned machine a unique name.
-Its separate state directory contains only ownership metadata and sockets.
-Named stop/delete commands manage native storage; the application never removes
-VM disks recursively or sweeps the shared registry. Lifecycle decisions check
-recorded ownership and CLI state, without a process observer or watcher.
-Ambiguous failed starts remain available for operator recovery. On macOS, native
-registry/cache locations are beneath HOME/Library; XDG data/cache settings do not
-replace them. Selected isolated e2fsprogs tools can be supplied through the shared
-`e2fsprogsDirectory` option and are bound into cold-reopen metadata. There is no
-native process-query helper in the extension package.
-
-The host admits up to four executions concurrently, with at most 64 outstanding
-requests including queued calls. Each uses its own short-lived CLI connection to
-smolvm's existing persistent guest agent; it does not boot another VM. Output,
-stdin and deadlines belong to each request. A per-execution guest wrapper matches
-Pi's 100 ms post-exit idle drain, restarting on output and closing inherited
-streams on completion. It is not a resident service.
-
-Owned packed VMs and OCI families share the admission rules. The four-call limit
-applies across an entire OCI family, including borrowed attachments. Branching,
-machine removal and cold retention take exclusive FIFO admission, waiting for
-earlier active calls and preventing later calls from overtaking them. Cancellation
-or expiry while queued removes only that request. An active cancellation,
-timeout, output-limit failure or execution infrastructure failure closes admission,
-interrupts peers and retires the owned VM or family before active calls settle.
-Unlike Bubblewrap's reusable cleanup, smolvm has no supported whole-workload reset
-that also removes previously detached guest processes while keeping the VM alive.
-Normal nonzero command exits do not retire it.
-
-The host-only OCI controller also supports scoped interactive terminals through
-a trusted runtime-neutral PTY launcher. Up to 16 terminal leases are separate
-from the four ordinary execution slots. Each terminal has its own fixed smolvm
-exec client and closes independently; no watcher or additional daemon is
-introduced. Branch/removal waits for terminals on the affected machine, and
-retention waits for all terminals. The orchestrator closes them before those
-exclusive transitions. Family shutdown actively closes every terminal before
-stopping VMs. The launch handshake consumes a guest marker after smolvm enters
-raw mode, avoiding input loss from its startup terminal flush.
-
-A child-free original can be cleanly retained whether frozen or writable, so
-administrative edits made after cold reopening persist on the next cold boot.
-Terminal-client cleanup failure preserves forensic state and prevents publishing
-a clean cold receipt. Terminal exit does not prove all guest descendants exited.

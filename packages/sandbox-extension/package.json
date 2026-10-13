@@ -1,6 +1,6 @@
 {
   "name": "@kcosr/pi-sandbox-extension",
-  "version": "0.5.0",
+  "version": "0.8.0",
   "description": "Reusable sandbox tools and execution backends for Pi",
   "license": "MIT",
   "type": "module",
@@ -22,7 +22,6 @@
     "./runtime": "./dist/runtime.js",
     "./config": "./dist/config.js",
     "./identity": "./dist/identity.js",
-    "./controller": "./dist/controller.js",
     "./invocation": "./dist/invocation.js"
   },
   "files": [
