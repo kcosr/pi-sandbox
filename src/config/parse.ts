@@ -305,7 +305,7 @@ function parseFilesystem(value: unknown, issues: string[]): FilesystemConfig | u
     issues.push("config.filesystem must be a table");
     return undefined;
   }
-  inspectKeys(value, ["cwd_writable", "hidden_paths"], "config.filesystem", issues);
+  inspectKeys(value, ["cwd_writable", "hidden_paths", "denied_paths"], "config.filesystem", issues);
   const cwdWritable = own(value, "cwd_writable");
   if (typeof cwdWritable !== "boolean") {
     issues.push("config.filesystem.cwd_writable must be a boolean");
@@ -334,7 +334,29 @@ function parseFilesystem(value: unknown, issues: string[]): FilesystemConfig | u
     );
     return undefined;
   }
-  return Object.freeze({ cwdWritable, hiddenPaths: Object.freeze([...hiddenPaths].sort()) });
+  const deniedPaths = own(value, "denied_paths");
+  if (
+    !Array.isArray(deniedPaths) ||
+    deniedPaths.length > 63 ||
+    !deniedPaths.every(isNormalizedHiddenPath) ||
+    new Set(deniedPaths).size !== deniedPaths.length
+  ) {
+    issues.push(
+      "config.filesystem.denied_paths must be an array of unique normalized absolute or home-relative directory paths",
+    );
+    return undefined;
+  }
+  try {
+    deniedPaths.forEach(validateAccountTemplate);
+  } catch {
+    issues.push("config.filesystem.denied_paths contains invalid account macro syntax");
+    return undefined;
+  }
+  return Object.freeze({
+    cwdWritable,
+    hiddenPaths: Object.freeze([...hiddenPaths].sort()),
+    deniedPaths: Object.freeze([...deniedPaths].sort()),
+  });
 }
 
 function parseExecution(value: unknown, issues: string[]): ExecutionConfig | undefined {
@@ -383,8 +405,8 @@ export function parseConfig(
   inspectKeys(parsed, ROOT_KEYS, "config", issues);
 
   const configVersion = own(parsed, "config_version");
-  if (configVersion !== 11) {
-    issues.push("config.config_version must be the integer 11");
+  if (configVersion !== 12) {
+    issues.push("config.config_version must be the integer 12");
   }
 
   const modelsFileValue = own(parsed, "models_file");
@@ -438,13 +460,28 @@ export function parseConfig(
     );
   }
   if (
-    execution?.backend === "direct" &&
+    (execution?.backend === "direct" || execution?.backend === "seatbelt") &&
     filesystem !== undefined &&
     filesystem.hiddenPaths.length > 0
   ) {
     issues.push(
-      'config.filesystem.hidden_paths must be empty when config.execution.backend is "direct"',
+      `config.filesystem.hidden_paths must be empty when config.execution.backend is "${execution.backend}"`,
     );
+  }
+  if (execution?.backend !== "seatbelt" && filesystem && filesystem.deniedPaths.length > 0) {
+    issues.push(
+      'config.filesystem.denied_paths must be empty unless config.execution.backend is "seatbelt"',
+    );
+  }
+  if (execution?.backend === "seatbelt") {
+    if (execution.processLifetime !== "command")
+      issues.push(
+        'config.execution.process_lifetime must be "command" when config.execution.backend is "seatbelt"',
+      );
+    if (network?.mode === "local")
+      issues.push(
+        'config.network.mode must be "none" or "host" when config.execution.backend is "seatbelt"',
+      );
   }
   const extensions = parseExtensions(own(parsed, "extensions"), catalog, issues);
   validateExtensionEnvironment(environment, extensions, catalog, issues);
@@ -479,7 +516,7 @@ export function parseConfig(
   }
 
   return Object.freeze({
-    configVersion: 11,
+    configVersion: 12,
     codemode,
     mcp,
     audit,

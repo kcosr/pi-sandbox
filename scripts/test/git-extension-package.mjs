@@ -14,7 +14,7 @@ execFileSync(process.execPath, [join(root, "scripts/build-extensions.mjs")], { s
 const temporary = await realpath(
   await mkdtemp(join(process.env.PI_SANDBOX_TEST_TMPDIR ?? "/var/tmp", "pi-git-package-")),
 );
-const backends = process.platform === "linux" ? ["bubblewrap", "direct"] : ["direct"];
+const backends = process.platform === "linux" ? ["bubblewrap", "direct"] : ["seatbelt", "direct"];
 const scenarios = [
   { variant: "git-only" },
   { variant: "excluded" },
@@ -85,7 +85,7 @@ async function scenario(directory, variant, artifacts, backend) {
   await writeFile(
     sandboxConfig,
     JSON.stringify({
-      version: 4,
+      version: 5,
       mode: "owned",
       userBash: false,
       backend:
@@ -100,7 +100,15 @@ async function scenario(directory, variant, artifacts, backend) {
               hiddenPaths: [],
               environment: {},
             }
-          : { kind: "direct", environment: {} },
+          : backend === "seatbelt"
+            ? {
+                kind: "seatbelt",
+                network: "none",
+                cwdWritable: true,
+                deniedPaths: [],
+                environment: {},
+              }
+            : { kind: "direct", environment: {} },
     }),
     { mode: 0o600 },
   );

@@ -29,7 +29,7 @@ try {
   const cases = [
     ...(process.platform === "linux"
       ? runtimes.map((runtime) => ({ kind: "bubblewrap", runtime, piRuntime: process.execPath }))
-      : []),
+      : runtimes.map((piRuntime) => ({ kind: "seatbelt", piRuntime }))),
     ...runtimes.map((piRuntime) => ({ kind: "direct", piRuntime })),
   ];
   for (const [index, selected] of cases.entries()) {
@@ -51,11 +51,19 @@ try {
             hiddenPaths: [home],
             environment: {},
           }
-        : { kind: "direct", environment: {} };
+        : selected.kind === "seatbelt"
+          ? {
+              kind: "seatbelt",
+              network: "none",
+              cwdWritable: true,
+              deniedPaths: [home],
+              environment: {},
+            }
+          : { kind: "direct", environment: {} };
     await writeFile(
       config,
       JSON.stringify({
-        version: 4,
+        version: 5,
         mode: "owned",
         backend,
         userBash: true,

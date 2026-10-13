@@ -1,4 +1,4 @@
-config_version = 11
+config_version = 12
 models_file = "/etc/pi-sandbox/models.json"
 
 [codemode]
@@ -16,6 +16,7 @@ facility = "local0"
 [filesystem]
 cwd_writable = true
 hidden_paths = []
+denied_paths = []
 
 [execution]
 backend = "direct"

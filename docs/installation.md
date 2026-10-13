@@ -13,18 +13,18 @@ the fixed GNU utilities used by typed tools.
 The build and installer validate required Bubblewrap options, including
 `--remount-ro` for directory masks and `--ro-bind-data` for empty file masks.
 
-macOS direct mode requires Homebrew `coreutils`, `findutils`,
+macOS direct and Seatbelt modes require Homebrew `coreutils`, `findutils`,
 `grep`, `gawk`, `fd`, and `ripgrep`, plus system Bash, `sh`, and `file`. The
 runtime resolves the Homebrew prefix for Apple silicon or Intel and fails
 closed if a GNU command is missing. The macOS installer validates the selected
-administrative backend before checking these direct-mode prerequisites. A macOS release build additionally requires
+administrative backend before checking these GNU prerequisites. Seatbelt also requires the fixed system `/usr/bin/sandbox-exec`. A macOS release build additionally requires
 Homebrew GNU tar (`gtar`) for reproducible archives.
 
 Configured home-directory expansion requires `/usr/bin/getent` on Linux or
 the system `/usr/bin/dscacheutil` on macOS. The runtime queries the effective
 user's OS account with a five-second deadline and a cleared environment; it
 does not use `HOME` as a fallback. This lookup runs only when a configured
-hidden path or scoped environment value needs expansion. A missing command,
+hidden/denied path or scoped environment value needs expansion. A missing command,
 missing account, invalid home, or lookup failure stops operational startup.
 
 Selected managed extensions add conditional absolute-executable requirements.
@@ -302,7 +302,7 @@ not start Pi or an execution backend.
 The default distribution installs under `/usr` on Linux and `/usr/local` on
 macOS, with `/etc/pi-sandbox` for administrative configuration. A custom
 distribution uses its compiled paths. The macOS installer validates
-the native direct-mode config and GNU prerequisites and never installs broker
+the native direct/Seatbelt configuration and GNU prerequisites and never installs broker
 or service-manager files.
 
 The installer serializes concurrent updates with
@@ -342,15 +342,15 @@ There is no implicit configuration replacement. This supports both complete
 archive deployments and systems where Salt or another configuration manager
 owns `/etc/pi-sandbox`.
 
-The installed configuration uses `config_version = 11` and must include the
+The installed configuration uses `config_version = 12` and must include the
 `[audit]`, `[sessions]`, `[codemode]`, `[mcp.servers]`, `[execution]`, `[filesystem]`, and `[extensions]` tables, an `audit` boolean on every
-base tool policy, explicit `filesystem.hidden_paths` (empty by default), and explicit `[environment.pi]`,
+base tool policy, explicit `filesystem.hidden_paths` and `filesystem.denied_paths` (both empty by default), and explicit `[environment.pi]`,
 `[environment.sandbox]`, and `[environment.extensions]` tables, even when the
 environment tables are empty. Set `execution.backend = "bubblewrap"` on Linux
-for containment, or `execution.backend = "direct"` on Linux/macOS for
+for containment, opt into `execution.backend = "seatbelt"` on macOS for the documented Seatbelt policy, or use `execution.backend = "direct"` on Linux/macOS for
 policy-gated execution in the user's host security context. Direct mode also
 requires `network.mode = "host"`, `filesystem.cwd_writable = true`, and
-`filesystem.hidden_paths = []`; macOS
+empty `filesystem.hidden_paths` and `filesystem.denied_paths`; macOS
 requires disabled identity. If a
 preserved site configuration does not satisfy the current schema, update the
 site-managed TOML first or use `--replace-config` to install the packaged
@@ -366,10 +366,19 @@ starting with `~/` before updating the version. Configurations older than
 schema 8 also need the required session policy. Alternatively, explicitly
 replace configuration with the packaged defaults.
 
+To migrate schema 11, add `denied_paths = []` to `[filesystem]` and set
+`config_version = 12`. Seatbelt is optional: the macOS packaged default remains
+direct. The complete opt-in example is `config/default/config.seatbelt.toml`.
+It requires `network.mode` of `none` or `host`, command lifetime, empty hidden
+paths, disabled broker identity and disabled audit. No helper service, watcher,
+Python runtime or private namespace is installed. macOS arm64 and x86-64 release
+qualification must run separately.
+
 Installer validation checks home-relative syntax without expanding it to the
 root installer's home or requiring per-user hidden paths to exist. Operational
 startup expands against the invoking effective user's OS account home and
-validates the resulting paths, silently skipping missing hidden targets.
+validates the resulting paths, silently skipping missing Bubblewrap hidden targets
+but rejecting missing Seatbelt denied directories.
 Model and installation paths remain absolute.
 
 When the optional identity broker is enabled, `users.d/*.toml` and `groups.d/*.toml` may overlay

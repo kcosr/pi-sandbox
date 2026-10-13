@@ -100,7 +100,7 @@ describe.skipIf(!available)("hidden paths through real Bubblewrap", () => {
       const launch = insideHome ? cwd : path.join(root, "outside-home-workspace");
       await mkdir(launch, { recursive: true });
       const expanded = expandManagedHomePaths(
-        { cwdWritable: true, hiddenPaths: ["~", "~/a/private"] },
+        { cwdWritable: true, hiddenPaths: ["~", "~/a/private"], deniedPaths: [] },
         { pi: {}, sandbox: { ACCOUNT_CACHE: "~/cache" }, extensions: {} },
         () => ({ username: "alice", uid: 1001, homeDirectory: runs }),
       );

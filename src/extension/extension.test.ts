@@ -90,11 +90,11 @@ function config(
   overrides: Partial<Record<ToolName, "allow" | "ask" | "deny" | "disabled">> = {},
 ): SandboxConfig {
   return {
-    configVersion: 11,
+    configVersion: 12,
     codemode: { enabled: false, timeoutMs: 300000 },
     mcp: { servers: {} },
     sessions: { retentionDays: 0 },
-    filesystem: { cwdWritable: true, hiddenPaths: [] },
+    filesystem: { cwdWritable: true, deniedPaths: [], hiddenPaths: [] },
     audit: { enabled: false, facility: "local0" },
     modelsFile: "/etc/pi-sandbox/models.json",
     execution: { backend: "bubblewrap", processLifetime: "command" },

@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 
-import { spawn } from "node:child_process";
+import { execFileSync, spawn } from "node:child_process";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -17,6 +17,11 @@ const environment = { ...process.env };
 delete environment.NODE_ENV;
 const buildArguments = process.argv.slice(2);
 if (process.platform === "linux") environment.PI_SANDBOX_REQUIRE_BWRAP = "1";
+if (process.platform === "darwin") {
+  environment.PI_SANDBOX_REQUIRE_SEATBELT = "1";
+  environment.PI_SANDBOX_TEST_BUN ??=
+    environment.PI_SANDBOX_BUN ?? execFileSync("which", ["bun"], { encoding: "utf8" }).trim();
+}
 environment.PI_SANDBOX_TEST_TMPDIR ??= "/var/tmp";
 
 const commonChecks = [

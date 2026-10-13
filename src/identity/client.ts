@@ -1,7 +1,6 @@
 import { createConnection } from "node:net";
 
 import {
-  EXECUTION_BACKENDS,
   POLICY_MODES,
   NETWORK_MODES,
   PROCESS_LIFETIMES,
@@ -167,7 +166,7 @@ export function applyIdentityOverrides(
     ]),
   ) as Record<string, ToolPolicy>;
   return Object.freeze({
-    configVersion: 11,
+    configVersion: 12,
     codemode: base.codemode,
     mcp: base.mcp,
     audit: base.audit,
@@ -212,7 +211,8 @@ function parseIdentityOverrides(value: unknown): IdentityOverrides {
     const fields = value.execution;
     if (
       Object.hasOwn(fields, "backend") &&
-      !EXECUTION_BACKENDS.includes(fields.backend as ExecutionConfig["backend"])
+      fields.backend !== "bubblewrap" &&
+      fields.backend !== "direct"
     )
       throw invalidResponse();
     if (

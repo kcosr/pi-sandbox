@@ -806,7 +806,7 @@ async function main() {
       buildVersion,
       platform,
       architecture: process.arch,
-      executionBackends: [...(os === "linux" ? ["bubblewrap"] : []), "direct"],
+      executionBackends: [os === "linux" ? "bubblewrap" : "seatbelt", "direct"],
       identityBroker: os === "linux",
       bubblewrap: os === "linux" ? distribution.bubblewrap.release : null,
       pi: {
@@ -861,7 +861,7 @@ async function main() {
         buildVersion,
         platform,
         architecture: process.arch,
-        executionBackends: [...(os === "linux" ? ["bubblewrap"] : []), "direct"],
+        executionBackends: [os === "linux" ? "bubblewrap" : "seatbelt", "direct"],
         identityBroker: os === "linux",
         bubblewrap: os === "linux" ? distribution.bubblewrap.release : null,
         pi: {
@@ -885,6 +885,19 @@ async function main() {
           join(repositoryRoot, "scripts/test/packaged-diagnostics-smoke.mjs"),
           join(extractedRelease, "payload/pi-sandbox/pi-sandbox"),
           join(extractedRelease, "payload/pi-sandbox/defaults"),
+        ],
+        { env: cleanEnvironment },
+      );
+    } else if (
+      packagedConfig.execution?.backend === "seatbelt" &&
+      distribution.layout.allowConfigOverride
+    ) {
+      process.stdout.write("Testing Seatbelt through the packaged review executable\n");
+      await run(
+        process.execPath,
+        [
+          join(repositoryRoot, "scripts/test/seatbelt-packaged-smoke.mjs"),
+          join(extractedRelease, "payload/pi-sandbox/pi-sandbox"),
         ],
         { env: cleanEnvironment },
       );

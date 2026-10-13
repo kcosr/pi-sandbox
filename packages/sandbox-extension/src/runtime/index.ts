@@ -1,5 +1,10 @@
 export { buildBubblewrapArguments, safeSandboxEnvironment } from "./bubblewrap-policy.js";
 export { createBubblewrapExecutor } from "./bubblewrap-executor.js";
+export {
+  createSeatbeltExecutor,
+  validateSeatbeltOptions,
+  type CreateSeatbeltExecutorOptions,
+} from "./seatbelt-executor.js";
 export { LINUX_TOOL_COMMANDS, REQUIRED_SANDBOX_EXECUTABLES } from "./tool-commands.js";
 export {
   createDirectExecutor,

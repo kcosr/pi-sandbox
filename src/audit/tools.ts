@@ -143,7 +143,7 @@ export class ToolAuditor {
 
   public wrap(
     definition: ToolDefinition,
-    boundary: "bubblewrap" | "direct" | "host",
+    boundary: "bubblewrap" | "direct" | "seatbelt" | "host",
     extension?: string,
     target?: (
       args: JsonObject,

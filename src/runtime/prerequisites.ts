@@ -25,6 +25,7 @@ export function assertExecutionPrerequisites(
     additionalFixedExecutables: [
       ...managedExecutables,
       ...(provider === undefined ? [] : [provider.path]),
+      ...(backend === "seatbelt" ? ["/usr/bin/sandbox-exec"] : []),
     ],
   });
 }

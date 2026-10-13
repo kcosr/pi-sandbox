@@ -12,9 +12,13 @@ Global policy and global scoped environment belong in
 `<config_dir>/config.toml`. Both rule directories are optional. If no rules
 match, the main configuration is inherited unchanged.
 
-The broker is not built or packaged on macOS. macOS direct-mode configuration
+The broker is not built or packaged on macOS. macOS configuration
 must use `identity.mode = "disabled"` and therefore uses only the main
 configuration.
+
+Seatbelt does not add macOS broker support. Linux broker overrides accept only
+Bubblewrap or direct execution. Main-policy directory denials cannot be removed
+by a filesystem override; changing CWD write access preserves both exclusion arrays.
 
 ## Enabling the broker
 

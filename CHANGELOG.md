@@ -4,8 +4,14 @@
 
 ### Breaking changes
 
+- Require managed schema 12 with explicit `filesystem.denied_paths` and standalone sandbox schema 5.
+
 - Remove smolvm execution, VM controllers and interactive VM terminals; managed Linux execution supports Bubblewrap or direct mode. ([#28](https://github.com/kcosr/pi-sandbox/pull/28))
 - Release reusable sandbox extension 0.8.0 with a backend-neutral executor interface and no VM/controller exports. Embedding applications own external execution and cleanup. ([#28](https://github.com/kcosr/pi-sandbox/pull/28))
+
+### Added
+
+- Add opt-in macOS Seatbelt execution with directory denials, read-only CWD policy, none/host networking, and serial bounded commands. Process-group cleanup while the direct child is active is best effort; background descendants may survive normal completion with their original grants.
 
 ## 0.7.0 - 2026-10-10
 

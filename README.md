@@ -25,7 +25,7 @@ approval. They also determine whether tool networking is isolated or allowed to
 use the host network. Approval operates within the limits established by that
 policy and the sandbox boundary. Linux and macOS also support explicit direct
 mode, which preserves tool exposure, approval policy, bounded process handling,
-and typed tools but provides no filesystem or network containment.
+and typed tools but provides no filesystem or network containment. macOS also offers opt-in Seatbelt filesystem and network policy, with real host scratch directories and best-effort process-group cleanup. Background descendants may survive ordinary completion, cancellation, shutdown, or owner death with their original grants.
 
 Pi Sandbox is designed for interactive use with an attentive user. Its boundary
 governs operations routed through `pi-sandbox` and complements the account and
@@ -33,10 +33,11 @@ server controls that govern other software run by the logged-in user.
 
 ## Execution backends and reusable extensions
 
-| Backend              | Supported hosts                | Tool filesystem                                                    | Tool networking                 |
-| -------------------- | ------------------------------ | ------------------------------------------------------------------ | ------------------------------- |
-| Bubblewrap (default) | Linux x86-64 / arm64           | Host read-only, selected launch directory writable, optional masks | None, private loopback, or host |
-| Direct (explicit)    | Linux and macOS x86-64 / arm64 | Ordinary host access                                               | Host                            |
+| Backend              | Supported hosts                                  | Tool filesystem                                                             | Tool networking                   |
+| -------------------- | ------------------------------------------------ | --------------------------------------------------------------------------- | --------------------------------- |
+| Bubblewrap (default) | Linux x86-64 / arm64                             | Host read-only, selected launch directory writable, optional masks          | None, private loopback, or host   |
+| Seatbelt (opt-in)    | macOS arm64 / x86-64 (qualify each architecture) | Host read-only, optional writable CWD, real host scratch, directory denials | None or host; no private loopback |
+| Direct (explicit)    | Linux and macOS x86-64 / arm64                   | Ordinary host access                                                        | Host                              |
 
 Ordinary Pi can load the same [sandbox tools](packages/sandbox-extension/README.md)
 or the independent [Git extension](packages/git-extension/README.md). These

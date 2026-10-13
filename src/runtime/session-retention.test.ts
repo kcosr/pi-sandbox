@@ -3,6 +3,7 @@ import {
   mkdtemp,
   readFile,
   readdir,
+  realpath,
   rm,
   stat,
   symlink,
@@ -40,7 +41,7 @@ afterEach(async () => {
 });
 
 async function fixture() {
-  const root = await mkdtemp(join(tmpdir(), "pi-session-retention-"));
+  const root = await realpath(await mkdtemp(join(tmpdir(), "pi-session-retention-")));
   roots.push(root);
   const agentDir = join(root, "agent");
   const sessions = join(agentDir, "sessions");

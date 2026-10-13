@@ -156,10 +156,10 @@ else
   execution_backend=$("$candidate" --print-execution-backend --root "$validation_root")
 fi
 case "$execution_backend" in
-  direct) ;;
+  direct|seatbelt) ;;
   *) echo "unsupported macOS execution backend: $execution_backend" >&2; exit 1 ;;
 esac
-if [ -z "$destdir" ] && [ "$execution_backend" = direct ]; then
+if [ -z "$destdir" ]; then
   required="$brew_prefix/opt/coreutils/libexec/gnubin/cat
 $brew_prefix/opt/coreutils/libexec/gnubin/chmod
 $brew_prefix/opt/coreutils/libexec/gnubin/mkdir
@@ -178,6 +178,9 @@ $brew_prefix/bin/gawk
 /bin/sh
 /usr/bin/file"
   missing=
+  if [ "$execution_backend" = seatbelt ] && [ ! -x /usr/bin/sandbox-exec ]; then
+    missing=" /usr/bin/sandbox-exec"
+  fi
   for executable in $required; do
     [ -x "$executable" ] || missing="$missing $executable"
   done

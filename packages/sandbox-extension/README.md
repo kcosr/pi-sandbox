@@ -33,7 +33,7 @@ executables:
 
 ```json
 {
-  "version": 4,
+  "version": 5,
   "mode": "owned",
   "backend": {
     "kind": "bubblewrap",
@@ -64,9 +64,10 @@ back to host execution. Among competing extension tool names or user-shell
 handlers, pinned Pi uses the first applicable extension in runner order; load
 sandbox before competing replacements. Other extension JavaScript remains host code.
 
-Standalone configuration version 4 contains execution settings only. To update a
-version-2 configuration, remove `tools` and set `version` to `4`. Old versions and
-unknown fields are rejected. Approvals are part of managed Pi Sandbox; its TOML
+Standalone configuration version 5 contains execution settings only. To update a
+version-2 configuration, remove `tools` and set `version` to `5`. Old versions and
+unknown fields are rejected. Version-4 execution shapes retain their fields with
+version 5; Seatbelt adds the explicit backend below. Approvals are part of managed Pi Sandbox; its TOML
 configuration and mandatory policy remain unchanged.
 
 Bubblewrap requires Linux user namespaces and the GNU command prerequisites
@@ -96,6 +97,39 @@ For explicit host execution, replace `backend` with:
 Direct mode keeps the existing platform-specific command prerequisites and
 command-scoped cleanup.
 
+For opt-in macOS Seatbelt, replace `backend` with:
+
+```json
+{
+  "kind": "seatbelt",
+  "network": "none",
+  "cwdWritable": true,
+  "deniedPaths": [],
+  "environment": {}
+}
+```
+
+Seatbelt uses fixed `/usr/bin/sandbox-exec` and the same macOS GNU prerequisites
+as direct mode. `network` accepts only `none` or `host`. `deniedPaths` accepts up
+to 63 unique absolute paths to existing canonical directories; missing targets,
+files, symlink components and contradictory grants fail startup. Unlike managed
+TOML, standalone JSON paths are literal and do not expand account macros or `~`.
+A denied ancestor admits only CWD, then explicit interior denials apply; denying
+CWD itself is rejected. Denials cause access errors, not empty mounts. Ordinary host paths are read-only
+except writable CWD and executor-owned real host scratch. HOME and TMPDIR use
+that scratch; literal `/tmp` is not private. It accepts no launcher override,
+worker runtime, `hiddenPaths`, or `processLifetime` field.
+
+Commands are serial, with bounded input/output/time and admission. Normal
+foreground completion can leave background descendants alive, including those
+still in its process group. Cancellation, timeout, output failure and close
+attempt process-group cleanup only while the direct child remains active.
+Detached descendants can escape those attempts. Surviving descendants retain
+their original filesystem/network grants after completion, session changes,
+close or owner death. Scratch removal is best effort and does not revoke grants.
+No private namespace, lifecycle supervisor or parent-death cleanup is promised.
+Qualify the package on each intended macOS architecture under Node and Bun.
+
 ## Programmatic composition
 
 - `./factory`: seven tool definitions and user-shell routing over a supplied
@@ -114,12 +148,12 @@ an embedding application can supply its own authorization with an immutable tool
 No permissions package is installed or discovered.
 
 Importing these modules does not create a sandbox. The default extension initializes
-its configured Bubblewrap or direct executor at session initialization. The embedding
+its configured Bubblewrap, Seatbelt or direct executor at session initialization. The embedding
 application owns any executor it supplies to the factory and must close it explicitly.
 
 Built artifacts include declarations, the worker, license and provenance. Run
 `npm run test:extension` from the repository to build, inspect and exercise the
-tarball with stock Pi under Node/Bun, using Bubblewrap on Linux and direct execution.
+tarball with stock Pi under Node/Bun, using Bubblewrap on Linux, Seatbelt on macOS, and direct execution.
 The package includes ordinary tool UI rendering, command output streaming and
 cancellation. It does not provide interactive terminal sessions or a VM controller.
 The package is JavaScript-only; no compiler, Python or native runtime helper is
