@@ -42,16 +42,18 @@ function checkedMap(
   return Object.freeze(values);
 }
 
+function reference(name: string, snapshot: NodeJS.ProcessEnv): string {
+  const value = Object.hasOwn(snapshot, name) ? snapshot[name] : undefined;
+  if (value === undefined || value === "") throw new Error("Missing MCP credential");
+  return value;
+}
+
 function references(
   mapping: Readonly<Record<string, string>>,
   snapshot: NodeJS.ProcessEnv,
 ): Record<string, string> {
   return Object.fromEntries(
-    Object.entries(mapping).map(([name, reference]) => {
-      const value = Object.hasOwn(snapshot, reference) ? snapshot[reference] : undefined;
-      if (value === undefined || value === "") throw new Error("Missing MCP credential");
-      return [name, value];
-    }),
+    Object.entries(mapping).map(([name, source]) => [name, reference(source, snapshot)]),
   );
 }
 
@@ -95,6 +97,11 @@ export async function resolveMcpServers(
         policy.transport === "http" ? policy.headersFromEnv : policy.envFromEnv,
         snapshot,
       );
+      if (policy.transport === "http" && policy.bearerTokenFromEnv !== undefined) {
+        const token = reference(policy.bearerTokenFromEnv, snapshot);
+        if (/\s/u.test(token)) throw new Error("Invalid MCP bearer credential");
+        values.Authorization = `Bearer ${token}`;
+      }
       checkedMap(values, policy.transport === "http");
     } catch {
       resolved.push(Object.freeze({ policy, status: "credentials-unavailable" }));

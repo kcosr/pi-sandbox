@@ -431,6 +431,13 @@ policy-neutral composition options. The main configuration, account macros,
 credentials, tool policy, grants, audit records, and invocation concurrency stay
 in Pi Sandbox.
 
+HTTP MCP policy may select a raw bearer credential with `bearer_token_from_env`.
+Resolve it from the same effective Pi environment snapshot as `headers_from_env`,
+prefix it with `Bearer `, and pass it through the existing bounded header path.
+Reject competing Authorization header sources case-insensitively. Missing or
+invalid credentials make only that server unavailable; never expose token values
+in diagnostics or enable provider authentication as a fallback.
+
 The MCP factory accepts an injected connection configuration and transport factory,
 a synchronous whole-catalog adapter with original server/tool provenance, and
 connection-state callbacks. It adapts every complete catalog before publishing

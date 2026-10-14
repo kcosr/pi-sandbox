@@ -152,7 +152,7 @@ export function parseMcpConfig(value: unknown, codemode: CodeModeConfig | undefi
         "timeout_ms",
         "tool_rules",
         ...(transport === "http"
-          ? ["headers", "headers_from_env"]
+          ? ["headers", "headers_from_env", "bearer_token_from_env"]
           : ["args", "env", "env_from_env"]),
       ],
       path,
@@ -203,12 +203,24 @@ export function parseMcpConfig(value: unknown, codemode: CodeModeConfig | undefi
         true,
       );
       disjoint(headers, headersFromEnv, true, path);
+      const bearerTokenFromEnv = server.bearer_token_from_env;
+      if (bearerTokenFromEnv !== undefined) {
+        if (typeof bearerTokenFromEnv !== "string" || !isManagedEnvironmentName(bearerTokenFromEnv))
+          throw new Error(`${path}.bearer_token_from_env must be an environment variable name`);
+        if (
+          [...Object.keys(headers), ...Object.keys(headersFromEnv)].some(
+            (name) => name.toLowerCase() === "authorization",
+          )
+        )
+          throw new Error(`${path}.bearer_token_from_env conflicts with an Authorization header`);
+      }
       result[id] = Object.freeze({
         ...common,
         transport,
         url: server.url,
         headers,
         headersFromEnv,
+        ...(bearerTokenFromEnv === undefined ? {} : { bearerTokenFromEnv }),
       });
     } else {
       if (!isNormalizedAbsoluteFilePath(server.command))

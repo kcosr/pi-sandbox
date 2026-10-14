@@ -26,10 +26,100 @@ const stdio: McpStdioServerConfig = {
   env: { CACHE: "~/cache/{{uid}}" },
   envFromEnv: { SERVICE_TOKEN: "TOKEN" },
 };
+const bearer: McpHttpServerConfig = {
+  ...http,
+  headersFromEnv: {},
+  bearerTokenFromEnv: "TOKEN",
+};
 const account = () => ({ username: "alice+team", uid: 1001, homeDirectory: "/home/alice" });
 const executable = vi.fn(async () => {});
 
 describe("MCP per-account resolution", () => {
+  it("prefixes a raw bearer token from the original snapshot and preserves other headers", async () => {
+    const token = "opaque.{{username}}~!value";
+    const env = { TOKEN: token, API_KEY: "key", UNSELECTED: "private" };
+    const servers = await resolveMcpServers(
+      {
+        servers: {
+          local: stdio,
+          docs: {
+            ...bearer,
+            headers: { "X-Account": "literal" },
+            headersFromEnv: { "X-Api-Key": "API_KEY" },
+          },
+        },
+      },
+      env,
+      account,
+      () => {
+        env.TOKEN = "changed-during-resolution";
+        return Promise.resolve();
+      },
+    );
+    expect(servers[1]!.headers).toEqual({
+      Authorization: `Bearer ${token}`,
+      "X-Account": "literal",
+      "X-Api-Key": "key",
+    });
+    expect(servers[1]!.status).toBe("ready");
+    expect(Object.isFrozen(servers[1]!.headers)).toBe(true);
+    expect(JSON.stringify(servers[1]!.policy)).not.toContain(token);
+  });
+  it.each([
+    undefined,
+    "",
+    " ",
+    "Bearer secret",
+    "secret\r\nInjected: value",
+    "secret\0",
+    "\u0100",
+    "x".repeat(16378),
+  ])("isolates missing or invalid raw bearer token %# without exposing it", async (value) => {
+    const servers = await resolveMcpServers(
+      { servers: { docs: bearer, public: { ...http, id: "public", headersFromEnv: {} } } },
+      { TOKEN: value },
+      account,
+    );
+    expect(servers[0]).toEqual({ policy: bearer, status: "credentials-unavailable" });
+    expect(servers[1]!.status).toBe("ready");
+  });
+  it("counts the Bearer prefix in per-header and combined limits", async () => {
+    const token = "x".repeat(16384 - "Bearer ".length);
+    const [server] = await resolveMcpServers(
+      { servers: { docs: bearer } },
+      { TOKEN: token },
+      account,
+    );
+    expect(server!.status).toBe("ready");
+    expect(Buffer.byteLength(server!.headers!.Authorization!)).toBe(16384);
+    const [overflow] = await resolveMcpServers(
+      {
+        servers: {
+          docs: {
+            ...bearer,
+            headers: Object.fromEntries(
+              Array.from({ length: 3 }, (_, i) => [`X-${i}`, "y".repeat(16384)]),
+            ),
+          },
+        },
+      },
+      { TOKEN: token },
+      account,
+    );
+    expect(overflow!.status).toBe("credentials-unavailable");
+    expect(overflow).not.toHaveProperty("headers");
+  });
+  it("does not resolve a disabled bearer server", async () => {
+    const [server] = await resolveMcpServers(
+      { servers: { docs: { ...bearer, enabled: false } } },
+      {},
+      () => {
+        throw new Error("identity must not be consulted");
+      },
+    );
+    expect(server!.status).toBe("disabled");
+    expect(server).not.toHaveProperty("headers");
+  });
   it("preserves the literal URL and passes complete explicit credential values", async () => {
     const [server] = await resolveMcpServers(
       { servers: { docs: http } },

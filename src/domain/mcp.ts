@@ -21,6 +21,7 @@ export interface McpHttpServerConfig extends McpServerBase {
   readonly url: string;
   readonly headers: EnvironmentVariables;
   readonly headersFromEnv: EnvironmentVariables;
+  readonly bearerTokenFromEnv?: string;
 }
 export interface McpStdioServerConfig extends McpServerBase {
   readonly transport: "stdio";
