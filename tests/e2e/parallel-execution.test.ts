@@ -1,7 +1,6 @@
 import { existsSync } from "node:fs";
 import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import path from "node:path";
-import { setTimeout as delay } from "node:timers/promises";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import {
@@ -31,11 +30,10 @@ describe.skipIf(!AVAILABLE)("parallel Bubblewrap execution", () => {
     await rm(root, { recursive: true, force: true });
   });
 
-  async function create(processLifetime: "command" | "sandbox" = "sandbox") {
+  async function create() {
     executor = await createBubblewrapExecutor({
       cwd,
       bubblewrapPath: BWRAP,
-      processLifetime,
       workerCommand: testSandboxWorkerCommand(),
     });
     return executor;
@@ -52,14 +50,14 @@ describe.skipIf(!AVAILABLE)("parallel Bubblewrap execution", () => {
     );
   }
 
-  it("overlaps four commands and keeps their input, output and exit status separate", async () => {
+  it("overlaps eight commands and keeps their input, output and exit status separate", async () => {
     const backend = await create();
-    const outputs = Array.from({ length: 4 }, () => ({ out: "", err: "" }));
-    const calls = Array.from({ length: 4 }, (_, index) =>
+    const outputs = Array.from({ length: 8 }, () => ({ out: "", err: "" }));
+    const calls = Array.from({ length: 8 }, (_, index) =>
       backend.execute(
         {
           ...command(
-            `touch started-${index}; for n in 0 1 2 3; do while ! test -e started-$n; do sleep 0.01; done; done; cat; printf err-${index} >&2; exit ${index}`,
+            `touch started-${index}; for n in 0 1 2 3 4 5 6 7; do while ! test -e started-$n; do sleep 0.01; done; done; cat; printf err-${index} >&2; exit ${index}`,
           ),
           stdin: `input-${index}`,
         },
@@ -84,68 +82,42 @@ describe.skipIf(!AVAILABLE)("parallel Bubblewrap execution", () => {
     }
   });
 
-  it("bounds active commands and outstanding requests without killing admitted work", async () => {
+  it("admits more than sixty-four simultaneous calls without a worker concurrency cap", async () => {
     const backend = await create();
-    const calls = Array.from({ length: 64 }, (_, index) => backend.execute(held(index)));
+    const calls = Array.from({ length: 72 }, (_, index) => backend.execute(held(index)));
     const finished = Promise.all(calls);
-    await Promise.all([0, 1, 2, 3].map((index) => marked(`started-${index}`)));
-    await delay(50);
-    expect(existsSync(path.join(cwd, "started-4"))).toBe(false);
-    await expect(backend.execute(command("touch overflow"))).rejects.toMatchObject({
-      code: "sandbox_queue_full",
-    });
-    expect(existsSync(path.join(cwd, "overflow"))).toBe(false);
+    await Promise.all(Array.from({ length: 72 }, (_, index) => marked(`started-${index}`)));
     await writeFile(path.join(cwd, "release"), "");
     expect((await finished).every((result) => result.exitCode === 0)).toBe(true);
   });
 
-  it("keeps command lifetime serial", async () => {
-    const backend = await create("command");
-    const first = backend.execute(held(0));
-    const second = backend.execute(held(1));
-    const finished = Promise.all([first, second]);
+  it("a pre-aborted request never starts while peers continue", async () => {
+    const backend = await create();
+    const active = backend.execute(held(0));
     await marked("started-0");
-    await delay(50);
-    expect(existsSync(path.join(cwd, "started-1"))).toBe(false);
+    const controller = new AbortController();
+    controller.abort();
+    await expect(
+      backend.execute(command("touch should-not-run"), { signal: controller.signal }),
+    ).rejects.toMatchObject({ code: "sandbox_aborted" });
+    expect(existsSync(path.join(cwd, "should-not-run"))).toBe(false);
     await writeFile(path.join(cwd, "release"), "");
-    expect((await finished).map((result) => result.exitCode)).toEqual([0, 0]);
+    expect((await active).exitCode).toBe(0);
   });
 
-  it.each(["abort", "timeout"] as const)(
-    "%s of queued work leaves active commands running",
-    async (reason) => {
-      const backend = await create();
-      const active = Promise.all([0, 1, 2, 3].map((index) => backend.execute(held(index))));
-      await Promise.all([0, 1, 2, 3].map((index) => marked(`started-${index}`)));
-      const controller = new AbortController();
-      const queued = backend.execute(
-        command("touch should-not-run", reason === "timeout" ? 100 : 5_000),
-        { signal: controller.signal },
-      );
-      const failed = expect(queued).rejects.toMatchObject({
-        code: reason === "abort" ? "sandbox_aborted" : "sandbox_timeout",
-      });
-      if (reason === "abort") controller.abort();
-      await failed;
-      expect(existsSync(path.join(cwd, "should-not-run"))).toBe(false);
-      await writeFile(path.join(cwd, "release"), "");
-      expect((await active).every((result) => result.exitCode === 0)).toBe(true);
-    },
-  );
-
   it.each(["abort", "timeout", "output", "callback", "spawn"] as const)(
-    "%s interrupts active peers and background processes before admitting new work",
+    "%s affects only its own request while active peers and detached background work continue",
     async (reason) => {
       const backend = await create();
       await backend.execute(
         command(
-          "setsid /bin/bash -c 'trap \"\" TERM; while :; do date +%s%N > heartbeat; sleep 0.02; done' </dev/null >background.log 2>&1 &",
+          "setsid /bin/bash -c 'trap \"\" TERM; while :; do date +%s%N > heartbeat-next && mv heartbeat-next heartbeat; sleep 0.02; done' </dev/null >background.log 2>&1 &",
         ),
       );
       await marked("heartbeat");
       const controller = new AbortController();
       const peers = [0, 1, 2].map((index) => backend.execute(held(index)));
-      const settledPeers = Promise.allSettled(peers);
+      const finishedPeers = Promise.all(peers);
       await Promise.all([0, 1, 2].map((index) => marked(`started-${index}`)));
       const trigger = backend.execute(
         reason === "spawn"
@@ -184,27 +156,35 @@ describe.skipIf(!AVAILABLE)("parallel Bubblewrap execution", () => {
       if (reason === "abort") controller.abort();
       else await writeFile(path.join(cwd, "fail-now"), "");
       await triggerFailed;
-      const outcomes = await settledPeers;
-      expect(outcomes.every((outcome) => outcome.status === "rejected")).toBe(true);
+      await writeFile(path.join(cwd, "release"), "");
+      expect((await finishedPeers).every((outcome) => outcome.exitCode === 0)).toBe(true);
       await nextFinished;
       const heartbeat = await readFile(path.join(cwd, "heartbeat"), "utf8");
-      await delay(80);
-      expect(await readFile(path.join(cwd, "heartbeat"), "utf8")).toBe(heartbeat);
+      expect(heartbeat).toMatch(/^\d+\n$/);
+      await expect
+        .poll(() => readFile(path.join(cwd, "heartbeat"), "utf8"), { timeout: 2_000 })
+        .not.toBe(heartbeat);
     },
   );
 
-  it("shutdown settles active and queued calls and rejects new work", async () => {
+  it("does not treat a quiet unlimited command as a stalled transport", async () => {
+    const backend = await create();
+    await expect(backend.execute({ argv: ["/bin/sleep", "11"] })).resolves.toMatchObject({
+      exitCode: 0,
+    });
+  }, 20_000);
+
+  it("shutdown settles active calls and rejects new work", async () => {
     const backend = await create();
     const calls = Array.from({ length: 6 }, (_, index) => backend.execute(held(index)));
     const settled = Promise.allSettled(calls);
-    await Promise.all([0, 1, 2, 3].map((index) => marked(`started-${index}`)));
+    await Promise.all([0, 1, 2, 3, 4, 5].map((index) => marked(`started-${index}`)));
     await backend.close();
     for (const outcome of await settled) {
       expect(outcome.status).toBe("rejected");
       if (outcome.status === "rejected")
         expect(outcome.reason).toMatchObject({ code: "sandbox_closed" });
     }
-    expect(existsSync(path.join(cwd, "started-4"))).toBe(false);
     await expect(backend.execute(command("true"))).rejects.toMatchObject({
       code: "sandbox_closed",
     });

@@ -52,7 +52,6 @@ try {
             executable: "/usr/bin/bwrap",
             runtime,
             network: "local",
-            processLifetime: "sandbox",
             cwdWritable: true,
             hiddenPaths: [home],
             environment: {},
@@ -69,7 +68,7 @@ try {
     await writeFile(
       config,
       JSON.stringify({
-        version: 5,
+        version: 6,
         mode: "owned",
         backend,
         userBash: true,
@@ -178,7 +177,6 @@ try {
       launch: (args) => launch(["-e", "builtin:codemode", ...args]),
       modelsPath: join(home, "agent/models.json"),
       workspace,
-      serialCommands: selected.kind === "seatbelt",
     });
     console.log(`PASS ${selected.kind} ordinary Pi under ${selected.piRuntime}`);
   }

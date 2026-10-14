@@ -4,7 +4,8 @@
 
 ### Breaking changes
 
-- Require managed schema 12 with explicit `filesystem.denied_paths` and standalone sandbox schema 5. ([#29](https://github.com/kcosr/pi-sandbox/pull/29))
+- Require managed configuration 13 and standalone sandbox configuration 6; reject obsolete process-lifetime settings. ([#30](https://github.com/kcosr/pi-sandbox/pull/30))
+- Require explicit `filesystem.denied_paths` in managed policy and strict standalone Seatbelt configuration. ([#29](https://github.com/kcosr/pi-sandbox/pull/29))
 - Remove smolvm execution, VM controllers and interactive VM terminals; managed Linux execution supports Bubblewrap or direct mode. ([#28](https://github.com/kcosr/pi-sandbox/pull/28))
 - Release reusable sandbox extension 0.8.0 with a backend-neutral executor interface and no VM/controller exports. Embedding applications own external execution and cleanup. ([#28](https://github.com/kcosr/pi-sandbox/pull/28))
 
@@ -12,6 +13,10 @@
 
 - Default macOS packages to Seatbelt execution with networking disabled, directory denials and read-only CWD support. Process cleanup is best effort; background survivors retain their original grants. ([#29](https://github.com/kcosr/pi-sandbox/pull/29))
 - Add build-selected macOS tool bundles with pinned native inventories, packaged licenses, relocatable paths and no runtime tool-directory override. ([#29](https://github.com/kcosr/pi-sandbox/pull/29))
+
+### Changed
+
+- Follow Pi's parallel scheduling across backends, isolate command cancellation from peers, and replace implicit timeouts with an optional administrator maximum. ([#30](https://github.com/kcosr/pi-sandbox/pull/30))
 
 ## 0.7.0 - 2026-10-10
 

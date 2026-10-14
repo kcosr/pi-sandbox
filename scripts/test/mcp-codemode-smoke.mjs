@@ -568,8 +568,6 @@ text("MCP_REMOVAL_OK");`,
 
     if (["bubblewrap", "seatbelt"].includes(config.execution.backend)) {
       const parallelConfig = JSON.parse(JSON.stringify(config));
-      if (config.execution.backend === "bubblewrap")
-        parallelConfig.execution.process_lifetime = "sandbox";
       parallelConfig.filesystem.cwd_writable = true;
       parallelConfig.mcp = { servers: {} };
       for (const name of ["read", "write", "edit", "bash"])
@@ -580,7 +578,6 @@ text("MCP_REMOVAL_OK");`,
         launch,
         modelsPath,
         workspace,
-        serialCommands: config.execution.backend === "seatbelt",
       });
     }
 

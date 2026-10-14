@@ -35,7 +35,7 @@ try {
   const modelsPath = join(temporary, "models.json");
   const config = parse(await readFile(join(payload, "defaults/config.toml"), "utf8"));
   config.models_file = modelsPath;
-  config.execution = { backend: "seatbelt", process_lifetime: "command" };
+  config.execution = { backend: "seatbelt" };
   config.network = { mode: "none" };
   config.filesystem = { cwd_writable: true, hidden_paths: [], denied_paths: [denied] };
   config.identity = { mode: "disabled" };

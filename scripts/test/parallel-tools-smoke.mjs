@@ -19,19 +19,12 @@ export async function testParallelTools({
   launch,
   modelsPath,
   workspace,
-  serialCommands = false,
   workspaceFiles = {
     write: (name, content) => writeFile(join(workspace, name), content),
     read: (name) => readFile(join(workspace, name), "utf8"),
   },
 }) {
-  // Seatbelt accepts concurrent tool requests but admits their commands serially.
-  // The directory mutex fails if those commands overlap; parallel backends keep
-  // the peer barrier that requires simultaneous execution.
-  const command = serialCommands
-    ? (prefix, side) =>
-        `mkdir ${prefix}-active || exit 71; printf ready > ${prefix}-${side}; sleep 0.05; rmdir ${prefix}-active; printf ${prefix}-${side}-ok`
-    : barrier;
+  const command = barrier;
   const originalModels = await readFile(modelsPath, "utf8").catch((error) => {
     if (error.code === "ENOENT") return undefined;
     throw error;

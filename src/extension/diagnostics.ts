@@ -88,12 +88,16 @@ export function formatSandboxSummary(input: SandboxSummaryInput): string {
     ],
     ["Lifetime", "pi-sandbox process"],
     [
+      "Timeout cap",
+      input.execution.maximumTimeoutMs === undefined
+        ? "none"
+        : `${input.execution.maximumTimeoutMs / 1_000} seconds`,
+    ],
+    [
       "Processes",
-      input.execution.backend === "seatbelt"
-        ? "serial admission; background survivors retain original grants; cleanup only while direct child is active"
-        : input.execution.processLifetime === "sandbox"
-          ? "persist until sandbox shutdown or operation failure"
-          : "cleaned up after each command",
+      input.execution.backend === "bubblewrap"
+        ? "independent commands; background descendants remain until sandbox shutdown"
+        : "independent commands; background survivors may remain; cleanup only while direct child is active",
     ],
     [
       "Code mode",
@@ -221,7 +225,7 @@ function subjectScope(input: PolicyDiagnosticInput, subject: string): readonly s
         ? "May write inside the launch directory and its real host scratch directory."
         : "The launch directory is read-only; only its real host scratch directory permits ordinary file writes.",
       "Effective denied subtrees cannot be read or written. A denied ancestor admits only CWD, with explicit interior denials preserved; directory names are not masked.",
-      "Commands are admitted serially. Background descendants can survive normal completion; cancellation/failure/close attempts group cleanup only while the direct child is active. Survivors may outlive owner death with their original grants.",
+      "Commands complete independently and may overlap. Background descendants can survive normal completion; cancellation/failure/close attempts group cleanup only while the direct child is active. Survivors may outlive owner death with their original grants.",
       networkScope(input.config.network, input.config.execution),
     ];
   }

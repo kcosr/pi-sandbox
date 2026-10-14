@@ -176,7 +176,7 @@ argument. It reads optional protected `users.d/*.toml` and `groups.d/*.toml`
 rules, selecting exactly one `user`/`uid` or `group`/`gid` per file. Filenames are
 labels. Names and numeric selectors have identical precedence.
 
-The protocol uses newline-delimited JSON version 6 and operation
+The protocol uses newline-delimited JSON version 7 and operation
 `resolve-identity`, with no caller-claimed identity. The client keeps its write
 side open; the broker responds after reading the newline. Successful responses
 contain only one combined matching environment/override patch. Missing rule
@@ -347,30 +347,43 @@ broker socket.
 Pi Sandbox does not produce an RPM. Site administrators may wrap the release
 archive and these semantics in their own package-management system.
 
-## Sandbox process lifetime
+## Command scheduling and cleanup
 
-Bubblewrap process lifetime is configured independently of Pi tool selection.
-The managed worker defaults to serial per-command cleanup; optional `sandbox` lifetime
-preserves descendants across calls and logical Pi sessions and admits up to four
-concurrent commands, with at most 64 outstanding requests. Keep same-path
-write/edit serialization across whole operations. An active failure interrupts
-affected peers and completes namespace cleanup before queued work starts;
-queued cancellation affects only that request. Result acceptance and terminal
-retirement must not let delayed frames invalidate newly admitted commands.
-Qualify both the managed application and ordinary Pi extension. Match the pinned Pi
-version's post-exit idle-drain behavior, including allowing continued output to
-defer completion; do not introduce a separate absolute drain deadline. Pi 1.1.0
-uses a 100 ms idle timer restarted by each chunk. Existing command timeout,
-output limits, cancellation and sandbox shutdown remain authoritative. This
-behavior lives in the managed worker and requires no upstream Pi patch.
+Preserve pinned Pi's parallel or explicitly sequential tool scheduling. Add no
+serial queue, four-active ceiling or 64-outstanding rejection. Keep same-file
+write/edit coordination across complete mutations and bounded transport frames,
+arguments, input and output. Backpressure must not eagerly encode arbitrarily many
+requests, and whole-frame control priority must keep cancellation/close responsive.
 
-Seatbelt has a separate command-only lifecycle. It admits commands serially,
-without a process namespace or supervising helper. Ordinary foreground exit
-may leave background descendants alive with their original grants. Failure,
-cancellation and close attempt process-group cleanup only while the direct child
-remains active. Do not signal a reaped child's former PID or process-group ID.
-Session replacement must retain the same executor and policy; it does not revoke
-surviving descendants' grants. These limits must appear in diagnostics and docs.
+Managed schema 13 removes `process_lifetime`; standalone schema 6 removes
+`processLifetime`. One lifecycle permits background descendants to survive normal
+completion and logical session changes. Per-request cancellation, timeout,
+overflow, callback/spawn failure affect only that request; nonzero exit is normal.
+Cancelled pre-launch requests must not execute. Every request settles once; delayed
+start/result/control frames cannot affect another execution.
+
+No timeout is implicit. Optional base-policy `execution.max_command_timeout_seconds`
+converts positive finite seconds (including fractions, at most 2147483.647) to
+milliseconds, rounded up. Shared `limits.maximumTimeoutMs` and standalone common
+`maximumTimeoutMs` express the same cap. Omitted caller timeout inherits an
+administrator cap if present; requests exceeding the cap fail explicitly. Start
+one authoritative clock at successful launch, excluding approvals, mutation locks
+and transport waiting. The Linux worker owns it. Keep startup/transport deadlines
+separate. Apply per command to all seven tools and user shell; do not change host
+Git, MCP or Code Mode timing. Reject scoped timeout overrides.
+
+Match Pi's 100 ms post-exit idle drain, reset on output, with no absolute drain
+deadline. Optional command timeouts remain active through drain; unlimited commands
+can continue until quiet/closed/cancelled/output-limited. After leader exit,
+cancellation/close detaches streams without sending a late PID/PGID signal.
+Active process-group cleanup is best effort. Final Linux executor shutdown retains
+its namespace boundary; fatal worker/transport failure can abort the executor.
+Mac survivors retain original grants, without revocation or a parent-death guarantee.
+Add no manager, watcher, guardian, observer, Python helper or descendant monitor.
+
+Qualify Node and Bun, managed and ordinary packages, concurrency above 4 and 64,
+peer survival on failures, timeout start semantics, lifecycle races, draining and
+survivors, final Linux teardown, unchanged approvals and same-file coordination.
 
 ## CWD filesystem access
 
@@ -400,13 +413,13 @@ bind would mask private `/tmp`. Existing root and private-system-path overlap
 rejections remain enforced. The setting applies to built-ins and user shell;
 managed host tools retain their declared host authority.
 
-Managed schema 12 additionally requires `[filesystem].denied_paths`, empty for
-Bubblewrap/direct. macOS Seatbelt rejects hidden paths, sandbox lifetime
+Managed schema 13 additionally requires `[filesystem].denied_paths`, empty for
+Bubblewrap/direct. macOS Seatbelt rejects hidden paths
 and local networking, and accepts canonical existing directory denials. A denied
 ancestor admits only CWD; explicit interior denials remain effective. Denials are
 access restrictions, not empty masks. CWD and real host scratch writes follow
 the configured policy without private /tmp or mount namespaces. Standalone
-schema 5 exposes the same backend through the existing neutral executor and tool
+schema 6 exposes the same backend through the existing neutral executor and tool
 factory, without managed approvals. Both consumers must fail closed, preserve
 streaming/cancellation and require the fixed system /usr/bin/sandbox-exec.
 macOS broker and audit services remain disabled; host Git remains separate.

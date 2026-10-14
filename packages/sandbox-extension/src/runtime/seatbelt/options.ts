@@ -1,11 +1,14 @@
 import {
-  DEFAULT_SANDBOX_OUTPUT_LIMIT_BYTES,
-  DEFAULT_SANDBOX_TIMEOUT_MS,
   SandboxExecutionError,
   type SandboxCommandRequest,
   type SandboxResourceLimits,
   type ToolBundle,
 } from "../contracts.js";
+import {
+  resolveSandboxLimits,
+  resolveCommandTimeout,
+  type ResolvedSandboxLimits,
+} from "../command-limits.js";
 import { assertToolBundlePlacement, snapshotToolBundle } from "../tool-bundle.js";
 import {
   assertSeatbeltPath,
@@ -27,7 +30,7 @@ export interface CreateSeatbeltExecutorOptions {
 
 export const SEATBELT_LAUNCHER = "/usr/bin/sandbox-exec";
 export const SEATBELT_REQUIRED_EXECUTABLES = ["/bin/sh", "/bin/cat", "/bin/rm"] as const;
-export type SeatbeltLimits = Required<SandboxResourceLimits>;
+export type SeatbeltLimits = ResolvedSandboxLimits;
 const ARGUMENT_CEILING = 1_048_576;
 
 export function seatbeltBasePolicy(options: CreateSeatbeltExecutorOptions): SeatbeltPolicy {
@@ -95,27 +98,7 @@ export function validateSeatbeltOptions(options: CreateSeatbeltExecutorOptions):
     if (!canReadSeatbeltPath(policy, executable)) throw new Error("sandbox_prerequisite_denied");
 }
 
-export function resolveSeatbeltLimits(input: SandboxResourceLimits = {}): SeatbeltLimits {
-  if (!input || typeof input !== "object" || Array.isArray(input))
-    throw new Error("sandbox_limits_invalid");
-  const limits = {
-    defaultTimeoutMs: input.defaultTimeoutMs ?? DEFAULT_SANDBOX_TIMEOUT_MS,
-    maximumTimeoutMs: input.maximumTimeoutMs ?? 600_000,
-    defaultOutputBytes: input.defaultOutputBytes ?? DEFAULT_SANDBOX_OUTPUT_LIMIT_BYTES,
-    maximumOutputBytes: input.maximumOutputBytes ?? 64 * 1_048_576,
-    maximumInputBytes: input.maximumInputBytes ?? 64 * 1_048_576,
-    maximumArgumentBytes: input.maximumArgumentBytes ?? ARGUMENT_CEILING,
-  };
-  if (
-    Object.keys(input).some((key) => !Object.hasOwn(limits, key)) ||
-    Object.values(limits).some((n) => !Number.isSafeInteger(n) || n <= 0) ||
-    limits.defaultTimeoutMs > limits.maximumTimeoutMs ||
-    limits.defaultOutputBytes > limits.maximumOutputBytes ||
-    limits.maximumTimeoutMs > 2_147_483_647
-  )
-    throw new Error("sandbox_limits_invalid");
-  return Object.freeze(limits);
-}
+export const resolveSeatbeltLimits = resolveSandboxLimits;
 
 /** No ambient inheritance or loader, shell, proxy, agent-socket or scratch-path injection. */
 export function seatbeltEnvironment(
@@ -146,7 +129,7 @@ export interface SeatbeltRequest {
   readonly cwd: string;
   readonly environment: Readonly<Record<string, string>>;
   readonly stdin: Buffer;
-  readonly timeoutMs: number;
+  readonly timeoutMs: number | undefined;
   readonly maxOutputBytes: number;
 }
 
@@ -183,12 +166,9 @@ export function seatbeltRequest(
         : (request.stdin?.byteLength ?? 0);
     if (inputBytes > limits.maximumInputBytes)
       throw new SandboxExecutionError("sandbox_input_too_large");
-    const timeoutMs = request.timeoutMs ?? limits.defaultTimeoutMs;
+    const timeoutMs = resolveCommandTimeout(request.timeoutMs, limits.maximumTimeoutMs);
     const maxOutputBytes = request.maxOutputBytes ?? limits.defaultOutputBytes;
     if (
-      !Number.isSafeInteger(timeoutMs) ||
-      timeoutMs <= 0 ||
-      timeoutMs > limits.maximumTimeoutMs ||
       !Number.isSafeInteger(maxOutputBytes) ||
       maxOutputBytes <= 0 ||
       maxOutputBytes > limits.maximumOutputBytes

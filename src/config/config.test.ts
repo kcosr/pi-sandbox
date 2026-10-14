@@ -25,7 +25,7 @@ function completeConfig(
     (toolName) =>
       `[tools.${toolName}]\naudit = false\n${overrides[toolName] ?? 'mode = "allow"\nsession_grant = "never"'}`,
   );
-  return `config_version = 12\nmodels_file = "/etc/pi-sandbox/models.json"\n\n[codemode]\nenabled = false\n\n[mcp.servers]\n\n[sessions]\nretention_days = 0\n\n[audit]\nenabled = false\nfacility = "local0"\n\n[filesystem]\ncwd_writable = true\nhidden_paths = []\ndenied_paths = []\n\n[execution]\nbackend = "bubblewrap"\n\n[identity]\nmode = "disabled"\n\n[network]\nmode = "none"\n\n[environment.pi]\n\n[environment.sandbox]\n\n[environment.extensions]\n\n[extensions]\n\n${sections.join("\n\n")}\n`;
+  return `config_version = 13\nmodels_file = "/etc/pi-sandbox/models.json"\n\n[codemode]\nenabled = false\n\n[mcp.servers]\n\n[sessions]\nretention_days = 0\n\n[audit]\nenabled = false\nfacility = "local0"\n\n[filesystem]\ncwd_writable = true\nhidden_paths = []\ndenied_paths = []\n\n[execution]\nbackend = "bubblewrap"\n\n[identity]\nmode = "disabled"\n\n[network]\nmode = "none"\n\n[environment.pi]\n\n[environment.sandbox]\n\n[environment.extensions]\n\n[extensions]\n\n${sections.join("\n\n")}\n`;
 }
 
 function parseConfig(
@@ -45,7 +45,7 @@ describe("parseConfig", () => {
         'denied_paths = ["~/.ssh", "/Users/{{username}}/private"]',
       ),
     );
-    expect(parsed.execution).toEqual({ backend: "seatbelt", processLifetime: "command" });
+    expect(parsed.execution).toEqual({ backend: "seatbelt" });
     expect(parsed.filesystem.deniedPaths).toEqual(["/Users/{{username}}/private", "~/.ssh"]);
     expect(Object.isFrozen(parsed.filesystem.deniedPaths)).toBe(true);
     for (const source of [
@@ -63,7 +63,7 @@ describe("parseConfig", () => {
         "denied_paths = []",
         `denied_paths = ${JSON.stringify(Array.from({ length: 64 }, (_, i) => `/private/${i}`))}`,
       ),
-      seatbelt.replace("config_version = 12", "config_version = 11"),
+      seatbelt.replace("config_version = 13", "config_version = 11"),
       completeConfig().replace("denied_paths = []", 'denied_paths = ["/Users/private"]'),
     ])
       expect(() => parseConfig(source)).toThrow();
@@ -82,14 +82,14 @@ describe("parseConfig", () => {
     );
 
     expect(config).toEqual({
-      configVersion: 12,
+      configVersion: 13,
       codemode: { enabled: false, timeoutMs: 300000 },
       mcp: { servers: {} },
       sessions: { retentionDays: 0 },
       filesystem: { cwdWritable: true, deniedPaths: [], hiddenPaths: [] },
       audit: { enabled: false, facility: "local0" },
       modelsFile: "/etc/pi-sandbox/models.json",
-      execution: { backend: "bubblewrap", processLifetime: "command" },
+      execution: { backend: "bubblewrap" },
       identity: { mode: "disabled" },
       network: { mode: "none" },
       environment: { pi: {}, sandbox: {}, extensions: {} },
@@ -241,8 +241,8 @@ describe("parseConfig", () => {
           .replace('mode = "none"', 'mode = "host"'),
       ),
     ).toThrow("config.filesystem.hidden_paths must be empty");
-    expect(() => parseConfig(source.replace("config_version = 12", "config_version = 8"))).toThrow(
-      "integer 12",
+    expect(() => parseConfig(source.replace("config_version = 13", "config_version = 8"))).toThrow(
+      "integer 13",
     );
   });
 
@@ -307,11 +307,11 @@ describe("parseConfig", () => {
 
   it("rejects unsupported config versions and types", () => {
     expect(() =>
-      parseConfig(completeConfig().replace("config_version = 12", 'config_version = "9"')),
-    ).toThrow("config.config_version must be the integer 12");
+      parseConfig(completeConfig().replace("config_version = 13", 'config_version = "9"')),
+    ).toThrow("config.config_version must be the integer 13");
     expect(() =>
-      parseConfig(completeConfig().replace("config_version = 12", "config_version = 4")),
-    ).toThrow("config.config_version must be the integer 12");
+      parseConfig(completeConfig().replace("config_version = 13", "config_version = 4")),
+    ).toThrow("config.config_version must be the integer 13");
   });
 
   it("requires models_file to be a normalized absolute file path", () => {
@@ -344,7 +344,7 @@ describe("parseConfig", () => {
   it("rejects unknown fields at every schema level", () => {
     expect(() =>
       parseConfig(
-        completeConfig().replace("config_version = 12", "config_version = 12\nunexpected = true"),
+        completeConfig().replace("config_version = 13", "config_version = 13\nunexpected = true"),
       ),
     ).toThrow("config.unexpected is not a recognized field");
     expect(() =>
@@ -482,12 +482,12 @@ describe("parseConfig", () => {
   });
 
   it("rejects missing root fields and tables with the wrong shape", () => {
-    expect(() => parseConfig(completeConfig().replace("config_version = 12\n", ""))).toThrow(
+    expect(() => parseConfig(completeConfig().replace("config_version = 13\n", ""))).toThrow(
       "config.config_version is required",
     );
     expect(() =>
       parseConfig(
-        'config_version = 12\nmodels_file = "/etc/pi-sandbox/models.json"\nexecution = "direct"\nidentity = "disabled"\nnetwork = "none"\nextensions = "none"\ntools = "all"\n',
+        'config_version = 13\nmodels_file = "/etc/pi-sandbox/models.json"\nexecution = "direct"\nidentity = "disabled"\nnetwork = "none"\nextensions = "none"\ntools = "all"\n',
       ),
     ).toThrow("config.tools must be a table");
     expect(() =>
@@ -512,14 +512,12 @@ describe("parseConfig", () => {
   it("requires an explicit execution backend and host networking for direct execution", () => {
     expect(parseConfig(completeConfig()).execution).toEqual({
       backend: "bubblewrap",
-      processLifetime: "command",
     });
     const direct = completeConfig()
       .replace('backend = "bubblewrap"', 'backend = "direct"')
       .replace('[network]\nmode = "none"', '[network]\nmode = "host"');
     expect(parseConfig(direct).execution).toEqual({
       backend: "direct",
-      processLifetime: "command",
     });
     expect(() =>
       parseConfig(completeConfig().replace('backend = "bubblewrap"', 'backend = "direct"')),
@@ -546,34 +544,36 @@ describe("parseConfig", () => {
     ).toThrow("config.smolvm is not a recognized field");
   });
 
-  it("defaults process lifetime to command and restricts sandbox lifetime to Bubblewrap", () => {
-    const withLifetime = (value: string) =>
+  it("uses an optional positive administrator cap without an implicit timeout", () => {
+    expect(parseConfig(completeConfig()).execution).toEqual({ backend: "bubblewrap" });
+    const capped = (value: string) =>
       completeConfig().replace(
         'backend = "bubblewrap"',
-        `backend = "bubblewrap"\nprocess_lifetime = ${value}`,
+        `backend = "bubblewrap"\nmax_command_timeout_seconds = ${value}`,
       );
-    expect(parseConfig(withLifetime('"sandbox"')).execution.processLifetime).toBe("sandbox");
-    expect(parseConfig(withLifetime('"command"')).execution.processLifetime).toBe("command");
-    for (const invalid of ['"session"', '""', "false", "123"]) {
-      expect(() => parseConfig(withLifetime(invalid))).toThrow(
-        "config.execution.process_lifetime must be one of",
-      );
+    for (const [seconds, ms] of [
+      [0.0001, 1],
+      [1.125, 1125],
+      [3600, 3600000],
+      [2147483.647, 2147483647],
+    ]) {
+      expect(parseConfig(capped(String(seconds))).execution.maximumTimeoutMs).toBe(ms);
+    }
+    for (const value of ["0", "-1", "inf", "nan", "2147483.648", '"60"', "true"]) {
+      expect(() => parseConfig(capped(value))).toThrow("max_command_timeout_seconds");
+    }
+    for (const backend of ["bubblewrap", "seatbelt", "direct"]) {
+      const source = capped("3600")
+        .replace('backend = "bubblewrap"', `backend = "${backend}"`)
+        .replace('[network]\nmode = "none"', '[network]\nmode = "host"');
+      expect(parseConfig(source).execution.maximumTimeoutMs).toBe(3_600_000);
+      expect(() =>
+        parseConfig(source.replace("[execution]", '[execution]\nprocess_lifetime = "command"')),
+      ).toThrow("process_lifetime is not a recognized field");
     }
     expect(() =>
-      parseConfig(
-        withLifetime('"sandbox"')
-          .replace('backend = "bubblewrap"', 'backend = "direct"')
-          .replace('[network]\nmode = "none"', '[network]\nmode = "host"'),
-      ),
-    ).toThrow('config.execution.process_lifetime must be "command"');
-    expect(() =>
-      parseConfig(
-        completeConfig().replace(
-          'backend = "bubblewrap"',
-          'backend = "bubblewrap"\nprocess_lifetimes = "sandbox"',
-        ),
-      ),
-    ).toThrow("config.execution.process_lifetimes is not a recognized field");
+      parseConfig(completeConfig().replace("config_version = 13", "config_version = 12")),
+    ).toThrow("must be the integer 13");
   });
 
   it("rejects incomplete or ambiguous identity configuration", () => {
@@ -648,7 +648,7 @@ describe("loadConfig", () => {
     await writeFile(path, completeConfig(), "utf8");
 
     await expect(loadConfig(path, EMPTY_EXTENSION_CATALOG)).resolves.toMatchObject({
-      configVersion: 12,
+      configVersion: 13,
       codemode: { enabled: false, timeoutMs: 300000 },
       mcp: { servers: {} },
       sessions: { retentionDays: 0 },

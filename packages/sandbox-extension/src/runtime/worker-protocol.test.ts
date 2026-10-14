@@ -16,7 +16,6 @@ describe("sandbox worker protocol", () => {
       stdin: "",
       timeoutMs: 1_000,
       maxOutputBytes: 1_024,
-      processLifetime: "command",
     });
     const second = encodeWorkerFrame({ type: "cancel", id: 1 });
     const combined = Buffer.concat([first, second]);
@@ -31,7 +30,6 @@ describe("sandbox worker protocol", () => {
         stdin: "",
         timeoutMs: 1_000,
         maxOutputBytes: 1_024,
-        processLifetime: "command",
       },
     ]);
     expect(decoder.push(combined.subarray(first.byteLength + 2))).toEqual([
@@ -59,14 +57,14 @@ describe("sandbox worker protocol", () => {
     const response = { type: "stdout", id: 1, data: "x".repeat(1_048_576) } as const;
     const frame = Buffer.concat([
       encodeWorkerFrame(response),
-      encodeWorkerFrame({ type: "completed", id: 1 }),
+      encodeWorkerFrame({ type: "started", id: 1 }),
     ]);
     const decoder = new WorkerFrameDecoder(2 * 1_048_576);
     const decoded: unknown[] = [];
     for (let offset = 0; offset < frame.byteLength; offset += 127) {
       decoded.push(...decoder.push(frame.subarray(offset, offset + 127)));
     }
-    expect(decoded).toEqual([response, { type: "completed", id: 1 }]);
+    expect(decoded).toEqual([response, { type: "started", id: 1 }]);
     expect(() => decoder.finish()).not.toThrow();
   });
 
@@ -92,28 +90,30 @@ describe("sandbox worker protocol", () => {
         stdin: "",
         timeoutMs: 1,
         maxOutputBytes: 1,
-        processLifetime: "sandbox",
       }),
     ).toBe(true);
     expect(isWorkerRequest({ type: "execute", id: 0, argv: [] })).toBe(false);
     expect(isWorkerRequest({ type: "cancel", id: 2, extra: true })).toBe(false);
-    expect(isWorkerRequest({ type: "accept", id: 2 })).toBe(true);
+    expect(isWorkerRequest({ type: "accept", id: 2 })).toBe(false);
     expect(isWorkerRequest({ type: "accept", id: 0 })).toBe(false);
     expect(isWorkerRequest({ type: "accept", id: 2, extra: true })).toBe(false);
-    expect(isWorkerRequest({ type: "retire", id: 2 })).toBe(true);
+    expect(isWorkerRequest({ type: "retire", id: 2 })).toBe(false);
     expect(isWorkerRequest({ type: "retire", id: 0 })).toBe(false);
     expect(isWorkerRequest({ type: "retire", id: 2, extra: true })).toBe(false);
-    expect(isWorkerResponse({ type: "ready", protocolVersion: 3 })).toBe(true);
-    expect(isWorkerResponse({ type: "completed", id: 2 })).toBe(true);
-    expect(isWorkerResponse({ type: "completed", id: 0 })).toBe(false);
-    expect(isWorkerResponse({ type: "completed", id: 2, exitCode: 0 })).toBe(false);
+    expect(isWorkerResponse({ type: "ready", protocolVersion: 4 })).toBe(true);
+    expect(isWorkerResponse({ type: "started", id: 2 })).toBe(true);
+    expect(isWorkerResponse({ type: "started", id: 0 })).toBe(false);
+    expect(isWorkerResponse({ type: "started", id: 2, exitCode: 0 })).toBe(false);
     expect(isWorkerResponse({ type: "result", id: 2, exitCode: 0, signal: "SIGTERM" })).toBe(false);
     expect(isWorkerResponse({ type: "failure", id: 2, code: "not_a_code" })).toBe(false);
-    expect(isWorkerResponse({ type: "failure", id: 2, code: "sandbox_queue_full" })).toBe(true);
+    expect(isWorkerResponse({ type: "failure", id: 2, code: "sandbox_queue_full" })).toBe(false);
+    expect(isWorkerResponse({ type: "failure", id: 2, code: "sandbox_admission_timeout" })).toBe(
+      false,
+    );
   });
 
-  it.each([undefined, null, "session", true])(
-    "rejects invalid process lifetime %s",
+  it.each(["command", "sandbox", null, "session", true])(
+    "rejects removed process lifetime %s",
     (processLifetime) => {
       expect(
         isWorkerRequest({
@@ -128,4 +128,13 @@ describe("sandbox worker protocol", () => {
       ).toBe(false);
     },
   );
+  it("accepts no timer or positive fractional timers and rejects unsafe timer values", () => {
+    const request = { type: "execute", id: 1, argv: ["/bin/true"], stdin: "", maxOutputBytes: 1 };
+    expect(isWorkerRequest(request)).toBe(true);
+    expect(isWorkerRequest({ ...request, timeoutMs: 0.5 })).toBe(true);
+    expect(isWorkerRequest({ ...request, timeoutMs: 2_147_483_647 })).toBe(true);
+    for (const timeoutMs of [0, -1, Infinity, NaN, null, "100", 2_147_483_648]) {
+      expect(isWorkerRequest({ ...request, timeoutMs })).toBe(false);
+    }
+  });
 });

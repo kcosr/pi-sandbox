@@ -437,8 +437,8 @@ Nested `allow` runs without a prompt; nested `ask` pauses that call; nested
 script may catch. Approving an earlier operation does not approve subsequent
 ones. Effects completed before a later denial, timeout, or error are not rolled
 back. Concurrent calls can be independently allowed or denied; approval prompts
-are serialized by the existing policy mutex. Sandbox commands remain sequential
-in the existing worker, even when the script uses `Promise.all()`.
+are serialized by the existing policy mutex. Sandbox commands may execute concurrently when the script uses `Promise.all()`,
+while same-file write/edit coordination still protects complete mutations.
 
 Use these managed limits for the first implementation:
 

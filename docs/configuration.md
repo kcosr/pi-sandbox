@@ -38,7 +38,7 @@ extension-specific scoped environment. The required `identity` table either
 disables user resolution or selects the fixed administrator broker. Broker mode
 may overlay a combined patch from `config_dir/users.d/*.toml` and
 `config_dir/groups.d/*.toml` for the caller and its primary/supplementary groups, including scoped environment, selected model file, execution
-backend, process lifetime, network mode, CWD write access, and any subset of model-tool policies. If no rules match,
+backend, network mode, CWD write access, and any subset of model-tool policies. If no rules match,
 the main configuration remains unchanged. See
 [user and group environment and overrides](identity-broker.md).
 
@@ -113,7 +113,7 @@ targets to exist. Operational startup validates expanded paths before masking.
 ## Complete example
 
 ```toml
-config_version = 12
+config_version = 13
 models_file = "/etc/pi-sandbox/models.json"
 
 [codemode]
@@ -203,7 +203,7 @@ therefore removes model Bash while preserving the user's `!` command.
 
 These TOML sections define built-in and compiled-extension tool policy. MCP tools
 use the separate per-server policy below. A broker user/group rule
-may override execution backend, process lifetime and network mode and may atomically
+may override execution backend and network mode and may atomically
 replace individual complete policies, including setting
 `git_clone` or another selected extension tool to `deny` or `disabled`. User/group environment values
 never select an extension, add a tool, change a policy, or authorize a call.
@@ -337,7 +337,7 @@ configuration. Unknown fields and malformed dormant configurations are errors.
 
 ## Launch directory access
 
-Configuration schema 12 requires all three keys in `[filesystem]`:
+Configuration schema 13 requires all three keys in `[filesystem]`:
 
 ```toml
 [filesystem]
@@ -448,13 +448,12 @@ hidden directory.
 ### Denied directories (Seatbelt)
 
 Seatbelt is the macOS packaged default. Start with
-`config/default/config.seatbelt.toml`, or use these fields in a complete schema-12
+`config/default/config.seatbelt.toml`, or use these fields in a complete schema-13
 configuration:
 
 ```toml
 [execution]
 backend = "seatbelt"
-process_lifetime = "command"
 
 [network]
 mode = "none"
@@ -465,7 +464,7 @@ hidden_paths = []
 denied_paths = ["~/.ssh"]
 ```
 
-`denied_paths` is required in every schema-12 configuration and must be empty
+`denied_paths` is required in every schema-13 configuration and must be empty
 for Bubblewrap and direct execution. Seatbelt requires empty `hidden_paths`.
 It accepts up to 63 unique normalized directory paths, with the same account
 macros and home expansion as hidden paths. Every expanded target must exist and
@@ -480,7 +479,7 @@ access error, not an empty filesystem mask; directory entries may remain visible
 Real host scratch storage remains writable and supplies HOME and TMPDIR; literal
 `/tmp` is not private. `network.mode = "none"` denies network operations through
 Seatbelt policy; `host` permits host networking subject to the remaining policy.
-There is no isolated loopback mode. Only serial `command` lifetime is supported.
+There is no isolated loopback mode. Commands complete independently and may overlap.
 Process-group and scratch cleanup are best effort. Ordinary foreground completion
 may leave background descendants alive even in the same process group. Failure,
 cancellation and close signal the group only while the direct child is active;
@@ -570,56 +569,53 @@ and after broker execution and network overrides are applied.
 Managed host tools are unaffected by this table: they deliberately use the
 invoking user's host network namespace and ordinary host controls.
 
-## Background process lifetime (Bubblewrap)
+## Command scheduling, timeouts and cleanup
 
-For Bubblewrap, optional `execution.process_lifetime` defaults to `command`, which removes all
-remaining sandbox command processes after every operation. With `sandbox`,
-background processes survive ordinary foreground completion, including nonzero
-exit codes, and remain available to subsequent calls. Lifetime covers the whole
-`pi-sandbox` process, including changes of logical Pi session. The existing worker
-runs up to four commands concurrently in this mode; `command` lifetime stays
-serial. At most 64 requests may be outstanding, including active calls and queued
-work. Further submissions fail with `sandbox_queue_full` without interrupting
-admitted work. These are fixed backend limits, not additional TOML settings.
-No watcher or daemon is involved. This setting is independent of network mode.
+Pi controls tool scheduling, including explicit sequential batches. The executors
+add no serial queue, active-command ceiling, or outstanding-request ceiling.
+Same-file write/edit coordination still serializes a complete mutation. Transport
+backpressure preserves bounded frames without promising bounded total resource
+use for arbitrarily many calls. Background writers are not excluded by scheduling.
 
-For a server reachable by later sandbox calls:
+`execution.max_command_timeout_seconds` is an optional base-policy limit for every
+command used by all seven built-in tools and user `!` shell. It accepts positive
+finite seconds, including fractions, up to 2147483.647 (the JavaScript timer ceiling).
+Values round up to the next millisecond. Omitted means no administrator maximum;
+no caller timeout and no maximum means no command timer. With a maximum, an omitted
+caller timeout uses that maximum, a shorter timeout is honored, and a larger timeout
+is rejected explicitly. The timer starts at successful process launch, after
+approvals, same-file coordination and transport waiting. It remains effective
+through output draining. A multi-command file operation has a separate clock for
+each command, not an aggregate operation deadline. Host Git, MCP and Code Mode keep
+their separate timing contracts. User/group rules cannot override this maximum.
 
 ```toml
 [execution]
 backend = "bubblewrap"
-process_lifetime = "sandbox"
-
-[network]
-mode = "local"
+# Optional; omit for ordinary Pi's uncapped default.
+max_command_timeout_seconds = 3600
 ```
 
-Start it with input/output redirected, for example
-`my-server </dev/null >server.log 2>&1 &`, then use `curl http://localhost:PORT`
-in a later call. In persistence mode, output completion matches pinned Pi 1.1.0:
-after foreground exit, wait for stream closure or 100 ms without output. Each
-chunk restarts the idle timer; continued output can defer completion under the
-existing command timeout and output limits. There is no separate absolute drain
-deadline. Completion closes that call's streams, so an unredirected background
-writer may receive a broken-pipe error on a later write.
+Commands complete independently. Background descendants may survive ordinary
+completion, including a nonzero exit, and logical session changes. Redirect a
+server's input and output, for example `my-server </dev/null >server.log 2>&1 &`.
+After foreground exit, completion waits for closed streams or 100 ms without
+output; every chunk restarts that idle timer. Continued output can defer unlimited
+commands subject to the output bound. There is no additional absolute drain
+deadline. Completion closes streams; later writes may receive a broken pipe.
 
-Cancelling active work, exceeding its timeout/output limit, or an execution
-failure interrupts other active calls and cleans up the sandbox's command
-processes, including previously started servers, before queued work may start.
-Each interrupted call reports a failure. Cancelling a queued request only removes
-that request. Closing Pi
-terminates the entire sandbox. A completed call's timeout/output limits do not
-impose a duration or disk quota on its surviving background processes.
+Cancellation, timeout, output overflow, callback failure and spawn failure affect
+only their request. Cancellation before launch prevents execution. Active cleanup
+is best-effort process-group termination; detached descendants may remain. After
+the direct child exits, cancellation/close detaches its streams without signalling
+its old PID or process group. No normal completion or individual failure sweeps
+all sandbox processes. Linux executor shutdown retains the final namespace
+boundary; fatal worker/transport failure may abort the executor. Direct and
+Seatbelt cleanup is best effort. Seatbelt survivors retain their original grants
+after close or owner death; no watcher, helper or grant revocation is provided.
 
-Direct execution requires `process_lifetime = "command"`; its behavior is
-unchanged. Administrator user/group overrides may set process lifetime, and the
-effective combination is validated after merging.
-
-Seatbelt also requires `command`, but this means serial admission with bounded
-execution, not descendant cleanup after completion. Ordinary background children
-may survive foreground exit with their original grants. Cleanup attempts only
-apply while the direct child remains active; see [Denied directories (Seatbelt)](#denied-directories-seatbelt)
-for its separate lifecycle and scratch contract.
+The removed `process_lifetime` field is rejected by managed schema 13. There is
+one lifecycle contract rather than separate command and sandbox modes.
 
 ## Compiled extensions
 
@@ -772,9 +768,9 @@ using its stock operations, whose truncation path writes an artifact to host
 temporary storage. Pi Sandbox intentionally returns one final bounded, sanitized
 user-shell result instead. Model Bash retains ordinary tool update rendering;
 both result paths remove ANSI escapes, carriage returns, and unsafe controls.
-Model Bash defaults to a 120-second sandbox timeout and accepts an explicit
-timeout greater than zero through 600 seconds. User `!` shell always uses the
-fixed 120-second timeout and has no per-command override.
+Model Bash accepts an optional positive finite timeout in seconds up to 2147483.647.
+There is no implicit timeout. The optional administrator command maximum applies
+to both model Bash and user `!` shell; user shell has no per-command override.
 
 In Bubblewrap, either kind of shell command can read the ordinary host
 filesystem and write private temporary state. It can write inside the launch

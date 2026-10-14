@@ -412,7 +412,7 @@ There is no implicit configuration replacement. This supports both complete
 archive deployments and systems where Salt or another configuration manager
 owns `/etc/pi-sandbox`.
 
-The installed configuration uses `config_version = 12` and must include the
+The installed configuration uses `config_version = 13` and must include the
 `[audit]`, `[sessions]`, `[codemode]`, `[mcp.servers]`, `[execution]`, `[filesystem]`, and `[extensions]` tables, an `audit` boolean on every
 base tool policy, explicit `filesystem.hidden_paths` and `filesystem.denied_paths` (both empty by default), and explicit `[environment.pi]`,
 `[environment.sandbox]`, and `[environment.extensions]` tables, even when the
@@ -436,12 +436,24 @@ starting with `~/` before updating the version. Configurations older than
 schema 8 also need the required session policy. Alternatively, explicitly
 replace configuration with the packaged defaults.
 
-To migrate schema 11, add `denied_paths = []` to `[filesystem]` and set
-`config_version = 12`. The macOS packaged default selects Seatbelt with networking
+To migrate schema 11 or 12, remove `process_lifetime` from `[execution]` and set
+`config_version = 13`. Schema 11 also needs `denied_paths = []` in `[filesystem]`.
+Commands now complete independently; background descendants may survive until
+executor shutdown, with best-effort cleanup outside Linux's namespace boundary.
+No default command timeout is imposed. Set the optional base-policy
+`execution.max_command_timeout_seconds` when an administrator maximum is needed.
+
+Broker users must also update preserved `users.d` and `groups.d` files from
+`version = 7` to `version = 8`, remove `overrides.execution.process_lifetime`, and
+remove an empty `[overrides.execution]` table if no backend override remains.
+Upgrade the broker and application together for protocol 7. The installer does
+not rewrite these rule files, including with `--replace-config`.
+
+The macOS packaged default selects Seatbelt with networking
 disabled, using `config/default/config.seatbelt.toml`. Ordinary upgrades preserve
 existing configuration, including an explicit direct backend. Builds can select
 `config/default/config.direct.toml` with `--config` when direct execution is intended.
-Seatbelt requires `network.mode` of `none` or `host`, command lifetime, empty hidden
+Seatbelt requires `network.mode` of `none` or `host`, empty hidden
 paths, disabled broker identity and disabled audit. No helper service, watcher,
 Python runtime or private namespace is installed. macOS arm64 and x86-64 release
 qualification must run separately.
@@ -603,12 +615,12 @@ restart `pi-sandbox` after changing the effective configuration.
 
 ### Background server stops after a call
 
-The default `execution.process_lifetime = "command"` removes background command
-processes after every operation. Select `sandbox` with Bubblewrap to retain
-servers and watchers across calls, and redirect their output to files. Active
-cancellation, timeout, output overflow or execution failure can still stop all
-sandbox command processes. Closing Pi always ends the sandbox. Direct execution
-does not support persistent background processes.
+Background descendants may survive normal command completion on every backend.
+Redirect their input/output to files so closing the originating call's streams does
+not produce a broken pipe. Individual cancellation or failure does not sweep unrelated
+commands. Closing the Linux executor terminates its sandbox namespace; direct and
+Seatbelt termination is best effort and survivors may remain. No lifecycle switch
+or watcher is required. See [command scheduling and cleanup](configuration.md#command-scheduling-timeouts-and-cleanup).
 
 ### Sandbox execution failure
 

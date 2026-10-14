@@ -1259,9 +1259,9 @@
                       namespaces.
                     </td>
                     <td>
-                      Approvals and bounded serial admission. Background descendants may survive
-                      foreground completion or owner death with original grants; cleanup is best
-                      effort only while the direct child remains active.
+                      Approvals and independent concurrent commands. Background descendants may
+                      survive foreground completion or owner death with original grants; cleanup is
+                      best effort only while the direct child remains active.
                     </td>
                   </tr>
                   <tr>
@@ -1316,7 +1316,7 @@
               class="compact"
               aria-label="Example global Pi Sandbox configuration"
             ><code># /etc/pi-sandbox/config.toml — excerpt
-config_version = 12
+config_version = 13
 models_file = "/etc/pi-sandbox/models.json"
 
 [codemode]
@@ -1350,7 +1350,7 @@ git_clone = { mode = "ask", session_grant = "never", audit = true }
                 class="compact"
                 aria-label="Example group Pi Sandbox override"
               ><code># groups.d/admin.toml — optional
-version = 7
+version = 8
 group = "admin"
 
 [overrides.tools.git_clone]

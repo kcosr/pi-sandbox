@@ -283,7 +283,7 @@ root=
 if [ "\${1:-}" = --root ]; then root=$2; shift 2; fi
 [ "$#" -eq 0 ]
 config_dir=${shellQuote(layout?.configDir ?? "/etc/pi-sandbox")}
-grep -q '^config_version = 12$' "$root$config_dir/config.toml"
+grep -q '^config_version = 13$' "$root$config_dir/config.toml"
 grep -q '"providers"' "$root$config_dir/models.json"
 case "$operation" in
   --validate-installation) ;;
@@ -295,7 +295,7 @@ esac
   );
   await writeFile(
     join(payload, "defaults/config.toml"),
-    `config_version = 12\nmodels_file = "/etc/pi-sandbox/models.json"\n\n[codemode]\nenabled = false\n\n[mcp.servers]\n\n[sessions]\nretention_days = 0\n\n[audit]\nenabled = false\nfacility = "local0"\n\n[filesystem]\ncwd_writable = true\nhidden_paths = []\ndenied_paths = []\n\n[execution]\nbackend = "${backend}"\n\n[identity]\nmode = "disabled"\n\n[network]\nmode = "host"\n\n[environment.pi]\n\n[environment.sandbox]\n\n[environment.extensions]\n\n[extensions]\n`,
+    `config_version = 13\nmodels_file = "/etc/pi-sandbox/models.json"\n\n[codemode]\nenabled = false\n\n[mcp.servers]\n\n[sessions]\nretention_days = 0\n\n[audit]\nenabled = false\nfacility = "local0"\n\n[filesystem]\ncwd_writable = true\nhidden_paths = []\ndenied_paths = []\n\n[execution]\nbackend = "${backend}"\n\n[identity]\nmode = "disabled"\n\n[network]\nmode = "host"\n\n[environment.pi]\n\n[environment.sandbox]\n\n[environment.extensions]\n\n[extensions]\n`,
   );
   await writeFile(join(payload, "defaults/models.json"), '{"providers":{}}\n');
   await writeFile(join(payload, "package.json"), '{"name":"pi-sandbox"}\n');
