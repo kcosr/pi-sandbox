@@ -1,7 +1,6 @@
 import { existsSync } from "node:fs";
 import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import path from "node:path";
-import { setTimeout as delay } from "node:timers/promises";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import {
@@ -112,7 +111,7 @@ describe.skipIf(!AVAILABLE)("parallel Bubblewrap execution", () => {
       const backend = await create();
       await backend.execute(
         command(
-          "setsid /bin/bash -c 'trap \"\" TERM; while :; do date +%s%N > heartbeat; sleep 0.02; done' </dev/null >background.log 2>&1 &",
+          "setsid /bin/bash -c 'trap \"\" TERM; while :; do date +%s%N > heartbeat-next && mv heartbeat-next heartbeat; sleep 0.02; done' </dev/null >background.log 2>&1 &",
         ),
       );
       await marked("heartbeat");
@@ -161,8 +160,10 @@ describe.skipIf(!AVAILABLE)("parallel Bubblewrap execution", () => {
       expect((await finishedPeers).every((outcome) => outcome.exitCode === 0)).toBe(true);
       await nextFinished;
       const heartbeat = await readFile(path.join(cwd, "heartbeat"), "utf8");
-      await delay(80);
-      expect(await readFile(path.join(cwd, "heartbeat"), "utf8")).not.toBe(heartbeat);
+      expect(heartbeat).toMatch(/^\d+\n$/);
+      await expect
+        .poll(() => readFile(path.join(cwd, "heartbeat"), "utf8"), { timeout: 2_000 })
+        .not.toBe(heartbeat);
     },
   );
 

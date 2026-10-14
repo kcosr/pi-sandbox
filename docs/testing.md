@@ -78,8 +78,8 @@ dependency.
   validation;
 - required extension selection and exact dynamic model-tool policy sets;
 - strict `none`, `local`, and `host` network modes, and optional administrator command timeout caps;
-- fieldwise execution overrides, `none < local < host` and `command < sandbox`
-  joins, omission inheritance, and rejection of effective direct persistence;
+- execution-backend overrides, `none < local < host` joins, omission inheritance,
+  preservation of the base command timeout maximum, and rejection of removed lifetime fields;
 - required CWD write-access configuration, parent inheritance and user/group overrides,
   with direct/read-only rejection before and after override application;
 - required hidden paths, strict path syntax and uniqueness, immutable

@@ -436,8 +436,20 @@ starting with `~/` before updating the version. Configurations older than
 schema 8 also need the required session policy. Alternatively, explicitly
 replace configuration with the packaged defaults.
 
-To migrate schema 11, add `denied_paths = []` to `[filesystem]` and set
-`config_version = 13`. The macOS packaged default selects Seatbelt with networking
+To migrate schema 11 or 12, remove `process_lifetime` from `[execution]` and set
+`config_version = 13`. Schema 11 also needs `denied_paths = []` in `[filesystem]`.
+Commands now complete independently; background descendants may survive until
+executor shutdown, with best-effort cleanup outside Linux's namespace boundary.
+No default command timeout is imposed. Set the optional base-policy
+`execution.max_command_timeout_seconds` when an administrator maximum is needed.
+
+Broker users must also update preserved `users.d` and `groups.d` files from
+`version = 7` to `version = 8`, remove `overrides.execution.process_lifetime`, and
+remove an empty `[overrides.execution]` table if no backend override remains.
+Upgrade the broker and application together for protocol 7. The installer does
+not rewrite these rule files, including with `--replace-config`.
+
+The macOS packaged default selects Seatbelt with networking
 disabled, using `config/default/config.seatbelt.toml`. Ordinary upgrades preserve
 existing configuration, including an explicit direct backend. Builds can select
 `config/default/config.direct.toml` with `--config` when direct execution is intended.
