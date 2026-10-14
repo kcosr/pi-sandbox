@@ -99,6 +99,41 @@ Pi's user credential store remains under `PI_CODING_AGENT_DIR` and may also
 supply credentials through Pi's login flow. The administrator-selected model
 catalog remains fixed regardless of the user-state directory.
 
+## macOS machine identity
+
+For an endpoint that accepts the Mac hardware UUID as its bearer value, configure
+the managed policy:
+
+```toml
+[environment.pi]
+PI_MACHINE_ID = "{{machine_id}}"
+```
+
+Then use these fields in the provider's `models.json` definition:
+
+```json
+{
+  "api": "openai-completions",
+  "apiKey": "$PI_MACHINE_ID",
+  "authHeader": true
+}
+```
+
+The application reads `IOPlatformUUID` on the host at startup and expands the
+administrator's environment value before loading the model catalog. The managed
+value overrides an ambient `PI_MACHINE_ID`; exporting another value does not
+replace the configured macro. `models.json` itself is not macro-expanded, and
+Pi's existing credential-store and provider authentication behavior is unchanged.
+
+Only macOS supports `{{machine_id}}`. A requested but unavailable machine ID
+fails policy startup; policy that does not use it performs no lookup. The
+identifier is shared by users of that machine and normally survives OS updates,
+but may change with hardware or VM identity replacement. It is not a secret or
+cryptographic device attestation: a client can copy the value. The endpoint
+must explicitly accept it; configuring the UUID does not grant access to a
+service that requires another credential. Administrators control whether to
+send this persistent identifier to a provider.
+
 ## Troubleshooting
 
 If Pi reports that no models are available:

@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import type { McpHttpServerConfig, McpStdioServerConfig } from "../domain/index.js";
 import { resolveMcpServers } from "./resolve.js";
+import { createMachineIdResolver } from "../runtime/machine-id.js";
 
 const base = {
   enabled: true,
@@ -149,6 +150,96 @@ describe("MCP per-account resolution", () => {
     expect(server!.environment).not.toHaveProperty("PROVIDER_TOKEN");
     expect(server!.environment).not.toHaveProperty("TOKEN");
     expect(executable).toHaveBeenCalledWith("/opt/mcp/server");
+  });
+  it("shares one machine-ID lookup across explicit stdio environments", async () => {
+    const value = "01234567-89AB-4CDE-8123-456789ABCDEF";
+    const readMachine = vi.fn(() => value);
+    const machine = createMachineIdResolver(readMachine);
+    // An earlier policy expansion and MCP startup use the same application resolver.
+    expect(machine()).toBe(value);
+    const servers = await resolveMcpServers(
+      {
+        servers: {
+          first: { ...stdio, env: { DEVICE: "{{machine_id}}/{{machine_id}}" } },
+          second: { ...stdio, id: "second", env: { CACHE: "~/{{machine_id}}/{{uid}}" } },
+        },
+      },
+      { TOKEN: "secret", DEVICE: "ambient", MACHINE_ID: "spoofed" },
+      account,
+      executable,
+      machine,
+    );
+    expect(servers[0]!.environment!.DEVICE).toBe(`${value}/${value}`);
+    expect(servers[1]!.environment!.CACHE).toBe(`/home/alice/${value}/1001`);
+    expect(readMachine).toHaveBeenCalledOnce();
+  });
+
+  it("isolates unavailable machine identity to referring stdio servers and caches failure", async () => {
+    const readMachine = vi.fn((): never => {
+      throw new Error("private hardware-query diagnostic");
+    });
+    const first = { ...stdio, env: { DEVICE: "{{machine_id}}" } };
+    const second = { ...stdio, id: "second", env: { DEVICE: "{{machine_id}}" } };
+    const servers = await resolveMcpServers(
+      { servers: { first, second, literal: stdio, http } },
+      { TOKEN: "secret" },
+      account,
+      executable,
+      readMachine,
+    );
+    expect(servers.map((server) => server.status)).toEqual([
+      "configuration-value-unavailable",
+      "configuration-value-unavailable",
+      "ready",
+      "ready",
+    ]);
+    expect(servers[0]).toEqual({ policy: first, status: "configuration-value-unavailable" });
+    expect(servers[1]).toEqual({ policy: second, status: "configuration-value-unavailable" });
+    expect(JSON.stringify(servers)).not.toContain("private hardware-query diagnostic");
+    expect(readMachine).toHaveBeenCalledOnce();
+  });
+
+  it("does not query machine identity for disabled or unavailable stdio servers", async () => {
+    const readMachine = vi.fn((): never => {
+      throw new Error("unavailable servers cannot query machine identity");
+    });
+    const servers = await resolveMcpServers(
+      {
+        servers: {
+          disabled: { ...stdio, enabled: false, env: { DEVICE: "{{machine_id}}" } },
+          unavailable: { ...stdio, id: "unavailable", env: { DEVICE: "{{machine_id}}" } },
+        },
+      },
+      { TOKEN: "secret" },
+      account,
+      () => Promise.reject(new Error("not installed")),
+      readMachine,
+    );
+    expect(servers.map((server) => server.status)).toEqual(["disabled", "executable-unavailable"]);
+    expect(readMachine).not.toHaveBeenCalled();
+  });
+
+  it("leaves HTTP header and credential text literal without querying machine identity", async () => {
+    const readMachine = vi.fn((): never => {
+      throw new Error("literal values cannot query machine identity");
+    });
+    const [server] = await resolveMcpServers(
+      {
+        servers: {
+          docs: { ...bearer, headers: { "X-Literal": "{{machine_id}}" } },
+        },
+      },
+      { TOKEN: "{{machine_id}}" },
+      account,
+      executable,
+      readMachine,
+    );
+    expect(server!.headers).toEqual({
+      "X-Literal": "{{machine_id}}",
+      Authorization: "Bearer {{machine_id}}",
+    });
+    expect(server!.status).toBe("ready");
+    expect(readMachine).not.toHaveBeenCalled();
   });
   it("captures references once without interpreting template-looking secrets", async () => {
     const env = { TOKEN: "{{username}}~!command" };

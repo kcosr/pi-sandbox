@@ -502,6 +502,131 @@ describe("administrative configuration", () => {
     expect(callerEnvironment).toEqual({ HOME: "/caller-home", INHERITED: "~/literal" });
   });
 
+  it("keeps machine-ID macros symbolic during installation validation", async () => {
+    const root = await createRoot();
+    const configPath = rooted(root, SYSTEM_CONFIG_PATH);
+    const source = await readFile(configPath, "utf8");
+    await writeFile(
+      configPath,
+      source
+        .replace("hidden_paths = []", 'hidden_paths = ["/srv/{{machine_id}}"]')
+        .replace("[environment.pi]", '[environment.pi]\nPI_MACHINE_ID = "{{machine_id}}"'),
+    );
+    await writeFile(rooted(root, "/etc/pi-sandbox/models.json"), '{"providers":{}}');
+    // The fixture selects Linux, where resolving this macro would fail.
+    const config = await validateAdministrativeConfiguration(root);
+    expect(config.configVersion).toBe(13);
+    expect(config.filesystem.hiddenPaths).toEqual(["/srv/{{machine_id}}"]);
+    expect(config.environment.pi.PI_MACHINE_ID).toBe("{{machine_id}}");
+  });
+
+  it("resolves one machine identity after broker merging and overrides ambient identity values", async () => {
+    const root = await createRoot();
+    const configPath = rooted(root, SYSTEM_CONFIG_PATH);
+    const source = await readFile(configPath, "utf8");
+    await writeFile(
+      configPath,
+      source
+        .replace('mode = "disabled"', 'mode = "broker"')
+        .replace("hidden_paths = []", 'hidden_paths = ["/srv/{{machine_id}}"]')
+        .replace("[environment.pi]", '[environment.pi]\nPI_MACHINE_ID = "{{machine_id}}"'),
+    );
+    await writeFile(rooted(root, "/etc/pi-sandbox/models.json"), '{"providers":{}}');
+    const machineId = "01234567-89AB-4CDE-8123-456789ABCDEF";
+    const environment = { PI_MACHINE_ID: "ambient", MACHINE_ID: "spoofed", HOME: "/spoofed" };
+    const getMachineId = vi.fn(() => machineId);
+    const getAccount = vi.fn((): never => {
+      throw new Error("machine identity does not require account identity");
+    });
+    const effective = await resolveEffectiveAdministrativeConfiguration(
+      root,
+      environment,
+      () =>
+        Promise.resolve({
+          environment: {
+            pi: { REPEATED: "{{machine_id}}/{{machine_id}}" },
+            sandbox: { DEVICE: "{{machine_id}}" },
+            extensions: { service: { DEVICE: "{{machine_id}}" } },
+          },
+          overrides: { tools: {} },
+        }),
+      SYSTEM_CONFIG_PATH,
+      getAccount,
+      getMachineId,
+    );
+    expect(effective.config.filesystem.hiddenPaths).toEqual([`/srv/${machineId}`]);
+    expect(effective.identityEnvironment).toEqual({
+      pi: { PI_MACHINE_ID: machineId, REPEATED: `${machineId}/${machineId}` },
+      sandbox: { DEVICE: machineId },
+      extensions: { service: { DEVICE: machineId } },
+    });
+    expect(getMachineId).toHaveBeenCalledOnce();
+    expect(getAccount).not.toHaveBeenCalled();
+    expect(environment).toEqual({
+      PI_MACHINE_ID: "ambient",
+      MACHINE_ID: "spoofed",
+      HOME: "/spoofed",
+    });
+  });
+
+  it("does not query a machine macro removed by broker merging", async () => {
+    const root = await createRoot();
+    const configPath = rooted(root, SYSTEM_CONFIG_PATH);
+    const source = await readFile(configPath, "utf8");
+    await writeFile(
+      configPath,
+      source
+        .replace('mode = "disabled"', 'mode = "broker"')
+        .replace("[environment.pi]", '[environment.pi]\nDEVICE = "{{machine_id}}"'),
+    );
+    await writeFile(rooted(root, "/etc/pi-sandbox/models.json"), '{"providers":{}}');
+    const getMachineId = vi.fn((): never => {
+      throw new Error("unused machine lookup must not run");
+    });
+    const effective = await resolveEffectiveAdministrativeConfiguration(
+      root,
+      {},
+      () =>
+        Promise.resolve({
+          environment: { pi: { DEVICE: "literal" }, sandbox: {}, extensions: {} },
+          overrides: { tools: {} },
+        }),
+      SYSTEM_CONFIG_PATH,
+      undefined,
+      getMachineId,
+    );
+    expect(effective.identityEnvironment.pi.DEVICE).toBe("literal");
+    expect(getMachineId).not.toHaveBeenCalled();
+  });
+
+  it("fails before applying managed environment when requested machine identity is unavailable", async () => {
+    const root = await createRoot();
+    const configPath = rooted(root, SYSTEM_CONFIG_PATH);
+    const source = await readFile(configPath, "utf8");
+    await writeFile(
+      configPath,
+      source.replace("[environment.pi]", '[environment.pi]\nPI_MACHINE_ID = "{{machine_id}}"'),
+    );
+    const environment = { PI_MACHINE_ID: "ambient" };
+    await expect(
+      resolveEffectiveAdministrativeConfiguration(
+        root,
+        environment,
+        undefined,
+        SYSTEM_CONFIG_PATH,
+        undefined,
+        () => {
+          throw new Error("Machine identity unavailable");
+        },
+      ),
+    ).rejects.toThrow("Machine identity unavailable");
+    expect(environment).toEqual({ PI_MACHINE_ID: "ambient" });
+    await expect(resolveEffectiveAdministrativeConfiguration(root, environment)).rejects.toThrow(
+      "Unable to resolve the machine ID from the operating system",
+    );
+    expect(environment).toEqual({ PI_MACHINE_ID: "ambient" });
+  });
+
   it("expands home and account macros after merging every broker environment scope", async () => {
     const root = await createRoot();
     const configPath = rooted(root, SYSTEM_CONFIG_PATH);

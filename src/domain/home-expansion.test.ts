@@ -10,6 +10,53 @@ import { MAXIMUM_ADMINISTRATIVE_PATH_BYTES } from "../../packages/sandbox-extens
 
 const account = (homeDirectory: string) => ({ username: "alice", uid: 1001, homeDirectory });
 describe("expandManagedHomePaths", () => {
+  it("shares one lazy machine lookup across paths and configured scopes", () => {
+    const machineId = "12345678-9ABC-5DEF-8123-456789ABCDEF";
+    const machine = vi.fn(() => machineId);
+    const identity = vi.fn(() => account("/Users/alice"));
+    const result = expandManagedHomePaths(
+      {
+        cwdWritable: false,
+        hiddenPaths: ["/private/{{machine_id}}"],
+        deniedPaths: ["/denied/{{machine_id}}"],
+      },
+      parseManagedEnvironment({
+        pi: { MACHINE: "{{machine_id}}" },
+        sandbox: { MACHINE: "{{machine_id}}" },
+        extensions: { service: { MACHINE: "{{machine_id}}" } },
+      }),
+      identity,
+      machine,
+    );
+    expect(result.filesystem.hiddenPaths).toEqual([`/private/${machineId}`]);
+    expect(result.filesystem.deniedPaths).toEqual([`/denied/${machineId}`]);
+    expect(result.environment).toEqual({
+      pi: { MACHINE: machineId },
+      sandbox: { MACHINE: machineId },
+      extensions: { service: { MACHINE: machineId } },
+    });
+    expect(machine).toHaveBeenCalledOnce();
+    expect(identity).not.toHaveBeenCalled();
+  });
+
+  it("does not consult an unavailable machine resolver without an active macro", () => {
+    const machine = vi.fn(() => {
+      throw new Error("Machine ID unavailable");
+    });
+    const result = expandManagedHomePaths(
+      { cwdWritable: true, hiddenPaths: [], deniedPaths: [] },
+      parseManagedEnvironment({
+        pi: { LITERAL: "{{{{machine_id}}}}" },
+        sandbox: {},
+        extensions: {},
+      }),
+      () => account("/Users/alice"),
+      machine,
+    );
+    expect(result.environment.pi.LITERAL).toBe("{{machine_id}}");
+    expect(machine).not.toHaveBeenCalled();
+  });
+
   it("expands immutable Seatbelt denials using the invoking account and rejects collisions", () => {
     const getIdentity = vi.fn(() => account("/Users/alice"));
     const filesystem = {

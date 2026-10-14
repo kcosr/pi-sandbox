@@ -884,7 +884,7 @@ fn valid_environment_scope(variables: &EnvironmentVariables, scope: EnvironmentS
         })
 }
 
-// Validate only: the application resolves the effective account after merging rules.
+// Validate only: the application resolves account/machine values after merging rules.
 fn valid_account_template(value: &str) -> bool {
     let bytes = value.as_bytes();
     let mut offset = 0;
@@ -896,6 +896,8 @@ fn valid_account_template(value: &str) -> bool {
             offset += 12;
         } else if remaining.starts_with(b"{{uid}}") {
             offset += 7;
+        } else if remaining.starts_with(b"{{machine_id}}") {
+            offset += 14;
         } else if remaining.starts_with(b"{{") || remaining.starts_with(b"}}") {
             return false;
         } else {
@@ -1180,31 +1182,48 @@ session_grant = "offer"
     fn validates_account_templates_without_resolving_the_broker_account() {
         for value in [
             "~/{{username}}/{{uid}}",
+            "~/{{machine_id}}/{{username}}",
+            "{{{{machine_id}}}}",
             "{{{{username}}}}",
             "é/{{uid}}",
             "{literal}",
             "{{uid}}}",
         ] {
-            for scope in ["pi", "sandbox", "extensions.service"] {
-                let source =
-                    format!("version = 8\nuid = 7\n[environment.{scope}]\nACCOUNT = {value:?}\n");
-                assert!(parse_user_for_test(source.as_bytes(), 7).is_ok());
+            for (kind, selector) in [
+                (RecordKind::User, "uid = 7"),
+                (RecordKind::Group, "gid = 7"),
+            ] {
+                for scope in ["pi", "sandbox", "extensions.service"] {
+                    let source = format!(
+                        "version = 8\n{selector}\n[environment.{scope}]\nACCOUNT = {value:?}\n"
+                    );
+                    assert!(parse_record(source.as_bytes(), kind).is_ok());
+                }
             }
         }
         for value in [
             "{{unknown}}",
+            "{{machine_id",
+            "{{ machine_id }}",
+            "{{machineId}}",
             "{{username",
             "{{ username }}",
             "value}}",
             "{{{username}}}",
         ] {
-            for scope in ["pi", "sandbox", "extensions.service"] {
-                let source =
-                    format!("version = 8\nuid = 7\n[environment.{scope}]\nACCOUNT = {value:?}\n");
-                assert_eq!(
-                    parse_user_for_test(source.as_bytes(), 7),
-                    Err(LookupError::InvalidFile)
-                );
+            for (kind, selector) in [
+                (RecordKind::User, "uid = 7"),
+                (RecordKind::Group, "gid = 7"),
+            ] {
+                for scope in ["pi", "sandbox", "extensions.service"] {
+                    let source = format!(
+                        "version = 8\n{selector}\n[environment.{scope}]\nACCOUNT = {value:?}\n"
+                    );
+                    assert!(matches!(
+                        parse_record(source.as_bytes(), kind),
+                        Err(LookupError::InvalidFile)
+                    ));
+                }
             }
         }
     }
