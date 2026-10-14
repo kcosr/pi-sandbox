@@ -18,6 +18,7 @@
 
 ### Changed
 
+- Upgrade managed and standalone Pi integration to 1.2.0, preserving configured-only models, MCP approvals and bounded Code Mode execution.
 - Follow Pi's parallel scheduling across backends, isolate command cancellation from peers, and replace implicit timeouts with an optional administrator maximum. ([#30](https://github.com/kcosr/pi-sandbox/pull/30))
 
 ## 0.7.0 - 2026-10-10

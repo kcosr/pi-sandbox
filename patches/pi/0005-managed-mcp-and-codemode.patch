@@ -1,9 +1,18 @@
-diff --git a/packages/codemode/src/runtime/host.ts b/packages/codemode/src/runtime/host.ts
-index 21a9352..49d79d8 100644
---- a/packages/codemode/src/runtime/host.ts
-+++ b/packages/codemode/src/runtime/host.ts
-@@ -106,6 +106,10 @@ interface PendingCall {
- }
+diff --git a/packages/codemode/src/runtime/execution.ts b/packages/codemode/src/runtime/execution.ts
+index 4479e4b..46111ff 100644
+--- a/packages/codemode/src/runtime/execution.ts
++++ b/packages/codemode/src/runtime/execution.ts
+@@ -47,6 +47,8 @@ import {
+ } from "./protocol.ts";
+ 
+ const DEFAULT_TIMEOUT_MS = 300_000;
++const utf8 = new TextEncoder();
++const byteLength = (value: string): number => utf8.encode(value).byteLength;
+ const IDENTIFIER = /^[A-Za-z_$][A-Za-z0-9_$]*$/;
+ const RESERVED_GLOBALS: ReadonlySet<string> = new Set([
+ 	"tools",
+@@ -170,6 +172,10 @@ function checkGlobals(globals: readonly CodemodeDeclaredGlobal[]): void {
+ type Control = Pick<CodemodeRunOptions, "onStarted" | "onCall" | "onIdle">;
  
  interface ExecutionOptions {
 +	awaitToolCleanup?: boolean;
@@ -11,12 +20,13 @@ index 21a9352..49d79d8 100644
 +	maxConcurrentCalls?: number;
 +	maxOutputBytes?: number;
  	code: string;
- 	tools: ReadonlyMap<string, CodemodeTool>;
- 	globals: ReadonlyMap<string, CodemodeTool>;
-@@ -135,11 +139,22 @@ class Execution {
- 	private readonly calls: CodemodeCall[] = [];
- 	private readonly pending = new Map<number, PendingCall>();
- 	private finished = false;
+ 	tools: readonly CodemodeDeclaredTool[];
+ 	globals: readonly CodemodeDeclaredGlobal[];
+@@ -189,6 +195,14 @@ class Execution {
+ 	readonly promise: Promise<CodemodeResult>;
+ 	private resolveResult!: (result: CodemodeResult) => void;
+ 	private channel: VmChannel | undefined;
++	private launching: Promise<void> | undefined;
 +	private readonly awaitToolCleanup: boolean;
 +	private readonly inFlight = new Set<Promise<void>>();
 +	private readonly maxCalls: number;
@@ -24,8 +34,10 @@ index 21a9352..49d79d8 100644
 +	private readonly maxOutputBytes: number;
 +	private callCount = 0;
 +	private outputBytes = 0;
- 
- 	constructor(options: ExecutionOptions) {
+ 	/** Replies produced before the launcher returned the channel. */
+ 	private unsent: HostToWorkerMessage[] = [];
+ 	private readonly executors: ExecutionOptions["executors"];
+@@ -207,6 +221,10 @@ class Execution {
  		this.promise = new Promise<CodemodeResult>((resolve) => {
  			this.resolveResult = resolve;
  		});
@@ -33,14 +45,85 @@ index 21a9352..49d79d8 100644
 +		this.maxCalls = options.maxCalls ?? Number.POSITIVE_INFINITY;
 +		this.maxConcurrentCalls = options.maxConcurrentCalls ?? Number.POSITIVE_INFINITY;
 +		this.maxOutputBytes = options.maxOutputBytes ?? Number.POSITIVE_INFINITY;
- 		this.tools = options.tools;
- 		this.globals = options.globals;
+ 		this.executors = options.executors;
+ 		this.control = options.control;
  		this.signal = options.signal;
-@@ -237,12 +252,24 @@ class Execution {
+@@ -242,19 +260,23 @@ class Execution {
+ 			message: (message) => this.receive(message),
+ 			failure: (error) => this.finish(error),
+ 		};
+-		new Promise<VmChannel>((resolve) => resolve(options.launch(data, events))).then(
+-			(channel) => {
+-				if (this.finished) {
+-					void channel.stop().catch(() => undefined);
+-					return;
+-				}
+-				this.channel = channel;
+-				for (const message of this.unsent.splice(0)) channel.post(message);
+-			},
+-			(error: unknown) => {
+-				this.finish({ kind: "sandbox", message: errorMessage(error) });
+-			},
+-		);
++		// Defer launch until its promise is recorded, so synchronous VM callbacks and
++		// cancellation during asynchronous setup can still await channel teardown.
++		this.launching = Promise.resolve()
++			.then(() => options.launch(data, events))
++			.then(
++				async (channel) => {
++					if (this.finished) {
++						await channel.stop().catch(() => undefined);
++						return;
++					}
++					this.channel = channel;
++					for (const message of this.unsent.splice(0)) channel.post(message);
++				},
++				(error: unknown) => {
++					this.finish({ kind: "sandbox", message: errorMessage(error) });
++				},
++			);
+ 	}
+ 
+ 	/** `CodemodeRun.deliver()`. */
+@@ -273,23 +295,28 @@ class Execution {
+ 			}
+ 		}
+ 		// Serialized before anything is recorded, so a value JSON cannot hold leaves the call waiting for another answer.
+-		const payload = outcome.ok
++		let ok = outcome.ok;
++		let payload = outcome.ok
+ 			? outcome.value === undefined
+ 				? undefined
+ 				: JSON.stringify(outcome.value)
+ 			: outcome.message;
+-		const properties =
+-			!outcome.ok && outcome.properties !== undefined ? JSON.stringify(outcome.properties) : undefined;
++		let properties = !outcome.ok && outcome.properties !== undefined ? JSON.stringify(outcome.properties) : undefined;
++		if (byteLength(payload ?? "") + byteLength(properties ?? "") > this.maxOutputBytes) {
++			ok = false;
++			payload = "Bridge reply exceeds configured byte limit".slice(0, this.maxOutputBytes);
++			properties = undefined;
++		}
+ 		this.delivered.add(seq);
+ 		this.pending.delete(id);
+ 		if (pending.record) {
+-			pending.record.status = outcome.ok ? "ok" : "error";
++			pending.record.status = ok ? "ok" : "error";
+ 			pending.record.durationMs = performance.now() - pending.startedAt;
+ 		}
+ 		this.post({
+ 			type: "result",
+ 			id,
+-			ok: outcome.ok,
++			ok,
+ 			payload,
+ 			seq,
+ 			now,
+@@ -332,13 +359,37 @@ class Execution {
  		if (!isWorkerToHostMessage(message)) throw new BridgeError("unknown message from the worker");
  		switch (message.type) {
  			case "output":
-+				this.outputBytes += Buffer.byteLength(JSON.stringify(message.item));
++				this.outputBytes += byteLength(JSON.stringify(message.item));
 +				if (this.outputBytes > this.maxOutputBytes) {
 +					this.finish({ kind: "sandbox", message: "Script output exceeds configured byte limit" });
 +					return;
@@ -50,45 +133,55 @@ index 21a9352..49d79d8 100644
 -			case "call":
 +			case "call": {
  				if (this.pending.has(message.id)) throw new BridgeError(`duplicate call id ${message.id}`);
--				void this.handleCall(message);
 +				if (++this.callCount > this.maxCalls || this.pending.size >= this.maxConcurrentCalls) {
 +					this.finish({ kind: "sandbox", message: "Script bridge call limit exceeded" });
 +					return;
 +				}
-+				const call = this.handleCall(message);
-+				this.inFlight.add(call);
-+				void call.finally(() => this.inFlight.delete(call));
+ 				if (this.control) this.forwardCall(message, this.control);
+-				else void this.handleCall(message);
++				else {
++					// Record cleanup before invoking a tool: it can synchronously abort
++					// the outer request and still return asynchronous cleanup work.
++					let complete!: () => void;
++					const call = new Promise<void>((resolve) => {
++						complete = resolve;
++					});
++					this.inFlight.add(call);
++					void this.handleCall(message)
++						.catch((error: unknown) => this.finish({ kind: "sandbox", message: errorMessage(error) }))
++						.finally(() => {
++							this.inFlight.delete(call);
++							complete();
++						});
++				}
  				break;
 +			}
- 			case "done":
- 				this.handleDone(message);
+ 			case "started":
+ 				this.control?.onStarted?.(message.fingerprint);
  				break;
-@@ -258,6 +285,16 @@ class Execution {
- 			this.finish(parseScriptError(message.error));
+@@ -360,6 +411,15 @@ class Execution {
+ 			this.finish(parseScriptError(message.error), undefined, undefined, message.during);
  			return;
  		}
-+		// Store's live-state limits do not bound its deletion journal. Check the serialized
-+		// journal before parsing or persisting it, separately from visible script output.
-+		if (Buffer.byteLength(message.writes) > this.maxOutputBytes) {
++		// Bound the deletion journal before parsing it, independently of visible output.
++		if (byteLength(message.writes) > this.maxOutputBytes) {
 +			this.finish({ kind: "sandbox", message: "Script store journal exceeds configured byte limit" });
 +			return;
 +		}
-+		if (Buffer.byteLength(message.value ?? "") + this.outputBytes > this.maxOutputBytes) {
++		if (byteLength(message.value ?? "") + this.outputBytes > this.maxOutputBytes) {
 +			this.finish({ kind: "sandbox", message: "Script output exceeds configured byte limit" });
 +			return;
 +		}
  		const value = message.value === undefined ? undefined : parseBridgeJson(message.value, "return value");
- 		this.finish(undefined, value, parseStoreWrites(message.writes));
+ 		this.finish(undefined, value, parseStoreWrites(message.writes), message.during);
  	}
-@@ -284,6 +321,20 @@ class Execution {
+@@ -397,6 +457,18 @@ class Execution {
  			status = "error";
  		}
  
-+		// Bound each serialized bridge reply, including errors, without charging nested
-+		// data processing against the aggregate emitted/final output budget. Deliver a
-+		// bounded call error the script may handle; termination and awaited cleanup
-+		// remain in the normal VM completion path.
-+		if (Buffer.byteLength(reply.payload ?? "") > this.maxOutputBytes) {
++		// Bound each serialized reply without charging nested data processing against
++		// aggregate script output. Return a bounded error the script may handle.
++		if (byteLength(reply.payload ?? "") > this.maxOutputBytes) {
 +			reply = {
 +				type: "result",
 +				id,
@@ -99,49 +192,49 @@ index 21a9352..49d79d8 100644
 +		}
 +
  		// Already cancelled by finish(): the record keeps "cancelled" and the
- 		// worker is gone or going.
+ 		// VM is gone or going.
  		if (!this.pending.delete(id)) return;
-@@ -316,15 +367,12 @@ class Execution {
- 					calls: this.calls,
+@@ -437,14 +509,12 @@ class Execution {
  					storeWrites: writes ?? { set: {}, delete: [] },
+ 					...ended,
  				};
--		if (!this.worker) {
+-		if (!this.channel) {
 -			this.resolveResult(result);
 -			return;
 -		}
- 		Atomics.store(new Int32Array(this.interrupt), 0, 1);
--		this.worker
--			.terminate()
+-		this.channel
+-			.stop()
 -			.catch(() => undefined)
 -			.then(() => this.resolveResult(result));
-+		// Tool cancellation includes executor/transport cleanup. The outer call must not settle
-+		// while a nested host operation is still cleaning up, even for unawaited script promises.
-+		void Promise.allSettled([...(this.awaitToolCleanup ? this.inFlight : []), this.worker?.terminate()]).then(() =>
++		// A managed result includes nested transport/executor cleanup, even for
++		// unawaited script promises or a VM that is still being launched.
++		const cleanup = this.channel?.stop() ?? this.launching;
++		void Promise.allSettled([...(this.awaitToolCleanup ? this.inFlight : []), cleanup]).then(() =>
 +			this.resolveResult(result),
 +		);
  	}
  }
  
-@@ -340,6 +388,10 @@ class Execution {
- export class CodemodeSandbox {
+@@ -460,6 +530,10 @@ class Execution {
+ export class CodemodeSandboxBase {
  	private readonly toolsByName = new Map<string, CodemodeTool>();
  	private readonly globalsByName = new Map<string, CodemodeTool>();
 +	private readonly limits: Pick<
-+		CodemodeSandboxOptions,
++		CodemodeSandboxBaseOptions,
 +		"maxCalls" | "maxConcurrentCalls" | "maxOutputBytes" | "awaitToolCleanup" | "rejectToolAliases"
 +	>;
  	private readonly timeoutMs: number;
  	private readonly memoryLimitBytes: number | undefined;
- 	private readonly wasm: CodemodeWasmModule | Promise<CodemodeWasmModule> | undefined;
-@@ -348,6 +400,7 @@ export class CodemodeSandbox {
+ 	private readonly launch: VmLauncher;
+@@ -467,6 +541,7 @@ export class CodemodeSandboxBase {
  	private closed = false;
  
- 	constructor(options: CodemodeSandboxOptions = {}) {
+ 	constructor(options: CodemodeSandboxBaseOptions, launch: VmLauncher) {
 +		this.limits = options;
  		this.timeoutMs = options.timeoutMs ?? DEFAULT_TIMEOUT_MS;
  		this.memoryLimitBytes = options.memoryLimitBytes;
- 		this.wasm = options.wasm;
-@@ -371,6 +424,12 @@ export class CodemodeSandbox {
+ 		this.launch = launch;
+@@ -478,6 +553,12 @@ export class CodemodeSandboxBase {
  	/** Throws if a tool with the same name is already registered. */
  	registerTool(tool: CodemodeTool): void {
  		if (this.toolsByName.has(tool.name)) throw new Error(`Tool "${tool.name}" is already registered`);
@@ -154,41 +247,49 @@ index 21a9352..49d79d8 100644
  		this.toolsByName.set(tool.name, tool);
  	}
  
-@@ -394,6 +453,7 @@ export class CodemodeSandbox {
- 	execute(code: string, options: CodemodeExecuteOptions = {}): Promise<CodemodeResult> {
+@@ -502,6 +583,7 @@ export class CodemodeSandboxBase {
  		if (this.closed) return Promise.reject(new Error("Sandbox is closed"));
+ 		const tools = new Map(this.toolsByName);
  		const execution = new Execution({
 +			...this.limits,
  			code,
- 			tools: new Map(this.toolsByName),
- 			globals: this.globalsByName,
+ 			tools: [...tools.values()],
+ 			globals: [...this.globalsByName.values()],
+@@ -542,6 +624,7 @@ export class CodemodeSandboxBase {
+ 		const globals = options.globals ?? [];
+ 		checkGlobals(globals);
+ 		const execution = new Execution({
++			...this.limits,
+ 			code,
+ 			tools,
+ 			globals,
 diff --git a/packages/codemode/src/types.ts b/packages/codemode/src/types.ts
-index b59f819..461d3b5 100644
+index cb1f0e0..417e7ed 100644
 --- a/packages/codemode/src/types.ts
 +++ b/packages/codemode/src/types.ts
-@@ -92,6 +92,14 @@ export type CodemodeResult =
- 	| { ok: false; error: CodemodeError; output: CodemodeOutputItem[]; calls: CodemodeCall[] };
+@@ -110,6 +110,13 @@ export type CodemodeResult =
  
- export interface CodemodeSandboxOptions {
-+	rejectToolAliases?: boolean;
-+	/** Wait for aborted tool implementations to finish local cleanup. */
+ /** Options every sandbox accepts, wherever its VM runs. */
+ export interface CodemodeSandboxBaseOptions {
++	/** Await canceled host tool operations before resolving an execution. */
 +	awaitToolCleanup?: boolean;
-+	/** Optional host-side limits, covering tool and helper bridge calls together. */
++	/** Reject tools sharing a normalized script identifier. */
++	rejectToolAliases?: boolean;
 +	maxCalls?: number;
 +	maxConcurrentCalls?: number;
-+	/** Aggregate emitted/final output and each serialized bridge reply or store journal. */
 +	maxOutputBytes?: number;
  	tools?: CodemodeTool[];
  	/**
  	 * Functions exposed as top-level identifiers instead of on `tools`, for host helpers such as
 diff --git a/packages/codemode/test/managed-limits.test.ts b/packages/codemode/test/managed-limits.test.ts
 new file mode 100644
-index 0000000..b6cbb33
+index 0000000..e5d06a3
 --- /dev/null
 +++ b/packages/codemode/test/managed-limits.test.ts
-@@ -0,0 +1,175 @@
-+import { afterEach, describe, expect, it } from "vitest";
+@@ -0,0 +1,264 @@
++import { afterEach, describe, expect, it, vi } from "vitest";
 +import { CodemodeSandbox } from "../src/index.ts";
++import { CodemodeSandboxBase, type VmChannel, type VmEvents } from "../src/runtime/execution.ts";
 +
 +const sandboxes: CodemodeSandbox[] = [];
 +afterEach(async () => {
@@ -362,11 +463,99 @@ index 0000000..b6cbb33
 +		expect(await sandbox.execute("await import('node:fs');")).toMatchObject({ ok: false });
 +	});
 +});
++
++describe("shared execution lifecycle", () => {
++	it.each(["abort", "deadline"])("waits for delayed VM launch teardown after %s", async (reason) => {
++		const controller = new AbortController();
++		let start!: (channel: VmChannel) => void;
++		let stopped = false;
++		const sandbox = new CodemodeSandboxBase(
++			{ awaitToolCleanup: true, timeoutMs: reason === "deadline" ? 20 : 3000 },
++			() =>
++				new Promise((resolve) => {
++					start = resolve;
++				}),
++		);
++		const result = sandbox.execute("return 1", { signal: controller.signal });
++		let settled = false;
++		void result.then(() => {
++			settled = true;
++		});
++		await vi.waitFor(() => expect(start).toBeDefined());
++		if (reason === "abort") controller.abort();
++		else await new Promise((resolve) => setTimeout(resolve, 30));
++		expect(settled).toBe(false);
++		start({
++			post: () => {},
++			stop: async () => {
++				await new Promise((resolve) => setTimeout(resolve, 20));
++				stopped = true;
++			},
++		});
++		expect(await result).toMatchObject({ ok: false, error: { kind: reason === "abort" ? "aborted" : "timeout" } });
++		expect(stopped).toBe(true);
++		await sandbox.close();
++	});
++
++	it("waits for cleanup when host tool code synchronously aborts the outer request", async () => {
++		const controller = new AbortController();
++		let cleaned = false;
++		const sandbox = create({
++			awaitToolCleanup: true,
++			tools: [
++				{
++					name: "abort",
++					execute: () => {
++						controller.abort();
++						return new Promise((resolve) =>
++							setTimeout(() => {
++								cleaned = true;
++								resolve(null);
++							}, 30),
++						);
++					},
++				},
++			],
++		});
++		expect(await sandbox.execute("await tools.abort();", { signal: controller.signal })).toMatchObject({
++			ok: false,
++			error: { kind: "aborted" },
++		});
++		expect(cleaned).toBe(true);
++	});
++
++	it("enforces shared call and reply bounds for host-controlled runs", async () => {
++		let events!: VmEvents;
++		const sent: unknown[] = [];
++		const onCall = vi.fn();
++		const sandbox = new CodemodeSandboxBase({ maxCalls: 1, maxOutputBytes: 64 }, (_data, callbacks) => {
++			events = callbacks;
++			return {
++				post: (message) => {
++					sent.push(message);
++				},
++				stop: async () => {},
++			};
++		});
++		const run = sandbox.start("", { startedAt: 0, seed: 1, onCall });
++		await vi.waitFor(() => expect(events).toBeDefined());
++		events.message({ type: "call", id: 1, target: "tool", name: "echo", args: "{}" });
++		run.deliver(1, 0, 1, { ok: false, message: "small", properties: { data: "é".repeat(64) } });
++		expect(sent).toMatchObject([
++			{ type: "result", ok: false, payload: "Bridge reply exceeds configured byte limit" },
++		]);
++		expect(sent[0]).not.toHaveProperty("properties");
++		events.message({ type: "call", id: 2, target: "global", name: "discover", args: "{}" });
++		expect(await run.result).toMatchObject({ ok: false, error: { message: "Script bridge call limit exceeded" } });
++		expect(onCall).toHaveBeenCalledOnce();
++		await sandbox.close();
++	});
++});
 diff --git a/packages/coding-agent/src/extensions/codemode/execute.ts b/packages/coding-agent/src/extensions/codemode/execute.ts
-index 3aafd61..2433bd7 100644
+index fb0c67e..c953fb6 100644
 --- a/packages/coding-agent/src/extensions/codemode/execute.ts
 +++ b/packages/coding-agent/src/extensions/codemode/execute.ts
-@@ -373,6 +373,7 @@ async function saveImages(items: (TextContent | ImageContent)[]): Promise<(TextC
+@@ -394,6 +394,7 @@ async function saveImages(items: (TextContent | ImageContent)[]): Promise<(TextC
  async function truncateOutput(
  	items: (TextContent | ImageContent)[],
  	maxTokens: number,
@@ -374,7 +563,7 @@ index 3aafd61..2433bd7 100644
  ): Promise<{ items: (TextContent | ImageContent)[]; fullOutputPath?: string }> {
  	const texts = items.filter((item): item is TextContent => item.type === "text").map((item) => item.text);
  	const combined = texts.join("\n");
-@@ -384,7 +385,9 @@ async function truncateOutput(
+@@ -405,7 +406,9 @@ async function truncateOutput(
  	const head = combined.slice(0, headChars);
  	const tail = tailChars > 0 ? combined.slice(-tailChars) : "";
  	let text = `Warning: truncated output (original token count: ${Math.ceil(combined.length / CHARS_PER_TOKEN)})\nTotal output lines: ${combined.split("\n").length}\n\n${head}…${Math.ceil(removed / CHARS_PER_TOKEN)} tokens truncated…${tail}`;
@@ -385,7 +574,7 @@ index 3aafd61..2433bd7 100644
  	text +=
  		"path" in spilled
  			? `\n\n[Full output: ${spilled.path} (read with offset/limit)]`
-@@ -422,6 +425,9 @@ export async function executeCodemode(
+@@ -443,6 +446,9 @@ export async function executeCodemode(
  	options: CodemodeToolOptions = {},
  ): Promise<AgentToolResult<CodemodeToolDetails>> {
  	const startedAt = performance.now();
@@ -395,7 +584,7 @@ index 3aafd61..2433bd7 100644
  	const { code, options: sourceOptions } = parseCodemodeSource(input.code);
  	const calls: CodemodeNestedCall[] = [];
  	// Usage of the script's `models.*` calls. Nested tool calls report theirs through the session.
-@@ -481,7 +487,15 @@ export async function executeCodemode(
+@@ -504,7 +510,15 @@ export async function executeCodemode(
  				? createModelGlobals(ctx.modelRegistry, toolCallId, calls, publish, addModelUsage, addGeneratedImages)
  				: []),
  		],
@@ -412,7 +601,7 @@ index 3aafd61..2433bd7 100644
  		memoryLimitBytes: CODEMODE_MEMORY_LIMIT_BYTES,
  		wasm: loadQuickJSWasm(getQuickJSWasmPath()),
  		workerUrl: getCodemodeWorkerSpecifier(),
-@@ -520,13 +534,15 @@ export async function executeCodemode(
+@@ -543,13 +557,15 @@ export async function executeCodemode(
  	const truncated = await truncateOutput(
  		joinAdjacentText(items),
  		sourceOptions.maxOutputTokens ?? DEFAULT_MAX_OUTPUT_TOKENS,
@@ -430,12 +619,12 @@ index 3aafd61..2433bd7 100644
  	return {
  		content: [{ type: "text", text: header }, ...output],
 diff --git a/packages/coding-agent/src/extensions/codemode/index.ts b/packages/coding-agent/src/extensions/codemode/index.ts
-index b883520..e8cae56 100644
+index 67492b6..d83749d 100644
 --- a/packages/coding-agent/src/extensions/codemode/index.ts
 +++ b/packages/coding-agent/src/extensions/codemode/index.ts
-@@ -8,9 +8,10 @@
- 
+@@ -9,9 +9,10 @@
  import type { ExtensionAPI, ExtensionFactory } from "../../core/extensions/types.ts";
+ import { SETTINGS_DEFAULTS } from "../../core/settings-defaults.ts";
  import type { CodemodeMode } from "../../core/settings-manager.ts";
 -import { createCodemodeToolDefinition } from "./tool.ts";
 +import { type CodemodeExecutionLimits, createCodemodeToolDefinition } from "./tool.ts";
@@ -445,7 +634,7 @@ index b883520..e8cae56 100644
  	/** Overrides the `codemode.mode` setting. */
  	mode?: CodemodeMode;
  	/** Overrides the `codemode.inlineBudget` setting. */
-@@ -30,8 +31,21 @@ function readInlineBudget(pi: ExtensionAPI): number | undefined {
+@@ -31,8 +32,21 @@ function readInlineBudget(pi: ExtensionAPI): number | undefined {
  
  export function createCodemodeExtension(options: CodemodeExtensionOptions = {}): ExtensionFactory {
  	return (pi) => {
@@ -468,7 +657,7 @@ index b883520..e8cae56 100644
  				appendEntry: (customType, data) => pi.appendEntry(customType, data),
  				models: options.models ?? true,
  				getToolNamespace: (name) => pi.getAllTools().find((tool) => tool.name === name)?.namespace,
-@@ -41,6 +55,23 @@ export function createCodemodeExtension(options: CodemodeExtensionOptions = {}):
+@@ -42,6 +56,23 @@ export function createCodemodeExtension(options: CodemodeExtensionOptions = {}):
  				getInlineBudget: () => options.inlineBudget ?? readInlineBudget(pi),
  			}),
  			defaultActive: false,
@@ -493,10 +682,10 @@ index b883520..e8cae56 100644
  	};
  }
 diff --git a/packages/coding-agent/src/extensions/codemode/tool.ts b/packages/coding-agent/src/extensions/codemode/tool.ts
-index ae8285a..28ad8f7 100644
+index b55a117..8b02996 100644
 --- a/packages/coding-agent/src/extensions/codemode/tool.ts
 +++ b/packages/coding-agent/src/extensions/codemode/tool.ts
-@@ -63,7 +63,17 @@ export type CodemodeModelRuntime = Pick<
+@@ -52,7 +52,17 @@ export type CodemodeModelRuntime = Pick<
  	"getModelsOfType" | "getAvailableOfType" | "getModelOfType" | "classify" | "generateImages"
  >;
  
@@ -514,7 +703,7 @@ index ae8285a..28ad8f7 100644
  	/** Namespace of a tool, for `searchTools()` ranking and its `namespace` filter. */
  	getToolNamespace?: (toolName: string) => ToolNamespace | undefined;
  	/** Prompt guidelines of every tool, by tool name, shown with declarations by `describeTool()` and `ALL_TOOLS`. */
-@@ -119,6 +129,8 @@ export interface CodemodeNestedCall {
+@@ -100,6 +110,8 @@ export interface CodemodeNestedCall {
  }
  
  export interface CodemodeToolDetails {
@@ -524,7 +713,7 @@ index ae8285a..28ad8f7 100644
  	/** Temp file with the full text output, when the output was truncated. */
  	fullOutputPath?: string;
 diff --git a/packages/coding-agent/src/extensions/mcp/index.ts b/packages/coding-agent/src/extensions/mcp/index.ts
-index 43e2ece..01843b1 100644
+index 8a97d7f..e121ad7 100644
 --- a/packages/coding-agent/src/extensions/mcp/index.ts
 +++ b/packages/coding-agent/src/extensions/mcp/index.ts
 @@ -27,6 +27,7 @@
@@ -582,7 +771,7 @@ index 43e2ece..01843b1 100644
  	/** Defaults to reading `mcp.json` from the agent directory and the trusted project. */
  	loadConfig?: (ctx: ExtensionContext) => LoadedMcpConfig;
  	/** Defaults to stdio and streamable HTTP transports built from the server config. */
-@@ -279,6 +313,16 @@ const MCP_USAGE = "Usage: /mcp, /mcp login [server], /mcp logout [server], /mcp
+@@ -278,6 +312,16 @@ const MCP_USAGE = "Usage: /mcp, /mcp login [server], /mcp logout [server], /mcp
  
  export function createMcpExtension(options: McpExtensionOptions = {}): ExtensionFactory {
  	return (pi: ExtensionAPI) => {
@@ -599,7 +788,7 @@ index 43e2ece..01843b1 100644
  		let servers: McpServer[] = [];
  		/** Servers from `mcp.json`, which take precedence over registered servers of the same name. */
  		let configuredEntries: McpServerEntry[] = [];
-@@ -344,6 +388,7 @@ export function createMcpExtension(options: McpExtensionOptions = {}): Extension
+@@ -343,6 +387,7 @@ export function createMcpExtension(options: McpExtensionOptions = {}): Extension
  
  		/** Servers extensions registered, except names `mcp.json` defines, which take precedence. */
  		const registeredServers = (): { servers: McpServer[]; overridden: string[] } => {
@@ -607,7 +796,7 @@ index 43e2ece..01843b1 100644
  			const registered: McpServer[] = [];
  			const overriddenNames: string[] = [];
  			for (const { name, config, extensionPath } of pi.getMcpServers()) {
-@@ -377,7 +422,7 @@ export function createMcpExtension(options: McpExtensionOptions = {}): Extension
+@@ -376,7 +421,7 @@ export function createMcpExtension(options: McpExtensionOptions = {}): Extension
  		/** Tool names currently offered by each server. */
  		const serverTools = new Map<string, Set<string>>();
  		/** Last definition registered under each tool name, to re-register withdrawn tools as hidden. */
@@ -616,7 +805,7 @@ index 43e2ece..01843b1 100644
  
  		// A resumed session renders calls to MCP tools before their server connected, if it ever does.
  		pi.registerToolRenderer((toolName, next) => {
-@@ -414,6 +459,7 @@ export function createMcpExtension(options: McpExtensionOptions = {}): Extension
+@@ -415,6 +460,7 @@ export function createMcpExtension(options: McpExtensionOptions = {}): Extension
  				current.add(name);
  				return name;
  			};
@@ -624,7 +813,7 @@ index 43e2ece..01843b1 100644
  			for (const tool of connection.tools) {
  				const definition = createMcpToolDefinition({
  					server,
-@@ -423,6 +469,8 @@ export function createMcpExtension(options: McpExtensionOptions = {}): Extension
+@@ -424,6 +470,8 @@ export function createMcpExtension(options: McpExtensionOptions = {}): Extension
  					namespace,
  					timeoutMs: connection.timeoutMs,
  					getClient: async () => {
@@ -633,7 +822,7 @@ index 43e2ece..01843b1 100644
  						// A prepared call can outlive this definition's connection while the readiness
  						// hook waits for a disable/re-enable. Resolve the replacement at execution time.
  						const current = findServer(server);
-@@ -438,7 +486,15 @@ export function createMcpExtension(options: McpExtensionOptions = {}): Extension
+@@ -439,7 +487,15 @@ export function createMcpExtension(options: McpExtensionOptions = {}): Extension
  						return client;
  					},
  					readableResources: () => resourceServers().some((current) => current.name === server),
@@ -649,7 +838,7 @@ index 43e2ece..01843b1 100644
  				definitions.set(definition.name, definition);
  				pi.registerTool(definition);
  			}
-@@ -477,6 +533,7 @@ export function createMcpExtension(options: McpExtensionOptions = {}): Extension
+@@ -478,6 +534,7 @@ export function createMcpExtension(options: McpExtensionOptions = {}): Extension
  		 * one of them is direct, and so on. They are hidden when no server has resources.
  		 */
  		const syncResourceTools = () => {
@@ -657,7 +846,7 @@ index 43e2ece..01843b1 100644
  			const exposures = new Set(serversWithResources().map((server) => exposureOf(server.entry)));
  			const exposure = (["direct", "codemode", "deferred"] as const).find((candidate) => exposures.has(candidate));
  			const next = exposure ?? "hidden";
-@@ -541,7 +598,13 @@ export function createMcpExtension(options: McpExtensionOptions = {}): Extension
+@@ -544,7 +601,13 @@ export function createMcpExtension(options: McpExtensionOptions = {}): Extension
  			const url = connection.oauthUrl;
  			return url && credentials ? JSON.stringify(credentials.tokens(connection.name, url) ?? null) : "null";
  		};
@@ -671,7 +860,7 @@ index 43e2ece..01843b1 100644
  			if (connection.state !== "needs-auth") tokensAtSignIn.delete(connection);
  			else if (!tokensAtSignIn.has(connection)) tokensAtSignIn.set(connection, storedTokens(connection));
  			emitChange();
-@@ -566,9 +629,14 @@ export function createMcpExtension(options: McpExtensionOptions = {}): Extension
+@@ -569,9 +632,14 @@ export function createMcpExtension(options: McpExtensionOptions = {}): Extension
  				entry: server.entry,
  				cwd: sessionCwd,
  				createTransport: options.createTransport ?? runtime.createDefaultTransport,
@@ -689,7 +878,7 @@ index 43e2ece..01843b1 100644
  				onTools: (connection) => {
  					if (isCurrent()) registerTools(connection);
  				},
-@@ -638,15 +706,17 @@ export function createMcpExtension(options: McpExtensionOptions = {}): Extension
+@@ -641,15 +709,17 @@ export function createMcpExtension(options: McpExtensionOptions = {}): Extension
  		 * that connected later.
  		 */
  		const reportProblems = (ctx: ExtensionContext, only?: readonly McpServer[]) => {
@@ -710,7 +899,7 @@ index 43e2ece..01843b1 100644
  				"warning",
  			);
  		};
-@@ -655,17 +725,32 @@ export function createMcpExtension(options: McpExtensionOptions = {}): Extension
+@@ -658,17 +728,32 @@ export function createMcpExtension(options: McpExtensionOptions = {}): Extension
  		 * Save a config change; returns an error message when the file could not be updated. Changes to
  		 * registered servers only apply to the current session. `inProject` adds a project override.
  		 */
@@ -748,7 +937,7 @@ index 43e2ece..01843b1 100644
  			return undefined;
  		};
  
-@@ -727,7 +812,7 @@ export function createMcpExtension(options: McpExtensionOptions = {}): Extension
+@@ -730,7 +815,7 @@ export function createMcpExtension(options: McpExtensionOptions = {}): Extension
  				await ready;
  				return undefined;
  			} catch (error) {
@@ -757,7 +946,7 @@ index 43e2ece..01843b1 100644
  			}
  		};
  
-@@ -737,10 +822,11 @@ export function createMcpExtension(options: McpExtensionOptions = {}): Extension
+@@ -740,10 +825,11 @@ export function createMcpExtension(options: McpExtensionOptions = {}): Extension
  			enabled: boolean,
  			inProject = false,
  		): Promise<string | undefined> => {
@@ -770,7 +959,7 @@ index 43e2ece..01843b1 100644
  				server.attempt = undefined;
  				server.connection = undefined;
  				if (connection) {
-@@ -762,8 +848,8 @@ export function createMcpExtension(options: McpExtensionOptions = {}): Extension
+@@ -765,8 +851,8 @@ export function createMcpExtension(options: McpExtensionOptions = {}): Extension
  			return undefined;
  		};
  
@@ -781,7 +970,7 @@ index 43e2ece..01843b1 100644
  			if (failed) return failed;
  			if (server.connection?.state === "connected") registerTools(server.connection);
  			syncResourceTools();
-@@ -785,8 +871,8 @@ export function createMcpExtension(options: McpExtensionOptions = {}): Extension
+@@ -788,8 +874,8 @@ export function createMcpExtension(options: McpExtensionOptions = {}): Extension
  		// ---------------------------------------------------------------------------------------
  
  		const notices = () => [
@@ -792,7 +981,7 @@ index 43e2ece..01843b1 100644
  		];
  
  		const serversMenu = (): McpMenu => ({
-@@ -797,9 +883,11 @@ export function createMcpExtension(options: McpExtensionOptions = {}): Extension
+@@ -800,9 +886,11 @@ export function createMcpExtension(options: McpExtensionOptions = {}): Extension
  				.map((server) => ({
  					value: server.entry.name,
  					label: server.entry.name,
@@ -806,7 +995,7 @@ index 43e2ece..01843b1 100644
  			confirmLabel: "manage",
  			cancelLabel: "close",
  		});
-@@ -816,8 +904,9 @@ export function createMcpExtension(options: McpExtensionOptions = {}): Extension
+@@ -819,8 +907,9 @@ export function createMcpExtension(options: McpExtensionOptions = {}): Extension
  				};
  			}
  			const { entry, connection } = server;
@@ -818,7 +1007,7 @@ index 43e2ece..01843b1 100644
  					? "for this session"
  					: entry.override
  						? "saved to the project mcp.json"
-@@ -825,7 +914,7 @@ export function createMcpExtension(options: McpExtensionOptions = {}): Extension
+@@ -828,7 +917,7 @@ export function createMcpExtension(options: McpExtensionOptions = {}): Extension
  							? `saved to the ${entry.scope} mcp.json`
  							: "saved to mcp.json";
  			// Global servers without an override can be turned on or off for the trusted project alone.
@@ -827,7 +1016,7 @@ index 43e2ece..01843b1 100644
  			const inProjectSaved = "saved to the project mcp.json";
  			const items: SelectItem[] = [];
  			if (!isEnabled(server)) {
-@@ -835,7 +924,7 @@ export function createMcpExtension(options: McpExtensionOptions = {}): Extension
+@@ -838,7 +927,7 @@ export function createMcpExtension(options: McpExtensionOptions = {}): Extension
  				}
  			} else {
  				const state = connection?.state;
@@ -836,7 +1025,7 @@ index 43e2ece..01843b1 100644
  					items.push({ value: "signin", label: "Sign in", description: "opens the browser" });
  				if (state === "connected" && connection) {
  					items.push({ value: "tools", label: "Tools", description: `${connection.tools.length} offered` });
-@@ -843,22 +932,36 @@ export function createMcpExtension(options: McpExtensionOptions = {}): Extension
+@@ -846,22 +935,36 @@ export function createMcpExtension(options: McpExtensionOptions = {}): Extension
  				if (state === "failed" || state === "disconnected" || state === "connected" || state === "needs-auth") {
  					items.push({ value: "reconnect", label: "Reconnect" });
  				}
@@ -880,7 +1069,7 @@ index 43e2ece..01843b1 100644
  				.filter((line): line is string => line !== undefined)
  				.join("\n");
  			return {
-@@ -881,10 +984,12 @@ export function createMcpExtension(options: McpExtensionOptions = {}): Extension
+@@ -884,10 +987,12 @@ export function createMcpExtension(options: McpExtensionOptions = {}): Extension
  				items: (server.connection?.tools ?? []).map((tool) => {
  					const toolExposure = getMcpToolExposure(server.entry.config, tool.name);
  					const description = firstLine(tool.description ?? "");
@@ -895,7 +1084,7 @@ index 43e2ece..01843b1 100644
  					};
  				}),
  				empty: "The server offers no tools.",
-@@ -895,16 +1000,19 @@ export function createMcpExtension(options: McpExtensionOptions = {}): Extension
+@@ -898,16 +1003,19 @@ export function createMcpExtension(options: McpExtensionOptions = {}): Extension
  
  		const chooseExposure = async (ui: McpUi, server: McpServer): Promise<string | undefined> => {
  			const current = exposureOf(server.entry);
@@ -919,7 +1108,7 @@ index 43e2ece..01843b1 100644
  				})),
  				selected: current,
  				confirmLabel: "save",
-@@ -938,25 +1046,33 @@ export function createMcpExtension(options: McpExtensionOptions = {}): Extension
+@@ -941,25 +1049,33 @@ export function createMcpExtension(options: McpExtensionOptions = {}): Extension
  			);
  		};
  
@@ -957,7 +1146,7 @@ index 43e2ece..01843b1 100644
  			const { signal } = session;
  			let message: string | undefined;
  			switch (action) {
-@@ -1013,12 +1129,13 @@ export function createMcpExtension(options: McpExtensionOptions = {}): Extension
+@@ -1016,12 +1132,13 @@ export function createMcpExtension(options: McpExtensionOptions = {}): Extension
  
  		const formatStatus = (): string => {
  			if (servers.length === 0 && configErrors.length === 0 && overridden.length === 0) {
@@ -972,7 +1161,7 @@ index 43e2ece..01843b1 100644
  				if (connection?.state === "needs-auth")
  					return `${name}: needs sign-in, run /mcp login ${name} (${exposure})`;
  				const tools = connection?.state === "connected" ? `, ${connection.tools.length} tools` : "";
-@@ -1033,8 +1150,9 @@ export function createMcpExtension(options: McpExtensionOptions = {}): Extension
+@@ -1036,8 +1153,9 @@ export function createMcpExtension(options: McpExtensionOptions = {}): Extension
  						: "";
  				return `${name}: ${state}${tools} (${exposure})${error}`;
  			});
@@ -984,7 +1173,7 @@ index 43e2ece..01843b1 100644
  			return lines.join("\n");
  		};
  
-@@ -1142,7 +1260,10 @@ export function createMcpExtension(options: McpExtensionOptions = {}): Extension
+@@ -1145,7 +1263,10 @@ export function createMcpExtension(options: McpExtensionOptions = {}): Extension
  				.catch((error: unknown) => {
  					// The session may have been disposed meanwhile, which makes ctx stale.
  					try {
@@ -996,7 +1185,7 @@ index 43e2ece..01843b1 100644
  					} catch {}
  				});
  		});
-@@ -1173,6 +1294,21 @@ export function createMcpExtension(options: McpExtensionOptions = {}): Extension
+@@ -1176,6 +1297,21 @@ export function createMcpExtension(options: McpExtensionOptions = {}): Extension
  		// Every prompt lists the servers in the `mcp_servers` section as they are when it starts. Pi
  		// appends the section to the conversation when it changed, for example after a server connected.
  		pi.on("before_agent_start", async (event, ctx) => {
@@ -1018,7 +1207,7 @@ index 43e2ece..01843b1 100644
  			await waitForDirectServers(ctx);
  			const { sections } = event.systemPromptOptions;
  			const section = renderServersSection(servers);
-@@ -1213,7 +1349,7 @@ export function createMcpExtension(options: McpExtensionOptions = {}): Extension
+@@ -1216,7 +1352,7 @@ export function createMcpExtension(options: McpExtensionOptions = {}): Extension
  		// Servers registered or unregistered during the session connect or disconnect right away.
  		pi.on("mcp_servers_change", async (_event, ctx) => {
  			const { signal } = session;
@@ -1027,7 +1216,7 @@ index 43e2ece..01843b1 100644
  			const registered = registeredServers();
  			overridden = registered.overridden;
  			const next = new Map(registered.servers.map((server) => [server.entry.name, server]));
-@@ -1239,7 +1375,10 @@ export function createMcpExtension(options: McpExtensionOptions = {}): Extension
+@@ -1242,7 +1378,10 @@ export function createMcpExtension(options: McpExtensionOptions = {}): Extension
  					return;
  				}
  			} catch (error) {
@@ -1039,7 +1228,7 @@ index 43e2ece..01843b1 100644
  				return;
  			}
  			if (signal.aborted) return;
-@@ -1249,22 +1388,27 @@ export function createMcpExtension(options: McpExtensionOptions = {}): Extension
+@@ -1252,22 +1391,27 @@ export function createMcpExtension(options: McpExtensionOptions = {}): Extension
  		pi.on("session_shutdown", async () => {
  			session.abort();
  			const closing = connections();
@@ -1069,7 +1258,7 @@ index 43e2ece..01843b1 100644
  				const items = servers
  					.filter((candidate) =>
  						action === "reconnect" ? candidate.connection !== undefined : usesOAuth(candidate),
-@@ -1273,7 +1417,7 @@ export function createMcpExtension(options: McpExtensionOptions = {}): Extension
+@@ -1276,7 +1420,7 @@ export function createMcpExtension(options: McpExtensionOptions = {}): Extension
  					.map((candidate) => ({
  						value: `${action} ${candidate.entry.name}`,
  						label: candidate.entry.name,
@@ -1078,7 +1267,7 @@ index 43e2ece..01843b1 100644
  					}));
  				return items.length > 0 ? items : null;
  			},
-@@ -1287,8 +1431,8 @@ export function createMcpExtension(options: McpExtensionOptions = {}): Extension
+@@ -1290,8 +1434,8 @@ export function createMcpExtension(options: McpExtensionOptions = {}): Extension
  					}
  					return;
  				}
@@ -1089,7 +1278,7 @@ index 43e2ece..01843b1 100644
  					return;
  				}
  				await pending;
-@@ -1323,14 +1467,14 @@ export function createMcpExtension(options: McpExtensionOptions = {}): Extension
+@@ -1326,14 +1470,14 @@ export function createMcpExtension(options: McpExtensionOptions = {}): Extension
  						else {
  							ensureDiscoveryActive(ctx);
  							ctx.ui.notify(
@@ -1107,10 +1296,10 @@ index 43e2ece..01843b1 100644
  			},
  		});
 diff --git a/packages/coding-agent/src/extensions/mcp/runtime.ts b/packages/coding-agent/src/extensions/mcp/runtime.ts
-index 0c42f79..6706ed9 100644
+index f13d21b..9380d84 100644
 --- a/packages/coding-agent/src/extensions/mcp/runtime.ts
 +++ b/packages/coding-agent/src/extensions/mcp/runtime.ts
-@@ -171,6 +171,10 @@ export class McpServerConnection implements McpToolCaller, McpResourceServer {
+@@ -152,6 +152,10 @@ export class McpServerConnection implements McpToolCaller, McpResourceServer {
  	challenge: OAuthChallenge | undefined;
  	private client: McpClient | undefined;
  	private opening: Promise<McpClient> | undefined;
@@ -1121,7 +1310,7 @@ index 0c42f79..6706ed9 100644
  	/** Aborted by `close()`; cancels a connect in progress, including the wait between retries. */
  	private readonly shutdown = new AbortController();
  	/** Stderr of the last stdio server that failed to connect. */
-@@ -186,7 +190,9 @@ export class McpServerConnection implements McpToolCaller, McpResourceServer {
+@@ -167,7 +171,9 @@ export class McpServerConnection implements McpToolCaller, McpResourceServer {
  		entry: McpServerEntry;
  		cwd: string;
  		createTransport: McpTransportFactory;
@@ -1132,7 +1321,7 @@ index 0c42f79..6706ed9 100644
  		/** The current token of a pi provider, for servers with `auth.provider`. */
  		providerToken?: (provider: string) => Promise<string | undefined>;
  		onTools: (connection: McpServerConnection) => void;
-@@ -195,6 +201,8 @@ export class McpServerConnection implements McpToolCaller, McpResourceServer {
+@@ -176,6 +182,8 @@ export class McpServerConnection implements McpToolCaller, McpResourceServer {
  		/** Receives the server's log messages (`notifications/message`). */
  		log?: McpServerLog;
  	}) {
@@ -1141,7 +1330,7 @@ index 0c42f79..6706ed9 100644
  		this.entry = options.entry;
  		this.cwd = options.cwd;
  		this.createTransport = options.createTransport;
-@@ -202,11 +210,11 @@ export class McpServerConnection implements McpToolCaller, McpResourceServer {
+@@ -183,11 +191,11 @@ export class McpServerConnection implements McpToolCaller, McpResourceServer {
  		this.onChange = options.onChange;
  		this.log = options.log;
  		const url = this.oauthUrl;
@@ -1155,7 +1344,7 @@ index 0c42f79..6706ed9 100644
  					settings: () => this.oauthSettings(),
  					onChallenge: (challenge) => {
  						this.challenge = challenge;
-@@ -232,7 +240,9 @@ export class McpServerConnection implements McpToolCaller, McpResourceServer {
+@@ -213,7 +221,9 @@ export class McpServerConnection implements McpToolCaller, McpResourceServer {
  
  	/** Server URL when the server authenticates with OAuth. */
  	get oauthUrl(): string | undefined {
@@ -1166,7 +1355,7 @@ index 0c42f79..6706ed9 100644
  	}
  
  	oauthSettings(): McpOAuthSettings {
-@@ -262,8 +272,20 @@ export class McpServerConnection implements McpToolCaller, McpResourceServer {
+@@ -243,8 +253,20 @@ export class McpServerConnection implements McpToolCaller, McpResourceServer {
  		return this.opening;
  	}
  
@@ -1189,7 +1378,7 @@ index 0c42f79..6706ed9 100644
  	}
  
  	readResource(uri: string, options: McpRequestOptions): Promise<ReadResourceResult> {
-@@ -352,14 +374,20 @@ export class McpServerConnection implements McpToolCaller, McpResourceServer {
+@@ -333,14 +355,20 @@ export class McpServerConnection implements McpToolCaller, McpResourceServer {
  	}
  
  	private async dropClient(client: McpClient): Promise<void> {
@@ -1212,7 +1401,7 @@ index 0c42f79..6706ed9 100644
  		for (let attempt = 0; ; attempt++) {
  			this.stderrTail = undefined;
  			try {
-@@ -379,8 +407,10 @@ export class McpServerConnection implements McpToolCaller, McpResourceServer {
+@@ -360,8 +388,10 @@ export class McpServerConnection implements McpToolCaller, McpResourceServer {
  		const client = new McpClient({
  			name: "pi",
  			version: VERSION,
@@ -1225,7 +1414,7 @@ index 0c42f79..6706ed9 100644
  		});
  		const log = this.log;
  		if (log) client.onNotification("notifications/message", (params) => log.write(this.entry.name, params));
-@@ -391,6 +421,7 @@ export class McpServerConnection implements McpToolCaller, McpResourceServer {
+@@ -372,6 +402,7 @@ export class McpServerConnection implements McpToolCaller, McpResourceServer {
  			closing ??= client.close().catch(() => undefined);
  			return closing;
  		};
@@ -1233,26 +1422,16 @@ index 0c42f79..6706ed9 100644
  		this.shutdown.signal.addEventListener("abort", closeClient, { once: true });
  		let transport: McpTransport | undefined;
  		try {
-@@ -399,13 +430,14 @@ export class McpServerConnection implements McpToolCaller, McpResourceServer {
- 			client.onNotification("notifications/tools/list_changed", () => {
- 				void this.refreshTools(client);
- 			});
--			client.onNotification("notifications/resources/list_changed", () => {
--				void this.refreshResources(client);
--			});
-+			if (!this.toolsOnly)
-+				client.onNotification("notifications/resources/list_changed", () => {
-+					void this.refreshResources(client);
-+				});
- 			const stdio = transport instanceof StdioTransport ? transport : undefined;
- 			client.onClose(() => this.handleClientClose(client, stdio));
- 			// Servers without the tools capability (prompts or resources only) do not answer tools/list.
--			const hasResources = client.serverCapabilities?.resources !== undefined;
-+			const hasResources = !this.toolsOnly && client.serverCapabilities?.resources !== undefined;
- 			const [tools, resources] = await Promise.all([
- 				client.serverCapabilities?.tools ? client.listTools() : [],
- 				hasResources ? fetchResources(client) : { resources: [], resourceTemplates: [] },
-@@ -428,8 +460,10 @@ export class McpServerConnection implements McpToolCaller, McpResourceServer {
+@@ -388,7 +419,7 @@ export class McpServerConnection implements McpToolCaller, McpResourceServer {
+ 			if (client.connectionState !== "connected") throw new Error("connection closed during setup");
+ 			this.client = client;
+ 			this.tools = tools;
+-			this.hasResources = client.serverCapabilities?.resources !== undefined;
++			this.hasResources = !this.toolsOnly && client.serverCapabilities?.resources !== undefined;
+ 			this.instructions = client.instructions?.trim() || undefined;
+ 			this.state = "connected";
+ 			this.error = undefined;
+@@ -400,8 +431,10 @@ export class McpServerConnection implements McpToolCaller, McpResourceServer {
  			if (transport instanceof StdioTransport) {
  				this.stderrTail = transport.stderr.trim().slice(-STDERR_TAIL_CHARS) || undefined;
  			}
@@ -1263,7 +1442,7 @@ index 0c42f79..6706ed9 100644
  			this.shutdown.signal.removeEventListener("abort", closeClient);
  		}
  	}
-@@ -456,13 +490,27 @@ export class McpServerConnection implements McpToolCaller, McpResourceServer {
+@@ -428,13 +461,27 @@ export class McpServerConnection implements McpToolCaller, McpResourceServer {
  	}
  
  	private async refreshTools(client: McpClient): Promise<void> {
@@ -1293,10 +1472,10 @@ index 0c42f79..6706ed9 100644
  		this.changed();
  	}
 diff --git a/packages/coding-agent/src/extensions/mcp/tools.ts b/packages/coding-agent/src/extensions/mcp/tools.ts
-index ca4da96..0275bcb 100644
+index 63f95db..80bdbe1 100644
 --- a/packages/coding-agent/src/extensions/mcp/tools.ts
 +++ b/packages/coding-agent/src/extensions/mcp/tools.ts
-@@ -123,7 +123,7 @@ export function createMcpResultSchema(structuredContentSchema: Record<string, un
+@@ -179,7 +179,7 @@ export function createMcpResultSchema(structuredContentSchema: Record<string, un
   */
  export async function limitMcpContent(
  	content: (TextContent | ImageContent)[],
@@ -1305,7 +1484,7 @@ index ca4da96..0275bcb 100644
  ): Promise<{ content: (TextContent | ImageContent)[]; fullOutputPath?: string }> {
  	const combined = textOf(content);
  	const truncation = truncateMiddle(combined, MCP_OUTPUT_MAX_BYTES);
-@@ -131,6 +131,7 @@ export async function limitMcpContent(
+@@ -187,6 +187,7 @@ export async function limitMcpContent(
  	let fullOutputPath: string | undefined;
  	let where: string;
  	try {
@@ -1313,7 +1492,7 @@ index ca4da96..0275bcb 100644
  		fullOutputPath = await saveOutput(combined, ".txt");
  		where = `[Full output: ${fullOutputPath} (read it with offset/limit)]`;
  	} catch (error) {
-@@ -145,6 +146,7 @@ export async function limitMcpContent(
+@@ -201,6 +202,7 @@ export async function limitMcpContent(
  }
  
  export interface ConvertMcpResultOptions {
@@ -1321,7 +1500,7 @@ index ca4da96..0275bcb 100644
  	/** Saves truncated text and binary resources. Default: a temp file. */
  	saveOutput?: McpOutputSaver;
  	/** Whether the server's resources can be read with `read_mcp_resource`, which resource links then name. */
-@@ -186,6 +188,8 @@ async function blockToContent(
+@@ -242,6 +244,8 @@ async function blockToContent(
  		const data = Buffer.from(blob, "base64");
  		if (isTextMimeType(mimeType)) return [{ type: "text", text: data.toString("utf8") }];
  		const kind = `${mimeType ?? "unknown type"}, ${formatSize(data.length)}`;
@@ -1330,7 +1509,7 @@ index ca4da96..0275bcb 100644
  		try {
  			const path = await (options.saveOutput ?? saveToTempFile)(data, extensionOf(uri));
  			return [{ type: "text", text: `[Binary resource ${uri} (${kind}) saved to ${path}]` }];
-@@ -219,7 +223,7 @@ export async function convertMcpResult(
+@@ -275,7 +279,7 @@ export async function convertMcpResult(
  	if (result.isError && textOf(converted) === "") {
  		converted.push({ type: "text", text: `MCP tool ${server}/${tool} returned an error` });
  	}
@@ -1339,7 +1518,7 @@ index ca4da96..0275bcb 100644
  	const { _meta: _ignored, ...scriptResult } = result;
  	return {
  		content,
-@@ -260,6 +264,7 @@ export function createMcpToolDefinition(options: {
+@@ -316,6 +320,7 @@ export function createMcpToolDefinition(options: {
  	exposure: McpExposure;
  	namespace: ToolNamespace;
  	timeoutMs: number;
@@ -1347,7 +1526,7 @@ index ca4da96..0275bcb 100644
  	getClient: () => Promise<McpToolCaller>;
  	/** Whether `read_mcp_resource` can read the server's resources. */
  	readableResources?: () => boolean;
-@@ -289,7 +294,10 @@ export function createMcpToolDefinition(options: {
+@@ -345,7 +350,10 @@ export function createMcpToolDefinition(options: {
  					onUpdate?.({ content: [{ type: "text", text }], details: { server, tool: tool.name } });
  				},
  			});
@@ -1361,10 +1540,10 @@ index ca4da96..0275bcb 100644
  }
 diff --git a/packages/coding-agent/test/managed-mcp-codemode.test.ts b/packages/coding-agent/test/managed-mcp-codemode.test.ts
 new file mode 100644
-index 0000000..180be28
+index 0000000..48e8398
 --- /dev/null
 +++ b/packages/coding-agent/test/managed-mcp-codemode.test.ts
-@@ -0,0 +1,728 @@
+@@ -0,0 +1,750 @@
 +import { LATEST_PROTOCOL_VERSION, McpSessionExpiredError, type Tool } from "@earendil-works/pi-mcp";
 +import { createInMemoryTransportPair } from "@earendil-works/pi-mcp/testing";
 +import { afterEach, describe, expect, it, vi } from "vitest";
@@ -1646,6 +1825,20 @@ index 0000000..180be28
 +		await handlers.get("session_shutdown")?.({}, ctx);
 +	});
 +
++	it.each([{ value: [1, 2] }, { value: "value" }, { value: 42 }, { value: true }, { value: null }])(
++		"preserves non-object structured content %j in inline results",
++		async ({ value: structuredContent }) => {
++			const result = await convertMcpResult(
++				"docs",
++				"value",
++				{ content: [], structuredContent },
++				{ inlineOnly: true },
++			);
++			expect(result.structuredContent).toEqual({ content: [], structuredContent });
++			expect(result.content).toEqual([{ type: "text", text: JSON.stringify(structuredContent, null, 2) }]);
++		},
++	);
++
 +	it("keeps large text and binary result handling inline without invoking a saver", async () => {
 +		const saveOutput = vi.fn();
 +		const result = await convertMcpResult(
@@ -1727,6 +1920,7 @@ index 0000000..180be28
 +			},
 +		})(pi);
 +		expect(definition).toBeDefined();
++		expect(definition!.reachesTools?.({ code: "return await searchTools({ query: 'docs' });" })).toBe("all");
 +		await expect(
 +			definition!.execute("long", { code: " ".repeat(1025) }, undefined, undefined, undefined as never),
 +		).rejects.toThrow("source exceeds");
@@ -1827,7 +2021,10 @@ index 0000000..180be28
 +			},
 +			registerTool: (tool: ToolDefinition) => definitions.set(tool.name, tool),
 +			registerToolRenderer: () => {},
-+			getAllTools: () => [...definitions.values(), { name: "codemode", parameters: codemodeSchema }],
++			getAllTools: () => [
++				...definitions.values(),
++				{ name: "codemode", parameters: codemodeSchema, reachesTools: () => "all" },
++			],
 +			getActiveTools: () => active,
 +			setActiveTools: (names: string[]) => {
 +				active = names;
@@ -2055,6 +2252,10 @@ index 0000000..180be28
 +		expect(state.published.at(-1)?.exposure).toBe("codemode");
 +		// Stock MCP codemode exposure uses deferred tool metadata for script discovery.
 +		expect(state.definitions.get("mcp__docs__echo")?.exposure).toBe("deferred");
++		expect(state.definitions.get("mcp__docs__echo")?.namespace).toMatchObject({
++			name: "mcp__docs",
++			aliases: ["docs"],
++		});
 +		expect(state.active()).toContain("codemode");
 +	});
 +
@@ -2094,7 +2295,7 @@ index 0000000..180be28
 +	});
 +});
 diff --git a/packages/mcp/src/client.ts b/packages/mcp/src/client.ts
-index 6199ed6..1a33d32 100644
+index 90997aa..37d5155 100644
 --- a/packages/mcp/src/client.ts
 +++ b/packages/mcp/src/client.ts
 @@ -45,6 +45,8 @@ type CloseListener = () => void;
@@ -2106,7 +2307,7 @@ index 6199ed6..1a33d32 100644
  	capabilities?: ClientCapabilities;
  	protocolVersion?: SupportedProtocolVersion;
  	requestTimeoutMs?: number;
-@@ -361,8 +363,17 @@ export class McpClient {
+@@ -363,8 +365,17 @@ export class McpClient {
  		const items: Record<string, unknown>[] = [];
  		const cursors = new Set<string>();
  		let cursor: string | undefined;
@@ -2125,7 +2326,7 @@ index 6199ed6..1a33d32 100644
  			items.push(...page.items);
  			if (page.nextCursor === undefined) return items;
  			if (cursors.has(page.nextCursor))
-@@ -370,7 +381,7 @@ export class McpClient {
+@@ -372,7 +383,7 @@ export class McpClient {
  			cursors.add(page.nextCursor);
  			cursor = page.nextCursor;
  		}
@@ -2134,7 +2335,7 @@ index 6199ed6..1a33d32 100644
  	}
  
  	async callTool(
-@@ -533,7 +544,7 @@ export class McpClient {
+@@ -538,7 +549,7 @@ export class McpClient {
  		const requestId = this.progressRequests.get(params.progressToken);
  		const entry = requestId === undefined ? undefined : this.pending.get(requestId);
  		if (requestId === undefined || !entry) return;
@@ -2201,10 +2402,10 @@ index 26479ac..cd62fb4 100644
  			return;
  		}
 diff --git a/packages/mcp/src/transports/streamable-http.ts b/packages/mcp/src/transports/streamable-http.ts
-index 6624651..9e2aee0 100644
+index af9c922..661690f 100644
 --- a/packages/mcp/src/transports/streamable-http.ts
 +++ b/packages/mcp/src/transports/streamable-http.ts
-@@ -243,7 +243,9 @@ export class StreamableHttpTransport extends TransportEvents implements McpTrans
+@@ -253,7 +253,9 @@ export class StreamableHttpTransport extends TransportEvents implements McpTrans
  		}
  		const type = contentType(response);
  		if (type === "application/json") {
@@ -2215,7 +2416,7 @@ index 6624651..9e2aee0 100644
  			for (const item of Array.isArray(body) ? body : [body]) this.emitMessage(parseJsonRpcMessage(item));
  			return;
  		}
-@@ -322,7 +324,7 @@ export class StreamableHttpTransport extends TransportEvents implements McpTrans
+@@ -338,7 +340,7 @@ export class StreamableHttpTransport extends TransportEvents implements McpTrans
  
  	private async checkResponse(response: Response): Promise<void> {
  		if (response.ok) return;
@@ -2224,7 +2425,7 @@ index 6624651..9e2aee0 100644
  		if (response.status === 401) throw new McpAuthRequiredError(response, body);
  		if (response.status === 404 && this.sessionIdValue) throw new McpSessionExpiredError(body);
  		throw new McpHttpError(response.status, describeHttpFailure(response.status, body), body);
-@@ -503,3 +505,35 @@ export class StreamableHttpTransport extends TransportEvents implements McpTrans
+@@ -519,3 +521,35 @@ export class StreamableHttpTransport extends TransportEvents implements McpTrans
  		});
  	}
  }

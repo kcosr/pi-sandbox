@@ -24,10 +24,10 @@ application versions:
 
 | Build                                            | Example display                     |
 | ------------------------------------------------ | ----------------------------------- |
-| Clean checkout at the matching product tag       | `1.1.0+ps.0.7.0`                    |
-| Untagged Git checkout                            | `1.1.0+ps.0.7.0.dev.gabcdef0`       |
-| Modified Git checkout                            | `1.1.0+ps.0.7.0.dev.gabcdef0.dirty` |
-| Source execution or a build without Git metadata | `1.1.0+ps.0.7.0.dev.source`         |
+| Clean checkout at the matching product tag       | `1.2.0+ps.0.7.0`                    |
+| Untagged Git checkout                            | `1.2.0+ps.0.7.0.dev.gabcdef0`       |
+| Modified Git checkout                            | `1.2.0+ps.0.7.0.dev.gabcdef0.dirty` |
+| Source execution or a build without Git metadata | `1.2.0+ps.0.7.0.dev.source`         |
 
 Only a clean checkout at `v0.7.0` produces the release display for product
 version `0.7.0`. Build identity is embedded at build time; launching the
@@ -35,7 +35,7 @@ application does not query Git. The combined value is a display identifier,
 not the product's release number. Use the product version and tag for release
 ordering; SemVer build metadata does not affect precedence.
 
-Pi's internal version remains `1.1.0`, including its update and changelog
+Pi's internal version remains `1.2.0`, including its update and changelog
 comparisons. Ordinary Pi using the reusable extension keeps its own version
 display.
 

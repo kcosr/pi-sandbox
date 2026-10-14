@@ -2,7 +2,7 @@
 
 A standard Pi extension providing `git_clone({ repository })`. It works alone
 or alongside `@kcosr/pi-sandbox-extension`; neither package requires the other.
-It targets Pi 1.1.0 and Node.js 24+ on Linux or macOS, with `/usr/bin/git` and,
+It targets Pi 1.2.0 and Node.js 24+ on Linux or macOS, with `/usr/bin/git` and,
 when SSH is allowed, `/usr/bin/ssh` available.
 
 ## Standalone use

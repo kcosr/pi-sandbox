@@ -25,10 +25,10 @@ index 9266ddb..e0056ed 100644
  		modelsStore: new InMemoryCodingAgentModelsStore(),
  		allowModelNetwork: false,
 diff --git a/packages/coding-agent/src/core/model-runtime.ts b/packages/coding-agent/src/core/model-runtime.ts
-index 81acdbb..709a682 100644
+index 7c1dc82..256de7a 100644
 --- a/packages/coding-agent/src/core/model-runtime.ts
 +++ b/packages/coding-agent/src/core/model-runtime.ts
-@@ -121,8 +121,12 @@ export interface CreateModelRuntimeOptions {
+@@ -122,8 +122,12 @@ export interface CreateModelRuntimeOptions {
  	signal?: AbortSignal;
  	/** Skip initial catalog and availability refresh. Static models remain available. */
  	refreshOnCreate?: boolean;
@@ -41,7 +41,7 @@ index 81acdbb..709a682 100644
  export interface ModelRuntimeAuthOverrides extends AuthOperationOptions {
  	apiKey?: string;
  	env?: Record<string, string>;
-@@ -181,6 +185,7 @@ export class ModelRuntime implements Models {
+@@ -182,6 +186,7 @@ export class ModelRuntime implements Models {
  	private readonly compositionErrors = new Map<string, string>();
  	private readonly modelsPath: string | undefined;
  	private readonly modelNetworkEnabled: boolean;
@@ -49,7 +49,7 @@ index 81acdbb..709a682 100644
  	private config: ModelConfig;
  	private snapshot: ModelRuntimeSnapshot = {
  		all: [],
-@@ -202,11 +207,13 @@ export class ModelRuntime implements Models {
+@@ -203,11 +208,13 @@ export class ModelRuntime implements Models {
  		modelsStore: ModelsStore,
  		providers: readonly Provider[],
  		modelNetworkEnabled: boolean,
@@ -63,16 +63,16 @@ index 81acdbb..709a682 100644
  		this.defaultBuiltins = new Map(providers.map((provider) => [provider.id, provider]));
  		for (const [providerId, provider] of this.defaultBuiltins) this.builtins.set(providerId, provider);
  		this.models = createModels({ credentials, modelsStore });
-@@ -227,7 +234,7 @@ export class ModelRuntime implements Models {
- 		const providers = builtinProviderCatalog
- 			.builtinProviders()
- 			.map((provider) =>
--				provider.id === "radius"
-+				options.includeBuiltinCatalog === false || provider.id === "radius"
- 					? provider
- 					: withRemoteCatalog(provider, options.catalogBaseUrl, builtinModelDataGeneratedAt),
- 			);
-@@ -238,6 +245,7 @@ export class ModelRuntime implements Models {
+@@ -226,7 +233,7 @@ export class ModelRuntime implements Models {
+ 				: new InMemoryCodingAgentModelsStore());
+ 		const builtinModelDataGeneratedAt = builtinProviderCatalog.getBuiltinModelDataGeneratedAt();
+ 		const providers = builtinProviderCatalog.builtinProviders().map((provider) => {
+-			if (provider.id === "radius") return provider;
++			if (options.includeBuiltinCatalog === false || provider.id === "radius") return provider;
+ 			// OpenRouter narrows the catalog to the models, limits and prices of the user's key.
+ 			if (provider.id === "openrouter") {
+ 				return withPersonalizedCatalog(
+@@ -245,6 +252,7 @@ export class ModelRuntime implements Models {
  			modelsStore,
  			providers,
  			process.env.PI_OFFLINE === undefined,
@@ -80,7 +80,7 @@ index 81acdbb..709a682 100644
  		);
  		runtime.configureRadiusProviders();
  		runtime.rebuildProviders();
-@@ -279,7 +287,7 @@ export class ModelRuntime implements Models {
+@@ -286,7 +294,7 @@ export class ModelRuntime implements Models {
  
  	private providerIds(): Set<string> {
  		return new Set([
@@ -89,7 +89,7 @@ index 81acdbb..709a682 100644
  			...this.nativeExtensionProviders.keys(),
  			...this.config.getProviderIds(),
  			...this.extensionProviders.keys(),
-@@ -299,20 +307,24 @@ export class ModelRuntime implements Models {
+@@ -306,20 +314,24 @@ export class ModelRuntime implements Models {
  
  	/** The provider without virtual models, or undefined when nothing defines it. */
  	private composeProvider(providerId: string): Provider | undefined {
@@ -169,10 +169,10 @@ index 94bd2ba..4ebef63 100644
  										models: refreshed,
  									});
 diff --git a/packages/coding-agent/src/index.ts b/packages/coding-agent/src/index.ts
-index 3a25f85..3b13460 100644
+index bd48684..fc3c188 100644
 --- a/packages/coding-agent/src/index.ts
 +++ b/packages/coding-agent/src/index.ts
-@@ -232,6 +232,7 @@ export {
+@@ -234,6 +234,7 @@ export {
  	type CredentialSynchronizationOperation,
  	ModelRuntime,
  	type ModelRuntimeAuthOverrides,
@@ -181,7 +181,7 @@ index 3a25f85..3b13460 100644
  export type {
  	PackageManager,
 diff --git a/packages/coding-agent/src/main.ts b/packages/coding-agent/src/main.ts
-index dea9e15..b758b6b 100644
+index 0710ed9..5e23dba 100644
 --- a/packages/coding-agent/src/main.ts
 +++ b/packages/coding-agent/src/main.ts
 @@ -5,6 +5,7 @@
@@ -239,7 +239,7 @@ index dea9e15..b758b6b 100644
  }
  
  export async function main(args: string[], options?: MainOptions) {
-@@ -579,7 +584,7 @@ export async function main(args: string[], options?: MainOptions) {
+@@ -581,7 +586,7 @@ export async function main(args: string[], options?: MainOptions) {
  		process.env.PI_SKIP_VERSION_CHECK = "1";
  	}
  
@@ -248,7 +248,7 @@ index dea9e15..b758b6b 100644
  		return;
  	}
  
-@@ -746,10 +751,18 @@ export async function main(args: string[], options?: MainOptions) {
+@@ -748,10 +753,18 @@ export async function main(args: string[], options?: MainOptions) {
  				parsed.projectTrustOverride ??
  				(!hasTrustRequiringResources || trustStore.get(cwd) === true));
  		const runtimeSettingsManager = SettingsManager.create(cwd, agentDir, { projectTrusted });
@@ -434,14 +434,14 @@ index 0000000..04def0a
 +});
 diff --git a/packages/coding-agent/test/managed-model-runtime.test.ts b/packages/coding-agent/test/managed-model-runtime.test.ts
 new file mode 100644
-index 0000000..8976712
+index 0000000..e9ec190
 --- /dev/null
 +++ b/packages/coding-agent/test/managed-model-runtime.test.ts
-@@ -0,0 +1,128 @@
+@@ -0,0 +1,232 @@
 +import { mkdirSync, rmSync, writeFileSync } from "node:fs";
 +import { tmpdir } from "node:os";
 +import { join } from "node:path";
-+import { InMemoryModelsStore } from "@earendil-works/pi-ai";
++import { type AnyModel, InMemoryModelsStore } from "@earendil-works/pi-ai";
 +import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 +import { AuthStorage } from "../src/core/auth-storage.ts";
 +import { ModelRuntime } from "../src/core/model-runtime.ts";
@@ -457,6 +457,8 @@ index 0000000..8976712
 +	});
 +
 +	afterEach(() => {
++		vi.restoreAllMocks();
++		vi.unstubAllEnvs();
 +		rmSync(tempDir, { recursive: true, force: true });
 +	});
 +
@@ -475,6 +477,7 @@ index 0000000..8976712
 +		writeFileSync(
 +			modelsPath,
 +			JSON.stringify({
++				$schema: "https://pi.dev/schemas/models.json",
 +				providers: {
 +					openai: {
 +						api: "openai-responses",
@@ -536,6 +539,107 @@ index 0000000..8976712
 +		} finally {
 +			fetch.mockRestore();
 +		}
++	});
++
++	test("keeps OpenRouter personalized caches and key changes outside the administrative catalog", async () => {
++		// Exercise the new key-personalized path with a cache containing every supported model type.
++		const cached: AnyModel[] = [
++			{
++				id: "cached-chat",
++				name: "Cached chat",
++				provider: "openrouter",
++				api: "openai-completions",
++				baseUrl: "https://example.invalid/v1",
++				input: ["text"],
++				reasoning: false,
++				contextWindow: 1000,
++				maxTokens: 100,
++				cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
++			},
++			{
++				type: "image",
++				id: "cached-image",
++				name: "Cached image",
++				provider: "openrouter",
++				api: "openrouter-images",
++				baseUrl: "https://example.invalid/v1",
++				input: ["text"],
++				output: ["image"],
++				cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
++			},
++			{
++				type: "classifier",
++				id: "cached-classifier",
++				name: "Cached classifier",
++				provider: "openrouter",
++				api: "test-classifier",
++				baseUrl: "https://example.invalid/v1",
++				input: ["text"],
++				contextWindow: 1000,
++				cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
++			},
++		];
++		const modelsStore = new InMemoryModelsStore();
++		await modelsStore.write("openrouter", { models: cached, lastModified: Date.now() });
++		const credentials = AuthStorage.inMemory({ openrouter: { type: "api_key", key: "stored-key" } });
++		const ordinary = await ModelRuntime.create({
++			credentials,
++			modelsStore,
++			modelsPath: null,
++			refreshOnCreate: false,
++		});
++		await ordinary.refresh({ allowNetwork: false, providers: ["openrouter"] });
++		expect(ordinary.getAllModels("openrouter").map((model) => model.id)).toEqual(cached.map((model) => model.id));
++
++		writeFileSync(
++			modelsPath,
++			JSON.stringify({
++				providers: {
++					openrouter: {
++						api: "openai-completions",
++						baseUrl: "https://example.invalid/v1",
++						models: [{ id: "managed-chat" }],
++					},
++				},
++			}),
++		);
++		const read = vi.spyOn(modelsStore, "read");
++		const write = vi.spyOn(modelsStore, "write");
++		const fetch = vi.spyOn(globalThis, "fetch").mockRejectedValue(new Error("Unexpected catalog request"));
++		vi.stubEnv("PI_OFFLINE", undefined);
++		const runtime = await ModelRuntime.create({
++			credentials,
++			modelsStore,
++			modelsPath,
++			includeBuiltinCatalog: false,
++			allowModelNetwork: true,
++		});
++		const expectManaged = () => {
++			expect(runtime.getError()).toBeUndefined();
++			expect(runtime.getAllModels().map((model) => `${model.provider}/${model.id}`)).toEqual([
++				"openrouter/managed-chat",
++			]);
++			expect(runtime.getModelsOfType("image")).toEqual([]);
++			expect(runtime.getModelsOfType("classifier")).toEqual([]);
++		};
++		expectManaged();
++		for (const key of ["first-key", "second-key"]) {
++			await runtime.setRuntimeApiKey("openrouter", key);
++			await expect(runtime.getAuth("openrouter")).resolves.toMatchObject({ auth: { apiKey: key } });
++			await runtime.refresh({ allowNetwork: true, force: true, providers: ["openrouter"] });
++			expectManaged();
++		}
++		await runtime.removeRuntimeApiKey("openrouter");
++		await expect(runtime.getAuth("openrouter")).resolves.toMatchObject({ auth: { apiKey: "stored-key" } });
++		await runtime.refresh({ allowNetwork: true, force: true });
++		expectManaged();
++		writeFileSync(modelsPath, JSON.stringify({ providers: {} }));
++		await runtime.refresh({ allowNetwork: true, providers: ["openrouter"] });
++		expect(runtime.getProvider("openrouter")).toBeUndefined();
++		expect(runtime.getAllModels()).toEqual([]);
++		expect(read).not.toHaveBeenCalled();
++		expect(write).not.toHaveBeenCalled();
++		expect(fetch).not.toHaveBeenCalled();
 +	});
 +
 +	test("does not expose builtin models for a missing or invalid administrative catalog", async () => {

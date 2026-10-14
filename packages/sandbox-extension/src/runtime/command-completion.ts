@@ -8,7 +8,7 @@ export interface CommandExit {
 }
 
 /**
- * Match Pi 1.1.0's utils/child-process.ts idle drain: after foreground exit,
+ * Match Pi 1.2.0's utils/child-process.ts idle drain: after foreground exit,
  * each output chunk restarts the grace period. A fixed post-exit deadline
  * would truncate active output (upstream issue #5303). The worker's ordinary
  * timeout and output limits remain responsible for bounding a noisy descendant.
