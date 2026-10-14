@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Support `bearer_token_from_env` for HTTP MCP bearer credentials without requiring a preformatted Authorization environment value.
+
 - Follow Pi's parallel tool scheduling across backends, isolate command cancellation from peers, and replace implicit command timeouts with an optional administrator maximum. Managed configuration is now version 13 and standalone sandbox configuration version 6; obsolete process-lifetime fields are rejected.
 
 ### Breaking changes

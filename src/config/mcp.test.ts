@@ -79,11 +79,48 @@ describe("MCP administrative configuration", () => {
       { match: "*", mode: "disabled", sessionGrant: "never", audit: false },
     ]);
   });
+  it("accepts a bearer environment reference alongside other HTTP headers", () => {
+    expect(
+      parse({
+        ...http,
+        bearer_token_from_env: "DOCS_TOKEN",
+        headers: { "X-Account": "shared" },
+        headers_from_env: { "X-Api-Key": "API_KEY" },
+      }),
+    ).toMatchObject({
+      bearerTokenFromEnv: "DOCS_TOKEN",
+      headers: { "X-Account": "shared" },
+      headersFromEnv: { "X-Api-Key": "API_KEY" },
+    });
+  });
+  it.each(["headers", "headers_from_env"])(
+    "rejects conflicting Authorization in %s even for disabled servers",
+    (field) => {
+      for (const name of ["Authorization", "authorization", "AUTHORIZATION", "AuThOrIzAtIoN"])
+        expect(() =>
+          parse({
+            ...http,
+            enabled: false,
+            bearer_token_from_env: "DOCS_TOKEN",
+            [field]: { [name]: "OTHER_TOKEN" },
+          }),
+        ).toThrow("conflicts with an Authorization header");
+    },
+  );
+  it.each(["", "Bearer TOKEN", "${TOKEN}", "!command", "NODE_OPTIONS", "a".repeat(129), 1, null])(
+    "rejects invalid bearer environment reference %#",
+    (value) => {
+      expect(() => parse({ ...http, bearer_token_from_env: value })).toThrow(
+        "bearer_token_from_env must be an environment variable name",
+      );
+    },
+  );
   it.each([
     { ...http, command: "/usr/bin/server" },
     { ...http, url: "https://mcp.example/{{username}}" },
     { ...http, url: "https://mcp.example/mcp?uid={{uid}}" },
     { ...stdio, url: "https://mcp.example" },
+    { ...stdio, bearer_token_from_env: "TOKEN" },
     { ...http, unknown: true },
     { ...http, enabled: "yes" },
     { ...http, exposure: "both" },
