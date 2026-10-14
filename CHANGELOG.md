@@ -21,6 +21,10 @@
 - Upgrade managed and standalone Pi integration to 1.2.0, preserving configured-only models, MCP approvals and bounded Code Mode execution.
 - Follow Pi's parallel scheduling across backends, isolate command cancellation from peers, and replace implicit timeouts with an optional administrator maximum. ([#30](https://github.com/kcosr/pi-sandbox/pull/30))
 
+### Fixed
+
+- Exclude stock Pi tool implementations from managed sessions so tool selection and MCP catalog refresh cannot restore policy-disabled tools.
+
 ## 0.7.0 - 2026-10-10
 
 ### Breaking changes
@@ -41,7 +45,6 @@
 
 ### Fixed
 
-- Exclude stock Pi tool implementations from managed sessions so tool selection and MCP catalog refresh cannot restore policy-disabled tools.
 - Update four development dependency resolutions to address denial-of-service advisories in lint/test tooling. ([#23](https://github.com/kcosr/pi-sandbox/pull/23))
 - Retire OCI families when terminal opening detects a lost VM identity, and report each terminal cleanup failure once. ([#22](https://github.com/kcosr/pi-sandbox/pull/22))
 
