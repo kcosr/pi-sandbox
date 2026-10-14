@@ -1,7 +1,7 @@
 import { chmod, mkdtemp, realpath, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { createBubblewrapExecutor } from "./bubblewrap-executor.js";
 import type { SandboxExecutor, SandboxResourceLimits } from "./contracts.js";
@@ -153,6 +153,24 @@ process.stdin.on("data", chunk => {
     expect(JSON.parse((await next).stdout.toString()) as unknown).toMatchObject({
       argv: ["/bin/printf", "original"],
     });
+  });
+
+  it("snapshots callbacks and removes the originally registered signal listener", async () => {
+    const backend = await create();
+    const original = new AbortController();
+    const replacement = new AbortController();
+    const remove = vi.spyOn(original.signal, "removeEventListener");
+    const onStdout = vi.fn();
+    const replacedStdout = vi.fn();
+    const options = { signal: original.signal, onStdout };
+    const running = backend.execute({ argv: ["/bin/true"] }, options);
+    options.signal = replacement.signal;
+    options.onStdout = replacedStdout;
+    expect((await running).exitCode).toBe(0);
+    expect(onStdout).toHaveBeenCalledOnce();
+    expect(replacedStdout).not.toHaveBeenCalled();
+    expect(remove).toHaveBeenCalledWith("abort", expect.any(Function));
+    remove.mockRestore();
   });
 
   it("cancels one active request without rejecting a peer or future requests", async () => {

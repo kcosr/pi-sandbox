@@ -219,7 +219,6 @@ function isSandboxExecutionErrorCode(value: unknown): value is SandboxExecutionE
       "sandbox_invalid_request",
       "sandbox_output_limit_exceeded",
       "sandbox_process_failed",
-      "sandbox_admission_timeout",
       "sandbox_start_failed",
       "sandbox_timeout",
     ].includes(value)

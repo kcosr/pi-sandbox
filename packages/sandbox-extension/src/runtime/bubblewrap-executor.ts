@@ -365,6 +365,7 @@ class PersistentBubblewrapExecutor implements SandboxExecutor {
     request: SandboxCommandRequest,
     options: SandboxExecutionOptions = {},
   ): Promise<SandboxCommandResult> {
+    const snapshot = { ...options };
     if (this.#fatalError !== undefined) {
       return Promise.reject(this.#fatalError);
     }
@@ -382,7 +383,7 @@ class PersistentBubblewrapExecutor implements SandboxExecutor {
           : new SandboxExecutionError("sandbox_invalid_request", { cause }),
       );
     }
-    if (options.signal?.aborted) {
+    if (snapshot.signal?.aborted) {
       return Promise.reject(new SandboxExecutionError("sandbox_aborted"));
     }
 
@@ -392,7 +393,7 @@ class PersistentBubblewrapExecutor implements SandboxExecutor {
       const pending: PendingExecution = {
         id,
         request: validated,
-        options,
+        options: snapshot,
         stdout: [],
         stderr: [],
         resolve,
@@ -404,7 +405,7 @@ class PersistentBubblewrapExecutor implements SandboxExecutor {
         completionTimeout: undefined,
       };
       this.#pending.set(id, pending);
-      options.signal?.addEventListener("abort", abort, { once: true });
+      snapshot.signal?.addEventListener("abort", abort, { once: true });
       // Resolve and encode only when this whole frame reaches the transport.
       // Cancellation while queued removes the request without launching it.
       void writer

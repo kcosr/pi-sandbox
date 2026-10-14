@@ -107,6 +107,9 @@ describe("sandbox worker protocol", () => {
     expect(isWorkerResponse({ type: "result", id: 2, exitCode: 0, signal: "SIGTERM" })).toBe(false);
     expect(isWorkerResponse({ type: "failure", id: 2, code: "not_a_code" })).toBe(false);
     expect(isWorkerResponse({ type: "failure", id: 2, code: "sandbox_queue_full" })).toBe(false);
+    expect(isWorkerResponse({ type: "failure", id: 2, code: "sandbox_admission_timeout" })).toBe(
+      false,
+    );
   });
 
   it.each(["command", "sandbox", null, "session", true])(
