@@ -27,3 +27,66 @@ export async function writeWorkerFrame(destination: Writable, frame: Buffer): Pr
     });
   }
 }
+
+interface PendingFrame {
+  readonly encode: () => Buffer | undefined;
+  readonly resolve: () => void;
+  readonly reject: (cause: unknown) => void;
+}
+
+/**
+ * Encode only the frame being written. Large queued requests therefore retain
+ * their original input, rather than a second base64/JSON/frame representation.
+ * Control frames can pass queued requests, but never split an in-flight frame.
+ */
+export class WorkerFrameWriter {
+  readonly #requests: PendingFrame[] = [];
+  readonly #controls: PendingFrame[] = [];
+  #writing = false;
+  #failure = new Error("sandbox_worker_transport_failed");
+  #failed = false;
+
+  public constructor(private readonly destination: Writable) {}
+
+  public enqueue(encode: () => Buffer | undefined, control = false): Promise<void> {
+    if (this.#failed) return Promise.reject(this.#failure);
+    const result = new Promise<void>((resolve, reject) => {
+      (control ? this.#controls : this.#requests).push({ encode, resolve, reject });
+    });
+    void this.drain();
+    return result;
+  }
+
+  public fail(cause: unknown): void {
+    if (this.#failed) return;
+    this.#failed = true;
+    this.#failure =
+      cause instanceof Error ? cause : new Error("sandbox_worker_transport_failed", { cause });
+    for (const pending of [...this.#controls.splice(0), ...this.#requests.splice(0)]) {
+      pending.reject(this.#failure);
+    }
+  }
+
+  private async drain(): Promise<void> {
+    if (this.#writing || this.#failed) return;
+    this.#writing = true;
+    try {
+      for (;;) {
+        if (this.#failed) return;
+        const pending = this.#controls.shift() ?? this.#requests.shift();
+        if (pending === undefined) return;
+        try {
+          const frame = pending.encode();
+          if (frame !== undefined) await writeWorkerFrame(this.destination, frame);
+          pending.resolve();
+        } catch (cause) {
+          this.fail(cause);
+          pending.reject(this.#failure);
+          return;
+        }
+      }
+    } finally {
+      this.#writing = false;
+    }
+  }
+}

@@ -4,7 +4,12 @@ import { access, lstat, realpath, stat } from "node:fs/promises";
 import path from "node:path";
 import type { Writable } from "node:stream";
 
-import { PROCESS_LIFETIMES, type NetworkMode, type ProcessLifetime } from "./contracts.js";
+import type { NetworkMode } from "./contracts.js";
+import {
+  validateCommandRequest,
+  resolveSandboxLimits,
+  type ResolvedSandboxLimits,
+} from "./command-limits.js";
 import {
   BUBBLEWRAP_SECCOMP_FD,
   BUBBLEWRAP_STATUS_FD,
@@ -14,8 +19,6 @@ import {
   type HiddenPathMask,
 } from "./bubblewrap-policy.js";
 import {
-  DEFAULT_SANDBOX_OUTPUT_LIMIT_BYTES,
-  DEFAULT_SANDBOX_TIMEOUT_MS,
   SandboxExecutionError,
   type CreateBubblewrapExecutorOptions,
   type SandboxCommandRequest,
@@ -32,38 +35,23 @@ import {
   encodeWorkerFrame,
   INTERNAL_SANDBOX_WORKER_ARGUMENT,
   isWorkerResponse,
-  MAXIMUM_WORKER_PENDING_COMMANDS,
   MAXIMUM_WORKER_RESPONSE_FRAME_BYTES,
   SANDBOX_WORKER_PROTOCOL_VERSION,
   WorkerFrameDecoder,
   type WorkerRequest,
   type WorkerResponse,
-  type WorkerResultResponse,
 } from "./worker-protocol.js";
-import { WORKER_TRANSPORT_IDLE_TIMEOUT_MS, writeWorkerFrame } from "./worker-transport.js";
+import { WORKER_TRANSPORT_IDLE_TIMEOUT_MS, WorkerFrameWriter } from "./worker-transport.js";
 
-const DEFAULT_MAXIMUM_TIMEOUT_MS = 600_000;
-const DEFAULT_MAXIMUM_OUTPUT_BYTES = 64 * 1_048_576;
-const DEFAULT_MAXIMUM_INPUT_BYTES = 64 * 1_048_576;
-const DEFAULT_MAXIMUM_ARGUMENT_BYTES = 1_048_576;
 const STATUS_OUTPUT_LIMIT_BYTES = 65_536;
 const WORKER_DIAGNOSTIC_LIMIT_BYTES = 65_536;
 const WORKER_START_TIMEOUT_MS = 10_000;
 const TERMINATE_GRACE_MS = 750;
 
-interface ResolvedLimits {
-  readonly defaultTimeoutMs: number;
-  readonly maximumTimeoutMs: number;
-  readonly defaultOutputBytes: number;
-  readonly maximumOutputBytes: number;
-  readonly maximumInputBytes: number;
-  readonly maximumArgumentBytes: number;
-}
-
 interface ValidatedRequest {
   readonly argv: readonly [string, ...string[]];
   readonly stdin: Buffer;
-  readonly timeoutMs: number;
+  readonly timeoutMs: number | undefined;
   readonly maxOutputBytes: number;
 }
 
@@ -76,10 +64,9 @@ interface PendingExecution {
   readonly resolve: (result: SandboxCommandResult) => void;
   readonly reject: (error: SandboxExecutionError) => void;
   readonly abort: () => void;
-  timeout: NodeJS.Timeout;
+  state: "queued" | "writing" | "sent" | "started";
   outputBytes: number;
   failure: SandboxExecutionError | undefined;
-  offeredResult: WorkerResultResponse | undefined;
   completionTimeout: NodeJS.Timeout | undefined;
 }
 
@@ -87,18 +74,16 @@ export async function createBubblewrapExecutor(
   options: CreateBubblewrapExecutorOptions,
 ): Promise<SandboxExecutor> {
   let toolBundle: ToolBundle | undefined;
+  let limits: ResolvedSandboxLimits;
   try {
     toolBundle = snapshotToolBundle(options.toolBundle);
+    limits = resolveSandboxLimits(options.limits);
+    if (Object.hasOwn(options, "processLifetime"))
+      throw new Error("sandbox_process_lifetime_removed");
   } catch (cause) {
     throw new SandboxExecutionError("sandbox_start_failed", { cause });
   }
   const cwd = path.normalize(options.cwd);
-  const processLifetime = options.processLifetime ?? "command";
-  if (!PROCESS_LIFETIMES.includes(processLifetime)) {
-    throw new SandboxExecutionError("sandbox_start_failed", {
-      cause: new Error("sandbox_process_lifetime_invalid"),
-    });
-  }
   assertSandboxCwd(cwd);
   const canonicalCwd = await realpath(cwd).catch((cause: unknown) => {
     throw new SandboxExecutionError("sandbox_start_failed", { cause });
@@ -171,10 +156,9 @@ export async function createBubblewrapExecutor(
   const executor = new PersistentBubblewrapExecutor(
     cwd,
     bubblewrapPath,
-    resolveLimits(options),
+    limits,
     seccompFilter,
     options.networkMode ?? "none",
-    processLifetime,
     environment,
     options.cwdWritable ?? true,
     Object.freeze(hiddenMasks),
@@ -236,7 +220,8 @@ class PersistentBubblewrapExecutor implements SandboxExecutor {
   readonly #finish: () => void;
   #child: ChildProcess | undefined;
   #stdin: Writable | undefined;
-  #writeChain = Promise.resolve();
+  #writer: WorkerFrameWriter | undefined;
+  #leaderExited = false;
   #nextRequestId = 1;
   #statusBytes = 0;
   #diagnosticBytes = 0;
@@ -253,10 +238,9 @@ class PersistentBubblewrapExecutor implements SandboxExecutor {
   public constructor(
     readonly cwd: string,
     readonly bubblewrapPath: string,
-    private readonly limits: ResolvedLimits,
+    private readonly limits: ResolvedSandboxLimits,
     private readonly seccompFilter: Buffer,
     private readonly networkMode: NetworkMode,
-    private readonly processLifetime: ProcessLifetime,
     private readonly environment: Readonly<Record<string, string>>,
     private readonly cwdWritable: boolean,
     private readonly hiddenMasks: readonly HiddenPathMask[],
@@ -308,6 +292,10 @@ class PersistentBubblewrapExecutor implements SandboxExecutor {
       if (emptyInput !== undefined) closeSync(emptyInput);
     }
     this.#stdin = child.stdin ?? undefined;
+    if (this.#stdin !== undefined) this.#writer = new WorkerFrameWriter(this.#stdin);
+    child.once("exit", () => {
+      this.#leaderExited = true;
+    });
 
     child.stdout?.on("data", (chunk: Buffer) => this.receiveWorkerData(chunk));
     child.stderr?.on("data", (chunk: Buffer) => this.appendDiagnostic(chunk));
@@ -356,7 +344,7 @@ class PersistentBubblewrapExecutor implements SandboxExecutor {
           "pi-sandbox-probe",
           ...Object.values(this.commands),
         ],
-        timeoutMs: 10_000,
+        timeoutMs: Math.min(10_000, this.limits.maximumTimeoutMs ?? 10_000),
         maxOutputBytes: 16_384,
       },
       signal ? { signal } : {},
@@ -380,11 +368,9 @@ class PersistentBubblewrapExecutor implements SandboxExecutor {
     if (this.#fatalError !== undefined) {
       return Promise.reject(this.#fatalError);
     }
-    if (this.#closed || !this.#started || this.#settled) {
+    const writer = this.#writer;
+    if (this.#closed || !this.#started || this.#settled || writer === undefined) {
       return Promise.reject(new SandboxExecutionError("sandbox_closed"));
-    }
-    if (this.#pending.size >= MAXIMUM_WORKER_PENDING_COMMANDS) {
-      return Promise.reject(new SandboxExecutionError("sandbox_queue_full"));
     }
     let validated: ValidatedRequest;
     try {
@@ -412,27 +398,34 @@ class PersistentBubblewrapExecutor implements SandboxExecutor {
         resolve,
         reject,
         abort,
-        timeout: setTimeout(
-          () => this.failPending(id, new SandboxExecutionError("sandbox_timeout")),
-          validated.timeoutMs,
-        ),
+        state: "queued",
         outputBytes: 0,
         failure: undefined,
-        offeredResult: undefined,
         completionTimeout: undefined,
       };
-      pending.timeout.unref();
       this.#pending.set(id, pending);
       options.signal?.addEventListener("abort", abort, { once: true });
-      void this.send({
-        type: "execute",
-        id,
-        argv: validated.argv,
-        stdin: validated.stdin.toString("base64"),
-        timeoutMs: validated.timeoutMs,
-        maxOutputBytes: validated.maxOutputBytes,
-        processLifetime: this.processLifetime,
-      }).catch((cause: unknown) => this.workerFailed(cause));
+      // Resolve and encode only when this whole frame reaches the transport.
+      // Cancellation while queued removes the request without launching it.
+      void writer
+        .enqueue(() => {
+          if (this.#pending.get(id) !== pending) return undefined;
+          pending.state = "writing";
+          return encodeWorkerFrame({
+            type: "execute",
+            id,
+            argv: validated.argv,
+            stdin: validated.stdin.toString("base64"),
+            ...(validated.timeoutMs === undefined ? {} : { timeoutMs: validated.timeoutMs }),
+            maxOutputBytes: validated.maxOutputBytes,
+          });
+        })
+        .then(() => {
+          if (this.#pending.get(id) !== pending || pending.state !== "writing") return;
+          pending.state = "sent";
+          this.armResponseTimeout(pending, "sandbox_worker_command_start_timeout");
+        })
+        .catch((cause: unknown) => this.workerFailed(cause));
     });
   }
 
@@ -448,7 +441,9 @@ class PersistentBubblewrapExecutor implements SandboxExecutor {
       } else if (!this.#settled) {
         await this.send({ type: "shutdown" }).catch(() => undefined);
         const child = this.#child;
-        const timer = setTimeout(() => signalProcessGroup(child, "SIGKILL"), TERMINATE_GRACE_MS);
+        const timer = setTimeout(() => {
+          if (!this.#leaderExited) signalProcessGroup(child, "SIGKILL");
+        }, TERMINATE_GRACE_MS);
         timer.unref();
         await this.#finished;
         clearTimeout(timer);
@@ -500,6 +495,16 @@ class PersistentBubblewrapExecutor implements SandboxExecutor {
       this.appendOutput(pending, response.type, response.data);
       return;
     }
+    if (response.type === "started") {
+      if (pending.state === "started" || pending.state === "queued") {
+        this.workerFailed(new Error("sandbox_worker_started_invalid"));
+        return;
+      }
+      pending.state = "started";
+      // The worker's clock began at spawn, not at this delayed observation.
+      if (pending.failure === undefined) this.clearResponseTimeout(pending);
+      return;
+    }
     if (response.type === "failure") {
       const error =
         pending.failure ??
@@ -507,75 +512,26 @@ class PersistentBubblewrapExecutor implements SandboxExecutor {
           ...(response.message === undefined ? {} : { cause: new Error(response.message) }),
         });
       this.settlePending(pending, () => pending.reject(error));
-      this.retire(pending.id);
-      return;
-    }
-    if (response.type === "completed") {
-      const result = pending.offeredResult;
-      if (result === undefined || pending.failure !== undefined) {
-        this.workerFailed(new Error("sandbox_worker_completion_invalid"));
-        return;
-      }
-      this.settlePending(pending, () =>
-        pending.resolve({
-          exitCode: result.exitCode,
-          signal: result.signal,
-          stdout: Buffer.concat(pending.stdout),
-          stderr: Buffer.concat(pending.stderr),
-        }),
-      );
-      this.retire(pending.id);
       return;
     }
     if (response.type !== "result") {
       this.workerFailed(new Error("sandbox_worker_response_invalid"));
       return;
     }
-    const signal = response.signal;
-    const pendingFailure = pending.failure;
-    if (pendingFailure !== undefined) {
-      // Sandbox results are offered before the worker releases its queue. A
-      // cancellation already sent by failPending must be acknowledged by the
-      // post-cleanup failure response before the caller may observe rejection.
-      if (this.processLifetime === "sandbox") return;
-      this.settlePending(pending, () => pending.reject(pendingFailure));
-      this.retire(pending.id);
-    } else {
-      if (this.processLifetime === "sandbox") {
-        if (pending.offeredResult !== undefined) {
-          this.workerFailed(new Error("sandbox_worker_result_repeated"));
-          return;
-        }
-        // Accept synchronously closes this request's cancellation window, but
-        // a peer's cleanup may already have invalidated the offered result.
-        // Keep it pending until the worker confirms completion or failure.
-        pending.offeredResult = response;
-        clearTimeout(pending.timeout);
-        pending.options.signal?.removeEventListener("abort", pending.abort);
-        // The accept may sit behind large legal execute frames. The transport
-        // bounds each write; only start awaiting a reply after accept flushes.
-        void this.send({ type: "accept", id: pending.id })
-          .then(() => {
-            if (this.#pending.get(pending.id) !== pending) return;
-            pending.completionTimeout = setTimeout(
-              () => this.workerFailed(new Error("sandbox_worker_completion_timeout")),
-              WORKER_TRANSPORT_IDLE_TIMEOUT_MS,
-            );
-            pending.completionTimeout.unref();
-          })
-          .catch((cause: unknown) => this.workerFailed(cause));
-        return;
-      }
-      this.settlePending(pending, () =>
+    // Worker completion is final; no acceptance round-trip may restart or
+    // retroactively expire the execution clock. An in-flight local abort still
+    // rejects this request, while a late worker cancel is harmless by identity.
+    const error = pending.failure;
+    this.settlePending(pending, () => {
+      if (error !== undefined) pending.reject(error);
+      else
         pending.resolve({
           exitCode: response.exitCode,
-          signal,
+          signal: response.signal,
           stdout: Buffer.concat(pending.stdout),
           stderr: Buffer.concat(pending.stderr),
-        }),
-      );
-      this.retire(pending.id);
-    }
+        });
+    });
   }
 
   private appendOutput(
@@ -613,38 +569,46 @@ class PersistentBubblewrapExecutor implements SandboxExecutor {
 
   private failPending(id: number, error: SandboxExecutionError): void {
     const pending = this.#pending.get(id);
-    if (
-      pending === undefined ||
-      pending.failure !== undefined ||
-      pending.offeredResult !== undefined
-    )
-      return;
+    if (pending === undefined || pending.failure !== undefined) return;
     pending.failure = error;
-    void this.send({ type: "cancel", id }).catch((cause: unknown) => this.workerFailed(cause));
+    if (pending.state === "queued") {
+      this.settlePending(pending, () => pending.reject(error));
+      return;
+    }
+    this.clearResponseTimeout(pending);
+    void this.send({ type: "cancel", id })
+      .then(() => {
+        if (this.#pending.get(id) === pending)
+          this.armResponseTimeout(pending, "sandbox_worker_cancel_timeout");
+      })
+      .catch((cause: unknown) => this.workerFailed(cause));
   }
 
   private settlePending(pending: PendingExecution, settle: () => void): void {
-    clearTimeout(pending.timeout);
-    if (pending.completionTimeout !== undefined) clearTimeout(pending.completionTimeout);
+    this.clearResponseTimeout(pending);
     pending.options.signal?.removeEventListener("abort", pending.abort);
     this.#pending.delete(pending.id);
     settle();
   }
 
-  private retire(id: number): void {
-    // Parent writes preserve order: every older accept/cancel precedes retire,
-    // and calls admitted by the settled promise are enqueued afterward.
-    void this.send({ type: "retire", id }).catch((cause: unknown) => this.workerFailed(cause));
+  private clearResponseTimeout(pending: PendingExecution): void {
+    if (pending.completionTimeout !== undefined) clearTimeout(pending.completionTimeout);
+    pending.completionTimeout = undefined;
+  }
+
+  private armResponseTimeout(pending: PendingExecution, reason: string): void {
+    this.clearResponseTimeout(pending);
+    pending.completionTimeout = setTimeout(
+      () => this.workerFailed(new Error(reason)),
+      WORKER_TRANSPORT_IDLE_TIMEOUT_MS,
+    );
+    pending.completionTimeout.unref();
   }
 
   private send(request: WorkerRequest): Promise<void> {
-    const stdin = this.#stdin;
-    if (stdin === undefined || this.#settled) {
+    if (this.#writer === undefined || this.#settled)
       return Promise.reject(new SandboxExecutionError("sandbox_closed"));
-    }
-    const frame = encodeWorkerFrame(request);
-    this.#writeChain = this.#writeChain.then(() => writeWorkerFrame(stdin, frame));
-    return this.#writeChain;
+    return this.#writer.enqueue(() => encodeWorkerFrame(request), true);
   }
 
   private receiveStatusData(value: Buffer | string): void {
@@ -685,6 +649,7 @@ class PersistentBubblewrapExecutor implements SandboxExecutor {
       cause: diagnostic.length > 0 ? new Error(diagnostic, { cause }) : cause,
     });
     this.#fatalError = error;
+    this.#writer?.fail(error);
     this.clearStartupTimer();
     this.#startupReject?.(error);
     this.#startupReject = undefined;
@@ -692,7 +657,8 @@ class PersistentBubblewrapExecutor implements SandboxExecutor {
     for (const pending of [...this.#pending.values()]) {
       this.settlePending(pending, () => pending.reject(pending.failure ?? error));
     }
-    if (this.#child !== undefined) signalProcessGroup(this.#child, "SIGKILL");
+    if (this.#child !== undefined && !this.#leaderExited)
+      signalProcessGroup(this.#child, "SIGKILL");
   }
 
   private workerClosed(exitCode: number | null, signal: NodeJS.Signals | null): void {
@@ -727,6 +693,7 @@ class PersistentBubblewrapExecutor implements SandboxExecutor {
       this.settlePending(pending, () => pending.reject(error));
     }
     this.#settled = true;
+    this.#writer?.fail(this.#fatalError ?? new SandboxExecutionError("sandbox_closed"));
     this.#finish();
   }
 
@@ -736,69 +703,14 @@ class PersistentBubblewrapExecutor implements SandboxExecutor {
   }
 }
 
-function validateRequest(request: SandboxCommandRequest, limits: ResolvedLimits): ValidatedRequest {
+function validateRequest(
+  request: SandboxCommandRequest,
+  limits: ResolvedSandboxLimits,
+): ValidatedRequest {
   if (request.cwd !== undefined || request.environment !== undefined) {
     throw new SandboxExecutionError("sandbox_invalid_request");
   }
-  if (!Array.isArray(request.argv) || request.argv.length === 0) {
-    throw new SandboxExecutionError("sandbox_invalid_request");
-  }
-  let argumentBytes = 0;
-  for (const argument of request.argv) {
-    if (typeof argument !== "string" || argument.includes("\0")) {
-      throw new SandboxExecutionError("sandbox_invalid_request");
-    }
-    argumentBytes += Buffer.byteLength(argument) + 1;
-  }
-  if (!path.isAbsolute(request.argv[0]) || argumentBytes > limits.maximumArgumentBytes) {
-    throw new SandboxExecutionError("sandbox_invalid_request");
-  }
-  const stdin =
-    typeof request.stdin === "string"
-      ? Buffer.from(request.stdin)
-      : Buffer.from(request.stdin ?? new Uint8Array());
-  if (stdin.byteLength > limits.maximumInputBytes) {
-    throw new SandboxExecutionError("sandbox_input_too_large");
-  }
-  const timeoutMs = request.timeoutMs ?? limits.defaultTimeoutMs;
-  const maxOutputBytes = request.maxOutputBytes ?? limits.defaultOutputBytes;
-  if (
-    !Number.isSafeInteger(timeoutMs) ||
-    timeoutMs <= 0 ||
-    timeoutMs > limits.maximumTimeoutMs ||
-    !Number.isSafeInteger(maxOutputBytes) ||
-    maxOutputBytes <= 0 ||
-    maxOutputBytes > limits.maximumOutputBytes
-  ) {
-    throw new SandboxExecutionError("sandbox_invalid_request");
-  }
-  return { argv: request.argv, stdin, timeoutMs, maxOutputBytes };
-}
-
-function resolveLimits(options: CreateBubblewrapExecutorOptions): ResolvedLimits {
-  const limits: ResolvedLimits = {
-    defaultTimeoutMs: options.limits?.defaultTimeoutMs ?? DEFAULT_SANDBOX_TIMEOUT_MS,
-    maximumTimeoutMs: options.limits?.maximumTimeoutMs ?? DEFAULT_MAXIMUM_TIMEOUT_MS,
-    defaultOutputBytes: options.limits?.defaultOutputBytes ?? DEFAULT_SANDBOX_OUTPUT_LIMIT_BYTES,
-    maximumOutputBytes: options.limits?.maximumOutputBytes ?? DEFAULT_MAXIMUM_OUTPUT_BYTES,
-    maximumInputBytes: options.limits?.maximumInputBytes ?? DEFAULT_MAXIMUM_INPUT_BYTES,
-    maximumArgumentBytes: options.limits?.maximumArgumentBytes ?? DEFAULT_MAXIMUM_ARGUMENT_BYTES,
-  };
-  const values = Object.values(limits);
-  if (values.some((value) => !Number.isSafeInteger(value) || value <= 0)) {
-    throw new SandboxExecutionError("sandbox_start_failed", {
-      cause: new Error("sandbox_limits_invalid"),
-    });
-  }
-  if (
-    limits.defaultTimeoutMs > limits.maximumTimeoutMs ||
-    limits.defaultOutputBytes > limits.maximumOutputBytes
-  ) {
-    throw new SandboxExecutionError("sandbox_start_failed", {
-      cause: new Error("sandbox_limits_invalid"),
-    });
-  }
-  return limits;
+  return validateCommandRequest(request, limits);
 }
 
 function validateWorkerCommand(

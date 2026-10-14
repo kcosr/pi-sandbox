@@ -200,15 +200,23 @@ describe.skipIf(!realBubblewrapAvailable)("real Bubblewrap executor", () => {
     expect(second.exitCode).toBe(0);
   });
 
-  it("serializes concurrent operations through the persistent worker", async () => {
-    const marker = path.join(cwd, "serialized-marker");
+  it("overlaps concurrent operations through the persistent worker", async () => {
+    const marker = path.join(cwd, "parallel-marker");
     const first = executor.execute({
-      argv: ["/bin/bash", "-c", 'sleep 0.1; printf ready > "$1"', "pi-sandbox-serialize", marker],
+      argv: [
+        "/bin/bash",
+        "-c",
+        'while ! test -e "$1"; do sleep 0.01; done; cat "$1"',
+        "pi-sandbox-overlap",
+        marker,
+      ],
+      timeoutMs: 5_000,
     });
-    const second = executor.execute({ argv: ["/bin/cat", marker] });
-
-    await expect(first).resolves.toMatchObject({ exitCode: 0 });
-    await expect(second).resolves.toMatchObject({ exitCode: 0, stdout: Buffer.from("ready") });
+    const second = executor.execute({
+      argv: ["/bin/bash", "-c", 'printf ready > "$1"', "pi-sandbox-overlap", marker],
+    });
+    await expect(first).resolves.toMatchObject({ exitCode: 0, stdout: Buffer.from("ready") });
+    await expect(second).resolves.toMatchObject({ exitCode: 0 });
   });
 
   it("clears ambient environment and presents an empty host sysfs", async () => {
@@ -350,7 +358,7 @@ describe.skipIf(!realBubblewrapAvailable)("real Bubblewrap executor", () => {
     expect(streamed).toEqual(expect.arrayContaining(["o:out", "e:err"]));
   });
 
-  it("kills the sandbox tree on cancellation", async () => {
+  it("terminates the active command group on cancellation", async () => {
     const controller = new AbortController();
     let sawReady = false;
     const execution = executor.execute(
@@ -372,7 +380,7 @@ describe.skipIf(!realBubblewrapAvailable)("real Bubblewrap executor", () => {
   });
 
   it.each(["abort", "close"] as const)(
-    "kills a detached, stdio-closed, signal-ignoring descendant on %s",
+    "uses group-only cancellation and final namespace cleanup for a detached descendant on %s",
     async (mode) => {
       const isolatedExecutor =
         mode === "close"
@@ -387,9 +395,8 @@ describe.skipIf(!realBubblewrapAvailable)("real Bubblewrap executor", () => {
       const escaped = path.join(cwd, `detached-${mode}-escaped`);
       const script = [
         "setsid /bin/bash -c",
-        '\'trap "" TERM HUP; exec </dev/null >/dev/null 2>&1; sleep 1; printf escaped > "$1"\'',
-        'pi-sandbox-detached "$1" &',
-        'printf started > "$2"; wait',
+        '\'trap "" TERM HUP; exec </dev/null >/dev/null 2>&1; printf started > "$2"; sleep 1; printf escaped > "$1"\'',
+        'pi-sandbox-detached "$1" "$2" & wait',
       ].join(" ");
       const execution = isolatedExecutor.execute(
         {
@@ -407,7 +414,7 @@ describe.skipIf(!realBubblewrapAvailable)("real Bubblewrap executor", () => {
       else await isolatedExecutor.close();
       await failed;
       await delay(1_250);
-      expect(existsSync(escaped)).toBe(false);
+      expect(existsSync(escaped)).toBe(mode === "abort");
     },
   );
 

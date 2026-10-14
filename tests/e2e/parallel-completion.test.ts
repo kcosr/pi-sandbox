@@ -31,66 +31,36 @@ describe.skipIf(!AVAILABLE)("parallel Bubblewrap completion protocol", () => {
     await rm(directory, { recursive: true, force: true });
   });
 
-  async function create(delayed: "accept" | "cancel" | "completed"): Promise<SandboxExecutor> {
-    const worker = path.join(directory, "delayed-input-worker.mjs");
-    // Hold a complete parent frame and everything behind it, preserving FIFO
-    // order as a stalled pipe would. The worker's own peer timeout still runs.
+  async function create(): Promise<SandboxExecutor> {
+    const worker = path.join(directory, "delayed-result-worker.mjs");
+    // A complete worker result is already committed, but its bytes remain in
+    // transport. Writes still acknowledge and every response keeps FIFO order.
     await writeFile(
       worker,
-      `import { existsSync, writeFileSync } from "node:fs";
+      `import { existsSync, unlinkSync, writeFileSync } from "node:fs";
 import { runSandboxWorker } from ${JSON.stringify(path.resolve("packages/sandbox-extension/src/runtime/worker.ts"))};
 const write = process.stdout.write.bind(process.stdout);
-let outputHeld;
+let held;
 process.stdout.write = (frame, callback) => {
   const response = JSON.parse(frame.subarray(4).toString());
-  if (${JSON.stringify(delayed)} === "completed" && response.type === "completed" && !outputHeld) {
-    outputHeld = [];
-    writeFileSync("output-held", "ready");
+  if (!held && response.type === "result" && existsSync("hold-result")) {
+    unlinkSync("hold-result");
+    held = [];
+    writeFileSync("result-held", "ready");
     const timer = setInterval(() => {
-      if (!existsSync("release-output")) return;
+      if (!existsSync("release-result")) return;
       clearInterval(timer);
-      const frames = outputHeld;
-      outputHeld = undefined;
+      const frames = held;
+      held = undefined;
       for (const buffered of frames) write(buffered);
     }, 5);
   }
-  if (outputHeld) {
-    outputHeld.push(Buffer.from(frame));
-    if (response.type === "failure") writeFileSync("failure-held", "ready");
+  if (held) {
+    held.push(Buffer.from(frame));
     queueMicrotask(() => callback?.());
     return true;
   }
   return write(frame, callback);
-};
-const on = process.stdin.on.bind(process.stdin);
-let buffer = Buffer.alloc(0);
-let held;
-let delayed = false;
-process.stdin.on = (event, listener) => {
-  if (event !== "data") return on(event, listener);
-  return on(event, chunk => {
-    buffer = Buffer.concat([buffer, chunk]);
-    while (buffer.length >= 4 && buffer.length >= 4 + buffer.readUInt32BE(0)) {
-      const length = 4 + buffer.readUInt32BE(0);
-      const frame = Buffer.from(buffer.subarray(0, length));
-      buffer = buffer.subarray(length);
-      const request = JSON.parse(frame.subarray(4).toString());
-      if (!delayed && request.type === ${JSON.stringify(delayed)}) {
-        delayed = true;
-        held = [];
-        writeFileSync("input-held", "ready");
-        const timer = setInterval(() => {
-          if (!existsSync("release-input")) return;
-          clearInterval(timer);
-          const frames = held;
-          held = undefined;
-          for (const buffered of frames) listener(buffered);
-        }, 5);
-      }
-      if (held) held.push(frame);
-      else listener(frame);
-    }
-  });
 };
 await runSandboxWorker();
 `,
@@ -98,79 +68,71 @@ await runSandboxWorker();
     executor = await createBubblewrapExecutor({
       cwd,
       bubblewrapPath: BWRAP_PATH,
-      processLifetime: "sandbox",
       workerCommand: [testSandboxWorkerCommand()[0], worker],
     });
     return executor;
   }
 
-  it.each(["accept", "cancel"] as const)(
-    "consumes a delayed %s after peer cleanup without touching newly admitted work",
-    async (delayed) => {
-      const sandbox = await create(delayed);
-      const peer = sandbox.execute({
-        argv: ["/bin/bash", "-c", "touch peer-started; sleep 100"],
-        timeoutMs: 1_000,
-      });
-      const peerFailed = expect(peer).rejects.toMatchObject({ code: "sandbox_timeout" });
-      await expect.poll(() => existsSync(path.join(cwd, "peer-started"))).toBe(true);
-      const controller = new AbortController();
-      const offered = sandbox.execute(
-        { argv: ["/bin/bash", "-c", "touch offered-started; sleep 0.1; printf offered"] },
-        { signal: controller.signal },
-      );
-      const offeredFailed = expect(offered).rejects.toMatchObject({ code: "sandbox_aborted" });
-      if (delayed === "cancel") {
-        await expect.poll(() => existsSync(path.join(cwd, "offered-started"))).toBe(true);
-        controller.abort();
-      }
-      await expect.poll(() => existsSync(path.join(cwd, "input-held"))).toBe(true);
-      await Promise.all([peerFailed, offeredFailed]);
-
-      // Cleanup is done, but its terminal retirements still sit behind the old
-      // accept/cancel. Reuse must wait until the worker consumes those frames.
-      const next = sandbox.execute({
-        argv: ["/bin/bash", "-c", "touch next-started; sleep 0.1; printf next"],
-      });
-      const nextSucceeded = expect(next).resolves.toMatchObject({
-        exitCode: 0,
-        stdout: Buffer.from("next"),
-      });
-      await delay(100);
-      expect(existsSync(path.join(cwd, "next-started"))).toBe(false);
-      await writeFile(path.join(cwd, "release-input"), "");
-      await nextSucceeded;
-      await expect(sandbox.execute({ argv: ["/bin/printf", "healthy"] })).resolves.toMatchObject({
-        exitCode: 0,
-        stdout: Buffer.from("healthy"),
-      });
-    },
-  );
-
-  it("preserves committed success when a peer fails before its final acknowledgement arrives", async () => {
-    const sandbox = await create("completed");
-    const peer = sandbox.execute({
-      argv: ["/bin/bash", "-c", "touch peer-started; sleep 100"],
-      timeoutMs: 1_000,
-    });
-    const peerFailed = expect(peer).rejects.toMatchObject({ code: "sandbox_timeout" });
-    await expect.poll(() => existsSync(path.join(cwd, "peer-started"))).toBe(true);
-    const committed = sandbox.execute({ argv: ["/bin/printf", "committed"] });
-    const committedSucceeded = expect(committed).resolves.toMatchObject({
+  it("does not retroactively time out a completed command while its result is delayed", async () => {
+    const sandbox = await create();
+    await writeFile(path.join(cwd, "hold-result"), "");
+    const result = sandbox.execute({ argv: ["/bin/printf", "committed"], timeoutMs: 200 });
+    const succeeded = expect(result).resolves.toMatchObject({
       exitCode: 0,
       stdout: Buffer.from("committed"),
     });
-    await expect.poll(() => existsSync(path.join(cwd, "output-held"))).toBe(true);
-    await expect.poll(() => existsSync(path.join(cwd, "failure-held"))).toBe(true);
+    await expect.poll(() => existsSync(path.join(cwd, "result-held"))).toBe(true);
+    await delay(500);
+    await writeFile(path.join(cwd, "release-result"), "");
+    await succeeded;
+  });
 
-    const next = sandbox.execute({ argv: ["/bin/bash", "-c", "touch next-started; printf next"] });
-    const nextSucceeded = expect(next).resolves.toMatchObject({
-      exitCode: 0,
-      stdout: Buffer.from("next"),
+  it("late cancellation is request-local and cannot signal a completed group or interrupt its peer", async () => {
+    const sandbox = await create();
+    const peer = sandbox.execute({
+      argv: [
+        "/bin/bash",
+        "-c",
+        "touch peer-started; while ! test -e release-peer; do sleep 0.01; done; printf peer",
+      ],
     });
-    await delay(100);
-    expect(existsSync(path.join(cwd, "next-started"))).toBe(false);
-    await writeFile(path.join(cwd, "release-output"), "");
-    await Promise.all([committedSucceeded, peerFailed, nextSucceeded]);
+    const peerSucceeded = expect(peer).resolves.toMatchObject({
+      exitCode: 0,
+      stdout: Buffer.from("peer"),
+    });
+    await expect.poll(() => existsSync(path.join(cwd, "peer-started"))).toBe(true);
+    await writeFile(path.join(cwd, "hold-result"), "");
+    const controller = new AbortController();
+    const completed = sandbox.execute({ argv: ["/bin/true"] }, { signal: controller.signal });
+    const cancelled = expect(completed).rejects.toMatchObject({ code: "sandbox_aborted" });
+    await expect.poll(() => existsSync(path.join(cwd, "result-held"))).toBe(true);
+    controller.abort();
+    await writeFile(path.join(cwd, "release-peer"), "");
+    await writeFile(path.join(cwd, "release-result"), "");
+    await Promise.all([cancelled, peerSucceeded]);
+    await expect(sandbox.execute({ argv: ["/bin/printf", "healthy"] })).resolves.toMatchObject({
+      exitCode: 0,
+      stdout: Buffer.from("healthy"),
+    });
+  });
+
+  it("a peer timeout cannot invalidate an already completed result in transport", async () => {
+    const sandbox = await create();
+    const peer = sandbox.execute({
+      argv: ["/bin/bash", "-c", "touch peer-started; sleep 100"],
+      timeoutMs: 500,
+    });
+    const peerTimedOut = expect(peer).rejects.toMatchObject({ code: "sandbox_timeout" });
+    await expect.poll(() => existsSync(path.join(cwd, "peer-started"))).toBe(true);
+    await writeFile(path.join(cwd, "hold-result"), "");
+    const result = sandbox.execute({ argv: ["/bin/printf", "committed"] });
+    const succeeded = expect(result).resolves.toMatchObject({
+      exitCode: 0,
+      stdout: Buffer.from("committed"),
+    });
+    await expect.poll(() => existsSync(path.join(cwd, "result-held"))).toBe(true);
+    await delay(600);
+    await writeFile(path.join(cwd, "release-result"), "");
+    await Promise.all([succeeded, peerTimedOut]);
   });
 });

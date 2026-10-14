@@ -5,7 +5,6 @@ import path from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
-import type { ProcessLifetime } from "../../src/domain/index.js";
 import {
   createBubblewrapExecutor,
   type SandboxExecutor,
@@ -54,15 +53,11 @@ describe.skipIf(!AVAILABLE)("Bubblewrap background process lifetime", () => {
     await rm(directory, { recursive: true, force: true });
   });
 
-  async function create(
-    processLifetime?: ProcessLifetime,
-    workerCommand = testSandboxWorkerCommand(),
-  ): Promise<SandboxExecutor> {
+  async function create(workerCommand = testSandboxWorkerCommand()): Promise<SandboxExecutor> {
     const executor = await createBubblewrapExecutor({
       cwd,
       bubblewrapPath: BWRAP_PATH,
       networkMode: "local",
-      ...(processLifetime === undefined ? {} : { processLifetime }),
       workerCommand,
     });
     executors.push(executor);
@@ -122,7 +117,7 @@ describe.skipIf(!AVAILABLE)("Bubblewrap background process lifetime", () => {
   it.each([0, 7])(
     "keeps a redirected server across ordinary exit %i and later calls",
     async (exitCode) => {
-      const executor = await create("sandbox");
+      const executor = await create();
       const port = await startServer(executor, exitCode);
       expect(await curl(executor, port)).toBe("sandbox-server\n");
       await expect(executor.execute({ argv: ["/bin/true"] })).resolves.toMatchObject({
@@ -132,22 +127,13 @@ describe.skipIf(!AVAILABLE)("Bubblewrap background process lifetime", () => {
 
       // Neither the host nor a different sandbox shares this listener.
       expect(await hostCanReachSandboxServer(port)).toBe(false);
-      await expectServerStopped(await create("sandbox"), port);
+      await expectServerStopped(await create(), port);
       expect(await curl(executor, port)).toBe("sandbox-server\n");
     },
   );
 
-  it.each([undefined, "command"] as const)(
-    "removes background servers in lifetime %s",
-    async (lifetime) => {
-      const executor = await create(lifetime);
-      const port = await startServer(executor);
-      await expectServerStopped(executor, port);
-    },
-  );
-
   it("closes quiet inherited pipes and ignores their late output during the next call", async () => {
-    const executor = await create("sandbox");
+    const executor = await create();
     const first = await executor.execute({
       argv: ["/bin/bash", "-c", "(sleep 0.3; printf late; sleep 10) & printf foreground"],
       timeoutMs: 250,
@@ -161,7 +147,7 @@ describe.skipIf(!AVAILABLE)("Bubblewrap background process lifetime", () => {
   });
 
   it("continues draining active inherited output beyond the initial 100ms", async () => {
-    const executor = await create("sandbox");
+    const executor = await create();
     const result = await executor.execute({
       argv: [
         "/bin/bash",
@@ -175,7 +161,7 @@ describe.skipIf(!AVAILABLE)("Bubblewrap background process lifetime", () => {
   });
 
   it("preserves complete foreground output larger than pipe buffers", async () => {
-    const executor = await create("sandbox");
+    const executor = await create();
     const result = await executor.execute({
       argv: [
         "/usr/bin/python3",
@@ -189,9 +175,9 @@ describe.skipIf(!AVAILABLE)("Bubblewrap background process lifetime", () => {
   });
 
   it.each(["abort", "timeout", "output", "spawn"] as const)(
-    "cleans previously started servers on %s failure",
+    "preserves previously started servers on request-local %s failure",
     async (failure) => {
-      const executor = await create("sandbox");
+      const executor = await create();
       const port = await startServer(executor);
       const controller = new AbortController();
       const request =
@@ -220,144 +206,12 @@ describe.skipIf(!AVAILABLE)("Bubblewrap background process lifetime", () => {
           spawn: "sandbox_process_failed",
         }[failure],
       });
-      await expectServerStopped(executor, port);
+      expect(await curl(executor, port)).toBe("sandbox-server\n");
     },
   );
-
-  it.each(["abort", "timeout", "shutdown"] as const)(
-    "cleans up when %s wins while a completed result is in transit",
-    async (failure) => {
-      const worker = path.join(directory, "delayed-result-worker.mjs");
-      // Simulate a fully written result still buffered in the transport. Acknowledge
-      // writes immediately, but preserve frame ordering until the test releases them.
-      await writeFile(
-        worker,
-        `import { existsSync, unlinkSync, writeFileSync } from "node:fs";
-import { runSandboxWorker } from ${JSON.stringify(path.resolve("packages/sandbox-extension/src/runtime/worker.ts"))};
-const write = process.stdout.write.bind(process.stdout);
-let held;
-process.stdout.write = (frame, callback) => {
-  const response = JSON.parse(frame.subarray(4).toString());
-  if (!held && response.type === "result" && existsSync("hold-result")) {
-    unlinkSync("hold-result");
-    held = [];
-    setImmediate(() => writeFileSync("result-held", "ready"));
-    const timer = setInterval(() => {
-      if (!existsSync("release-result")) return;
-      clearInterval(timer);
-      const frames = held;
-      held = undefined;
-      for (const buffered of frames) write(buffered);
-    }, 5);
-  }
-  if (held) {
-    held.push(Buffer.from(frame));
-    queueMicrotask(() => callback?.());
-    return true;
-  }
-  return write(frame, callback);
-};
-await runSandboxWorker();
-`,
-      );
-      const executor = await create("sandbox", [testSandboxWorkerCommand()[0], worker]);
-      const port = await startServer(executor);
-      await writeFile(path.join(cwd, "hold-result"), "");
-      const controller = new AbortController();
-      const running = executor.execute(
-        { argv: ["/bin/true"], timeoutMs: failure === "timeout" ? 1_000 : 5_000 },
-        { signal: controller.signal },
-      );
-      const failed = expect(running).rejects.toMatchObject({
-        code: {
-          abort: "sandbox_aborted",
-          timeout: "sandbox_timeout",
-          shutdown: "sandbox_closed",
-        }[failure],
-      });
-      await expect.poll(() => existsSync(path.join(cwd, "result-held"))).toBe(true);
-      if (failure === "shutdown") {
-        const closed = executor.close();
-        await writeFile(path.join(cwd, "release-result"), "");
-        await failed;
-        await closed;
-        const heartbeat = await readFile(path.join(cwd, "server.heartbeat"), "utf8");
-        await delay(100);
-        expect(await readFile(path.join(cwd, "server.heartbeat"), "utf8")).toBe(heartbeat);
-        return;
-      }
-      const peers = Array.from({ length: 3 }, (_, index) =>
-        executor.execute({
-          argv: ["/bin/bash", "-c", `touch peer-${index}; sleep 100`],
-        }),
-      );
-      const peersStopped = Promise.allSettled(peers);
-      await Promise.all(
-        [0, 1, 2].map(async (index) => {
-          await expect.poll(() => existsSync(path.join(cwd, `peer-${index}`))).toBe(true);
-        }),
-      );
-      const next = executor.execute({
-        argv: ["/bin/bash", "-c", "touch next-started; sleep 0.1; printf next"],
-      });
-      const nextSucceeded = expect(next).resolves.toMatchObject({
-        exitCode: 0,
-        stdout: Buffer.from("next"),
-      });
-      await delay(100);
-      expect(existsSync(path.join(cwd, "next-started"))).toBe(false);
-      if (failure === "abort") controller.abort();
-      else await delay(1_000);
-      await writeFile(path.join(cwd, "release-result"), "");
-      await failed;
-      expect((await peersStopped).every((result) => result.status === "rejected")).toBe(true);
-      await nextSucceeded;
-      await expectServerStopped(executor, port);
-    },
-  );
-
-  it("cancels queued work without killing a server or the active call", async () => {
-    const executor = await create("sandbox");
-    const port = await startServer(executor);
-    let began!: () => void;
-    const started = new Promise<void>((resolve) => {
-      began = resolve;
-    });
-    let ready = 0;
-    const active = Promise.all(
-      Array.from({ length: 4 }, () =>
-        executor.execute(
-          {
-            argv: [
-              "/bin/bash",
-              "-c",
-              "printf ready; while ! test -e release-active; do sleep 0.01; done; printf done",
-            ],
-          },
-          {
-            onStdout: () => {
-              if (++ready === 4) began();
-            },
-          },
-        ),
-      ),
-    );
-    await started;
-    const controller = new AbortController();
-    const queued = executor.execute(
-      { argv: ["/bin/touch", "should-not-run"] },
-      { signal: controller.signal },
-    );
-    controller.abort();
-    await expect(queued).rejects.toMatchObject({ code: "sandbox_aborted" });
-    await writeFile(path.join(cwd, "release-active"), "");
-    expect((await active).every((result) => result.exitCode === 0)).toBe(true);
-    expect(existsSync(path.join(cwd, "should-not-run"))).toBe(false);
-    expect(await curl(executor, port)).toBe("sandbox-server\n");
-  });
 
   it("kills an idle sandbox's detached signal-ignoring server on shutdown", async () => {
-    const executor = await create("sandbox");
+    const executor = await create();
     await startServer(executor);
     await executor.close();
     const heartbeat = await readFile(path.join(cwd, "server.heartbeat"), "utf8");
@@ -369,7 +223,7 @@ await runSandboxWorker();
   });
 
   it("closes active work and previously started servers together", async () => {
-    const executor = await create("sandbox");
+    const executor = await create();
     await startServer(executor);
     let began!: () => void;
     const started = new Promise<void>((resolve) => {
@@ -388,13 +242,6 @@ await runSandboxWorker();
     const heartbeat = await readFile(path.join(cwd, "server.heartbeat"), "utf8");
     await delay(100);
     expect(await readFile(path.join(cwd, "server.heartbeat"), "utf8")).toBe(heartbeat);
-  });
-
-  it("rejects an unknown process lifetime before starting a worker", async () => {
-    await expect(create("session" as ProcessLifetime)).rejects.toMatchObject({
-      code: "sandbox_start_failed",
-      cause: { message: "sandbox_process_lifetime_invalid" },
-    });
   });
 });
 
