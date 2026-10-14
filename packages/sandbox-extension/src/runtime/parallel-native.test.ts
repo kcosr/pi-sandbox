@@ -78,7 +78,7 @@ const check=(condition,message)=>{assert.ok(condition,message);assertions++};
 const track=p=>{const result=p.then(value=>({value}),error=>({error}));pending.push(result);return result};
 const exists=file=>access(file).then(()=>true,()=>false);
 const until=async(predicate,label)=>{const deadline=Date.now()+12000;while(Date.now()<deadline){if(await predicate())return;await delay(10)}throw Error('readiness deadline: '+label)};
-const make=async(limits)=>{const e=await create({cwd,toolBundle,limits,...(backend==='direct'?{ambientEnvironment:{HOME:cwd,PATH:'/usr/bin:/bin'}}:{})});owned.push(e);return e};
+const make=async(limits)=>{const e=await create({cwd,toolBundle,limits,...(backend==='seatbelt'?{deniedPaths:[join(cwd,'protected')]}:{}),...(backend==='direct'?{ambientEnvironment:{HOME:cwd,PATH:'/usr/bin:/bin'}}:{})});owned.push(e);return e};
 const shell=(script,...args)=>['/bin/sh','-c',script,'fixture',...args];
 const gate=(name)=>{
  const ready=join(cwd,'ready-'+name),release=join(cwd,'release-'+name);
@@ -158,6 +158,52 @@ try {
    values.forEach(r=>check(r.error?.code==='sandbox_closed','close catches request admitted during preparation: '+diagnostics(r.error)));
    const closed=await track(e.execute({argv:shell('exit 0')}));
    check(closed.error?.code==='sandbox_closed','closed executor refuses later launch');
+ } else if(scenario==='survivors'||scenario==='post-exit-cancel') {
+   function descendant(marker,ready,protectedFile,noisy) {
+     const fs=require('node:fs');
+     fs.writeFileSync(ready,String(process.pid));
+     process.stdout.on('error',()=>{});
+     const output=noisy?setInterval(()=>process.stdout.write('continuing-output\\n'),20):undefined;
+     setTimeout(()=>{
+       if(output)clearInterval(output);
+       let confined=false;
+       try{fs.readFileSync(protectedFile)}catch(error){confined=error.code==='EPERM'}
+       fs.writeFileSync(marker,confined?'original-grants':'FAILED');
+     },1000);
+   }
+   function launch(childSource,detached,leaderReady,childReady,noisy) {
+     const fs=require('node:fs');
+     const child=require('node:child_process').spawn(process.execPath,['-e',childSource],{detached,stdio:noisy?['ignore',1,2]:'ignore'});
+     child.unref();
+     fs.writeFileSync(leaderReady,String(process.pid));
+     const timer=setInterval(()=>{if(fs.existsSync(childReady))clearInterval(timer)},5);
+   }
+   for(const detached of scenario==='survivors'?[false,true]:[false]) {
+     const current=detached?await make():e;
+     const marker=join(cwd,'survived-'+detached),leaderReady=join(cwd,'ready-leader-'+detached),childReady=join(cwd,'ready-child-'+detached);
+     const noisy=scenario==='post-exit-cancel';
+     const childSource='('+descendant.toString()+')('+[marker,childReady,join(cwd,'protected/marker'),noisy].map(v=>JSON.stringify(v)).join(',')+')';
+     const launcher='('+launch.toString()+')('+[childSource,detached,leaderReady,childReady,noisy].map(v=>JSON.stringify(v)).join(',')+')';
+     const controller=new AbortController();
+     let settled=false;
+     const result=track(current.execute({argv:[process.execPath,'-e',launcher]},{signal:controller.signal})).then(r=>{settled=true;return r});
+     await until(()=>exists(childReady),'finite descendant active');
+     const leader=Number(await readFile(leaderReady,'utf8'));
+     await until(()=>{try{process.kill(leader,0);return false}catch(error){if(error.code==='ESRCH')return true;throw error}},'foreground leader exited');
+     if(noisy){
+       check(!settled,'continuous descendant output delays completion');
+       controller.abort();
+       const cancelled=await result;
+       check(cancelled.error?.code==='sandbox_aborted','post-exit cancellation settles');
+     } else {
+       const completed=await result;
+       check(!completed.error&&completed.value.exitCode===0,'foreground completed independently');
+     }
+     await current.close();
+     check(!(await exists(marker)),'descendant still pending after foreground completion/cancel and close');
+     await until(()=>exists(marker),'finite survivor after completion/cancel/close');
+     check(await readFile(marker,'utf8')==='original-grants','survivor retains original confinement');
+   }
  } else throw Error('unknown fixture');
 } finally {
  await Promise.all([...releases].map(file=>writeFile(file,'')));
@@ -213,12 +259,20 @@ describe.skipIf(prerequisite !== undefined)("native concurrent command owners", 
     "spawn",
     "limits-binary",
     "startup-close",
+    "survivors",
+    "post-exit-cancel",
   ]) {
-    it.each(cases)(
+    it.each(
+      scenario === "survivors" || scenario === "post-exit-cancel"
+        ? cases.filter(({ backend }) => backend === "seatbelt")
+        : cases,
+    )(
       `$name owns $backend ${scenario}`,
       async ({ name, runtime, backend }) => {
         const cwd = await mkdtemp(path.join(root, "case-"));
         await mkdir(path.join(cwd, "home"));
+        await mkdir(path.join(cwd, "protected"));
+        await writeFile(path.join(cwd, "protected/marker"), "private fixture");
         try {
           const result = await executeHost(
             runtime,
