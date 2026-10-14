@@ -627,6 +627,7 @@ async function main() {
         "packages/coding-agent/test/auth-check.test.ts",
         "packages/coding-agent/test/managed-model-runtime.test.ts",
         "packages/coding-agent/test/managed-main.test.ts",
+        "packages/coding-agent/test/managed-tools.test.ts",
         "packages/coding-agent/test/managed-version.test.ts",
         "packages/coding-agent/test/managed-tool-paths.test.ts",
         "packages/coding-agent/test/managed-extensions.test.ts",
@@ -638,6 +639,9 @@ async function main() {
         "packages/mcp/test/managed-transport.test.ts",
         "packages/codemode/test/managed-limits.test.ts",
         "packages/coding-agent/test/args.test.ts",
+        "packages/coding-agent/test/print-mode.test.ts",
+        "packages/coding-agent/test/compaction-serialization.test.ts",
+        "packages/coding-agent/test/suite/agent-session-prompt.test.ts",
         "packages/coding-agent/test/mcp-extension.test.ts",
         "packages/coding-agent/test/mcp-manager-view.test.ts",
         "packages/coding-agent/test/suite/agent-session-codemode.test.ts",
@@ -647,6 +651,12 @@ async function main() {
       ],
       { cwd: sourceRoot, env: { ...cleanEnvironment, PI_OFFLINE: "1" } },
     );
+
+    // This upstream fixture resolves bundled themes from its package CWD.
+    await run("npm", ["exec", "--", "vitest", "run", "test/resource-loader-theme.test.ts"], {
+      cwd: join(sourceRoot, "packages/coding-agent"),
+      env: { ...cleanEnvironment, PI_OFFLINE: "1" },
+    });
 
     await copyPrivateEntrypoint(sourceRoot);
     const stagingDirectory = join(temporaryDirectory, "release-stage");

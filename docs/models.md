@@ -65,6 +65,12 @@ Provider and model fields follow the pinned Pi release's `models.json` schema.
 Pi Sandbox validates the file at startup and fails rather than combining it
 with built-in models.
 
+For editor validation and completion, the top-level object may include
+`"$schema": "https://pi.dev/schemas/models.schema.json"`. This is an editor hint;
+startup still uses the pinned Pi validator and does not fetch the schema.
+OpenRouter's per-key remote or cached model lists do not add models to the
+managed catalog. Each admitted model must remain explicitly configured.
+
 ## API keys
 
 `apiKey` supports Pi's standard value resolution:

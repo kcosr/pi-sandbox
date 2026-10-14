@@ -76,6 +76,8 @@ export async function testManagedMcpCodemode({
             `${marker}: selected tools`,
           );
         }
+        for (const name of providerScenario.excludedTools ?? [])
+          assert(!names.includes(name), `${marker}: excluded stock tool ${name} was restored`);
         assert.equal(
           names.includes("codemode"),
           providerScenario.codemode,
@@ -430,6 +432,33 @@ text("ADDITIVE_SELECTION_OK");`,
         script: 'text(await tools.mcp__docs__search_allowed({query:"additive"}));',
       },
       {
+        marker: "WILDCARD_STOCK_TOOLS_EXCLUDED",
+        codemode: true,
+        directMcp: true,
+        mcp: true,
+        preference: { enabled: true, exposure: "direct" },
+        args: ["--tools", "*"],
+        disableWrite: true,
+        excludedTools: ["write", "powershell"],
+        expectedResult: "STOCK_TOOLS_EXCLUDED_OK",
+        script: `
+if(ALL_TOOLS.some(t=>t.name==="write" || t.name==="powershell")) throw new Error("Stock tool exposed to code mode");
+text(await tools.read({path:"input.txt"}));
+text(await tools.mcp__docs__search_allowed({query:"stock-tool-exclusion"}));
+let rejected=false;
+try { await tools.write({path:"stock-write-bypass.txt",content:"bypass"}); } catch { rejected=true; }
+if(!rejected) throw new Error("Disabled write restored");
+text("STOCK_TOOLS_EXCLUDED_OK");`,
+      },
+      {
+        marker: "CLI_UNSUPPORTED_STOCK_TOOL",
+        codemode: false,
+        directMcp: false,
+        mcp: false,
+        args: ["--tools", "powershell"],
+        expectedTools: [],
+      },
+      {
         marker: "CLI_REMOVES_NESTED_MCP",
         codemode: true,
         directMcp: false,
@@ -485,6 +514,7 @@ text("MCP_REMOVAL_OK");`,
       },
     ];
     for (const scenario of preferenceCases) {
+      config.tools.write = toolPolicy(scenario.disableWrite ? "disabled" : "ask");
       for (const server of Object.values(config.mcp.servers)) server.enabled = scenario.mcp;
       config.mcp.servers.docs.exposure = scenario.adminExposure ?? "direct";
       await writeFile(configPath, stringifyToml(config));
@@ -545,6 +575,8 @@ text("MCP_REMOVAL_OK");`,
       }
       if (scenario.marker === "ADDITIVE_CODEMODE_WITHOUT_BASH")
         await assert.rejects(access(join(workspace, "additive-bash-bypass.txt")));
+      if (scenario.marker === "WILDCARD_STOCK_TOOLS_EXCLUDED")
+        await assert.rejects(access(join(workspace, "stock-write-bypass.txt")));
       await running.stop();
       running = undefined;
       assert.deepEqual(

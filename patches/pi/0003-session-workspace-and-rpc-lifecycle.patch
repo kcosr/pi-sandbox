@@ -198,9 +198,11 @@ diff --git a/packages/coding-agent/src/main.ts b/packages/coding-agent/src/main.
 index b758b6b..8640361 100644
 --- a/packages/coding-agent/src/main.ts
 +++ b/packages/coding-agent/src/main.ts
-@@ -573,6 +573,8 @@ async function promptForMissingSessionCwd(
+@@ -573,8 +573,10 @@ async function promptForMissingSessionCwd(
  export interface MainOptions {
  	extensionFactories?: InlineExtension[];
+ 	/** Register stock tool definitions. False leaves only extension/custom tools. Defaults to true. */
+ 	includeBuiltinTools?: boolean;
  	createModelRuntime?: ModelRuntimeFactory;
 +	/** Reject a target workspace before reading its settings or resources. */
 +	validateSessionCwd?: (cwd: string) => void;
@@ -224,9 +226,10 @@ index b758b6b..8640361 100644
  		const isInitialRuntime = sessionStartEvent === undefined;
  		const projectTrustDiagnostics: AgentSessionRuntimeDiagnostic[] = [];
  		const cachedProjectTrust = projectTrustByCwd.get(cwd);
-@@ -860,6 +865,7 @@ export async function main(args: string[], options?: MainOptions) {
+@@ -860,7 +865,8 @@ export async function main(args: string[], options?: MainOptions) {
  			excludeTools: sessionOptions.excludeTools,
  			noTools: sessionOptions.noTools,
+ 			includeBuiltinTools: options?.includeBuiltinTools,
  			customTools: sessionOptions.customTools,
 +			validateSessionCwd: options?.validateSessionCwd,
  		});

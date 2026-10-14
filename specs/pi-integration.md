@@ -11,11 +11,11 @@ those patches to be reimplemented.
 
 | Field                  | Pinned value                                                                           |
 | ---------------------- | -------------------------------------------------------------------------------------- |
-| Version                | `1.1.0`                                                                                |
-| Tag                    | `v1.1.0`                                                                               |
-| Commit                 | `abe508e1b89912adde45528136c3221eb69acdd7`                                             |
-| Source archive         | `https://github.com/earendil-works/pi/releases/download/v1.1.0/pi-1.1.0-source.tar.gz` |
-| Source archive SHA-256 | `63b17b48b855e36e64c5013523acd48131ffcfa90ae48fe2f3e6fa9fe3d0da32`                     |
+| Version                | `1.2.0`                                                                                |
+| Tag                    | `v1.2.0`                                                                               |
+| Commit                 | `06a466935536f8c9bcacb2d5efc0fc021be1bdff`                                             |
+| Source archive         | `https://github.com/earendil-works/pi/releases/download/v1.2.0/pi-1.2.0-source.tar.gz` |
+| Source archive SHA-256 | `ccfa08c4ae2ab4f744bcc7b5fe0ad47960b6d3dffde65e480bce215b83624dbd`                     |
 
 The build may download that archive or accept the identical archive from a
 local path. It must verify the SHA-256 digest before extraction. It extracts Pi
@@ -31,7 +31,7 @@ pre-1.0 API or launch compatibility paths.
 ## Product boundary
 
 The managed application's `--version` output and TUI header display the pinned
-Pi version followed by the product identity, for example `1.1.0+ps.0.7.0` for
+Pi version followed by the product identity, for example `1.2.0+ps.0.7.0` for
 a clean checkout at product tag `v0.7.0`. Untagged Git builds append
 `.dev.g<short-sha>` and modified builds append `.dirty`; source execution or
 application builds without Git metadata use `.dev.source`. The full release
@@ -57,7 +57,8 @@ Sandbox factory through the inline extension-factory option. It must:
 - disable automatic built-in MCP, codemode, tool-search, and llama factories and
   reject the MCP management CLI; only the forced factory may compose the
   exported MCP/code-mode factories under administrator policy;
-- disable Pi's built-in tools and reject any option that restores them;
+- exclude all Pi built-in tool definitions from managed sessions, so tool
+  selections, registry refreshes, and session recreation cannot restore them;
 - reject Pi package install, remove, update, and configuration commands that
   could introduce executable code;
 - admit managed host environment values only through the selected compiled
@@ -108,6 +109,11 @@ The managed Pi model runtime must:
   configured models; and
 - fail startup when the administrative catalog is missing, unreadable,
   malformed, or semantically invalid.
+
+Pi 1.2.0's per-key OpenRouter personalization must not wrap managed configured
+providers: cached and remote catalog contents, credential rotation, and refresh
+cannot introduce unconfigured models of any type. The optional `models.json`
+`$schema` field is editor metadata, not a runtime schema download.
 
 The executable does not check that administrative files are owned by root or
 have particular modes. Deployment is responsible for installing them with the
@@ -210,11 +216,19 @@ global scoped environment.
 
 ## Required Pi patch behavior
 
-Keep the patch series as small and generic as practical. Against Pi 1.1.0 it
+Keep the patch series as small and generic as practical. Against Pi 1.2.0 it
 provides these seams:
 
 1. `main()` accepts a caller-provided model-runtime factory and consistently
    uses it for interactive startup and supported authentication paths.
+   Its embedding-only `includeBuiltinTools` option defaults to true for ordinary
+   Pi. Managed startup sets it to false; the session SDK then constructs an empty
+   base-tool registry while retaining tools registered by the forced extension.
+   Carry that choice through runtime recreation and reload. This excludes stock
+   implementations, not managed tools sharing their names. Test explicit and
+   wildcard tool selections followed by late tool registration, including
+   unsupported `powershell` and policy-disabled replacement tools. Review new
+   upstream tools explicitly instead of relying on a fixed built-in inventory.
 2. Model-runtime construction can exclude the internal provider/model catalog
    for every model type, including chat, image, and classifier models, without
    preventing explicitly configured providers from using Pi's trusted provider
@@ -291,6 +305,13 @@ Startup-hook tests must prove the awaited ordering for TUI, print, JSON, and
 RPC, before stdin consumption and theme initialization, as well as the absence
 of maintenance for metadata and authentication exits. Cover selected-session
 access and effective custom session storage without adding cleanup logic to Pi.
+
+Preserve Pi 1.2.0's run-start semantics: `before_agent_start` covers user and
+extension-triggered custom-message runs. Managed prompt guidance uses their
+shared system-prompt options without assuming a user `prompt`. A starting run
+is busy; queued messages join that run, and cancellation during setup reaches
+the run. Preserve print mode's nonzero exit for a final answer truncated at the
+output-token limit. Test these upstream behaviors against the patched source.
 
 Do not solve upstream merge conflicts by adding compatibility aliases or by
 supporting both managed and obsolete launch shapes in Pi Sandbox. Reimplement
@@ -448,6 +469,12 @@ reconnect or replay `tools/call` after approval, including HTTP session-expired
 responses. Disconnected servers may reconnect on a subsequent prompt. A catalog
 refresh failure withdraws the server instead of preserving an unverified catalog.
 
+Preserve Pi 1.2.0's tool `reachesTools` and namespace aliases through managed
+wrappers so readiness and deferred discovery still precede authorization.
+Transport wrappers forward per-request cancellation options. MCP structured
+content may be an object, array, primitive, or null; preserve the result without
+coercing it into an object or weakening the invocation policy.
+
 A restricted management option reuses the stock MCP menu for admitted servers.
 An awaited callback validates and saves enabled/exposure preferences before runtime
 changes; failures and late callbacks cannot mutate a replacement session. It offers
@@ -467,6 +494,9 @@ when the leader exits or the transport closes.
 
 The code-mode factory accepts generic execution limits, registers one active
 script per managed instance, and aborts/awaits that script on session shutdown.
+Pi 1.2.0 implements the execution loop in shared `runtime/execution.ts`; place
+the managed limits there so every supported VM launcher enforces them, retaining
+the portable engine and upstream linear-time output handling.
 Pi Sandbox keeps code mode inactive by default, honors Pi's merged `defaultTools`
 and `codemode.mode` settings, and applies CLI inclusion/exclusion ceilings to
 initial activation and later MCP autoactivation. The administrator flag controls

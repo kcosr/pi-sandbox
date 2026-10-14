@@ -8,6 +8,7 @@ import type { ManagedMcpPreferences } from "./preferences.js";
 import { mcpSubject, matchesMcpPattern } from "./policy.js";
 import { parseMcpConfig } from "../config/mcp.js";
 import { resolveMcpServers } from "./resolve.js";
+import { ToolAuditor } from "../audit/tools.js";
 
 const allow = { mode: "allow", sessionGrant: "never", audit: false } as const;
 const config: McpServerConfig = {
@@ -52,6 +53,7 @@ function setup(
   selected: (name: string) => boolean = () => true,
   preferences?: ManagedMcpPreferences,
   autoEnableCodemode = false,
+  auditor?: ToolAuditor,
 ) {
   const connection = {
     state: "connected",
@@ -71,7 +73,7 @@ function setup(
     autoEnableCodemode,
     ...(preferences === undefined ? {} : { preferences }),
     getPolicy: () => policy,
-    getAuditor: () => undefined,
+    getAuditor: () => auditor,
   });
   const policy: PolicyEngine = new PolicyEngine({}, runtime.resolveSubject);
   runtime.serverChanged("docs", connection);
@@ -94,6 +96,63 @@ function invoke(
 }
 
 describe("managed MCP admission", () => {
+  it("retains deferred discovery metadata through admission, approval and audit wrappers", async () => {
+    const submit = vi.fn(() => Promise.resolve());
+    const auditor = new ToolAuditor(
+      { submit, close: () => Promise.resolve() },
+      "/work",
+      "/home/test",
+    );
+    const { runtime, connection } = setup(
+      { exposure: "codemode", defaultPolicy: { ...allow, mode: "ask", audit: true } },
+      () => true,
+      undefined,
+      true,
+      auditor,
+    );
+    const source = item();
+    const namespace = {
+      name: "mcp__docs",
+      aliases: ["docs", "reference"],
+      description: "Reference documents",
+      instructions: "Query the documentation index first.",
+    };
+    const reachesTools = vi.fn(() => ["mcp__docs__search"]);
+    const outputSchema = { type: "array", items: { type: "string" } };
+    const [tool] = runtime.adaptTools(
+      "docs",
+      [{ ...source, definition: { ...source.definition, namespace, reachesTools, outputSchema } }],
+      connection,
+    );
+    expect(tool).toMatchObject({ exposure: "deferred", namespace, outputSchema });
+    expect(tool!.reachesTools).toBe(reachesTools);
+    expect(tool!.reachesTools!({ query: "hello" })).toEqual(["mcp__docs__search"]);
+    expect(source.execute).not.toHaveBeenCalled();
+    await expect(invoke(tool!)).rejects.toThrow("no_ui");
+    expect(source.execute).not.toHaveBeenCalled();
+    const select = vi.fn(() => Promise.resolve("Allow once"));
+    await invoke(tool!, "hello", select);
+    expect(select).toHaveBeenCalledOnce();
+    expect(source.execute).toHaveBeenCalledOnce();
+    expect(submit).toHaveBeenCalledWith(
+      expect.objectContaining({ event: "tool_completed", outcome: "success" }),
+    );
+    await runtime.close();
+  });
+  it.each([
+    ["array", ["first", { second: 2 }]],
+    ["string", "text"],
+    ["number", 7],
+    ["boolean", false],
+    ["null", null],
+  ])("preserves %s MCP structured content without replacing it with text", async (_name, value) => {
+    const { runtime, connection } = setup();
+    const response = { ...result, structuredContent: value };
+    const execute = vi.fn<ToolDefinition["execute"]>(() => Promise.resolve(response));
+    const [tool] = runtime.adaptTools("docs", [item("search", execute)], connection);
+    expect(await invoke(tool!)).toBe(response);
+    await runtime.close();
+  });
   it("wraps raw identities, validates arguments, and dispatches a frozen snapshot", async () => {
     const { runtime, connection } = setup();
     const source = item();
@@ -472,6 +531,27 @@ describe("MCP dispatch lifecycle", () => {
 });
 
 describe("HTTP dispatch and protocol cleanup", () => {
+  it("preserves the MCP request signal so cancelled sends never reach the HTTP endpoint", async () => {
+    const { runtime } = setup();
+    const transport = factoryOptions(runtime).createTransport({ name: "docs" });
+    const fetch = vi.fn<typeof globalThis.fetch>(() =>
+      Promise.resolve(new Response(null, { status: 202 })),
+    );
+    vi.stubGlobal("fetch", fetch);
+    try {
+      await transport.start();
+      await expect(
+        transport.send(
+          { jsonrpc: "2.0", id: 1, method: "initialize", params: {} },
+          { signal: AbortSignal.abort() },
+        ),
+      ).rejects.toThrow();
+      expect(fetch).not.toHaveBeenCalled();
+    } finally {
+      await runtime.close();
+      vi.unstubAllGlobals();
+    }
+  });
   it("passes configured bearer credentials through to the HTTP transport without diagnostic disclosure", async () => {
     const parsed = parseMcpConfig(
       {

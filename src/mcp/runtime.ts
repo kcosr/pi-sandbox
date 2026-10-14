@@ -478,7 +478,7 @@ export class ManagedMcpRuntime {
       throw new Error("MCP server unavailable");
     const { resolved } = state;
     const policy = resolved.policy;
-    const transport =
+    const transport: McpTransport =
       this.options.transportFactory?.(resolved) ??
       (policy.transport === "http"
         ? new StreamableHttpTransport({
@@ -527,7 +527,7 @@ export class ManagedMcpRuntime {
       }
     });
     const send = transport.send.bind(transport);
-    transport.send = async (message) => {
+    transport.send = async (message, options) => {
       if (Buffer.byteLength(JSON.stringify(message)) > MESSAGE_LIMIT) {
         await transport.close();
         throw new Error("MCP message exceeds limits");
@@ -537,7 +537,7 @@ export class ManagedMcpRuntime {
         if (invocation === undefined || !invocation.current() || invocation.signal.aborted)
           throw new Error("MCP dispatch not authorized");
       }
-      return send(message);
+      return send(message, options);
     };
     state.transport = transport;
     return transport;
