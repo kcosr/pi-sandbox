@@ -274,7 +274,10 @@ class SeatbeltExecutor implements SandboxExecutor {
           validated.stdin,
           validated.timeoutMs,
           validated.maxOutputBytes,
-          { onStdout: snapshot.onStdout, onStderr: snapshot.onStderr },
+          {
+            ...(snapshot.onStdout === undefined ? {} : { onStdout: snapshot.onStdout }),
+            ...(snapshot.onStderr === undefined ? {} : { onStderr: snapshot.onStderr }),
+          },
         );
         const abort = () => child.abort(signal.reason as SandboxExecutionError);
         signal.addEventListener("abort", abort, { once: true });

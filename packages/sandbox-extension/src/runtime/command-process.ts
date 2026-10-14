@@ -37,7 +37,8 @@ export function startSandboxProcess(options: SandboxProcessOptions): SandboxProc
   const callbacks = new Set<Promise<void>>();
   const drain = new AbortController();
   let failure: SandboxExecutionError | undefined;
-  let exited = false,
+  let launched = false,
+    exited = false,
     finished = false,
     outputBytes = 0;
   let timeout: NodeJS.Timeout | undefined;
@@ -60,6 +61,10 @@ export function startSandboxProcess(options: SandboxProcessOptions): SandboxProc
   const abort = (error: SandboxExecutionError) => {
     if (finished) return;
     failure ??= error;
+    // Node can return the child before its spawn event. Defer termination until
+    // that event so a pre-launch cancellation cannot miss group creation or
+    // consume the abort notification before a signalling failure is known.
+    if (!launched && !exited) return;
     // This is best effort, not an atomic PID lease. Never signal after observing
     // the leader's exit, even when descendants keep its output pipes open.
     killGroup();
@@ -72,8 +77,9 @@ export function startSandboxProcess(options: SandboxProcessOptions): SandboxProc
     callbacks.add(pending);
   };
   child.once("spawn", () => {
+    launched = true;
     if (failure) {
-      killGroup();
+      abort(failure);
       return;
     }
     if (options.timeoutMs !== undefined) {

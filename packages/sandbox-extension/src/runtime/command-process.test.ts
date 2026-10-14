@@ -39,9 +39,7 @@ describe("shared command execution", () => {
     expect(result.stdout).toEqual(Buffer.concat(chunks));
     await expect(
       run("console.log('output')", {
-        onStdout: async () => {
-          throw new Error("consumer failed");
-        },
+        onStdout: () => Promise.reject(new Error("consumer failed")),
       }).result,
     ).rejects.toMatchObject({ code: "sandbox_process_failed" });
   });

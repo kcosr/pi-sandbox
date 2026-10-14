@@ -209,8 +209,8 @@ class DirectExecutor implements SandboxExecutor {
           stdin: validated.stdin,
           timeoutMs: validated.timeoutMs,
           maxOutputBytes: validated.maxOutputBytes,
-          onStdout: snapshot.onStdout,
-          onStderr: snapshot.onStderr,
+          ...(snapshot.onStdout === undefined ? {} : { onStdout: snapshot.onStdout }),
+          ...(snapshot.onStderr === undefined ? {} : { onStderr: snapshot.onStderr }),
         });
         const abort = () => child.abort(signal.reason as SandboxExecutionError);
         signal.addEventListener("abort", abort, { once: true });
