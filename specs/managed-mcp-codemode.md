@@ -267,7 +267,9 @@ Existing path/environment validation and size bounds apply after expansion.
 Installation validation checks syntax without resolving the installer's account.
 Inherited ambient values and values read through `*_from_env` are not templated.
 
-These same fields accept macOS-only `{{machine_id}}`. Resolve the hardware UUID
+On macOS, denied paths, configured scoped environment values, and explicit stdio
+`env` values support `{{machine_id}}`. Hidden paths are available only with Linux
+Bubblewrap and cannot resolve this macOS-only macro. Resolve the hardware UUID
 through a fixed bounded OS query only when an effective value requests it, sharing
 one result across startup without ambient overrides. A lookup failure in policy
 fails startup; an MCP-stdio-only failure makes that server unavailable. Installation

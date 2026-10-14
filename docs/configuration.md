@@ -84,8 +84,10 @@ every configured value under `environment.pi`, `environment.sandbox`, and
 `environment.extensions.<id>`, and MCP stdio `env` values. These fields also
 accept `{{username}}` and `{{uid}}` anywhere in a string. For example,
 `/srv/accounts/{{username}}` becomes `/srv/accounts/alice`, and `~/cache/{{uid}}`
-becomes `/home/alice/cache/1001` for that account. On macOS these same fields also
-accept `{{machine_id}}`, which expands to the host's hardware UUID (`IOPlatformUUID`).
+becomes `/home/alice/cache/1001` for that account. On macOS, `filesystem.denied_paths`
+and the environment fields listed above also support `{{machine_id}}`, which
+expands to the host's hardware UUID (`IOPlatformUUID`). `filesystem.hidden_paths`
+is available only with Linux Bubblewrap and cannot resolve this macOS-only macro.
 
 Expansion happens once at operational startup, after broker rules are merged,
 using the invoking effective user's canonical OS account name, numeric UID,
