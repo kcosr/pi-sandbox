@@ -13,7 +13,7 @@
 
 - Default macOS packages to Seatbelt execution with networking disabled, directory denials and read-only CWD support. Process cleanup is best effort; background survivors retain their original grants. ([#29](https://github.com/kcosr/pi-sandbox/pull/29))
 - Add build-selected macOS tool bundles with pinned native inventories, packaged licenses, relocatable paths and no runtime tool-directory override. ([#29](https://github.com/kcosr/pi-sandbox/pull/29))
-- Support `bearer_token_from_env` for HTTP MCP credentials, adding the Bearer prefix to a raw environment token.
+- Support `bearer_token_from_env` for HTTP MCP credentials, adding the Bearer prefix to a raw environment token. ([#31](https://github.com/kcosr/pi-sandbox/pull/31))
 
 ### Changed
 
