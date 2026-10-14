@@ -41,14 +41,20 @@ export function startSandboxProcess(options: SandboxProcessOptions): SandboxProc
     finished = false,
     outputBytes = 0;
   let timeout: NodeJS.Timeout | undefined;
+  let signallingFailed = false;
 
   const killGroup = () => {
-    if (exited || child.pid === undefined) return;
+    if (exited || signallingFailed || child.pid === undefined) return;
     try {
       process.kill(-child.pid, "SIGKILL");
     } catch (cause) {
-      if ((cause as NodeJS.ErrnoException).code !== "ESRCH")
-        failure ??= new SandboxExecutionError("sandbox_process_failed", { cause });
+      if ((cause as NodeJS.ErrnoException).code !== "ESRCH") {
+        signallingFailed = true;
+        failure = new SandboxExecutionError(failure?.code ?? "sandbox_process_failed", { cause });
+        // Report uncertain termination instead of hanging close forever. The
+        // process may survive within its original grants; no monitor is added.
+        child.unref();
+      }
     }
   };
   const abort = (error: SandboxExecutionError) => {
@@ -102,6 +108,7 @@ export function startSandboxProcess(options: SandboxProcessOptions): SandboxProc
   });
   child.stdout.on("error", failed);
   child.stderr.on("error", failed);
+  child.once("error", failed);
 
   const append = (
     stream: Readable,
@@ -134,12 +141,24 @@ export function startSandboxProcess(options: SandboxProcessOptions): SandboxProc
   const result = waitForSandboxCommand(child, {
     signal: drain.signal,
     isOutputPending: () => callbacks.size > 0,
+    abandonOnAbort: () => signallingFailed,
   })
     .then(
       async (exit) => {
         // The process clock ends at completion, not after transport acknowledgments.
         if (timeout !== undefined) clearTimeout(timeout);
-        if (!failure) await Promise.all([...callbacks]);
+        if (!failure && callbacks.size > 0) {
+          let stopWaiting!: () => void;
+          const cancelled = new Promise<void>((resolve) => {
+            stopWaiting = resolve;
+          });
+          drain.signal.addEventListener("abort", stopWaiting, { once: true });
+          try {
+            if (!drain.signal.aborted) await Promise.race([Promise.all([...callbacks]), cancelled]);
+          } finally {
+            drain.signal.removeEventListener("abort", stopWaiting);
+          }
+        }
         if (failure) throw failure;
         return { ...exit, stdout: Buffer.concat(stdout), stderr: Buffer.concat(stderr) };
       },

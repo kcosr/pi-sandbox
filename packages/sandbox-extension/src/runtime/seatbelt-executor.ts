@@ -12,7 +12,7 @@ import {
 } from "./contracts.js";
 import { resolveDirectToolCommands } from "./direct-executor.js";
 import { assertToolBundlePlacement, snapshotToolBundle, toolBundlePath } from "./tool-bundle.js";
-import { SeatbeltAdmissionQueue } from "./seatbelt/admission.js";
+import { CommandRegistry } from "./command-registry.js";
 import {
   canonicalizeSeatbeltDirectory,
   type CanonicalSeatbeltDirectory,
@@ -22,7 +22,7 @@ import {
   type SeatbeltPolicy,
   type SeatbeltProfile,
 } from "./seatbelt/policy.js";
-import { startSeatbeltProcess, type SeatbeltProcess } from "./seatbelt/process.js";
+import { startSeatbeltProcess } from "./seatbelt/process.js";
 import {
   canReadSeatbeltPath,
   resolveSeatbeltLimits,
@@ -170,8 +170,7 @@ export async function createSeatbeltExecutor(
 class SeatbeltExecutor implements SandboxExecutor {
   readonly cwd: string;
   readonly home: string;
-  readonly #admission = new SeatbeltAdmissionQueue();
-  #active: SeatbeltProcess | undefined;
+  readonly #commands = new CommandRegistry();
   #closed = false;
   #closing: Promise<void> | undefined;
   #fatal: SandboxExecutionError | undefined;
@@ -221,7 +220,7 @@ class SeatbeltExecutor implements SandboxExecutor {
             PROBE_FILE: path.join(this.cwd, `.pi-sandbox-probe-${randomUUID()}`),
             PROBE_WRITABLE: String(this.policy.workspaceWritable),
           },
-          timeoutMs: Math.min(10_000, this.limits.maximumTimeoutMs),
+          timeoutMs: Math.min(10_000, this.limits.maximumTimeoutMs ?? 10_000),
           maxOutputBytes: Math.min(16_384, this.limits.maximumOutputBytes),
         },
         signal === undefined ? {} : { signal },
@@ -231,7 +230,7 @@ class SeatbeltExecutor implements SandboxExecutor {
     } catch (cause) {
       const error = new SandboxExecutionError("sandbox_start_failed", { cause });
       this.#fatal ??= error;
-      this.#admission.fail(error);
+      this.#commands.fail(error);
       throw error;
     }
   }
@@ -242,76 +241,62 @@ class SeatbeltExecutor implements SandboxExecutor {
   ): Promise<SandboxCommandResult> {
     this.available();
     const validated = seatbeltRequest(request, this.limits, this.cwd);
-    const deadline = Date.now() + validated.timeoutMs;
     const snapshot = { ...options };
-    const release = await this.#admission.acquire(snapshot.signal, deadline);
-    let child: SeatbeltProcess | undefined;
-    const abort = () => child?.abort(new SandboxExecutionError("sandbox_aborted"));
-    try {
-      this.available();
-      await Promise.all([this.runtime, ...this.identities].map(revalidate)).catch(
-        (cause: unknown) => {
-          this.#fatal = new SandboxExecutionError("sandbox_process_failed", { cause });
-          this.#admission.fail(this.#fatal);
-          throw this.#fatal;
-        },
-      );
-      if (
-        (await canonicalizeSeatbeltDirectory(validated.cwd)) !== validated.cwd ||
-        !canReadSeatbeltPath(this.policy, validated.cwd)
-      )
-        throw new SandboxExecutionError("sandbox_invalid_request");
-      this.available();
-      if (snapshot.signal?.aborted) throw new SandboxExecutionError("sandbox_aborted");
-      const remaining = deadline - Date.now();
-      if (remaining <= 0) throw new SandboxExecutionError("sandbox_timeout");
-      child = startSeatbeltProcess(
-        SEATBELT_LAUNCHER,
-        profileArguments(this.profile, [
-          "/bin/sh",
-          "-c",
-          ENTER_CWD,
-          "seatbelt-job",
-          validated.cwd,
-          this.cwd,
-          ...validated.argv,
-        ]),
-        { ...this.environment, ...validated.environment },
-        validated.stdin,
-        remaining,
-        validated.maxOutputBytes,
-        {
-          onStdout: (chunk) => this.#admission.context.run(true, () => snapshot.onStdout?.(chunk)),
-          onStderr: (chunk) => this.#admission.context.run(true, () => snapshot.onStderr?.(chunk)),
-        },
-      );
-      this.#active = child;
-      snapshot.signal?.addEventListener("abort", abort, { once: true });
-      return await child.result;
-    } catch (cause) {
-      throw cause instanceof SandboxExecutionError
-        ? cause
-        : new SandboxExecutionError("sandbox_process_failed", { cause });
-    } finally {
-      snapshot.signal?.removeEventListener("abort", abort);
-      this.#active = undefined;
-      release();
-    }
+    return this.#commands
+      .run(snapshot.signal, async (signal) => {
+        this.available();
+        await Promise.all([this.runtime, ...this.identities].map(revalidate)).catch(
+          (cause: unknown) => {
+            this.#fatal = new SandboxExecutionError("sandbox_process_failed", { cause });
+            this.#commands.fail(this.#fatal);
+            throw this.#fatal;
+          },
+        );
+        if (
+          (await canonicalizeSeatbeltDirectory(validated.cwd)) !== validated.cwd ||
+          !canReadSeatbeltPath(this.policy, validated.cwd)
+        )
+          throw new SandboxExecutionError("sandbox_invalid_request");
+        this.available();
+        if (signal.aborted) throw signal.reason;
+        const child = startSeatbeltProcess(
+          SEATBELT_LAUNCHER,
+          profileArguments(this.profile, [
+            "/bin/sh",
+            "-c",
+            ENTER_CWD,
+            "seatbelt-job",
+            validated.cwd,
+            this.cwd,
+            ...validated.argv,
+          ]),
+          { ...this.environment, ...validated.environment },
+          validated.stdin,
+          validated.timeoutMs,
+          validated.maxOutputBytes,
+          { onStdout: snapshot.onStdout, onStderr: snapshot.onStderr },
+        );
+        const abort = () => child.abort(signal.reason as SandboxExecutionError);
+        signal.addEventListener("abort", abort, { once: true });
+        if (signal.aborted) abort();
+        try {
+          return await child.result;
+        } finally {
+          signal.removeEventListener("abort", abort);
+        }
+      })
+      .catch((cause: unknown) => {
+        throw cause instanceof SandboxExecutionError
+          ? cause
+          : new SandboxExecutionError("sandbox_process_failed", { cause });
+      });
   }
 
   close(): Promise<void> {
-    if (this.#admission.context.getStore())
-      return Promise.reject(
-        new SandboxExecutionError("sandbox_invalid_request", {
-          cause: new Error("sandbox_reentrant"),
-        }),
-      );
     if (!this.#closing) {
       this.#closed = true;
-      this.#admission.fail(new SandboxExecutionError("sandbox_closed"));
-      this.#active?.abort(new SandboxExecutionError("sandbox_closed"));
       this.#closing = (async () => {
-        await this.#admission.idle();
+        await this.#commands.close();
         await cleanupRuntime(this.runtime);
       })();
     }

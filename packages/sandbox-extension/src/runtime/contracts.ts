@@ -95,8 +95,6 @@ export type SandboxExecutionErrorCode =
   | "sandbox_invalid_request"
   | "sandbox_output_limit_exceeded"
   | "sandbox_process_failed"
-  | "sandbox_queue_full"
-  | "sandbox_admission_timeout"
   | "sandbox_start_failed"
   | "sandbox_timeout";
 

@@ -15,7 +15,11 @@ export interface CommandExit {
  */
 export function waitForSandboxCommand(
   child: ChildProcess,
-  options: { readonly signal?: AbortSignal; readonly isOutputPending?: () => boolean } = {},
+  options: {
+    readonly signal?: AbortSignal;
+    readonly isOutputPending?: () => boolean;
+    readonly abandonOnAbort?: () => boolean;
+  } = {},
 ): Promise<CommandExit> {
   return new Promise((resolve, reject) => {
     let result: CommandExit | undefined;
@@ -93,6 +97,7 @@ export function waitForSandboxCommand(
       child.stdout?.destroy();
       child.stderr?.destroy();
       if (result !== undefined) finish(result);
+      else if (options.abandonOnAbort?.()) finish({ exitCode: null, signal: null });
     };
 
     child.stdout?.once("end", onStdoutEnd);
