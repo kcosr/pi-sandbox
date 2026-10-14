@@ -77,7 +77,7 @@ dependency.
 - compiled extension catalog, manifest, schema, identifier, and collision
   validation;
 - required extension selection and exact dynamic model-tool policy sets;
-- strict `none`, `local`, and `host` network modes, and optional process lifetime;
+- strict `none`, `local`, and `host` network modes, and optional administrator command timeout caps;
 - fieldwise execution overrides, `none < local < host` and `command < sandbox`
   joins, omission inheritance, and rejection of effective direct persistence;
 - required CWD write-access configuration, parent inheritance and user/group overrides,
@@ -179,12 +179,12 @@ standard-extension acceptance remains `npm run test:extension`.
 
 Verify all seven tools, user `!`, canonical CWD, read-only and writable CWD,
 ordinary outside reads with denied writes, real host scratch, and existing
-canonical directory denials. Reject unsupported `local`, sandbox lifetime,
+canonical directory denials. Reject unsupported `local`, removed lifetime fields,
 nonempty hidden paths, missing/symlink/file denials, contradictory grants and
 unknown launcher fields. Verify none/host networking, no direct fallback, bounded
-admission/input/output, cancellation and close, and accurate diagnostics.
+input/output, concurrent execution, cancellation and close, and accurate diagnostics.
 
-Serial admission does not guarantee descendant cleanup. Include an explicit
+Scheduling does not exclude surviving descendants. Include an explicit
 residual-risk test demonstrating that background descendants may outlive ordinary
 foreground completion with their original grants. Cancellation/close cleanup
 attempts apply only while the direct child remains active. Test fixtures must
@@ -223,12 +223,15 @@ prove kernel-observable properties:
   executor establishes multiple file masks without waiting on empty JS pipes;
 - `/tmp` is writable, private from host `/tmp`, and persistent between calls in
   one Pi process;
-- command lifetime stays serial; sandbox lifetime permits four overlapping
-  commands in one stable namespace with separate input, output and results;
-- outstanding requests are bounded; queue overflow and queued cancellation do
-  not interrupt active work, and cleanup finishes before queued work starts;
-- result acceptance and retirement tolerate concurrent failures without stale
-  messages affecting subsequent commands;
+- more than four and more than 64 lightweight commands can overlap with independent
+  input, output and results; no fixed active/outstanding count rejection;
+- pre-launch cancellation prevents execution; active cancellation, timeout,
+  overflow, callback/spawn failure preserve peers;
+- result/start/retirement races cannot settle twice or affect another request;
+- optional timeout starts at successful launch, excludes approval/file/transport
+  waits, and remains authoritative through drain;
+- quiet uncapped commands do not trigger transport watchdogs, and backpressure
+  keeps cancel/close responsive at complete-frame boundaries;
 - host pseudo-filesystems and privileged sockets are not exposed;
 - TCP and pathname Unix-socket attempts inside and outside the writable CWD
   fail in offline mode;
@@ -238,12 +241,12 @@ prove kernel-observable properties:
 - datagram socket pairs cannot reconnect to host sockets in `none` or `local`,
   with a host-mode positive control; Bun stream-pair child spawning still works;
 - a server started in one call is reachable with curl from another under local
-  networking and sandbox process lifetime, while default command lifetime kills it;
+  networking, without a lifecycle mode switch;
 - post-exit output restarts the 100 ms idle timer; silent inherited pipes release
   the call, completed output cannot corrupt later calls, and timeout/output bounds
   still apply to continuously arriving output;
-- cancellation, timeout, output overflow and shutdown also remove previously
-  started background servers, including detached processes;
+- individual failures do not remove peer/background servers; final Linux namespace
+  shutdown removes remaining descendants, including detached processes;
 - `io_uring` cannot reopen socket authority on kernels where setup is otherwise
   permitted;
 - sandboxed `link` creation fails while pre-existing hard links remain the

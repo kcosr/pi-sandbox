@@ -60,6 +60,27 @@ describe("reusable sandbox factory", () => {
     },
   );
 
+  it("preserves optional and fractional caller timeouts beyond ten minutes", async () => {
+    const f = fixture();
+    await createSandboxExtension(f.options)(f.pi);
+    await f.invoke("bash", { command: "true" });
+    expect(f.execute.mock.calls.at(-1)?.[0]).not.toHaveProperty("timeoutMs");
+    for (const [timeout, timeoutMs] of [
+      [0.0001, 1],
+      [1.125, 1125],
+      [3600, 3_600_000],
+      [2_147_483.647, 2_147_483_647],
+    ]) {
+      await f.invoke("bash", { command: "true", timeout });
+      expect(f.execute.mock.calls.at(-1)?.[0].timeoutMs).toBe(timeoutMs);
+    }
+    for (const timeout of [0, -1, Infinity, NaN, 2_147_483.648]) {
+      const count = f.execute.mock.calls.length;
+      await expect(f.invoke("bash", { command: "true", timeout })).rejects.toThrow("timeout");
+      expect(f.execute.mock.calls.length).toBe(count);
+    }
+  });
+
   it("registers eagerly without obtaining an executor or assuming managed Pi APIs", async () => {
     const f = fixture();
     const getExecutor = vi.fn(() => {

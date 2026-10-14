@@ -5,7 +5,7 @@ import { join } from "node:path";
 import { readSandboxConfig, parseSandboxConfig } from "./config.js";
 
 const config = {
-  version: 5,
+  version: 6,
   mode: "owned",
   backend: { kind: "direct", environment: {} },
   userBash: false,
@@ -23,6 +23,7 @@ describe("standalone sandbox configuration", () => {
       { ...config, version: 2 },
       { ...config, version: 3 },
       { ...config, version: 4 },
+      { ...config, version: 5 },
       { ...config, requirePermissions: undefined },
       { ...config, requirePermissions: "true" },
       { ...config, backend: { kind: "automatic", environment: {} } },
@@ -58,12 +59,36 @@ describe("standalone sandbox configuration", () => {
     ])
       expect(() => parseSandboxConfig({ ...config, backend: { ...backend, ...patch } })).toThrow();
   });
+  it("admits one common optional timeout cap and rejects obsolete backend lifetime", () => {
+    for (const maximumTimeoutMs of [0.5, 1, 60_000, 3_600_000, 2_147_483_647])
+      expect(parseSandboxConfig({ ...config, maximumTimeoutMs }).maximumTimeoutMs).toBe(
+        maximumTimeoutMs,
+      );
+    for (const maximumTimeoutMs of [undefined, null, 0, -1, Infinity, NaN, 2_147_483_648, "1000"])
+      expect(() => parseSandboxConfig({ ...config, maximumTimeoutMs })).toThrow("maximumTimeoutMs");
+    const backend = {
+      kind: "bubblewrap",
+      executable: "/usr/bin/bwrap",
+      runtime: "/usr/bin/node",
+      network: "none",
+      cwdWritable: true,
+      hiddenPaths: [],
+      environment: {},
+    };
+    expect(
+      parseSandboxConfig({ ...config, backend, maximumTimeoutMs: 3_600_000 }).maximumTimeoutMs,
+    ).toBe(3_600_000);
+    for (const processLifetime of ["command", "sandbox"])
+      expect(() =>
+        parseSandboxConfig({ ...config, backend: { ...backend, processLifetime } }),
+      ).toThrow("configuration keys");
+  });
   it("rejects removed VM ownership and controller attachments", () => {
     expect(() => parseSandboxConfig({ ...config, backend: { kind: "smolvm" } })).toThrow(
       "Unsupported sandbox backend",
     );
     expect(() =>
-      parseSandboxConfig({ version: 5, mode: "attached", attachment: {}, userBash: false }),
+      parseSandboxConfig({ version: 6, mode: "attached", attachment: {}, userBash: false }),
     ).toThrow();
   });
   it.skipIf(process.platform === "win32")(

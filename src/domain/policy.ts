@@ -18,15 +18,10 @@ import { buildLayout } from "../build-layout/index.js";
 
 export const IDENTITY_BROKER_SOCKET_PATH = buildLayout.identitySocketPath;
 
-import type {
-  NetworkMode,
-  ProcessLifetime,
-} from "../../packages/sandbox-extension/src/runtime/contracts.js";
+import type { NetworkMode } from "../../packages/sandbox-extension/src/runtime/contracts.js";
 export {
   NETWORK_MODES,
-  PROCESS_LIFETIMES,
   type NetworkMode,
-  type ProcessLifetime,
 } from "../../packages/sandbox-extension/src/runtime/contracts.js";
 
 export interface NetworkConfig {
@@ -45,7 +40,7 @@ export interface FilesystemConfig {
 
 export interface ExecutionConfig {
   readonly backend: ExecutionBackend;
-  readonly processLifetime: ProcessLifetime;
+  readonly maximumTimeoutMs?: number;
 }
 
 export interface ToolPolicy extends SubjectPolicy {
@@ -92,7 +87,7 @@ export type IdentityConfig = DisabledIdentityConfig | BrokerIdentityConfig;
 
 export interface IdentityOverrides {
   readonly modelsFile?: string;
-  readonly execution?: Partial<ExecutionConfig>;
+  readonly execution?: Pick<ExecutionConfig, "backend">;
   readonly network?: NetworkConfig;
   readonly filesystem?: Pick<FilesystemConfig, "cwdWritable">;
   readonly tools: Readonly<Partial<Record<string, SubjectPolicy>>>;
@@ -107,7 +102,7 @@ export interface ManagedEnvironment {
 }
 
 export interface SandboxConfig {
-  readonly configVersion: 12;
+  readonly configVersion: 13;
   readonly codemode: CodeModeConfig;
   readonly mcp: McpConfig;
   readonly audit: AuditConfig;

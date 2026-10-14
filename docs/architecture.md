@@ -19,11 +19,10 @@ selects Bubblewrap, Seatbelt or direct execution and owns its audit metadata. Th
 approved. Branding, fingerprints and approval UI remain internal; no event-bus
 permission provider or extension hook ordering is involved.
 
-Standalone sandbox configuration version 5 describes execution only. Its entry
+Standalone sandbox configuration version 6 describes execution only. Its entry
 supplies an explicit no-op authorization callback; it does not supply managed
 approvals. It owns one backend per Pi process across conversation replacement;
-quit or explicit reload closes it. Background survival follows the configured
-process lifetime. User `!` shell retains the independent `userBash` choice.
+quit or explicit reload closes it. Background descendants may survive command completion. User `!` shell retains the independent `userBash` choice.
 
 The Git package has one clone core. Its normal Pi entry reads explicit standalone
 JSON and owns a bounded host executor; its programmatic factory borrows an
@@ -64,7 +63,7 @@ trusted host
         bounded direct-argv host executor
         selected built-in executor
           -> Bubblewrap process-lifetime worker and framed pipe IPC (Linux)
-          -> or serial Seatbelt-policy child (macOS)
+          -> or independent Seatbelt-policy children (macOS)
           -> or bounded direct host child (Linux/macOS)
 ```
 
@@ -359,8 +358,7 @@ applies explicit interior denials. Equal-CWD denial is rejected. Startup rejects
 contradictory grants and unavailable prerequisites without direct fallback.
 
 Networking accepts `none` or `host`; `local` is rejected because private loopback
-is unavailable. Process lifetime is `command` only. Commands run serially with
-bounded admission. Process-group termination and scratch cleanup are best effort.
+is unavailable. Commands run independently without a backend concurrency ceiling. Process-group termination and scratch cleanup are best effort.
 Ordinary foreground completion may leave background descendants alive, even in
 the same process group. Failure/cancellation/close attempts signal the process
 group only while the direct child is active; detached descendants can escape
@@ -384,17 +382,16 @@ as `HOME`, `PATH`, or `TMPDIR`.
 The host and worker communicate over the worker's anonymous stdin/stdout pipes
 using length-prefixed, versioned JSON frames. There is no socket, listening
 port, or filesystem control endpoint. Requests carry an identifier, direct
-argument vector, bounded input, duration, and output ceiling. The worker runs one
-command at a time in `command` lifetime and up to four in `sandbox` lifetime,
-with separate output and completion state per request. At most 64 requests may
-be outstanding; additional calls fail with `sandbox_queue_full` without executing.
-In `sandbox` lifetime, a result is offered to the parent before it is committed.
-The parent accepts it, and the worker confirms success or reports a concurrent
-cleanup failure before the caller settles. Terminal requests are retained until
-the parent acknowledges retirement, so delayed cancellation or acceptance cannot
-affect newly admitted commands. Transport watchdogs fail closed on inactivity;
-ongoing transfer keeps acknowledgements alive behind large queued inputs. They
-do not add an absolute deadline to the post-exit output drain.
+argument vector, bounded input, optional duration, and output ceiling. Protocol 4
+tracks independent requests without serial admission, four-active or 64-outstanding
+limits. Transport backpressure bounds each encoded frame and gives cancellation
+and shutdown priority at whole-frame boundaries while preserving request order.
+A request-tagged start notification records launch; the worker owns the command
+clock from actual spawn through completion. Transport/startup deadlines are separate
+from optional command deadlines; quiet unlimited commands are not stalled transports.
+Terminal acknowledgements and request IDs prevent delayed cancellation or result
+frames from affecting another execution. A command already completed in the worker
+cannot become a timeout merely because its result transmission is delayed.
 
 The mount view is:
 
@@ -485,36 +482,30 @@ file descriptor and rejects unsupported architectures before execution.
 ## Execution and lifecycle
 
 Structured tools use fixed absolute executables with explicit argument arrays;
-no host shell is implied. Input, output, arguments, and duration are bounded.
-Malformed inputs, process startup failure, excessive output, timeout, and
-cancellation fail closed. Bash is the only operation that deliberately invokes a
-shell, and its complete approved command is passed as one argument.
+no host shell is implied. Arguments, input and output are bounded. Commands have
+no implicit timer; caller timeouts and the optional administrator maximum begin
+at successful launch, after approvals, file coordination and transport waiting.
+The maximum applies separately to each command in a multi-step operation.
 
-Bubblewrap `execution.process_lifetime` defaults to `command`, removing remaining
-command processes after every operation. `sandbox` preserves them after ordinary
-foreground exit, including nonzero status. The process-owned worker permits
-bounded parallel execution in this mode, and background processes also
-survive logical Pi session changes. Same-path write/edit queues still cover whole
-multi-step mutations; ordinary Pi tool batches retain their sequencing rules.
-Scheduling does not exclude background
-writers, including during managed host `git_clone`; see the accepted clone race
-in [security.md](security.md).
+All backends preserve Pi's scheduling and same-file mutation coordination without
+an extra serial queue or command-count ceiling. Commands complete independently;
+background descendants may survive completion and logical session replacement.
+Scheduling is not exclusion against surviving writers, including the accepted
+host Git destination race in [security.md](security.md).
 
-In `sandbox` mode, match pinned Pi 1.1.0's post-exit idle-drain behavior: complete
-when streams close or output has been idle for 100 ms, restarting that timer on
-each chunk. Continued output defers completion under the existing command
-timeout and output limits; there is no separate absolute drain deadline. At
-completion, close the operation's streams and stop its output callbacks before
-publishing the terminal response. Background programs should redirect output to
-files to avoid broken pipes after the originating call completes.
+Match pinned Pi's 100 ms post-exit idle drain, restarting on every output chunk,
+without another absolute drain deadline. The optional command timer remains
+active through drain; unlimited commands can continue draining until quiet, closed,
+cancelled or over the output bound. Completion detaches streams and callbacks.
 
-On active cancellation, timeout, output overflow or execution failure, the
-worker stops admission, interrupts all affected active calls, and completes
-sandbox-wide cleanup before starting queued work. This also terminates
-previously started servers. A queued cancellation only removes that
-queued request. Closing the executor terminates the worker and complete
-Bubblewrap process tree. Direct execution remains command-scoped and requires
-`process_lifetime = "command"`.
+Cancellation, timeout, overflow, callback failure and spawn failure settle only
+the affected execution. Nonzero exit is an ordinary result. Best-effort process-group
+cleanup applies only while the direct child remains active; never signal a reaped
+child's old PID/PGID. Linux final executor shutdown retains its namespace boundary;
+fatal worker/transport failure may end the executor. Mac survivors remain confined
+to their original grants. No watcher, guardian, Python helper or descendant monitor
+is added. Shared tracking, timeout resolution and output/completion handling are
+backend-neutral where practical; launch and termination remain backend-specific.
 
 There is never a direct-host fallback. Direct built-in execution occurs only
 when `execution.backend = "direct"` was admitted at startup. Managed host

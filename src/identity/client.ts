@@ -3,7 +3,6 @@ import { createConnection } from "node:net";
 import {
   POLICY_MODES,
   NETWORK_MODES,
-  PROCESS_LIFETIMES,
   SESSION_GRANT_POLICIES,
   IDENTITY_BROKER_SOCKET_PATH,
   emptyManagedEnvironment,
@@ -20,7 +19,7 @@ import {
   type IdentityOverrides,
 } from "../domain/index.js";
 
-export const IDENTITY_BROKER_PROTOCOL_VERSION = 6;
+export const IDENTITY_BROKER_PROTOCOL_VERSION = 7;
 export const IDENTITY_BROKER_TIMEOUT_MS = 10_000;
 export const MAXIMUM_IDENTITY_RESPONSE_BYTES = 512 * 1024;
 
@@ -30,14 +29,14 @@ export interface BrokerIdentity {
 }
 
 interface BrokerSuccessResponse {
-  readonly version: 6;
+  readonly version: 7;
   readonly status: "ok";
   readonly environment: ManagedEnvironment;
   readonly overrides: IdentityOverrides;
 }
 
 interface BrokerErrorResponse {
-  readonly version: 6;
+  readonly version: 7;
   readonly status: "error";
   readonly code: "identity_store_unavailable" | "protocol_error";
 }
@@ -130,7 +129,7 @@ export function parseBrokerResponse(source: string): BrokerResponse {
       throw invalidResponse();
     }
     return Object.freeze({
-      version: 6,
+      version: 7,
       status: "ok",
       environment: parseBrokerEnvironment(value.environment),
       overrides: parseIdentityOverrides(value.overrides),
@@ -166,7 +165,7 @@ export function applyIdentityOverrides(
     ]),
   ) as Record<string, ToolPolicy>;
   return Object.freeze({
-    configVersion: 12,
+    configVersion: 13,
     codemode: base.codemode,
     mcp: base.mcp,
     audit: base.audit,
@@ -184,11 +183,10 @@ export function applyIdentityOverrides(
 
 function applyExecutionOverride(
   base: ExecutionConfig,
-  override?: Partial<ExecutionConfig>,
+  override?: Pick<ExecutionConfig, "backend">,
 ): ExecutionConfig {
   const backend = override?.backend ?? base.backend;
-  const processLifetime = override?.processLifetime ?? base.processLifetime;
-  return Object.freeze({ backend, processLifetime });
+  return Object.freeze({ ...base, backend });
 }
 
 function parseIdentityOverrides(value: unknown): IdentityOverrides {
@@ -199,35 +197,15 @@ function parseIdentityOverrides(value: unknown): IdentityOverrides {
     throw invalidResponse();
   }
 
-  let execution: Partial<ExecutionConfig> | undefined;
+  let execution: Pick<ExecutionConfig, "backend"> | undefined;
   if (Object.hasOwn(value, "execution")) {
     if (
       !isRecord(value.execution) ||
-      !hasAllowedKeys(value.execution, ["backend", "process_lifetime"]) ||
-      Object.keys(value.execution).length === 0
-    ) {
-      throw invalidResponse();
-    }
-    const fields = value.execution;
-    if (
-      Object.hasOwn(fields, "backend") &&
-      fields.backend !== "bubblewrap" &&
-      fields.backend !== "direct"
+      !hasExactKeys(value.execution, ["backend"]) ||
+      (value.execution.backend !== "bubblewrap" && value.execution.backend !== "direct")
     )
       throw invalidResponse();
-    if (
-      Object.hasOwn(fields, "process_lifetime") &&
-      !PROCESS_LIFETIMES.includes(fields.process_lifetime as ExecutionConfig["processLifetime"])
-    )
-      throw invalidResponse();
-    execution = Object.freeze({
-      ...(Object.hasOwn(fields, "backend")
-        ? { backend: fields.backend as ExecutionConfig["backend"] }
-        : {}),
-      ...(Object.hasOwn(fields, "process_lifetime")
-        ? { processLifetime: fields.process_lifetime as ExecutionConfig["processLifetime"] }
-        : {}),
-    });
+    execution = Object.freeze({ backend: value.execution.backend });
   }
   let filesystem: Pick<FilesystemConfig, "cwdWritable"> | undefined;
   if (Object.hasOwn(value, "filesystem")) {

@@ -5,14 +5,14 @@ import { formatSandboxMounts, formatSandboxPolicy, formatSandboxSummary } from "
 
 function diagnosticConfig(): SandboxConfig {
   return {
-    configVersion: 12,
+    configVersion: 13,
     codemode: { enabled: false, timeoutMs: 300000 },
     mcp: { servers: {} },
     sessions: { retentionDays: 0 },
     audit: { enabled: false, facility: "local0" },
     modelsFile: "/etc/pi-sandbox/models.json",
     filesystem: { cwdWritable: true, deniedPaths: [], hiddenPaths: [] },
-    execution: { backend: "bubblewrap", processLifetime: "command" },
+    execution: { backend: "bubblewrap" },
     identity: { mode: "disabled" },
     network: { mode: "none" },
     environment: { pi: {}, sandbox: {}, extensions: {} },
@@ -34,7 +34,7 @@ describe("sandbox diagnostics", () => {
   it("describes Seatbelt denials, host scratch and best-effort lifecycle without namespace claims", () => {
     const config = {
       ...diagnosticConfig(),
-      execution: { backend: "seatbelt", processLifetime: "command" },
+      execution: { backend: "seatbelt" },
       filesystem: { cwdWritable: false, hiddenPaths: [], deniedPaths: ["/Users/alice/private"] },
     } satisfies SandboxConfig;
     const mounts = formatSandboxMounts("/Users/alice/work", config.execution, config.filesystem);
@@ -61,7 +61,7 @@ describe("sandbox diagnostics", () => {
         configPath: "/etc/pi-sandbox/config.toml",
         modelsFile: "/etc/pi-sandbox/models.json",
         filesystem: { cwdWritable: true, deniedPaths: [], hiddenPaths: [] },
-        execution: { backend: "bubblewrap", processLifetime: "command" },
+        execution: { backend: "bubblewrap" },
         identity: { mode: "disabled" },
         network: { mode: "none" },
         extensions: [],
@@ -74,7 +74,8 @@ Hidden paths:  none
 Denied paths:  none
 CWD access:    read/write
 Lifetime:      pi-sandbox process
-Processes:     cleaned up after each command
+Timeout cap:   none
+Processes:     independent commands; background descendants remain until sandbox shutdown
 Code mode:     disabled
 MCP servers:   0
 Execution:     Bubblewrap sandbox
@@ -95,7 +96,7 @@ Use /sandbox mounts or /sandbox policy for details.`);
       configPath: "/etc/pi-sandbox/config.toml",
       modelsFile: "/etc/pi-sandbox/models\u001b[31m.json",
       filesystem: { cwdWritable: true, deniedPaths: [], hiddenPaths: [] },
-      execution: { backend: "bubblewrap", processLifetime: "command" },
+      execution: { backend: "bubblewrap" },
       identity: { mode: "broker" },
       network: { mode: "host" },
       extensions: ["git", "service-api"],
@@ -114,7 +115,7 @@ Use /sandbox mounts or /sandbox policy for details.`);
   it("formats the semantic mount policy instead of raw mountinfo", () => {
     const output = formatSandboxMounts(
       "/work/project",
-      { backend: "bubblewrap", processLifetime: "command" },
+      { backend: "bubblewrap" },
       { cwdWritable: true, deniedPaths: [], hiddenPaths: [] },
     );
     expect(output).toContain("Sandbox mounts");
@@ -229,7 +230,7 @@ Use /sandbox mounts or /sandbox policy for details.`);
   it("reports local networking and persistent sandbox processes", () => {
     const config = {
       ...diagnosticConfig(),
-      execution: { backend: "bubblewrap", processLifetime: "sandbox" },
+      execution: { backend: "bubblewrap" },
       network: { mode: "local" },
     } satisfies SandboxConfig;
     const summary = formatSandboxSummary({
@@ -245,7 +246,7 @@ Use /sandbox mounts or /sandbox policy for details.`);
       userStateDir: "/home/alice/.pi/agent",
     });
     expect(summary).toContain("local (sandbox loopback only)");
-    expect(summary).toContain("persist until sandbox shutdown or operation failure");
+    expect(summary).toContain("background descendants remain until sandbox shutdown");
     const detail = formatSandboxPolicy(
       { config, hasSessionGrant: () => false, isToolActive: () => true },
       "bash",
@@ -257,7 +258,7 @@ Use /sandbox mounts or /sandbox policy for details.`);
   it("makes the lack of containment explicit in direct mode", () => {
     const config = {
       ...diagnosticConfig(),
-      execution: { backend: "direct", processLifetime: "command" },
+      execution: { backend: "direct" },
       network: { mode: "host" },
     } satisfies SandboxConfig;
     const summary = formatSandboxSummary({

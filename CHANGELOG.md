@@ -2,9 +2,11 @@
 
 ## Unreleased
 
+- Follow Pi's parallel tool scheduling across backends, isolate command cancellation from peers, and replace implicit command timeouts with an optional administrator maximum. Managed configuration is now version 13 and standalone sandbox configuration version 6; obsolete process-lifetime fields are rejected.
+
 ### Breaking changes
 
-- Require managed schema 12 with explicit `filesystem.denied_paths` and standalone sandbox schema 5.
+- Require explicit `filesystem.denied_paths` in managed policy and strict standalone Seatbelt configuration.
 
 - Remove smolvm execution, VM controllers and interactive VM terminals; managed Linux execution supports Bubblewrap or direct mode. ([#28](https://github.com/kcosr/pi-sandbox/pull/28))
 - Release reusable sandbox extension 0.8.0 with a backend-neutral executor interface and no VM/controller exports. Embedding applications own external execution and cleanup. ([#28](https://github.com/kcosr/pi-sandbox/pull/28))

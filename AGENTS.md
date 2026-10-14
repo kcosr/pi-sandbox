@@ -42,7 +42,7 @@ reimplemented rather than mechanically reapplied.
   sockets. Restrict anonymous socket pairs to connected Unix stream pairs in
   both isolated modes. Explicit `host` shares unrestricted host networking.
   Require `host` whenever `direct` is selected.
-- On macOS, Seatbelt uses fixed `/usr/bin/sandbox-exec` with ordinary host paths, read-only host access except writable CWD and real host scratch directories, and base-policy `filesystem.denied_paths` for canonical existing directory denials. Denied entries are not empty masks. Reject `hidden_paths`, `network.mode = "local"`, and sandbox process lifetime in Seatbelt mode; other backends reject denied paths. No private `/tmp` or PID/network/mount namespaces are claimed. Serial command execution uses best-effort process-group cleanup only. Background descendants may survive ordinary completion, cancellation, close, or owner death with their original grants; cleanup attempts signal only a still-active direct child's process group. Add no watcher, guardian, observer, Python helper, or new service. Keep macOS broker and audit disabled.
+- On macOS, Seatbelt uses fixed `/usr/bin/sandbox-exec` with ordinary host paths, read-only host access except writable CWD and real host scratch directories, and base-policy `filesystem.denied_paths` for canonical existing directory denials. Denied entries are not empty masks. Reject `hidden_paths`, `network.mode = "local"`, in Seatbelt mode; other backends reject denied paths. No private `/tmp` or PID/network/mount namespaces are claimed. Concurrent command execution uses best-effort process-group cleanup only. Background descendants may survive ordinary completion, cancellation, close, or owner death with their original grants; cleanup attempts signal only a still-active direct child's process group. Add no watcher, guardian, observer, Python helper, or new service. Keep macOS broker and audit disabled.
 - Build one precompiled Bun `pi-sandbox` application from pinned Pi source and the separately maintained Pi Sandbox extension. Force that extension through Pi's inline factory API, disable Pi's built-in extension factories, and permit no user/project extensions or package-management commands. Package the optional user/group resolver as a separate static Rust broker; it is never a wrapper or sandbox backend.
 - Keep reusable tools and execution backends in `packages/sandbox-extension`,
   and reusable Git clone in `packages/git-extension`. Keep permissions and approval
@@ -71,16 +71,9 @@ reimplemented rather than mechanically reapplied.
   scoped, and never persisted. User `!` shell is fixed-allow without a prompt
   and uses the selected execution backend.
 - Treat configuration as strict and versioned. Reject unknown fields and missing tool policy. Project-local content must not broaden system/user policy.
-- In Bubblewrap mode, start one worker for the `pi-sandbox` process. Default
-  `execution.process_lifetime = "command"` kills descendants after each operation;
-  `sandbox` preserves them across ordinary exits and logical Pi sessions, with
-  bounded parallel commands. Keep command lifetime serial. Match
-  pinned Pi's 100 ms post-exit idle drain, restarting on output, with no separate
-  absolute drain deadline. Retain sandbox-wide cleanup on active cancellation,
-  timeout, output overflow, execution failure and shutdown; interrupt affected
-  active calls and finish cleanup before admitting queued work. Direct execution
-  remains command-scoped. Preserve ordinary scheduling and the accepted host
-  Git clone destination race; add no clone-specific termination or publication helper.
+- Preserve Pi scheduling across backends: remove extra serial admission and fixed active/outstanding request ceilings, but retain same-file mutation coordination, approvals and bounded transport/input/output. Commands complete independently; background descendants may survive. Request-local cancellation, timeout, overflow and spawn/callback failures must not sweep peers. Linux final shutdown retains its namespace boundary; fatal worker/transport failure may abort the executor. No watcher, guardian, helper or descendant monitoring.
+- Commands have no implicit timeout. Optional managed base `execution.max_command_timeout_seconds`, standalone common `maximumTimeoutMs` and executor `limits.maximumTimeoutMs` cap each command from successful launch through drain, excluding admission/approval/coordination waits. Reject over-cap requests and obsolete lifetime/default-timeout fields. Preserve positive finite fractional caller seconds through JavaScript's timer ceiling. Keep host Git/MCP/Code Mode timing separate.
+- Preserve Pi's 100 ms post-exit idle drain reset by output, without an absolute drain deadline. Once the direct child exits never signal its former PID/process group; cancellation and close detach streams. Mac survivors retain their original grants. Keep the accepted host Git destination race; add no clone-specific termination or publication helper.
 
 ## Development
 

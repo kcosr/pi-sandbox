@@ -67,7 +67,8 @@ scope; those values remain model-visible. Broad filesystem reads can still expos
 credentials outside denied directories. Path aliases and existing filesystem
 relationships must not be treated as inode-level confidentiality guarantees.
 
-Commands are serial and bounded in argv, stdin, output and duration. Cleanup
+Commands may overlap and have bounded argv, stdin and output. Optional caller or
+administrator timeouts start at successful command launch. Cleanup
 signals the command process group on failure, cancellation or close only while
 the direct child remains active. Normal foreground completion can leave background
 descendants alive, including members of the same group. Cleanup is explicitly
@@ -417,15 +418,15 @@ requests inside the tool sandbox. Separately, optional user resolution occurs
 before sandbox startup through a root systemd Unix socket. That broker derives
 the caller's UID from `SO_PEERCRED`, returns only the matching user/group patch,
 and never enters the Bubblewrap boundary. The worker
-processes one command at a time in default `command` lifetime, removing descendants
-between requests. Optional `sandbox` lifetime admits up to four concurrent commands
-and preserves background processes
-between calls and logical sessions; those processes can continue acting with
-their existing sandbox authority without a new approval for each action.
-Active cancellation, timeout, output overflow and execution failure can terminate
-other active calls and previously started servers as part of sandbox-wide cleanup.
-No queued work starts until that cleanup finishes. Shutdown terminates
-the sandbox. Ordinary scheduling is not exclusion against background processes.
+runs independent commands without a fixed active/outstanding count limit.
+Background descendants may persist between calls and logical sessions with their
+existing authority, without a new approval for every action. Per-request failures
+and cancellation do not sweep peers. Active process-group cleanup is best effort
+and may miss detached descendants. Once the direct child exits no later group
+signal is sent; application exit state is not an atomic PID/PGID identity guarantee.
+Linux final executor shutdown terminates the namespace; fatal worker/transport
+failure can abort all requests. No total resource bound is promised for arbitrarily
+many concurrent calls. Ordinary scheduling is not exclusion against background writers.
 
 The filesystem may still contain credentials because broad host read access is
 intentional. Environment cleaning protects against accidental ambient authority;
