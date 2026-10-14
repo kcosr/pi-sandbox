@@ -627,6 +627,7 @@ async function main() {
         "packages/coding-agent/test/auth-check.test.ts",
         "packages/coding-agent/test/managed-model-runtime.test.ts",
         "packages/coding-agent/test/managed-main.test.ts",
+        "packages/coding-agent/test/managed-tools.test.ts",
         "packages/coding-agent/test/managed-version.test.ts",
         "packages/coding-agent/test/managed-tool-paths.test.ts",
         "packages/coding-agent/test/managed-extensions.test.ts",

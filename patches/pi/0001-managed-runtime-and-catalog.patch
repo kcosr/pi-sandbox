@@ -24,6 +24,26 @@ index 9266ddb..e0056ed 100644
  		credentials,
  		modelsStore: new InMemoryCodingAgentModelsStore(),
  		allowModelNetwork: false,
+diff --git a/packages/coding-agent/src/core/agent-session-services.ts b/packages/coding-agent/src/core/agent-session-services.ts
+index 9673ba6..104830a 100644
+--- a/packages/coding-agent/src/core/agent-session-services.ts
++++ b/packages/coding-agent/src/core/agent-session-services.ts
+@@ -61,6 +61,7 @@ export interface CreateAgentSessionFromServicesOptions {
+ 	tools?: string[];
+ 	excludeTools?: CreateAgentSessionOptions["excludeTools"];
+ 	noTools?: CreateAgentSessionOptions["noTools"];
++	includeBuiltinTools?: CreateAgentSessionOptions["includeBuiltinTools"];
+ 	customTools?: ToolDefinition[];
+ }
+ 
+@@ -227,6 +228,7 @@ export async function createAgentSessionFromServices(
+ 		tools: options.tools,
+ 		excludeTools: options.excludeTools,
+ 		noTools: options.noTools,
++		includeBuiltinTools: options.includeBuiltinTools,
+ 		customTools: options.customTools,
+ 		sessionStartEvent: options.sessionStartEvent,
+ 	});
 diff --git a/packages/coding-agent/src/core/model-runtime.ts b/packages/coding-agent/src/core/model-runtime.ts
 index 7c1dc82..256de7a 100644
 --- a/packages/coding-agent/src/core/model-runtime.ts
@@ -168,6 +188,27 @@ index 94bd2ba..4ebef63 100644
  										...extension,
  										models: refreshed,
  									});
+diff --git a/packages/coding-agent/src/core/sdk.ts b/packages/coding-agent/src/core/sdk.ts
+index f678ba4..5d2c421 100644
+--- a/packages/coding-agent/src/core/sdk.ts
++++ b/packages/coding-agent/src/core/sdk.ts
+@@ -69,6 +69,8 @@ export interface CreateAgentSessionOptions {
+ 	 *   but keep extension/custom tools enabled
+ 	 */
+ 	noTools?: "all" | "builtin";
++	/** Register stock tool definitions. False leaves only extension/custom tools. Defaults to true. */
++	includeBuiltinTools?: boolean;
+ 	/**
+ 	 * Optional allowlist of tool names or patterns, where `*` matches any characters.
+ 	 *
+@@ -466,6 +468,7 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
+ 		scopedModels: options.scopedModels,
+ 		resourceLoader,
+ 		customTools: options.customTools,
++		baseToolsOverride: options.includeBuiltinTools === false ? {} : undefined,
+ 		modelRuntime,
+ 		cacheWarmer,
+ 		initialActiveToolNames,
 diff --git a/packages/coding-agent/src/index.ts b/packages/coding-agent/src/index.ts
 index bd48684..fc3c188 100644
 --- a/packages/coding-agent/src/index.ts
@@ -181,7 +222,7 @@ index bd48684..fc3c188 100644
  export type {
  	PackageManager,
 diff --git a/packages/coding-agent/src/main.ts b/packages/coding-agent/src/main.ts
-index 0710ed9..5e23dba 100644
+index 0710ed9..189b150 100644
 --- a/packages/coding-agent/src/main.ts
 +++ b/packages/coding-agent/src/main.ts
 @@ -5,6 +5,7 @@
@@ -231,15 +272,17 @@ index 0710ed9..5e23dba 100644
  			result = await checkProviderAuth(parsed, modelRuntime, { refresh: !command.noRefresh });
  			if (command.credentials && result.status === "ready") {
  				credential = await getProviderCredential(result.provider, modelRuntime, credentials, {
-@@ -568,6 +572,7 @@ async function promptForMissingSessionCwd(
+@@ -568,6 +572,9 @@ async function promptForMissingSessionCwd(
  
  export interface MainOptions {
  	extensionFactories?: InlineExtension[];
++	/** Register stock tool definitions. False leaves only extension/custom tools. Defaults to true. */
++	includeBuiltinTools?: boolean;
 +	createModelRuntime?: ModelRuntimeFactory;
  }
  
  export async function main(args: string[], options?: MainOptions) {
-@@ -581,7 +586,7 @@ export async function main(args: string[], options?: MainOptions) {
+@@ -581,7 +588,7 @@ export async function main(args: string[], options?: MainOptions) {
  		process.env.PI_SKIP_VERSION_CHECK = "1";
  	}
  
@@ -248,7 +291,7 @@ index 0710ed9..5e23dba 100644
  		return;
  	}
  
-@@ -748,10 +753,18 @@ export async function main(args: string[], options?: MainOptions) {
+@@ -748,10 +755,18 @@ export async function main(args: string[], options?: MainOptions) {
  				parsed.projectTrustOverride ??
  				(!hasTrustRequiringResources || trustStore.get(cwd) === true));
  		const runtimeSettingsManager = SettingsManager.create(cwd, agentDir, { projectTrusted });
@@ -267,6 +310,14 @@ index 0710ed9..5e23dba 100644
  			modelRuntimeSignal: AbortSignal.timeout(15_000),
  			extensionFlagValues: parsed.unknownFlags,
  			resourceLoaderReloadOptions: shouldResolveProjectTrust
+@@ -848,6 +863,7 @@ export async function main(args: string[], options?: MainOptions) {
+ 			tools: sessionOptions.tools,
+ 			excludeTools: sessionOptions.excludeTools,
+ 			noTools: sessionOptions.noTools,
++			includeBuiltinTools: options?.includeBuiltinTools,
+ 			customTools: sessionOptions.customTools,
+ 		});
+ 		const cliThinkingOverride = parsed.thinking !== undefined || cliThinkingFromModel;
 diff --git a/packages/coding-agent/test/auth-check.test.ts b/packages/coding-agent/test/auth-check.test.ts
 index 5f1ce63..49bd9d4 100644
 --- a/packages/coding-agent/test/auth-check.test.ts
@@ -668,5 +719,188 @@ index 0000000..e9ec190
 +
 +		expect(runtime.getError()).toBeUndefined();
 +		expect(runtime.getModels()).toEqual([]);
++	});
++});
+diff --git a/packages/coding-agent/test/managed-tools.test.ts b/packages/coding-agent/test/managed-tools.test.ts
+new file mode 100644
+index 0000000..836b751
+--- /dev/null
++++ b/packages/coding-agent/test/managed-tools.test.ts
+@@ -0,0 +1,177 @@
++import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
++import { tmpdir } from "node:os";
++import { join } from "node:path";
++import { InMemoryModelsStore } from "@earendil-works/pi-ai";
++import { Type } from "typebox";
++import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
++import { createAgentSessionFromServices, createAgentSessionServices } from "../src/core/agent-session-services.ts";
++import { AuthStorage } from "../src/core/auth-storage.ts";
++import type { ExtensionAPI, ToolDefinition } from "../src/core/extensions/types.ts";
++import { ModelRuntime } from "../src/core/model-runtime.ts";
++import { restoreStdout } from "../src/core/output-guard.ts";
++import { SessionManager } from "../src/core/session-manager.ts";
++import { main } from "../src/main.ts";
++
++const disabledTools = ["read", "grep", "find", "ls", "write", "edit", "powershell"];
++const selections = [["powershell"], ["*"], ["+powershell"], ["read", "write", "powershell"]];
++const definition = (name: string): ToolDefinition => ({
++	name,
++	label: name,
++	description: "Managed fixture tool",
++	parameters: Type.Object({}),
++	execute: async () => ({ content: [{ type: "text", text: "managed" }], details: {} }),
++});
++
++describe("managed built-in tool exclusion", () => {
++	let root: string;
++	let agentDir: string;
++	let modelRuntime: ModelRuntime;
++	let api: ExtensionAPI;
++
++	beforeEach(async () => {
++		root = mkdtempSync(join(tmpdir(), "pi-managed-tools-"));
++		agentDir = join(root, "agent");
++		mkdirSync(agentDir);
++		writeFileSync(join(agentDir, "settings.json"), JSON.stringify({ setupComplete: true }));
++		modelRuntime = await ModelRuntime.create({
++			credentials: AuthStorage.inMemory(),
++			modelsPath: null,
++			modelsStore: new InMemoryModelsStore(),
++			includeBuiltinCatalog: false,
++			allowModelNetwork: false,
++			refreshOnCreate: false,
++		});
++	});
++
++	afterEach(() => {
++		restoreStdout();
++		vi.restoreAllMocks();
++		vi.unstubAllEnvs();
++		rmSync(root, { recursive: true, force: true });
++	});
++
++	const factory = (pi: ExtensionAPI) => {
++		api = pi;
++		// This models an administrator allowing bash while disabling the other managed tools.
++		// Disabled tools are never registered, so stock definitions must not fill their names.
++		pi.registerTool(definition("bash"));
++	};
++
++	const assertNoStock = () => {
++		expect(api.getAllTools().every((tool) => tool.sourceInfo?.source !== "builtin")).toBe(true);
++		for (const name of disabledTools) expect(api.getAllTools().map((tool) => tool.name)).not.toContain(name);
++	};
++
++	test.each(selections)(
++		"cannot restore stock tools selected with %j through refresh, reload or recreation",
++		async (...tools) => {
++			const create = async () => {
++				const services = await createAgentSessionServices({
++					cwd: root,
++					agentDir,
++					modelRuntime,
++					resourceLoaderOptions: {
++						noExtensions: true,
++						noSkills: true,
++						noContextFiles: true,
++						extensionFactories: [factory],
++					},
++				});
++				return createAgentSessionFromServices({
++					services,
++					sessionManager: SessionManager.inMemory(root),
++					noTools: "builtin",
++					tools,
++					includeBuiltinTools: false,
++				});
++			};
++			for (let generation = 0; generation < 2; generation++) {
++				const { session } = await create();
++				try {
++					await session.bindExtensions({});
++					// The managed startup hook narrows activation before a slow MCP server registers.
++					api.setActiveTools(["bash"]);
++					api.registerTool(definition("mcp__docs__late"));
++					assertNoStock();
++					for (const name of disabledTools) {
++						expect(session.getActiveToolNames()).not.toContain(name);
++						expect(session.getCallableToolNames()).not.toContain(name);
++					}
++					if (tools.includes("*")) {
++						const tool = session.agent.state.tools.find((tool) => tool.name === "bash")!;
++						expect(await tool.execute("managed-call", {})).toMatchObject({ content: [{ text: "managed" }] });
++					}
++					await session.reload();
++					api.registerTool(definition("mcp__docs__after_reload"));
++					assertNoStock();
++				} finally {
++					session.dispose();
++				}
++			}
++		},
++	);
++
++	test.each([undefined, true])(
++		"preserves ordinary stock registration when the option is %s",
++		async (includeBuiltinTools) => {
++			const services = await createAgentSessionServices({
++				cwd: root,
++				agentDir,
++				modelRuntime,
++				resourceLoaderOptions: {
++					noExtensions: true,
++					noSkills: true,
++					noContextFiles: true,
++					extensionFactories: [factory],
++				},
++			});
++			const { session } = await createAgentSessionFromServices({
++				services,
++				sessionManager: SessionManager.inMemory(root),
++				noTools: "builtin",
++				tools: ["*"],
++				includeBuiltinTools,
++			});
++			try {
++				api.registerTool(definition("mcp__docs__late"));
++				expect(session.getAllTools().find((tool) => tool.name === "powershell")?.sourceInfo?.source).toBe(
++					"builtin",
++				);
++				expect(session.getAllTools().find((tool) => tool.name === "read")?.sourceInfo?.source).toBe("builtin");
++			} finally {
++				session.dispose();
++			}
++		},
++	);
++
++	test("forwards the embedding-only switch from main independently of user tool selections", async () => {
++		vi.stubEnv("PI_CODING_AGENT_DIR", agentDir);
++		vi.stubEnv("PI_OFFLINE", "1");
++		const stopped = new Error("Expected metadata exit");
++		vi.spyOn(process, "exit").mockImplementation(() => {
++			throw stopped;
++		});
++		vi.spyOn(process.stdout, "write").mockReturnValue(true);
++		await expect(
++			main(
++				[
++					"--help",
++					"--no-builtin-tools",
++					"--tools",
++					"*",
++					"--no-session",
++					"--no-extensions",
++					"--no-skills",
++					"--no-context-files",
++				],
++				{
++					includeBuiltinTools: false,
++					createModelRuntime: async () => modelRuntime,
++					extensionFactories: [factory],
++				},
++			),
++		).rejects.toBe(stopped);
++		api.registerTool(definition("mcp__docs__late"));
++		assertNoStock();
 +	});
 +});

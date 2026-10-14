@@ -57,7 +57,8 @@ Sandbox factory through the inline extension-factory option. It must:
 - disable automatic built-in MCP, codemode, tool-search, and llama factories and
   reject the MCP management CLI; only the forced factory may compose the
   exported MCP/code-mode factories under administrator policy;
-- disable Pi's built-in tools and reject any option that restores them;
+- exclude all Pi built-in tool definitions from managed sessions, so tool
+  selections, registry refreshes, and session recreation cannot restore them;
 - reject Pi package install, remove, update, and configuration commands that
   could introduce executable code;
 - admit managed host environment values only through the selected compiled
@@ -220,6 +221,14 @@ provides these seams:
 
 1. `main()` accepts a caller-provided model-runtime factory and consistently
    uses it for interactive startup and supported authentication paths.
+   Its embedding-only `includeBuiltinTools` option defaults to true for ordinary
+   Pi. Managed startup sets it to false; the session SDK then constructs an empty
+   base-tool registry while retaining tools registered by the forced extension.
+   Carry that choice through runtime recreation and reload. This excludes stock
+   implementations, not managed tools sharing their names. Test explicit and
+   wildcard tool selections followed by late tool registration, including
+   unsupported `powershell` and policy-disabled replacement tools. Review new
+   upstream tools explicitly instead of relying on a fixed built-in inventory.
 2. Model-runtime construction can exclude the internal provider/model catalog
    for every model type, including chat, image, and classifier models, without
    preventing explicitly configured providers from using Pi's trusted provider

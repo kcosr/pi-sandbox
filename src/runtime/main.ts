@@ -76,6 +76,7 @@ export type ManagedModelRuntimeFactory = (
 ) => Promise<ModelRuntime>;
 
 export interface ManagedMainOptions {
+  readonly includeBuiltinTools: false;
   readonly displayVersion: string;
   readonly extensionFactories: Array<{ readonly name: string; readonly factory: ExtensionFactory }>;
   readonly createModelRuntime: ManagedModelRuntimeFactory;
@@ -563,6 +564,7 @@ export async function runPiSandbox({ piArgs: args, configPath }: SandboxArgument
         );
       }
       await managedMain(createManagedPiArguments(args), {
+        includeBuiltinTools: false,
         displayVersion: DISPLAY_VERSION,
         extensionFactories: [{ name: "pi-sandbox", factory: extension }],
         createModelRuntime: createManagedModelRuntimeFactory(modelsPath),

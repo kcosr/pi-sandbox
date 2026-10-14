@@ -68,7 +68,7 @@ trusted host
 ```
 
 Allowing a tool call never delegates to Pi's stock host implementation. The
-extension replaces all seven built-ins and maps the exact approved request to a
+extension supplies seven replacement tools and maps the exact approved request to a
 fixed direct executable invocation through the selected backend. User `!`
 shell commands follow the same route. Administratively selected
 managed-extension tools may instead declare host execution. Those tools still use the same policy and
@@ -182,12 +182,14 @@ The compiled catalog validates extension API versions, identifiers, semantic
 versions, tool schemas, and collisions before administrative configuration is
 admitted. The root configuration selects a subset of that immutable catalog.
 
-The private entry point always disables extension discovery, Pi's built-in
-extension factories, and Pi's built-in tools. It rejects arguments and commands
-that could load executable extension code, manage packages, or restore stock
-tool implementations. Skills and user tool-selection options remain available:
-they may provide instructions or narrow the visible catalog, but all executable
-tool authority still comes from the forced extension.
+The private entry point always disables extension discovery and Pi's built-in
+extension factories. It excludes all stock tool definitions from the session
+registry, including unsupported upstream tools such as `powershell`. Registry
+refreshes and session recreation preserve that exclusion. It rejects arguments
+and commands that could load executable extension code or manage packages.
+Skills and user tool-selection options remain available: they may provide
+instructions or narrow the visible catalog, but all executable tool authority
+still comes from the forced extension.
 
 Configuration begins at the distribution's compiled `config_dir/config.toml`.
 Version-3 distribution manifests explicitly select `allow_config_override`;

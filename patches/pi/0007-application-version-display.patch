@@ -2,13 +2,15 @@ diff --git a/packages/coding-agent/src/main.ts b/packages/coding-agent/src/main.
 index eb8f0a0..7d46a99 100644
 --- a/packages/coding-agent/src/main.ts
 +++ b/packages/coding-agent/src/main.ts
-@@ -571,6 +571,8 @@ async function promptForMissingSessionCwd(
+@@ -571,8 +571,10 @@ async function promptForMissingSessionCwd(
  }
  
  export interface MainOptions {
 +	/** Application identity shown by --version and the TUI; internal Pi version stays unchanged. */
 +	displayVersion?: string;
  	extensionFactories?: InlineExtension[];
+ 	/** Register stock tool definitions. False leaves only extension/custom tools. Defaults to true. */
+ 	includeBuiltinTools?: boolean;
  	createModelRuntime?: ModelRuntimeFactory;
  	/** Reject a target workspace before reading its settings or resources. */
 @@ -647,7 +649,7 @@ export async function main(args: string[], options?: MainOptions) {

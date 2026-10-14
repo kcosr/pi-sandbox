@@ -59,9 +59,12 @@ reimplemented rather than mechanically reapplied.
 - Preserve `PI_CODING_AGENT_DIR` for user state such as credentials, sessions, settings, skills, themes, and logs. It must not redirect administrative configuration or the model catalog.
 - Expand bare `~`, leading `~/`, and `{{username}}`/`{{uid}}` in configured hidden and denied paths, scoped environment values, and explicit MCP stdio environment values. On macOS, denied paths and those environment fields support `{{machine_id}}`, resolved lazily from the host hardware UUID through fixed bounded `ioreg` with a cleared environment, independently of account identity and at most once per startup. Hidden paths are Linux Bubblewrap-only and cannot resolve this macOS-only macro. Resolve the invoking effective OS account once after broker merging; ignore ambient identity variables and CWD. Unavailable requested hardware identity fails effective policy startup; an MCP-stdio-only lookup failure disables that server. No hardware query during installation validation. Hardware UUIDs are copyable identifiers, not secrets or device attestation. MCP URLs remain literal, including query parameters. Revalidate expanded inputs, reject unknown macro syntax, preserve literal installation/config/model/executable paths, and never expand against the installer account during validation.
 - Require main-policy `[sessions].retention_days` (0 disables; packaged default 365). Use session-file modification time and refresh it on startup/resume when enabled. Await best-effort shallow cleanup before interface startup, normally once per 24 hours; only slow interactive sweeps display progress. Keep scheduling state under the agent directory, tolerate concurrent sweeps and cleanup errors, and leave audit-log retention to the host.
-- Replace all seven Pi built-ins (`read`, `grep`, `find`, `ls`, `write`, `edit`,
-  and `bash`) and route user `!` shell commands through the selected execution
-  backend.
+- Provide managed replacements for `read`, `grep`, `find`, `ls`, `write`, `edit`,
+  and `bash`, and route user `!` shell commands through the selected execution
+  backend. Exclude all stock built-in tool definitions from managed sessions,
+  including Pi 1.2.0's unsupported `powershell`. Tool selections, registry
+  refreshes, and session recreation must not restore them. Review every upstream
+  tool addition explicitly before admitting a managed implementation.
 - Never fall back to direct execution after a Bubblewrap, Seatbelt, approval,
   cancellation, or lifecycle failure.
 - Permit administrator-configured host HTTP/stdio MCP through the managed adapter, with original-tool wildcard policies, typed catalog revisions and the shared approval engine. Code mode is an administrator-permitted QuickJS feature with ordinary Pi activation settings; all nested tools retain ordinary policy and execution boundaries. The MCP menu may persist enabled/exposure preferences for admitted servers only. Never accept user/project MCP connection definitions or general extension factories.

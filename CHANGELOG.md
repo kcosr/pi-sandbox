@@ -41,6 +41,7 @@
 
 ### Fixed
 
+- Exclude stock Pi tool implementations from managed sessions so tool selection and MCP catalog refresh cannot restore policy-disabled tools.
 - Update four development dependency resolutions to address denial-of-service advisories in lint/test tooling. ([#23](https://github.com/kcosr/pi-sandbox/pull/23))
 - Retire OCI families when terminal opening detects a lost VM identity, and report each terminal cleanup failure once. ([#22](https://github.com/kcosr/pi-sandbox/pull/22))
 
