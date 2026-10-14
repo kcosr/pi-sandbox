@@ -4,7 +4,7 @@
 
 ### Breaking changes
 
-- Reject `BASHOPTS`, `CDPATH`, `GLOBIGNORE` and `IFS` in `environment.sandbox` and the Bubblewrap executor environment, matching Seatbelt.
+- Reject `BASHOPTS`, `CDPATH`, `GLOBIGNORE` and `IFS` in `environment.sandbox` and the Bubblewrap executor environment, matching Seatbelt. ([#34](https://github.com/kcosr/pi-sandbox/pull/34))
 - Require managed configuration 13 and standalone sandbox configuration 6; reject obsolete process-lifetime settings. ([#30](https://github.com/kcosr/pi-sandbox/pull/30))
 - Require explicit `filesystem.denied_paths` in managed policy and strict standalone Seatbelt configuration. ([#29](https://github.com/kcosr/pi-sandbox/pull/29))
 - Remove smolvm execution, VM controllers and interactive VM terminals; managed Linux execution supports Bubblewrap or direct mode. ([#28](https://github.com/kcosr/pi-sandbox/pull/28))
@@ -12,7 +12,7 @@
 
 ### Added
 
-- Add an optional `[tools.bash.known_read_only]` policy, including broker rules and audit fields, so recognized read-only model Bash commands can use a more permissive approval policy than other Bash commands. Classification never changes execution.
+- Add an optional `[tools.bash.known_read_only]` policy, including broker rules and audit fields, so recognized read-only model Bash commands can use a more permissive approval policy than other Bash commands. Classification never changes execution. ([#34](https://github.com/kcosr/pi-sandbox/pull/34))
 - Support macOS `{{machine_id}}` in administrator environment values and Seatbelt denied paths, including provider API keys through configured Pi environment variables. Resolve the hardware UUID only when requested; no authentication or device-attestation guarantee is implied. ([#32](https://github.com/kcosr/pi-sandbox/pull/32))
 - Default macOS packages to Seatbelt execution with networking disabled, directory denials and read-only CWD support. Process cleanup is best effort; background survivors retain their original grants. ([#29](https://github.com/kcosr/pi-sandbox/pull/29))
 - Add build-selected macOS tool bundles with pinned native inventories, packaged licenses, relocatable paths and no runtime tool-directory override. ([#29](https://github.com/kcosr/pi-sandbox/pull/29))
