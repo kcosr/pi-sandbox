@@ -1,0 +1,72 @@
+config_version = 12
+models_file = "/etc/pi-sandbox/models.json"
+
+[codemode]
+enabled = false
+
+[mcp.servers]
+
+[sessions]
+retention_days = 365
+
+[audit]
+enabled = false
+facility = "local0"
+
+[filesystem]
+cwd_writable = true
+hidden_paths = []
+denied_paths = []
+
+[execution]
+backend = "seatbelt"
+process_lifetime = "command"
+
+[identity]
+mode = "disabled"
+
+[network]
+mode = "none"
+
+[environment.pi]
+
+[environment.sandbox]
+
+[environment.extensions]
+
+[extensions]
+
+[tools.read]
+mode = "allow"
+session_grant = "never"
+audit = false
+
+[tools.grep]
+mode = "allow"
+session_grant = "never"
+audit = false
+
+[tools.find]
+mode = "allow"
+session_grant = "never"
+audit = false
+
+[tools.ls]
+mode = "allow"
+session_grant = "never"
+audit = false
+
+[tools.write]
+mode = "ask"
+session_grant = "never"
+audit = true
+
+[tools.edit]
+mode = "ask"
+session_grant = "never"
+audit = true
+
+[tools.bash]
+mode = "disabled"
+session_grant = "never"
+audit = true

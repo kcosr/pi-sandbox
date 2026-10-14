@@ -14,6 +14,7 @@ import {
 } from "./build/extension-composition.mjs";
 import { createCompiledLayoutModule, loadDistribution } from "./build/distribution.mjs";
 import { readBuildVersion } from "./build/version.mjs";
+import { validateNativeToolBundle } from "./build/tool-bundle.mjs";
 
 const repositoryRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const defaultDistribution = join(repositoryRoot, "config/default/distribution.toml");
@@ -25,6 +26,7 @@ Options:
   --distribution FILE  Select extensions and installation layout
                        (default: config/default/distribution.toml)
   -h, --help           Show this help
+  --executable-relative-tools  Anchor selected tools beside the compiled executable
 
 Only extensions selected by the distribution manifest are compiled.
 `);
@@ -32,9 +34,14 @@ Only extensions selected by the distribution manifest are compiled.
 
 function parseArguments(argv) {
   let distribution = defaultDistribution;
+  let executableRelativeTools = false;
   for (let index = 0; index < argv.length; index += 1) {
     const argument = argv[index];
     if (argument === "--help" || argument === "-h") return { help: true };
+    if (argument === "--executable-relative-tools") {
+      executableRelativeTools = true;
+      continue;
+    }
     if (argument !== "--distribution") throw new Error(`unknown option: ${argument}`);
     const value = argv[index + 1];
     if (value === undefined || value.startsWith("--")) {
@@ -43,7 +50,7 @@ function parseArguments(argv) {
     distribution = resolve(value);
     index += 1;
   }
-  return { distribution };
+  return { distribution, executableRelativeTools };
 }
 
 let options;
@@ -63,9 +70,13 @@ if (options?.help) {
 if (options === undefined) process.exit(2);
 
 const distribution = await loadDistribution(options.distribution);
+validateNativeToolBundle(distribution.toolBundle);
 const extensions = await loadExtensionManifests(distribution.extensionManifests);
 const compiledExtensionsModule = createCompiledExtensionsModule(extensions);
-const compiledLayoutModule = createCompiledLayoutModule(distribution.layout);
+const compiledLayoutModule = createCompiledLayoutModule(distribution.layout, {
+  toolBundleDirectory: distribution.toolBundle?.directory,
+  executableRelative: options.executableRelativeTools,
+});
 const privateBundle = join(repositoryRoot, "dist/private/private-cli.js");
 const buildVersion = await readBuildVersion(repositoryRoot);
 

@@ -82,6 +82,7 @@ describe("broker response", () => {
       { process_lifetime: null },
       { backend: null },
       { backend: "smolvm" },
+      { backend: "seatbelt" },
       { processLifetime: "sandbox" },
     ]) {
       expect(() => parseBrokerResponse(response(execution))).toThrow(
@@ -139,6 +140,7 @@ describe("broker response", () => {
       { cwd_writable: 0 },
       { cwd_writable: true, extra: true },
       { cwd_writable: true, hidden_paths: [] },
+      { cwd_writable: true, denied_paths: [] },
       { cwdWritable: true },
     ]) {
       expect(() => parseBrokerResponse(response(filesystem))).toThrow();
@@ -326,11 +328,11 @@ describe("identity overrides", () => {
   it("atomically replaces selected tools and inherits all omitted values", () => {
     const basePolicy = { audit: true, mode: "allow", sessionGrant: "never" } as const;
     const base = {
-      configVersion: 11,
+      configVersion: 12,
       codemode: { enabled: false, timeoutMs: 300000 },
       mcp: { servers: {} },
       sessions: { retentionDays: 365 },
-      filesystem: { cwdWritable: true, hiddenPaths: ["/srv/runs"] },
+      filesystem: { cwdWritable: true, deniedPaths: [], hiddenPaths: ["/srv/runs"] },
       audit: { enabled: false, facility: "local0" },
       modelsFile: "/etc/pi-sandbox/models.json",
       execution: { backend: "bubblewrap", processLifetime: "command" },
@@ -379,11 +381,23 @@ describe("identity overrides", () => {
     expect(effective.audit).toBe(base.audit);
     expect(effective.sessions).toBe(base.sessions);
     expect(effective.filesystem).toEqual(base.filesystem);
+    const deniedBase = {
+      ...base,
+      filesystem: { ...base.filesystem, deniedPaths: ["/Users/alice/private"] },
+    };
+    expect(
+      applyIdentityOverrides(deniedBase, { filesystem: { cwdWritable: false }, tools: {} })
+        .filesystem.deniedPaths,
+    ).toBe(deniedBase.filesystem.deniedPaths);
     const restricted = applyIdentityOverrides(base, {
       filesystem: { cwdWritable: false },
       tools: {},
     });
-    expect(restricted.filesystem).toEqual({ cwdWritable: false, hiddenPaths: ["/srv/runs"] });
+    expect(restricted.filesystem).toEqual({
+      cwdWritable: false,
+      deniedPaths: [],
+      hiddenPaths: ["/srv/runs"],
+    });
     expect(restricted.execution).toEqual(base.execution);
     const persistent = applyIdentityOverrides(base, {
       execution: { processLifetime: "sandbox" },
@@ -405,7 +419,11 @@ describe("identity overrides", () => {
       filesystem: { cwdWritable: true },
       tools: {},
     });
-    expect(direct.filesystem).toEqual({ cwdWritable: true, hiddenPaths: ["/srv/runs"] });
+    expect(direct.filesystem).toEqual({
+      cwdWritable: true,
+      deniedPaths: [],
+      hiddenPaths: ["/srv/runs"],
+    });
     expect(direct.execution).toEqual({ backend: "direct", processLifetime: "command" });
     expect(effective.identity).toBe(base.identity);
     expect(effective.extensions).toBe(base.extensions);

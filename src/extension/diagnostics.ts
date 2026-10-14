@@ -75,6 +75,10 @@ export function formatSandboxSummary(input: SandboxSummaryInput): string {
       input.filesystem.hiddenPaths.length === 0 ? "none" : input.filesystem.hiddenPaths.join(", "),
     ],
     [
+      "Denied paths",
+      input.filesystem.deniedPaths.length === 0 ? "none" : input.filesystem.deniedPaths.join(", "),
+    ],
+    [
       "CWD access",
       input.execution.backend === "direct"
         ? "host permissions (uncontained)"
@@ -85,9 +89,11 @@ export function formatSandboxSummary(input: SandboxSummaryInput): string {
     ["Lifetime", "pi-sandbox process"],
     [
       "Processes",
-      input.execution.processLifetime === "sandbox"
-        ? "persist until sandbox shutdown or operation failure"
-        : "cleaned up after each command",
+      input.execution.backend === "seatbelt"
+        ? "serial admission; background survivors retain original grants; cleanup only while direct child is active"
+        : input.execution.processLifetime === "sandbox"
+          ? "persist until sandbox shutdown or operation failure"
+          : "cleaned up after each command",
     ],
     [
       "Code mode",
@@ -95,7 +101,7 @@ export function formatSandboxSummary(input: SandboxSummaryInput): string {
     ],
     ["MCP servers", String(input.mcpServerCount ?? 0)],
     ["Execution", executionDisplay(input.execution)],
-    ["Network", networkDisplay(input.network)],
+    ["Network", networkDisplay(input.network, input.execution)],
     ["Config", input.configPath],
     ["Models", input.modelsFile],
     ["Extensions", input.extensions.length === 0 ? "none" : input.extensions.join(", ")],
@@ -115,6 +121,9 @@ export function formatSandboxMounts(
 ): string {
   if (execution.backend === "direct") {
     return "Execution mounts\n\nDirect execution uses the ordinary host filesystem as the current user.\nThere is no mount namespace or filesystem containment boundary.";
+  }
+  if (execution.backend === "seatbelt") {
+    return `Seatbelt filesystem policy\n\nHost paths retain their absolute names. The launch directory is ${filesystem.cwdWritable ? "writable" : "read-only"}; other ordinary host paths are read-only except denied directories.\nDenied directories: ${safeDisplay(filesystem.deniedPaths.join(", ") || "none")}. Denied paths remain host entries; they are not empty mount masks. A denied ancestor admits only CWD, then explicit interior denials apply.\nHOME and TMPDIR use a real host scratch directory owned by this executor. There is no private /tmp or mount namespace. Scratch cleanup is best effort. Normal foreground exit can leave background descendants alive. Failure/cancellation/close attempts process-group cleanup only while the direct child is active; survivors retain original grants, including after owner death.`;
   }
   const mounts = describeBubblewrapMounts(cwd, filesystem.cwdWritable, filesystem.hiddenPaths);
   const table = formatTable(
@@ -145,7 +154,7 @@ export function formatSandboxPolicy(
   return `Effective policy\n\n${formatTable(
     ["SUBJECT", "EXECUTION", "MODE", "SESSION OPTION", "ACTIVE GRANT"],
     rows,
-  )}\n\nNetwork: ${networkDisplay(input.config.network)}.\nDisabled tools are not advertised to the model.`;
+  )}\n\nNetwork: ${networkDisplay(input.config.network, input.config.execution)}.\nDisabled tools are not advertised to the model.`;
 }
 
 export function diagnosticSubjects(config: SandboxConfig): readonly string[] {
@@ -200,7 +209,21 @@ function subjectScope(input: PolicyDiagnosticInput, subject: string): readonly s
     ];
   }
   if (input.config.execution.backend === "direct") {
-    return [...directSubjectScope(subject), networkScope(input.config.network)];
+    return [
+      ...directSubjectScope(subject),
+      networkScope(input.config.network, input.config.execution),
+    ];
+  }
+  if (input.config.execution.backend === "seatbelt") {
+    return [
+      "Runs under macOS Seatbelt filesystem and network policy at ordinary host paths.",
+      input.config.filesystem.cwdWritable
+        ? "May write inside the launch directory and its real host scratch directory."
+        : "The launch directory is read-only; only its real host scratch directory permits ordinary file writes.",
+      "Effective denied subtrees cannot be read or written. A denied ancestor admits only CWD, with explicit interior denials preserved; directory names are not masked.",
+      "Commands are admitted serially. Background descendants can survive normal completion; cancellation/failure/close attempts group cleanup only while the direct child is active. Survivors may outlive owner death with their original grants.",
+      networkScope(input.config.network, input.config.execution),
+    ];
   }
   return [
     ...sandboxSubjectScope(subject, input.config.filesystem.cwdWritable),
@@ -209,7 +232,7 @@ function subjectScope(input: PolicyDiagnosticInput, subject: string): readonly s
           "Configured hidden files and directories are masked when present at startup, including inside the launch directory. Missing paths are skipped.",
         ]
       : []),
-    networkScope(input.config.network),
+    networkScope(input.config.network, input.config.execution),
   ];
 }
 
@@ -246,17 +269,26 @@ function directSubjectScope(subject: string): readonly string[] {
 }
 
 function executionDisplay(execution: ExecutionConfig): string {
+  if (execution.backend === "seatbelt") return "macOS Seatbelt policy (shared host namespaces)";
   return execution.backend === "bubblewrap"
     ? "Bubblewrap sandbox"
     : "direct host execution (uncontained)";
 }
 
-function networkDisplay(network: NetworkConfig): string {
+function networkDisplay(network: NetworkConfig, execution: ExecutionConfig): string {
+  if (execution.backend === "seatbelt")
+    return network.mode === "none"
+      ? "disabled by Seatbelt policy (shared host namespace)"
+      : "host (unrestricted by network policy)";
   if (network.mode === "local") return "local (sandbox loopback only)";
   return network.mode === "none" ? "disabled (private namespace)" : "host (unrestricted)";
 }
 
-function networkScope(network: NetworkConfig): string {
+function networkScope(network: NetworkConfig, execution: ExecutionConfig): string {
+  if (execution.backend === "seatbelt")
+    return network.mode === "none"
+      ? "Seatbelt denies network access; it does not create a private network namespace."
+      : "Uses host networking, including host loopback, subject to other Seatbelt restrictions.";
   if (network.mode === "local")
     return "Can access only sandbox-local TCP/UDP services; host networking and named Unix sockets are unavailable.";
   return network.mode === "none"

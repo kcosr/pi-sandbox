@@ -145,6 +145,19 @@ async function verifyPayloadIntegrityChecks(temporaryRoot) {
 }
 
 async function verifyExecutionBackends(root) {
+  const seatbeltRelease = join(root, "seatbelt-release");
+  const seatbeltRoot = join(root, "seatbelt-root");
+  await createRelease(seatbeltRelease, { backend: "seatbelt" });
+  run(join(seatbeltRelease, "install.sh"), [], { DESTDIR: seatbeltRoot });
+  if (
+    !(await readFile(join(seatbeltRoot, "etc/pi-sandbox/config.toml"), "utf8")).includes(
+      'backend = "seatbelt"',
+    )
+  ) {
+    throw new Error("macOS staged installation did not preserve Seatbelt selection");
+  }
+  run(join(seatbeltRelease, "uninstall.sh"), ["--remove-config"], { DESTDIR: seatbeltRoot });
+  await expectMissing(join(seatbeltRoot, "usr/local/libexec/pi-sandbox"));
   const unsupportedRelease = join(root, "unsupported-backend-release");
   const unsupportedRoot = join(root, "unsupported-backend-root");
   await createRelease(unsupportedRelease, { backend: "bubblewrap" });
@@ -177,16 +190,60 @@ async function verifyExecutionBackends(root) {
   );
   const environment = { DESTDIR: "", PATH: `${fakeBin}:${process.env.PATH}` };
   const missingTools = join(root, "missing-homebrew");
-  const hostDirect = join(root, "host-direct-release");
-  await createRelease(hostDirect, { layout, homebrewPrefix: missingTools });
+  for (const backend of ["direct", "seatbelt"]) {
+    const hostRelease = join(root, `host-${backend}-release`);
+    await createRelease(hostRelease, { backend, layout, homebrewPrefix: missingTools });
+    expectFailure(
+      join(hostRelease, "install.sh"),
+      [],
+      environment,
+      "missing required host executables",
+    );
+    await expectMissing(layout.libexecDir);
+    await expectMissing(join(layout.configDir, "config.toml"));
+  }
+  const toolNames = [
+    "awk",
+    "cat",
+    "chmod",
+    "find",
+    "grep",
+    "head",
+    "mkdir",
+    "mv",
+    "rm",
+    "sha256sum",
+    "sort",
+    "tail",
+    "test",
+    "wc",
+  ];
+  const bundleRoot = join(layout.libexecDir, "tools");
+  const bundledLayout = {
+    ...layout,
+    toolBundle: {
+      root: bundleRoot,
+      commands: Object.fromEntries(toolNames.map((name) => [name, join(bundleRoot, "bin", name)])),
+    },
+    hostTools: { fd: join(bundleRoot, "bin/fd"), rg: join(bundleRoot, "bin/rg") },
+  };
+  const bundledRelease = join(root, "bundled tools release");
+  await createRelease(bundledRelease, { layout: bundledLayout, homebrewPrefix: missingTools });
+  run(join(bundledRelease, "install.sh"), [], environment);
+  for (const name of [...toolNames, "fd", "rg"])
+    if (((await lstat(join(bundleRoot, "bin", name))).mode & 0o777) !== 0o755)
+      throw new Error(`bundled executable mode was lost: ${name}`);
+  if (((await lstat(join(bundleRoot, "lib/libfixture.dylib"))).mode & 0o777) !== 0o755)
+    throw new Error("bundled library mode was lost");
+  if (((await lstat(join(bundleRoot, "licenses/COPYING"))).mode & 0o777) !== 0o644)
+    throw new Error("bundled license mode was lost");
+  await chmod(join(bundledRelease, "payload/pi-sandbox/tools/bin/rg"), 0o644);
   expectFailure(
-    join(hostDirect, "install.sh"),
+    join(bundledRelease, "install.sh"),
     [],
     environment,
-    "missing required host executables",
+    "selected bundled executable is missing or invalid: rg",
   );
-  await expectMissing(layout.libexecDir);
-  await expectMissing(join(layout.configDir, "config.toml"));
   const unknownRelease = join(root, "unknown-backend-release");
   await createRelease(unknownRelease, { backend: "unknown" });
   expectFailure(
@@ -226,7 +283,7 @@ root=
 if [ "\${1:-}" = --root ]; then root=$2; shift 2; fi
 [ "$#" -eq 0 ]
 config_dir=${shellQuote(layout?.configDir ?? "/etc/pi-sandbox")}
-grep -q '^config_version = 11$' "$root$config_dir/config.toml"
+grep -q '^config_version = 12$' "$root$config_dir/config.toml"
 grep -q '"providers"' "$root$config_dir/models.json"
 case "$operation" in
   --validate-installation) ;;
@@ -238,7 +295,7 @@ esac
   );
   await writeFile(
     join(payload, "defaults/config.toml"),
-    `config_version = 11\nmodels_file = "/etc/pi-sandbox/models.json"\n\n[codemode]\nenabled = false\n\n[mcp.servers]\n\n[sessions]\nretention_days = 0\n\n[audit]\nenabled = false\nfacility = "local0"\n\n[filesystem]\ncwd_writable = true\nhidden_paths = []\n\n[execution]\nbackend = "${backend}"\n\n[identity]\nmode = "disabled"\n\n[network]\nmode = "host"\n\n[environment.pi]\n\n[environment.sandbox]\n\n[environment.extensions]\n\n[extensions]\n`,
+    `config_version = 12\nmodels_file = "/etc/pi-sandbox/models.json"\n\n[codemode]\nenabled = false\n\n[mcp.servers]\n\n[sessions]\nretention_days = 0\n\n[audit]\nenabled = false\nfacility = "local0"\n\n[filesystem]\ncwd_writable = true\nhidden_paths = []\ndenied_paths = []\n\n[execution]\nbackend = "${backend}"\n\n[identity]\nmode = "disabled"\n\n[network]\nmode = "host"\n\n[environment.pi]\n\n[environment.sandbox]\n\n[environment.extensions]\n\n[extensions]\n`,
   );
   await writeFile(join(payload, "defaults/models.json"), '{"providers":{}}\n');
   await writeFile(join(payload, "package.json"), '{"name":"pi-sandbox"}\n');
@@ -249,6 +306,19 @@ esac
     join(payload, "sbom.cdx.json"),
     '{"bomFormat":"CycloneDX","specVersion":"1.6","version":1,"components":[]}\n',
   );
+  if (layout?.toolBundle) {
+    for (const directory of ["bin", "lib", "licenses"])
+      await mkdir(join(payload, "tools", directory), { recursive: true });
+    for (const name of [
+      ...Object.keys(layout.toolBundle.commands),
+      ...Object.keys(layout.hostTools ?? {}),
+    ])
+      await writeFile(join(payload, "tools/bin", name), "#!/bin/sh\nexit 0\n", { mode: 0o755 });
+    await writeFile(join(payload, "tools/lib/libfixture.dylib"), "fixture library\n", {
+      mode: 0o755,
+    });
+    await writeFile(join(payload, "tools/licenses/COPYING"), "fixture license\n", { mode: 0o644 });
+  }
   const files = await regularFiles(payload);
   const checksums = await Promise.all(
     files.map(async (file) => {

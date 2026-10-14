@@ -265,6 +265,14 @@ provides these seams:
    and the TUI header, falling back to Pi's own version when it is absent. The
    managed entry point supplies its build identity; ordinary Pi behavior and
    Pi's internal version remain unchanged.
+10. `0008-build-selected-host-tools.patch` binds optional host `fd` and `rg`
+    selections through build-time `PI_SANDBOX_HOST_TOOLS` literals. Resolve bundled
+    `tools/bin/<name>` paths relative to the compiled executable. Check selected
+    files before user-cache or PATH discovery; a missing or non-executable selected
+    tool fails without downloading or falling back. Unselected tools preserve Pi's
+    ordinary discovery. No policy, environment variable, or model-facing runtime
+    option may replace a build-selected path. Qualify conflicting cache/PATH tools,
+    missing selections and relocated package paths containing spaces.
 
 Pi 1.0's resource loader separates built-in factories from ordinary inline
 factories. The forced `--no-extensions` flag disables the built-in factories and
@@ -356,6 +364,14 @@ uses a 100 ms idle timer restarted by each chunk. Existing command timeout,
 output limits, cancellation and sandbox shutdown remain authoritative. This
 behavior lives in the managed worker and requires no upstream Pi patch.
 
+Seatbelt has a separate command-only lifecycle. It admits commands serially,
+without a process namespace or supervising helper. Ordinary foreground exit
+may leave background descendants alive with their original grants. Failure,
+cancellation and close attempt process-group cleanup only while the direct child
+remains active. Do not signal a reaped child's former PID or process-group ID.
+Session replacement must retain the same executor and policy; it does not revoke
+surviving descendants' grants. These limits must appear in diagnostics and docs.
+
 ## CWD filesystem access
 
 Administrative configuration requires `[filesystem].cwd_writable`, with `true`
@@ -383,6 +399,17 @@ storage remains writable. Read-only CWD exactly `/tmp` is rejected because its
 bind would mask private `/tmp`. Existing root and private-system-path overlap
 rejections remain enforced. The setting applies to built-ins and user shell;
 managed host tools retain their declared host authority.
+
+Managed schema 12 additionally requires `[filesystem].denied_paths`, empty for
+Bubblewrap/direct. macOS Seatbelt rejects hidden paths, sandbox lifetime
+and local networking, and accepts canonical existing directory denials. A denied
+ancestor admits only CWD; explicit interior denials remain effective. Denials are
+access restrictions, not empty masks. CWD and real host scratch writes follow
+the configured policy without private /tmp or mount namespaces. Standalone
+schema 5 exposes the same backend through the existing neutral executor and tool
+factory, without managed approvals. Both consumers must fail closed, preserve
+streaming/cancellation and require the fixed system /usr/bin/sandbox-exec.
+macOS broker and audit services remain disabled; host Git remains separate.
 
 ## Managed MCP and code-mode seams
 

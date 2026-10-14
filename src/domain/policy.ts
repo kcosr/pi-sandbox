@@ -33,13 +33,14 @@ export interface NetworkConfig {
   readonly mode: NetworkMode;
 }
 
-export const EXECUTION_BACKENDS = Object.freeze(["bubblewrap", "direct"] as const);
+export const EXECUTION_BACKENDS = Object.freeze(["bubblewrap", "direct", "seatbelt"] as const);
 
 export type ExecutionBackend = (typeof EXECUTION_BACKENDS)[number];
 
 export interface FilesystemConfig {
   readonly cwdWritable: boolean;
   readonly hiddenPaths: readonly string[];
+  readonly deniedPaths: readonly string[];
 }
 
 export interface ExecutionConfig {
@@ -106,7 +107,7 @@ export interface ManagedEnvironment {
 }
 
 export interface SandboxConfig {
-  readonly configVersion: 11;
+  readonly configVersion: 12;
   readonly codemode: CodeModeConfig;
   readonly mcp: McpConfig;
   readonly audit: AuditConfig;

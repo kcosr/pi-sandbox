@@ -1251,6 +1251,20 @@
                     </td>
                   </tr>
                   <tr>
+                    <td>Seatbelt<br /><small>macOS default</small></td>
+                    <td>The same built-in file, search, edit, and shell tools</td>
+                    <td>
+                      Read-only ordinary host access, optional CWD writes, real host scratch,
+                      canonical directory denials, and none/host network policy. No private
+                      namespaces.
+                    </td>
+                    <td>
+                      Approvals and bounded serial admission. Background descendants may survive
+                      foreground completion or owner death with original grants; cleanup is best
+                      effort only while the direct child remains active.
+                    </td>
+                  </tr>
+                  <tr>
                     <td>Direct<br /><small>Linux / macOS</small></td>
                     <td>The same built-ins when containment is not selected</td>
                     <td>
@@ -1302,7 +1316,7 @@
               class="compact"
               aria-label="Example global Pi Sandbox configuration"
             ><code># /etc/pi-sandbox/config.toml — excerpt
-config_version = 11
+config_version = 12
 models_file = "/etc/pi-sandbox/models.json"
 
 [codemode]
@@ -1310,7 +1324,7 @@ enabled = false
 
 [mcp.servers]
 audit = { enabled = false, facility = "local0" }
-filesystem = { cwd_writable = true, hidden_paths = [] }
+filesystem = { cwd_writable = true, hidden_paths = [], denied_paths = [] }
 [sessions]
 retention_days = 365
 [execution]

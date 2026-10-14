@@ -1,4 +1,5 @@
-import { mkdir, mkdtemp, readFile, readdir, rm, writeFile } from "node:fs/promises";
+import { selectedTestToolBundle } from "../support/tool-bundle.js";
+import { mkdir, mkdtemp, realpath, readFile, readdir, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -17,13 +18,20 @@ import {
   type SandboxExecutor,
 } from "../../packages/sandbox-extension/src/runtime/index.js";
 
+const toolBundle = selectedTestToolBundle();
+const selectedTools = toolBundle === undefined ? {} : { toolBundle };
+
 describe("typed tools through direct execution", () => {
   let cwd: string;
   let executor: SandboxExecutor;
 
   beforeAll(async () => {
-    cwd = await mkdtemp(join(tmpdir(), "pi-sandbox-direct-tools-"));
-    executor = await createDirectExecutor({ cwd, ambientEnvironment: { HOME: cwd } });
+    cwd = await realpath(await mkdtemp(join(tmpdir(), "pi-sandbox-direct-tools-")));
+    executor = await createDirectExecutor({
+      cwd,
+      ...selectedTools,
+      ambientEnvironment: { HOME: cwd },
+    });
     await executor.probe();
   });
 

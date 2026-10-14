@@ -108,9 +108,12 @@ managed permission engine.
 
 Remove provider discovery, tool delegation, provider initialization/teardown,
 and the `requirePermissions` switch. Accept a single new standalone JSON schema
-version, version 4, with `version`, `mode = "owned"`, `userBash`, and `backend`.
-The backend selects Bubblewrap or direct execution with strict fields for that
-choice. Reject removed VM execution and attachment fields.
+version, version 5, with `version`, `mode = "owned"`, `userBash`, and `backend`.
+The backend selects Bubblewrap, macOS Seatbelt, or direct execution with strict
+fields for that choice. Seatbelt uses directory access denials, none/host
+networking and serial commands with the background-survivor limits documented
+in `docs/security.md`; it does not promise Bubblewrap namespace or process
+cleanup semantics. Reject removed VM execution and attachment fields.
 Reject old versions and obsolete fields; add no compatibility parser.
 
 Retain `--sandbox-config`, explicit private config-file ownership/mode/size

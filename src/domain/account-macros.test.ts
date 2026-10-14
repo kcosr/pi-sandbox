@@ -7,7 +7,7 @@ describe("account templates", () => {
   it("expands all configured scopes and masks from one canonical account", () => {
     const identity = vi.fn(alice);
     const result = expandManagedHomePaths(
-      { cwdWritable: true, hiddenPaths: ["/srv/{{uid}}/{{username}}", "~/.ssh"] },
+      { cwdWritable: true, deniedPaths: [], hiddenPaths: ["/srv/{{uid}}/{{username}}", "~/.ssh"] },
       {
         pi: { USER_ROUTE: "{{username}}/{{uid}}" },
         sandbox: { CACHE: "~/{{uid}}" },
@@ -45,14 +45,14 @@ describe("account templates", () => {
   it("rejects duplicate and reserved masks produced by macros", () => {
     expect(() =>
       expandManagedHomePaths(
-        { cwdWritable: true, hiddenPaths: ["/home/{{username}}", "/home/alice"] },
+        { cwdWritable: true, deniedPaths: [], hiddenPaths: ["/home/{{username}}", "/home/alice"] },
         { pi: {}, sandbox: {}, extensions: {} },
         alice,
       ),
     ).toThrow("unique");
     expect(() =>
       expandManagedHomePaths(
-        { cwdWritable: true, hiddenPaths: ["/{{username}}"] },
+        { cwdWritable: true, deniedPaths: [], hiddenPaths: ["/{{username}}"] },
         { pi: {}, sandbox: {}, extensions: {} },
         () => ({ ...alice(), username: "proc" }),
       ),

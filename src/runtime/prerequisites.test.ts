@@ -1,8 +1,25 @@
 import { describe, expect, it } from "vitest";
 
-import { assertHostPrerequisites } from "./prerequisites.js";
+import { assertExecutionPrerequisites, assertHostPrerequisites } from "./prerequisites.js";
 
 describe("host prerequisites", () => {
+  it("checks selected paths without requiring their ambient host alternatives", async () => {
+    const layout = {
+      toolBundle: { root: "/bin", commands: { cat: "/bin/sh" } },
+      hostTools: { fd: "/bin/sh", rg: "/bin/sh" },
+    };
+    await expect(assertExecutionPrerequisites("direct", layout, [])).resolves.toBeUndefined();
+    await expect(
+      assertExecutionPrerequisites(
+        "direct",
+        {
+          ...layout,
+          hostTools: { fd: "/definitely-missing/selected-fd", rg: "/bin/sh" },
+        },
+        [],
+      ),
+    ).rejects.toThrow("/definitely-missing/selected-fd");
+  });
   it("accepts fixed executables and alternative command names", async () => {
     await expect(
       assertHostPrerequisites({

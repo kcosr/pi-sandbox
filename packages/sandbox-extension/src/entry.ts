@@ -9,9 +9,11 @@ import type {
 import { readSandboxConfig, type SandboxExtensionConfig } from "./config.js";
 import { createSandboxExtension } from "./factory.js";
 import { TOOL_NAMES } from "./invocation.js";
+import { builtToolBundle } from "./build-tools.js";
 import {
   createBubblewrapExecutor,
   createDirectExecutor,
+  createSeatbeltExecutor,
   type SandboxExecutor,
 } from "./runtime/index.js";
 
@@ -38,7 +40,21 @@ async function createExecutor(
 ): Promise<SandboxExecutor> {
   const backend = config.backend;
   if (backend.kind === "direct")
-    return createDirectExecutor({ cwd, environment: backend.environment });
+    return createDirectExecutor({
+      cwd,
+      environment: backend.environment,
+      ...(builtToolBundle ? { toolBundle: builtToolBundle } : {}),
+    });
+  if (backend.kind === "seatbelt")
+    return createSeatbeltExecutor({
+      cwd,
+      cwdWritable: backend.cwdWritable,
+      deniedPaths: backend.deniedPaths,
+      networkMode: backend.network,
+      environment: backend.environment,
+      ...(builtToolBundle ? { toolBundle: builtToolBundle } : {}),
+    });
+  if (backend.kind !== "bubblewrap") throw new Error("Unsupported sandbox backend");
   const runtime = await realpath(backend.runtime);
   const version = execFileSync(runtime, ["--version"], {
     encoding: "utf8",
@@ -62,6 +78,7 @@ async function createExecutor(
     cwdWritable: backend.cwdWritable,
     hiddenPaths: backend.hiddenPaths,
     environment: backend.environment,
+    ...(builtToolBundle ? { toolBundle: builtToolBundle } : {}),
     workerCommand: [runtime, fileURLToPath(new URL("./runtime/worker-entry.js", import.meta.url))],
   });
 }

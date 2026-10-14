@@ -27,6 +27,12 @@ export const TOOL_COMMAND_NAMES = Object.freeze([
 export type ToolCommandName = (typeof TOOL_COMMAND_NAMES)[number];
 export type ToolCommandPaths = Readonly<Record<ToolCommandName, string>>;
 
+/** Trusted build/embedding metadata only; never selected by runtime configuration or environment. */
+export interface ToolBundle {
+  readonly root: string;
+  readonly commands: Readonly<Partial<Record<ToolCommandName, string>>>;
+}
+
 export const DEFAULT_SANDBOX_TIMEOUT_MS = 120_000;
 export const DEFAULT_SANDBOX_OUTPUT_LIMIT_BYTES = 1_048_576;
 
@@ -52,6 +58,7 @@ export interface CreateBubblewrapExecutorOptions {
   readonly processLifetime?: ProcessLifetime;
   /** Administrator-provided variables added to the fixed sandbox environment. */
   readonly environment?: Readonly<Record<string, string>>;
+  readonly toolBundle?: ToolBundle;
   /** Absolute build-selected Bubblewrap executable. No runtime default or fallback exists. */
   readonly bubblewrapPath: string;
   readonly limits?: SandboxResourceLimits;

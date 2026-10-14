@@ -141,10 +141,26 @@ function resolvePortableArgv(
   const translations = Object.entries(CANONICAL_COMMANDS).toSorted(
     ([left], [right]) => right.length - left.length,
   );
-  for (const [canonical, name] of translations) {
-    source = source.replaceAll(canonical, executor.commands[name]);
-  }
-  resolved[optionIndex + 1] = source;
+  const commands = new Map(translations);
+  const expression = new RegExp(
+    translations.map(([canonical]) => canonical.replace(/[.*+?^${}()|[\]\\]/gu, "\\$&")).join("|"),
+    "gu",
+  );
+  const assignments = new Map<string, string>();
+  source = source.replace(expression, (canonical) => {
+    const name = commands.get(canonical)!;
+    const selected = executor.commands[name];
+    if (/^[A-Za-z0-9_./-]+$/u.test(selected)) return selected;
+    // Variables also work inside the existing single-quoted trap bodies: the
+    // path is quoted once here and expanded only when that fixed trap executes.
+    const variable = `PI_SANDBOX_COMMAND_${name.toUpperCase()}`;
+    assignments.set(variable, selected);
+    return `"$${variable}"`;
+  });
+  const declarations = [...assignments]
+    .map(([name, value]) => `readonly ${name}='${value.replaceAll("'", "'\\''")}';`)
+    .join(" ");
+  resolved[optionIndex + 1] = declarations ? `${declarations} ${source}` : source;
   return resolved;
 }
 

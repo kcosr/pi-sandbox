@@ -5,13 +5,13 @@ import { formatSandboxMounts, formatSandboxPolicy, formatSandboxSummary } from "
 
 function diagnosticConfig(): SandboxConfig {
   return {
-    configVersion: 11,
+    configVersion: 12,
     codemode: { enabled: false, timeoutMs: 300000 },
     mcp: { servers: {} },
     sessions: { retentionDays: 0 },
     audit: { enabled: false, facility: "local0" },
     modelsFile: "/etc/pi-sandbox/models.json",
-    filesystem: { cwdWritable: true, hiddenPaths: [] },
+    filesystem: { cwdWritable: true, deniedPaths: [], hiddenPaths: [] },
     execution: { backend: "bubblewrap", processLifetime: "command" },
     identity: { mode: "disabled" },
     network: { mode: "none" },
@@ -31,6 +31,28 @@ function diagnosticConfig(): SandboxConfig {
 }
 
 describe("sandbox diagnostics", () => {
+  it("describes Seatbelt denials, host scratch and best-effort lifecycle without namespace claims", () => {
+    const config = {
+      ...diagnosticConfig(),
+      execution: { backend: "seatbelt", processLifetime: "command" },
+      filesystem: { cwdWritable: false, hiddenPaths: [], deniedPaths: ["/Users/alice/private"] },
+    } satisfies SandboxConfig;
+    const mounts = formatSandboxMounts("/Users/alice/work", config.execution, config.filesystem);
+    expect(mounts).toContain("Seatbelt filesystem policy");
+    expect(mounts).toContain("read-only");
+    expect(mounts).toContain("/Users/alice/private");
+    expect(mounts).toContain("real host scratch");
+    expect(mounts).toContain("no private /tmp or mount namespace");
+    expect(mounts).toContain("foreground exit can leave background descendants alive");
+    expect(mounts).not.toContain("private tmpfs");
+    const policy = formatSandboxPolicy(
+      { config, hasSessionGrant: () => false, isToolActive: () => true },
+      "bash",
+    );
+    expect(policy).toContain("owner death with their original grants");
+    expect(policy).toContain("does not create a private network namespace");
+    expect(policy).not.toContain("Missing paths are skipped");
+  });
   it("formats the concise process summary without reading configuration again", () => {
     expect(
       formatSandboxSummary({
@@ -38,7 +60,7 @@ describe("sandbox diagnostics", () => {
         cwd: "/work/project",
         configPath: "/etc/pi-sandbox/config.toml",
         modelsFile: "/etc/pi-sandbox/models.json",
-        filesystem: { cwdWritable: true, hiddenPaths: [] },
+        filesystem: { cwdWritable: true, deniedPaths: [], hiddenPaths: [] },
         execution: { backend: "bubblewrap", processLifetime: "command" },
         identity: { mode: "disabled" },
         network: { mode: "none" },
@@ -49,6 +71,7 @@ describe("sandbox diagnostics", () => {
 
 Launch CWD:    /work/project
 Hidden paths:  none
+Denied paths:  none
 CWD access:    read/write
 Lifetime:      pi-sandbox process
 Processes:     cleaned up after each command
@@ -71,7 +94,7 @@ Use /sandbox mounts or /sandbox policy for details.`);
       cwd: "/work/project\nNetwork: enabled",
       configPath: "/etc/pi-sandbox/config.toml",
       modelsFile: "/etc/pi-sandbox/models\u001b[31m.json",
-      filesystem: { cwdWritable: true, hiddenPaths: [] },
+      filesystem: { cwdWritable: true, deniedPaths: [], hiddenPaths: [] },
       execution: { backend: "bubblewrap", processLifetime: "command" },
       identity: { mode: "broker" },
       network: { mode: "host" },
@@ -92,7 +115,7 @@ Use /sandbox mounts or /sandbox policy for details.`);
     const output = formatSandboxMounts(
       "/work/project",
       { backend: "bubblewrap", processLifetime: "command" },
-      { cwdWritable: true, hiddenPaths: [] },
+      { cwdWritable: true, deniedPaths: [], hiddenPaths: [] },
     );
     expect(output).toContain("Sandbox mounts");
     expect(output).toContain("/              read-only   host filesystem");
@@ -102,7 +125,10 @@ Use /sandbox mounts or /sandbox policy for details.`);
   });
 
   it("reports read-only CWD and keeps managed host tools outside that restriction", () => {
-    const config = { ...diagnosticConfig(), filesystem: { cwdWritable: false, hiddenPaths: [] } };
+    const config = {
+      ...diagnosticConfig(),
+      filesystem: { cwdWritable: false, deniedPaths: [], hiddenPaths: [] },
+    };
     const mounts = formatSandboxMounts("/work/project", config.execution, config.filesystem);
     expect(mounts).toContain("/work/project  read-only");
     expect(mounts).toContain("Only private temporary/runtime storage is writable");
@@ -131,7 +157,11 @@ Use /sandbox mounts or /sandbox policy for details.`);
   it("reports configured masks as conditional on presence at startup", () => {
     const config = {
       ...diagnosticConfig(),
-      filesystem: { cwdWritable: true, hiddenPaths: ["/work", "/work/project/private"] },
+      filesystem: {
+        cwdWritable: true,
+        deniedPaths: [],
+        hiddenPaths: ["/work", "/work/project/private"],
+      },
     };
     const mounts = formatSandboxMounts("/work/project", config.execution, config.filesystem);
     expect(mounts).toContain("/work");

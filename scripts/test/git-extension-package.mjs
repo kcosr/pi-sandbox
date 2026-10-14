@@ -10,11 +10,19 @@ import { fileURLToPath, URL } from "node:url";
 import { installExtensionArtifacts } from "./extension-artifacts.mjs";
 
 const root = dirname(dirname(dirname(fileURLToPath(import.meta.url))));
-execFileSync(process.execPath, [join(root, "scripts/build-extensions.mjs")], { stdio: "inherit" });
+const buildArgs = process.argv.slice(2);
+if (
+  buildArgs.length !== 0 &&
+  (buildArgs.length !== 2 || buildArgs[0] !== "--distribution" || !buildArgs[1])
+)
+  throw new Error("usage: node scripts/test/git-extension-package.mjs [--distribution FILE]");
+execFileSync(process.execPath, [join(root, "scripts/build-extensions.mjs"), ...buildArgs], {
+  stdio: "inherit",
+});
 const temporary = await realpath(
   await mkdtemp(join(process.env.PI_SANDBOX_TEST_TMPDIR ?? "/var/tmp", "pi-git-package-")),
 );
-const backends = process.platform === "linux" ? ["bubblewrap", "direct"] : ["direct"];
+const backends = process.platform === "linux" ? ["bubblewrap", "direct"] : ["seatbelt", "direct"];
 const scenarios = [
   { variant: "git-only" },
   { variant: "excluded" },
@@ -85,7 +93,7 @@ async function scenario(directory, variant, artifacts, backend) {
   await writeFile(
     sandboxConfig,
     JSON.stringify({
-      version: 4,
+      version: 5,
       mode: "owned",
       userBash: false,
       backend:
@@ -100,7 +108,15 @@ async function scenario(directory, variant, artifacts, backend) {
               hiddenPaths: [],
               environment: {},
             }
-          : { kind: "direct", environment: {} },
+          : backend === "seatbelt"
+            ? {
+                kind: "seatbelt",
+                network: "none",
+                cwdWritable: true,
+                deniedPaths: [],
+                environment: {},
+              }
+            : { kind: "direct", environment: {} },
     }),
     { mode: 0o600 },
   );

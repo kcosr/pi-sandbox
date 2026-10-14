@@ -25,7 +25,7 @@ function completeConfig(
     (toolName) =>
       `[tools.${toolName}]\naudit = false\n${overrides[toolName] ?? 'mode = "allow"\nsession_grant = "never"'}`,
   );
-  return `config_version = 11\nmodels_file = "/etc/pi-sandbox/models.json"\n\n[codemode]\nenabled = false\n\n[mcp.servers]\n\n[sessions]\nretention_days = 0\n\n[audit]\nenabled = false\nfacility = "local0"\n\n[filesystem]\ncwd_writable = true\nhidden_paths = []\n\n[execution]\nbackend = "bubblewrap"\n\n[identity]\nmode = "disabled"\n\n[network]\nmode = "none"\n\n[environment.pi]\n\n[environment.sandbox]\n\n[environment.extensions]\n\n[extensions]\n\n${sections.join("\n\n")}\n`;
+  return `config_version = 12\nmodels_file = "/etc/pi-sandbox/models.json"\n\n[codemode]\nenabled = false\n\n[mcp.servers]\n\n[sessions]\nretention_days = 0\n\n[audit]\nenabled = false\nfacility = "local0"\n\n[filesystem]\ncwd_writable = true\nhidden_paths = []\ndenied_paths = []\n\n[execution]\nbackend = "bubblewrap"\n\n[identity]\nmode = "disabled"\n\n[network]\nmode = "none"\n\n[environment.pi]\n\n[environment.sandbox]\n\n[environment.extensions]\n\n[extensions]\n\n${sections.join("\n\n")}\n`;
 }
 
 function parseConfig(
@@ -37,6 +37,40 @@ function parseConfig(
 }
 
 describe("parseConfig", () => {
+  it("admits Seatbelt denials only with its explicit network and lifetime contract", () => {
+    const seatbelt = completeConfig().replace('backend = "bubblewrap"', 'backend = "seatbelt"');
+    const parsed = parseConfig(
+      seatbelt.replace(
+        "denied_paths = []",
+        'denied_paths = ["~/.ssh", "/Users/{{username}}/private"]',
+      ),
+    );
+    expect(parsed.execution).toEqual({ backend: "seatbelt", processLifetime: "command" });
+    expect(parsed.filesystem.deniedPaths).toEqual(["/Users/{{username}}/private", "~/.ssh"]);
+    expect(Object.isFrozen(parsed.filesystem.deniedPaths)).toBe(true);
+    for (const source of [
+      seatbelt.replace('mode = "none"', 'mode = "local"'),
+      seatbelt.replace(
+        'backend = "seatbelt"',
+        'backend = "seatbelt"\nprocess_lifetime = "sandbox"',
+      ),
+      seatbelt.replace("hidden_paths = []", 'hidden_paths = ["/Users/private"]'),
+      seatbelt.replace("denied_paths = []\n", ""),
+      seatbelt.replace("denied_paths = []", 'denied_paths = ["/private", "/private"]'),
+      seatbelt.replace("denied_paths = []", 'denied_paths = ["relative"]'),
+      seatbelt.replace("denied_paths = []", 'denied_paths = ["/{{unknown}}"]'),
+      seatbelt.replace(
+        "denied_paths = []",
+        `denied_paths = ${JSON.stringify(Array.from({ length: 64 }, (_, i) => `/private/${i}`))}`,
+      ),
+      seatbelt.replace("config_version = 12", "config_version = 11"),
+      completeConfig().replace("denied_paths = []", 'denied_paths = ["/Users/private"]'),
+    ])
+      expect(() => parseConfig(source)).toThrow();
+    expect(parseConfig(seatbelt.replace('mode = "none"', 'mode = "host"')).network.mode).toBe(
+      "host",
+    );
+  });
   it("parses a complete policy for every model tool", () => {
     const config = parseConfig(
       completeConfig({
@@ -48,11 +82,11 @@ describe("parseConfig", () => {
     );
 
     expect(config).toEqual({
-      configVersion: 11,
+      configVersion: 12,
       codemode: { enabled: false, timeoutMs: 300000 },
       mcp: { servers: {} },
       sessions: { retentionDays: 0 },
-      filesystem: { cwdWritable: true, hiddenPaths: [] },
+      filesystem: { cwdWritable: true, deniedPaths: [], hiddenPaths: [] },
       audit: { enabled: false, facility: "local0" },
       modelsFile: "/etc/pi-sandbox/models.json",
       execution: { backend: "bubblewrap", processLifetime: "command" },
@@ -106,10 +140,17 @@ describe("parseConfig", () => {
   it("requires a strict filesystem policy and rejects unenforceable direct access", () => {
     const source = completeConfig();
     const readonly = source.replace("cwd_writable = true", "cwd_writable = false");
-    expect(parseConfig(readonly).filesystem).toEqual({ cwdWritable: false, hiddenPaths: [] });
+    expect(parseConfig(readonly).filesystem).toEqual({
+      cwdWritable: false,
+      deniedPaths: [],
+      hiddenPaths: [],
+    });
     expect(Object.isFrozen(parseConfig(readonly).filesystem)).toBe(true);
     for (const invalid of [
-      source.replace("[filesystem]\ncwd_writable = true\nhidden_paths = []\n\n", ""),
+      source.replace(
+        "[filesystem]\ncwd_writable = true\nhidden_paths = []\ndenied_paths = []\n\n",
+        "",
+      ),
       source.replace("cwd_writable = true", ""),
       source.replace("cwd_writable = true", 'cwd_writable = "false"'),
       source.replace("cwd_writable = true", "cwd_writable = 0"),
@@ -200,8 +241,8 @@ describe("parseConfig", () => {
           .replace('mode = "none"', 'mode = "host"'),
       ),
     ).toThrow("config.filesystem.hidden_paths must be empty");
-    expect(() => parseConfig(source.replace("config_version = 11", "config_version = 8"))).toThrow(
-      "integer 11",
+    expect(() => parseConfig(source.replace("config_version = 12", "config_version = 8"))).toThrow(
+      "integer 12",
     );
   });
 
@@ -266,11 +307,11 @@ describe("parseConfig", () => {
 
   it("rejects unsupported config versions and types", () => {
     expect(() =>
-      parseConfig(completeConfig().replace("config_version = 11", 'config_version = "9"')),
-    ).toThrow("config.config_version must be the integer 11");
+      parseConfig(completeConfig().replace("config_version = 12", 'config_version = "9"')),
+    ).toThrow("config.config_version must be the integer 12");
     expect(() =>
-      parseConfig(completeConfig().replace("config_version = 11", "config_version = 4")),
-    ).toThrow("config.config_version must be the integer 11");
+      parseConfig(completeConfig().replace("config_version = 12", "config_version = 4")),
+    ).toThrow("config.config_version must be the integer 12");
   });
 
   it("requires models_file to be a normalized absolute file path", () => {
@@ -303,7 +344,7 @@ describe("parseConfig", () => {
   it("rejects unknown fields at every schema level", () => {
     expect(() =>
       parseConfig(
-        completeConfig().replace("config_version = 11", "config_version = 11\nunexpected = true"),
+        completeConfig().replace("config_version = 12", "config_version = 12\nunexpected = true"),
       ),
     ).toThrow("config.unexpected is not a recognized field");
     expect(() =>
@@ -441,12 +482,12 @@ describe("parseConfig", () => {
   });
 
   it("rejects missing root fields and tables with the wrong shape", () => {
-    expect(() => parseConfig(completeConfig().replace("config_version = 11\n", ""))).toThrow(
+    expect(() => parseConfig(completeConfig().replace("config_version = 12\n", ""))).toThrow(
       "config.config_version is required",
     );
     expect(() =>
       parseConfig(
-        'config_version = 11\nmodels_file = "/etc/pi-sandbox/models.json"\nexecution = "direct"\nidentity = "disabled"\nnetwork = "none"\nextensions = "none"\ntools = "all"\n',
+        'config_version = 12\nmodels_file = "/etc/pi-sandbox/models.json"\nexecution = "direct"\nidentity = "disabled"\nnetwork = "none"\nextensions = "none"\ntools = "all"\n',
       ),
     ).toThrow("config.tools must be a table");
     expect(() =>
@@ -486,7 +527,7 @@ describe("parseConfig", () => {
     expect(() =>
       parseConfig(
         completeConfig().replace(
-          '[audit]\nenabled = false\nfacility = "local0"\n\n[filesystem]\ncwd_writable = true\nhidden_paths = []\n\n[execution]\nbackend = "bubblewrap"\n\n',
+          '[audit]\nenabled = false\nfacility = "local0"\n\n[filesystem]\ncwd_writable = true\nhidden_paths = []\ndenied_paths = []\n\n[execution]\nbackend = "bubblewrap"\n\n',
           "",
         ),
       ),
@@ -607,11 +648,11 @@ describe("loadConfig", () => {
     await writeFile(path, completeConfig(), "utf8");
 
     await expect(loadConfig(path, EMPTY_EXTENSION_CATALOG)).resolves.toMatchObject({
-      configVersion: 11,
+      configVersion: 12,
       codemode: { enabled: false, timeoutMs: 300000 },
       mcp: { servers: {} },
       sessions: { retentionDays: 0 },
-      filesystem: { cwdWritable: true, hiddenPaths: [] },
+      filesystem: { cwdWritable: true, deniedPaths: [], hiddenPaths: [] },
       audit: { enabled: false, facility: "local0" },
     });
   });

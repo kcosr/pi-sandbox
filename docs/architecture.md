@@ -3,7 +3,7 @@
 ## Reusable package and managed composition
 
 `packages/sandbox-extension` contains the filesystem/shell tool adapters,
-Bubblewrap/direct executors and worker assets. `packages/git-extension`
+Bubblewrap, Seatbelt and direct executors and worker assets. `packages/git-extension`
 contains the reusable clone implementation and its standard Pi entry point.
 Each package installs independently. The managed application keeps its permission
 engine and approval UI in `src/permissions`, together with administrator TOML,
@@ -15,11 +15,11 @@ adapter constructs its private approval request, evaluates policy and awaits aud
 before execution. The public executor interface describes command execution,
 working directory, command paths, probing and cleanup; it does not name a backend.
 Applications can supply their own executor. The managed application separately
-selects Bubblewrap or direct execution and owns its audit metadata. The sandbox executes the same canonical JSON snapshot that was
+selects Bubblewrap, Seatbelt or direct execution and owns its audit metadata. The sandbox executes the same canonical JSON snapshot that was
 approved. Branding, fingerprints and approval UI remain internal; no event-bus
 permission provider or extension hook ordering is involved.
 
-Standalone sandbox configuration version 4 describes execution only. Its entry
+Standalone sandbox configuration version 5 describes execution only. Its entry
 supplies an explicit no-op authorization callback; it does not supply managed
 approvals. It owns one backend per Pi process across conversation replacement;
 quit or explicit reload closes it. Background survival follows the configured
@@ -49,7 +49,7 @@ Pi Sandbox deliberately keeps the stock Pi process on the host. Pi owns the
 terminal UI, provider credentials, provider traffic, and session state. The
 compiled Pi Sandbox extension owns tool presentation, approval, and process
 lifecycle. One Bubblewrap worker lives for the `pi-sandbox` process; each
-allowed built-in operation runs through the administrator-selected Bubblewrap
+allowed built-in operation runs through the administrator-selected Bubblewrap, Seatbelt
 or direct backend.
 
 ```text
@@ -64,6 +64,7 @@ trusted host
         bounded direct-argv host executor
         selected built-in executor
           -> Bubblewrap process-lifetime worker and framed pipe IPC (Linux)
+          -> or serial Seatbelt-policy child (macOS)
           -> or bounded direct host child (Linux/macOS)
 ```
 
@@ -73,7 +74,7 @@ fixed direct executable invocation through the selected backend. User `!`
 shell commands follow the same route. Administratively selected
 managed-extension tools may instead declare host execution. Those tools still use the same policy and
 approval machinery, but run only their fixed executable and argument shape as
-the invoking user outside Bubblewrap.
+the invoking user outside the selected sandbox boundary.
 
 ## Managed MCP and code mode
 
@@ -206,7 +207,7 @@ returns an empty patch. The Bun process validates the response independently,
 overlays it on the global policy and scoped environment from the main TOML, constructs one effective
 configuration, and loads only its selected model catalog. Pi-scoped values are
 applied to the trusted host Pi process, sandbox-scoped values are added to the
-cleared Bubblewrap environment or overlaid on the inherited direct-command
+cleared Bubblewrap/Seatbelt environment or overlaid on the inherited direct-command
 environment, and extension-scoped values are admitted only
 for their named extension. The patched Pi runtime omits its internal model
 catalog. `PI_CODING_AGENT_DIR` still selects user credentials, sessions,
@@ -215,17 +216,17 @@ broker selection, or models. Missing or invalid effective inputs abort startup.
 
 Before applying the effective environment or starting executors, operational
 startup expands bare `~`, leading `~/`, and account macros in configured scoped
-environment values and hidden paths using the invoking effective OS account.
+environment values and hidden/denied paths using the invoking effective OS account.
 Expansion follows the broker merge and is independent of `$HOME` and CWD.
 Expanded values retain the existing environment bounds and filesystem checks.
 Installation validation checks syntax without expanding the installer's home.
 
 The distribution manifest fixes the config directory, libexec directory,
 launcher path, identity and event-collector sockets, Linux systemd unit directory, and Linux
-Bubblewrap provider at build time. A system provider names an unmanaged
+Bubblewrap provider and optional macOS tool bundle at build time. A system provider names an unmanaged
 absolute executable. A bundled provider supplies a verified native binary that
 is installed under the root-owned libexec directory and selected by the
-compiled runtime. macOS packages only the application; the Linux-only broker is not
+compiled runtime. macOS packages the application and any selected native tools; the Linux-only broker is not
 included. Keeping the product executable behind its configured launcher path provides a canonical command,
 but does not constitute access control against the logged-in user.
 
@@ -293,7 +294,7 @@ read-only and CWD access follows `filesystem.cwd_writable`; in direct mode Git
 has the current user's ordinary host authority. Bash can run repository-local
 commands through the selected backend, but commands that require host writes
 fail when the CWD is read-only. The managed `git_clone` tool itself remains a
-host operation and is unaffected by Bubblewrap filesystem settings.
+host operation and is unaffected by Bubblewrap or Seatbelt filesystem settings.
 The normal tool card shows the submitted repository locator.
 
 The Git host and scheme allowlists validate only the submitted repository
@@ -330,6 +331,44 @@ resolves a declared Homebrew GNU command profile (coreutils, findutils, grep,
 and gawk) plus system Bash, `sh`, and `file`, and fails startup if any command is
 missing. This preserves one typed-tool implementation instead of silently
 changing semantics between GNU and BSD utilities.
+
+An optional build-only tool inventory replaces selected command paths with
+verified packaged executables and their dependent libraries. Shared executor
+constructors accept trusted `toolBundle: { root, commands }` metadata and retain
+the backend-neutral public executor interface. Managed metadata derives from
+the executable's real directory; standalone metadata derives from its package.
+No runtime policy or environment field selects a bundle. Unselected command
+names keep their existing system paths. Selected host `fd` and `rg` use the
+pinned Pi build seam before its cache or PATH search.
+
+## Seatbelt executor
+
+The macOS packaged `seatbelt` backend uses the fixed system `/usr/bin/sandbox-exec`
+launcher. The same seven-tool factory and user shell adapter supply direct argv,
+bounded input/output, cancellation and output callbacks through the backend-neutral
+executor. It uses the existing macOS GNU command profile or selected bundled commands. The host application,
+provider traffic, MCP and managed host tools remain outside this policy.
+
+Seatbelt shares host namespaces. Ordinary host files are readable and read-only;
+`cwd_writable` permits writes under the canonical launch directory. An executor-owned
+real host scratch directory supplies HOME, TMPDIR and runtime state. Literal `/tmp`
+is not private, and scratch writes are host writes. Main-policy `denied_paths`
+denies access to existing canonical directories; it does not mount empty replacements,
+or skip missing targets. A denied ancestor restores only the CWD subtree, then
+applies explicit interior denials. Equal-CWD denial is rejected. Startup rejects
+contradictory grants and unavailable prerequisites without direct fallback.
+
+Networking accepts `none` or `host`; `local` is rejected because private loopback
+is unavailable. Process lifetime is `command` only. Commands run serially with
+bounded admission. Process-group termination and scratch cleanup are best effort.
+Ordinary foreground completion may leave background descendants alive, even in
+the same process group. Failure/cancellation/close attempts signal the process
+group only while the direct child is active; detached descendants can escape
+these attempts. Survivors keep the original filesystem and network grants,
+including after close or owner death. There is
+no supervisor, process namespace, parent-death guarantee or grant revocation.
+Logical session replacement retains the executor and its fixed policy; ending a
+session does not revoke grants already inherited by descendants.
 
 ## Bubblewrap worker
 

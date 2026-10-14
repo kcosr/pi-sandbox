@@ -13,18 +13,26 @@ the fixed GNU utilities used by typed tools.
 The build and installer validate required Bubblewrap options, including
 `--remount-ro` for directory masks and `--ro-bind-data` for empty file masks.
 
-macOS direct mode requires Homebrew `coreutils`, `findutils`,
+By default, macOS direct and Seatbelt modes require Homebrew `coreutils`, `findutils`,
 `grep`, `gawk`, `fd`, and `ripgrep`, plus system Bash, `sh`, and `file`. The
 runtime resolves the Homebrew prefix for Apple silicon or Intel and fails
 closed if a GNU command is missing. The macOS installer validates the selected
-administrative backend before checking these direct-mode prerequisites. A macOS release build additionally requires
+administrative backend before checking these GNU prerequisites. Seatbelt also requires the fixed system `/usr/bin/sandbox-exec`. A macOS release build additionally requires
 Homebrew GNU tar (`gtar`) for reproducible archives.
+
+A build-selected macOS tool bundle can supply any of those tool commands,
+including host `fd` and `rg`, with its required libraries. Selected bundled
+commands replace only their corresponding system prerequisites. System Bash,
+`sh`, `file`, and fixed `/usr/bin/sandbox-exec` remain required unless the first
+three are themselves selected. The bundle records its architecture and minimum
+macOS version; each target needs native qualification. GNU tar remains a build
+dependency and is not a runtime bundle command.
 
 Configured home-directory expansion requires `/usr/bin/getent` on Linux or
 the system `/usr/bin/dscacheutil` on macOS. The runtime queries the effective
 user's OS account with a five-second deadline and a cleared environment; it
 does not use `HOME` as a fallback. This lookup runs only when a configured
-hidden path or scoped environment value needs expansion. A missing command,
+hidden/denied path or scoped environment value needs expansion. A missing command,
 missing account, invalid home, or lookup failure stops operational startup.
 
 Selected managed extensions add conditional absolute-executable requirements.
@@ -225,6 +233,68 @@ reported version, and required command-line options, then installs it at
 third-party notices. System mode packages no Bubblewrap binary and leaves the
 selected absolute path unmanaged.
 
+macOS can additionally select a prepared native tool artifact:
+
+```toml
+[platforms.darwin.tool_bundle]
+directory = "./build-inputs/tools-darwin-arm64"
+inventory_sha256 = "<lowercase SHA-256 of inventory.json>"
+commands = ["awk", "cat", "chmod", "fd", "find", "grep", "head", "mkdir", "mv", "rg", "rm", "sha256sum", "sort", "tail", "test", "wc"]
+```
+
+This optional table contains exactly those three fields. Omitting it retains
+system command selection. `directory` resolves relative to the manifest and
+must be a canonical directory with no symlink components. Supported command
+names are `bash`, `sh`, `cat`, `chmod`, `mkdir`, `mv`, `rm`, `grep`, `file`,
+`find`, `awk`, `head`, `sha256sum`, `sort`, `tail`, `test`, `wc`, `fd`, and `rg`.
+The selection must exactly match its `bin/` entries. This first bundle validator
+supports native Darwin builds only; Linux continues using its existing providers.
+
+The strict `inventory.json` has version `1`, platform `"darwin"`, architecture
+`"arm64"` or `"x64"`, `minimumOS` such as `"26.0"`, and `files` and `sources`
+arrays. Every file entry has `path`, final `sha256`, `mode`, byte `size`, and
+`source`. Native entries also have `originalSha256`, recording the bytes before
+relocation or signing. Native paths are `bin/<command>` or `lib/<name>.dylib`
+with mode `"0755"`; license files reside below `licenses/` with mode `"0644"`.
+Every source has `name`, `version`, `license`, `sourceUrl`, `sourceSha256`,
+`binaryUrl`, `binarySha256`, and nonempty `licenseFiles` naming its packaged
+notices. URLs are HTTPS and digests lowercase SHA-256. Original/source digests
+are provenance supplied by the artifact producer; the builder verifies the
+pinned inventory and every final file, not remote source archives.
+
+Unlisted files/directories, missing files, symlinks, traversal, unknown fields,
+incorrect modes or hashes are rejected. Native builds inspect each executable
+and dylib's actual architecture, minimum OS, loader imports and signature.
+Dependencies must resolve to system libraries or inventoried libraries via
+`@loader_path`; external Homebrew paths and `LC_RPATH` are rejected. Artifact
+producers must relocate dependent dylibs, sign changed native files, preserve
+licenses and record original/final hashes before pinning the inventory. The
+builder does not download or repair tool artifacts.
+Artifact producers must retain corresponding source archives, patches and build
+recipes and fulfill the bundled components' license and redistribution terms;
+an inventory of source URLs and digests does not itself supply those materials.
+
+Managed releases copy the complete artifact to `libexec_dir/tools`, preserve
+native executable modes during installation, and include its identity and
+source/file hashes in the release manifest and SBOM. Runtime paths are anchored
+beside the real managed executable, allowing extracted archives to relocate
+together. Selected host `fd`/`rg` paths precede Pi's cache and PATH lookup; a
+missing selected file fails without fallback or download. No TOML runtime,
+standalone JSON, or environment setting can replace this build selection.
+
+`node scripts/build-extensions.mjs --distribution FILE` and
+`node scripts/pack-extensions.mjs OUTPUT --distribution FILE` use the same
+verified input for the standalone sandbox package. Its tools reside under
+`dist/native-tools`, resolve relative to the extracted package, and are recorded in
+package provenance. Ordinary builds remain JavaScript-only. A bundle-bearing
+package is specific to its recorded OS/architecture/minimum version; consumers
+that rebundle its JavaScript must preserve that tools layout or construct an
+executor with their own trusted `toolBundle` metadata. Neither path creates an
+administrator tool-directory policy.
+Stock Pi's own interactive `fd`/`rg` helpers retain stock Pi's cache/PATH
+selection; the managed host-tool seam is not part of the standalone extension.
+The standalone package's immutable selection governs its executor commands.
+
 Each strict JSON extension manifest has `"manifestVersion": 1`, kind
 `"managed"` or `"pi-tool"`, API version 3, a lowercase hyphenated identifier,
 semantic version, relative entrypoint, exact tool-name list, and optional
@@ -302,7 +372,7 @@ not start Pi or an execution backend.
 The default distribution installs under `/usr` on Linux and `/usr/local` on
 macOS, with `/etc/pi-sandbox` for administrative configuration. A custom
 distribution uses its compiled paths. The macOS installer validates
-the native direct-mode config and GNU prerequisites and never installs broker
+the native direct/Seatbelt configuration and GNU prerequisites and never installs broker
 or service-manager files.
 
 The installer serializes concurrent updates with
@@ -342,15 +412,15 @@ There is no implicit configuration replacement. This supports both complete
 archive deployments and systems where Salt or another configuration manager
 owns `/etc/pi-sandbox`.
 
-The installed configuration uses `config_version = 11` and must include the
+The installed configuration uses `config_version = 12` and must include the
 `[audit]`, `[sessions]`, `[codemode]`, `[mcp.servers]`, `[execution]`, `[filesystem]`, and `[extensions]` tables, an `audit` boolean on every
-base tool policy, explicit `filesystem.hidden_paths` (empty by default), and explicit `[environment.pi]`,
+base tool policy, explicit `filesystem.hidden_paths` and `filesystem.denied_paths` (both empty by default), and explicit `[environment.pi]`,
 `[environment.sandbox]`, and `[environment.extensions]` tables, even when the
 environment tables are empty. Set `execution.backend = "bubblewrap"` on Linux
-for containment, or `execution.backend = "direct"` on Linux/macOS for
+for containment, use `execution.backend = "seatbelt"` on macOS for the documented Seatbelt policy, or use `execution.backend = "direct"` on Linux/macOS for
 policy-gated execution in the user's host security context. Direct mode also
 requires `network.mode = "host"`, `filesystem.cwd_writable = true`, and
-`filesystem.hidden_paths = []`; macOS
+empty `filesystem.hidden_paths` and `filesystem.denied_paths`; macOS
 requires disabled identity. If a
 preserved site configuration does not satisfy the current schema, update the
 site-managed TOML first or use `--replace-config` to install the packaged
@@ -366,10 +436,21 @@ starting with `~/` before updating the version. Configurations older than
 schema 8 also need the required session policy. Alternatively, explicitly
 replace configuration with the packaged defaults.
 
+To migrate schema 11, add `denied_paths = []` to `[filesystem]` and set
+`config_version = 12`. The macOS packaged default selects Seatbelt with networking
+disabled, using `config/default/config.seatbelt.toml`. Ordinary upgrades preserve
+existing configuration, including an explicit direct backend. Builds can select
+`config/default/config.direct.toml` with `--config` when direct execution is intended.
+Seatbelt requires `network.mode` of `none` or `host`, command lifetime, empty hidden
+paths, disabled broker identity and disabled audit. No helper service, watcher,
+Python runtime or private namespace is installed. macOS arm64 and x86-64 release
+qualification must run separately.
+
 Installer validation checks home-relative syntax without expanding it to the
 root installer's home or requiring per-user hidden paths to exist. Operational
 startup expands against the invoking effective user's OS account home and
-validates the resulting paths, silently skipping missing hidden targets.
+validates the resulting paths, silently skipping missing Bubblewrap hidden targets
+but rejecting missing Seatbelt denied directories.
 Model and installation paths remain absolute.
 
 When the optional identity broker is enabled, `users.d/*.toml` and `groups.d/*.toml` may overlay

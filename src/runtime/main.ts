@@ -44,6 +44,7 @@ import {
 import {
   createBubblewrapExecutor,
   createDirectExecutor,
+  createSeatbeltExecutor,
   type SandboxExecutor,
 } from "../../packages/sandbox-extension/src/runtime/index.js";
 import {
@@ -238,11 +239,28 @@ async function createProbedExecutor(
         processLifetime: config.execution.processLifetime,
         cwdWritable: config.filesystem.cwdWritable,
         hiddenPaths: config.filesystem.hiddenPaths,
+        ...(buildLayout.toolBundle ? { toolBundle: buildLayout.toolBundle } : {}),
         environment,
       });
-    } else {
-      executor = await createDirectExecutor({ cwd, environment, ambientEnvironment });
-    }
+    } else if (config.execution.backend === "seatbelt") {
+      if (config.network.mode === "local")
+        throw new Error("Seatbelt does not support local networking");
+      executor = await createSeatbeltExecutor({
+        cwd,
+        cwdWritable: config.filesystem.cwdWritable,
+        deniedPaths: config.filesystem.deniedPaths,
+        ...(buildLayout.toolBundle ? { toolBundle: buildLayout.toolBundle } : {}),
+        networkMode: config.network.mode,
+        environment,
+      });
+    } else if (config.execution.backend === "direct") {
+      executor = await createDirectExecutor({
+        cwd,
+        environment,
+        ambientEnvironment,
+        ...(buildLayout.toolBundle ? { toolBundle: buildLayout.toolBundle } : {}),
+      });
+    } else throw new Error("Unsupported execution backend");
   } catch (error) {
     const detail = actionableErrorMessage(error);
     throw new Error(
@@ -272,6 +290,8 @@ async function createProbedExecutor(
 function executionStartupMessage(config: SandboxConfig): string {
   if (config.execution.backend === "bubblewrap")
     return "Bubblewrap could not establish the required sandbox; verify unprivileged user namespaces and Bubblewrap compatibility";
+  if (config.execution.backend === "seatbelt")
+    return "Seatbelt could not establish the required policy; verify /usr/bin/sandbox-exec and the documented macOS prerequisites";
   return "Direct execution could not establish its bounded command runner; verify the documented host prerequisites";
 }
 
@@ -284,6 +304,17 @@ export function assertExecutionPlatform(
   }
   if (config.execution.backend === "bubblewrap" && platform !== "linux") {
     throw new Error("Bubblewrap execution is supported only on Linux");
+  }
+  if (config.execution.backend === "seatbelt") {
+    if (platform !== "darwin") throw new Error("Seatbelt execution is supported only on macOS");
+    if (config.network.mode === "local")
+      throw new Error("Seatbelt execution requires network.mode = none or host");
+    if (config.execution.processLifetime !== "command")
+      throw new Error("Seatbelt execution requires execution.process_lifetime = command");
+    if (config.filesystem.hiddenPaths.length > 0)
+      throw new Error("Seatbelt execution requires filesystem.hidden_paths = []");
+  } else if (config.filesystem.deniedPaths.length > 0) {
+    throw new Error("filesystem.denied_paths requires Seatbelt execution");
   }
   if (config.execution.backend === "direct" && config.network.mode !== "host") {
     throw new Error("Direct execution requires network.mode = host");

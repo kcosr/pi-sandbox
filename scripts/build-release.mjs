@@ -26,6 +26,7 @@ import { loadExtensionManifests } from "./build/extension-composition.mjs";
 import { createSbom } from "./build/sbom.mjs";
 import { loadDistribution } from "./build/distribution.mjs";
 import { renderLayoutText } from "./build/layout-render.mjs";
+import { copyToolBundle, validateNativeToolBundle } from "./build/tool-bundle.mjs";
 
 const repositoryRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const defaultDistribution = join(repositoryRoot, "config/default/distribution.toml");
@@ -450,6 +451,7 @@ async function inspectReleaseArchive(
     executionBackends: expectedRelease.executionBackends,
     identityBroker: expectedRelease.identityBroker,
     bubblewrap: expectedRelease.bubblewrap,
+    toolBundle: expectedRelease.toolBundle,
     pi: expectedRelease.pi,
     extensions: expectedRelease.extensions,
     layout: expectedRelease.layout,
@@ -465,6 +467,7 @@ async function inspectReleaseArchive(
     executionBackends: manifest.executionBackends,
     identityBroker: manifest.identityBroker,
     bubblewrap: manifest.bubblewrap,
+    toolBundle: manifest.toolBundle,
     pi: manifest.pi,
     extensions: manifest.extensions,
     layout: manifest.layout,
@@ -503,9 +506,10 @@ async function main() {
   const packageJson = JSON.parse(await readFile(packagePath, "utf8"));
   const target = hostPlatform();
   const distribution = await loadDistribution(options.distribution, target.os);
+  validateNativeToolBundle(distribution.toolBundle, target.os, process.arch);
   options.config ??= join(
     repositoryRoot,
-    target.os === "darwin" ? "config/default/config.direct.toml" : "config/default/config.toml",
+    target.os === "darwin" ? "config/default/config.seatbelt.toml" : "config/default/config.toml",
   );
   validateLock(lock);
   await assertRegularFile(options.config, "default configuration");
@@ -548,7 +552,12 @@ async function main() {
     process.stdout.write("Bundling the private Pi Sandbox application\n");
     await run(
       process.execPath,
-      [join(repositoryRoot, "scripts/build-bundles.mjs"), "--distribution", distribution.path],
+      [
+        join(repositoryRoot, "scripts/build-bundles.mjs"),
+        "--distribution",
+        distribution.path,
+        "--executable-relative-tools",
+      ],
       { env: cleanEnvironment },
     );
     let extensionBuildInventory;
@@ -619,6 +628,7 @@ async function main() {
         "packages/coding-agent/test/managed-model-runtime.test.ts",
         "packages/coding-agent/test/managed-main.test.ts",
         "packages/coding-agent/test/managed-version.test.ts",
+        "packages/coding-agent/test/managed-tool-paths.test.ts",
         "packages/coding-agent/test/managed-extensions.test.ts",
         "packages/coding-agent/test/managed-session-sharing.test.ts",
         "packages/coding-agent/test/managed-session-cwd.test.ts",
@@ -664,6 +674,8 @@ async function main() {
         "--no-compile-autoload-bunfig",
         "--no-compile-autoload-dotenv",
         `--target=${bunTarget}`,
+        "--define",
+        `PI_SANDBOX_HOST_TOOLS=${JSON.stringify(Object.fromEntries(Object.keys(distribution.layout.hostTools ?? {}).map((name) => [name, `tools/bin/${name}`])))}`,
         "./dist/pi-sandbox/private-entrypoint.mjs",
         "./src/utils/image-resize-worker.ts",
         "./src/extensions/codemode/worker.ts",
@@ -739,6 +751,7 @@ async function main() {
     }
 
     const defaults = join(payload, "defaults");
+    await copyToolBundle(distribution.toolBundle, join(payload, "tools"));
     await mkdir(defaults);
     await copyFile(options.config, join(defaults, "config.toml"));
     await copyFile(options.models, join(defaults, "models.json"));
@@ -792,6 +805,7 @@ async function main() {
       sourceCommit: (await capture("git", ["rev-parse", "HEAD"])).trim(),
       sourceDirty: (await capture("git", ["status", "--porcelain"])).trim().length > 0,
       bubblewrap: os === "linux" ? distribution.bubblewrap.release : null,
+      toolBundle: distribution.toolBundle,
       payload,
     });
     await writeFile(join(payload, "sbom.cdx.json"), `${JSON.stringify(sbom, null, 2)}\n`, {
@@ -806,9 +820,10 @@ async function main() {
       buildVersion,
       platform,
       architecture: process.arch,
-      executionBackends: [...(os === "linux" ? ["bubblewrap"] : []), "direct"],
+      executionBackends: [os === "linux" ? "bubblewrap" : "seatbelt", "direct"],
       identityBroker: os === "linux",
       bubblewrap: os === "linux" ? distribution.bubblewrap.release : null,
+      toolBundle: distribution.toolBundle?.release ?? null,
       pi: {
         version: lock.version,
         tag: lock.tag,
@@ -861,9 +876,10 @@ async function main() {
         buildVersion,
         platform,
         architecture: process.arch,
-        executionBackends: [...(os === "linux" ? ["bubblewrap"] : []), "direct"],
+        executionBackends: [os === "linux" ? "bubblewrap" : "seatbelt", "direct"],
         identityBroker: os === "linux",
         bubblewrap: os === "linux" ? distribution.bubblewrap.release : null,
+        toolBundle: distribution.toolBundle?.release ?? null,
         pi: {
           version: lock.version,
           tag: lock.tag,
@@ -888,6 +904,19 @@ async function main() {
         ],
         { env: cleanEnvironment },
       );
+    } else if (
+      packagedConfig.execution?.backend === "seatbelt" &&
+      distribution.layout.allowConfigOverride
+    ) {
+      process.stdout.write("Testing Seatbelt through the packaged review executable\n");
+      await run(
+        process.execPath,
+        [
+          join(repositoryRoot, "scripts/test/seatbelt-packaged-smoke.mjs"),
+          join(extractedRelease, "payload/pi-sandbox/pi-sandbox"),
+        ],
+        { env: cleanEnvironment },
+      );
     }
     const archiveSha256 = await sha256(archive);
     await writeFile(join(options.out, "SHA256SUMS"), `${archiveSha256}  ${archiveName}\n`, {
@@ -896,7 +925,12 @@ async function main() {
     process.stdout.write(`Created and inspected ${archive}\nSHA-256 ${archiveSha256}\n`);
     await run(
       process.execPath,
-      [join(repositoryRoot, "scripts/pack-extensions.mjs"), options.out],
+      [
+        join(repositoryRoot, "scripts/pack-extensions.mjs"),
+        options.out,
+        "--distribution",
+        distribution.path,
+      ],
       { env: cleanEnvironment },
     );
   } finally {

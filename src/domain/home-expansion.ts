@@ -33,6 +33,15 @@ export function expandManagedHomePaths(
       "Expanded filesystem.hidden_paths must not overlap private system paths or hide /tmp",
     );
   }
+  const deniedPaths = filesystem.deniedPaths.map(expand);
+  if (
+    !deniedPaths.every(isNormalizedAbsoluteFilePath) ||
+    new Set(deniedPaths).size !== deniedPaths.length
+  ) {
+    throw new Error(
+      "Expanded filesystem.denied_paths must contain unique normalized absolute directory paths",
+    );
+  }
 
   function expandVariables(variables: EnvironmentVariables): EnvironmentVariables {
     return Object.fromEntries(
@@ -54,6 +63,7 @@ export function expandManagedHomePaths(
     filesystem: Object.freeze({
       cwdWritable: filesystem.cwdWritable,
       hiddenPaths: Object.freeze(hiddenPaths.sort()),
+      deniedPaths: Object.freeze(deniedPaths.sort()),
     }),
     environment: expandedEnvironment,
   });

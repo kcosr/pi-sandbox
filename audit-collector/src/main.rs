@@ -95,7 +95,7 @@ fn facility(config: &str) -> io::Result<Option<u32>> {
     if value
         .get("config_version")
         .and_then(toml::Value::as_integer)
-        != Some(11)
+        != Some(12)
     {
         return Err(invalid());
     }
@@ -842,17 +842,18 @@ mod tests {
     #[test]
     fn configuration_owns_facility_and_requires_current_schema() {
         assert_eq!(
-            facility("config_version=11\n[audit]\nenabled=true\nfacility='local7'").unwrap(),
+            facility("config_version=12\n[audit]\nenabled=true\nfacility='local7'").unwrap(),
             Some(23)
         );
         assert_eq!(
-            facility("config_version=11\n[audit]\nenabled=false\nfacility='local0'").unwrap(),
+            facility("config_version=12\n[audit]\nenabled=false\nfacility='local0'").unwrap(),
             None
         );
         for text in [
             "config_version=10\n[audit]\nenabled=true\nfacility='local0'",
-            "config_version=11\n[audit]\nenabled=true\nfacility='auth'",
-            "config_version=11\n[audit]\nenabled=true\nfacility='local0'\npath='/tmp/log'",
+            "config_version=11\n[audit]\nenabled=true\nfacility='local0'",
+            "config_version=12\n[audit]\nenabled=true\nfacility='auth'",
+            "config_version=12\n[audit]\nenabled=true\nfacility='local0'\npath='/tmp/log'",
         ] {
             assert!(facility(text).is_err());
         }

@@ -16,7 +16,7 @@ if [ -z "$destdir" ]; then [ "$(uname -s)" = Darwin ] || { echo "this package re
 launcher="$destdir/usr/local/bin/pi-sandbox"
 install_base="$destdir/usr/local/libexec/pi-sandbox"
 etc_target="$destdir/etc/pi-sandbox"
-expected_link=../libexec/pi-sandbox/pi-sandbox
+expected_link="../libexec/pi-sandbox/pi-sandbox"
 if [ -e "$launcher" ] || [ -L "$launcher" ]; then
   [ -L "$launcher" ] && [ "$(readlink "$launcher")" = "$expected_link" ] || { echo "launcher is not managed by Pi Sandbox" >&2; exit 1; }
 fi

@@ -39,6 +39,51 @@ spelling. Session approval grants do not survive replacement or reload.
 Workspace pathname replacement during a process lifetime is outside the trusted
 launcher contract; admission checks do not make host-side resource reads atomic.
 
+## macOS Seatbelt
+
+Seatbelt is the macOS packaged policy backend using the trusted system
+`/usr/bin/sandbox-exec`. It constrains tool
+children, not Pi or managed host tools. Ordinary host paths stay readable, while
+ordinary file writes are limited to the allowed CWD and executor-owned real host
+scratch directories. `cwd_writable = false` removes CWD write authority.
+Apple marks `sandbox-exec` deprecated. Treat continued availability and policy
+behavior as macOS qualification requirements; an unavailable launcher or failed
+enforcement probe aborts startup rather than selecting direct execution.
+`filesystem.denied_paths` denies reads and writes to canonical existing directories,
+including selected CWD descendants. Denials are not empty mounts and may expose
+names in parent listings. A denied ancestor admits only the CWD subtree, with
+explicit interior denials applied afterward. Denying CWD itself is rejected.
+Root `/`, system trees `/System`, `/usr`, `/bin`, `/sbin`, `/dev`, and known
+noncanonical aliases `/tmp`, `/var`, `/etc` are invalid denial targets. Broad
+account/data roots such as `/Users`, `/Volumes`, and `/Library` may be denied,
+but are not valid whole-workspace grants.
+
+There are no PID, filesystem, IPC or network namespaces, private `/tmp`, VM,
+or parent-death containment. Scratch is real host storage with best-effort removal.
+`none` denies network operations under Seatbelt policy; `host` admits host networking
+subject to other policy restrictions. Private-loopback `local` is unsupported.
+The policy uses a cleared environment plus fixed values and the admitted sandbox
+scope; those values remain model-visible. Broad filesystem reads can still expose
+credentials outside denied directories. Path aliases and existing filesystem
+relationships must not be treated as inode-level confidentiality guarantees.
+
+Commands are serial and bounded in argv, stdin, output and duration. Cleanup
+signals the command process group on failure, cancellation or close only while
+the direct child remains active. Normal foreground completion can leave background
+descendants alive, including members of the same group. Cleanup is explicitly
+best effort: descendants that detach or change process group can escape those
+attempts and may survive after Pi exits or dies. They retain the original filesystem
+and network grants. Closing the executor, changing a session or changing later
+policy does not revoke those grants. Scratch deletion is not a substitute for
+process revocation. No watcher, guardian, observer or new host service attempts
+to provide stronger lifecycle guarantees.
+
+macOS broker identity and audit collection remain disabled. Host `git_clone`
+retains ordinary execution and its accepted destination race; Seatbelt introduces
+no staging publisher or clone-specific process cleanup. Qualify runtime behavior
+on each supported macOS architecture and version; arm64 execution does not prove
+x86-64 qualification.
+
 ## Outside the boundary
 
 Pi runs on the host. Its provider API requests, authentication material, UI,
@@ -60,13 +105,24 @@ binary is trusted installation code. A bundled binary is digest-checked at
 build and by the release inventory, installed non-setuid beneath the root-owned
 libexec directory, and never selected by runtime configuration.
 
+Optional native tool bundles are also trusted installation code selected only
+at build time. The builder verifies a pinned complete inventory and the native
+loader dependency closure; source/original hashes record artifact provenance.
+The installed bundle and libraries must remain protected from untrusted writes.
+Bubblewrap and Seatbelt reject overlap between the bundle and writable CWD, and
+reject filesystem exclusions covering selected tools or the bundle. A standalone
+package should therefore be installed outside its writable project workspace.
+Direct execution provides no filesystem protection for the package. Runtime
+configuration, environment and Pi's host-tool cache cannot replace a selected
+bundled executable, and a missing selected executable does not trigger fallback.
+
 ## MCP and code-mode authority
 
 Administrator-enabled HTTP MCP clients and stdio MCP servers run outside the
-Bubblewrap boundary. Stdio servers are trusted installed host code with the
+selected sandbox boundary. Stdio servers are trusted installed host code with the
 invoking account's authority, including startup and background activity before
 any tool approval. HTTP tools exercise the server's authority. Sandbox network
-and hidden-path settings do not constrain either transport. Enabling a server
+and filesystem exclusion settings do not constrain either transport. Enabling a server
 authorizes connection and tool discovery even if every tool policy is disabled.
 
 Code mode isolates model-authored JavaScript in the embedded QuickJS runtime,
@@ -100,11 +156,11 @@ maintained Pi Sandbox extension and build-selected extension modules
 are compiled into the executable; Pi receives only the one forced Pi Sandbox
 extension through its inline API. Each enabled operation uses its replacement
 tool backed by its declared boundary. The seven replacements and user shell use
-the configured Bubblewrap or direct executor. Explicit managed host tools use only
+the configured Bubblewrap, Seatbelt or direct executor. Explicit managed host tools use only
 their compiled direct-argument implementation; sandbox failure never changes a
 tool into a host operation. Direct execution is admitted only from the
 effective selected configuration and is never selected
-after a Bubblewrap failure.
+after a Bubblewrap or Seatbelt failure.
 
 In managed builds (`allow_config_override = false`), the distribution's
 compiled `config_dir/config.toml` is the fixed global policy and

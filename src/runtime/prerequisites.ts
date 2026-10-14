@@ -1,6 +1,6 @@
 import { constants as fsConstants } from "node:fs";
 import { access } from "node:fs/promises";
-import { delimiter, join } from "node:path";
+import { basename, delimiter, join } from "node:path";
 
 import { REQUIRED_SANDBOX_EXECUTABLES } from "../../packages/sandbox-extension/src/runtime/index.js";
 import type { CompiledLayout } from "../build-layout/index.js";
@@ -16,15 +16,28 @@ const DEFAULT_PATH_COMMANDS = Object.freeze([
 /** Only executables that run on the host belong in this check. */
 export function assertExecutionPrerequisites(
   backend: ExecutionBackend,
-  layout: Pick<CompiledLayout, "bubblewrap">,
+  layout: Pick<CompiledLayout, "bubblewrap" | "toolBundle" | "hostTools">,
   managedExecutables: readonly string[],
 ): Promise<void> {
   const provider = backend === "bubblewrap" ? layout.bubblewrap : undefined;
+  const selectedCommands = layout.toolBundle?.commands ?? {};
+  const selectedHost = layout.hostTools ?? {};
   return assertHostPrerequisites({
-    ...(backend !== "bubblewrap" ? { fixedExecutables: [] } : {}),
+    fixedExecutables:
+      backend !== "bubblewrap"
+        ? []
+        : DEFAULT_FIXED_EXECUTABLES.filter(
+            (path) => !Object.hasOwn(selectedCommands, basename(path)),
+          ),
+    pathCommands: DEFAULT_PATH_COMMANDS.filter(
+      (command) => !command.names.some((name) => Object.hasOwn(selectedHost, name)),
+    ),
     additionalFixedExecutables: [
       ...managedExecutables,
+      ...Object.values(selectedCommands),
+      ...Object.values(selectedHost),
       ...(provider === undefined ? [] : [provider.path]),
+      ...(backend === "seatbelt" ? ["/usr/bin/sandbox-exec"] : []),
     ],
   });
 }

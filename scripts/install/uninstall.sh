@@ -65,11 +65,11 @@ audit_service_unit="$systemd_target/pi-sandbox-audit@.service"
 etc_target="${root_prefix}/etc/pi-sandbox"
 config="$etc_target/config.toml"
 models="$etc_target/models.json"
-expected_link=../libexec/pi-sandbox/pi-sandbox
-expected_socket_unit_link=../../../libexec/pi-sandbox/systemd/pi-sandbox-identity-broker.socket
-expected_audit_socket_unit_link=../../../libexec/pi-sandbox/systemd/pi-sandbox-audit.socket
-expected_service_unit_link=../../../libexec/pi-sandbox/systemd/pi-sandbox-identity-broker@.service
-expected_audit_service_unit_link=../../../libexec/pi-sandbox/systemd/pi-sandbox-audit@.service
+expected_link="../libexec/pi-sandbox/pi-sandbox"
+expected_socket_unit_link="../../../libexec/pi-sandbox/systemd/pi-sandbox-identity-broker.socket"
+expected_audit_socket_unit_link="../../../libexec/pi-sandbox/systemd/pi-sandbox-audit.socket"
+expected_service_unit_link="../../../libexec/pi-sandbox/systemd/pi-sandbox-identity-broker@.service"
+expected_audit_service_unit_link="../../../libexec/pi-sandbox/systemd/pi-sandbox-audit@.service"
 
 # Validate every managed target before removing any of them.
 if [ -e "$launcher" ] || [ -L "$launcher" ]; then

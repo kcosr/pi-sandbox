@@ -8,13 +8,27 @@ and starts stock Pi 1.1.0 against independently extracted artifacts. Sandbox is
 installed without Git or permissions; Git is installed alone and with sandbox.
 No workspace package links are admitted. Provenance includes Git's bundled runner.
 
+To exercise a bundle-bearing artifact, run each package script with the same
+build input:
+
+```sh
+node scripts/test/sandbox-extension-package.mjs --distribution /path/to/distribution.toml
+node scripts/test/git-extension-package.mjs --distribution /path/to/distribution.toml
+```
+
+`verify:release -- --distribution FILE` propagates that selection to both
+package tests and the managed release. It supplies the verified directory to
+native test fixtures through test-only `PI_SANDBOX_TEST_TOOL_BUNDLE`; product
+runtime code does not read this variable. Package paths must be outside writable
+workspaces, and Node/Bun acceptance must test the extracted package.
+
 Linux sandbox acceptance requires Bubblewrap, Node 24 and Bun 1.3.14+ and checks
 both worker runtimes, conversation replacement and persistent background jobs.
 Direct acceptance also exercises ordinary and nested parallel tool calls.
 Git acceptance uses local HTTP repositories and scripted local model responses
 for ordinary/nested Code Mode cloning, restrictions, exclusions and repeated
 sessions. Both extension load orders run with direct execution on Linux and
-macOS, and with Bubblewrap on Linux. Temporary paths are canonicalized before
+macOS, with Seatbelt on macOS, and with Bubblewrap on Linux. Temporary paths are canonicalized before
 configuring the workspace. Managed tests cover mandatory approvals, exact canonical snapshots,
 per-call cancellation, audit failure, MCP and nested Code Mode. No live provider
 is contacted. Standalone direct acceptance runs stock Pi under Node and Bun
@@ -44,6 +58,12 @@ integration, real-Bubblewrap, package/install, build, archive inspection, and
 packaged executable diagnostic checks as distinct observable steps. A supported release
 host must execute the Bubblewrap suites rather than accepting a skip caused by
 unavailable namespaces.
+
+On macOS the verifier requires real Seatbelt controls and both Node/Bun runtime
+fixtures. It selects Bun from `PI_SANDBOX_TEST_BUN`, `PI_SANDBOX_BUN`, or the
+test host's `PATH`, in that order; use the verified release toolchain. Genuine
+documented GNU prerequisites or the distribution's verified tool bundle are
+required for direct and Seatbelt tests.
 
 Linux real-Bubblewrap tests also require Python 3 for offline socket-family and
 namespace probes. This is a test-host dependency, not an application runtime
@@ -132,6 +152,45 @@ Host-tool integration uses a mocked host executor and local fixtures only. It
 proves that `git_clone` constructs `/usr/bin/git clone --` with one derived
 child. Tests do not contact Git hosts or a broker service.
 
+### Real Seatbelt (macOS)
+
+Run native acceptance on each intended macOS architecture; an arm64 pass does
+not qualify x86-64. Exercise both the managed compiled Bun application and the
+independently packed standalone extension with stock Pi under Node and Bun.
+Keep tests offline with local scripted model responses and local socket fixtures.
+Require native prerequisites instead of silently accepting skips:
+
+```sh
+PI_SANDBOX_REQUIRE_SEATBELT=1 PI_SANDBOX_TEST_BUN=/absolute/path/to/verified/bun \
+  npm test -- packages/sandbox-extension/src/runtime/seatbelt-executor.test.ts \
+  tests/integration/seatbelt-tool-flow.test.ts
+```
+
+The compiled review-build smoke uses a release explicitly built with
+`allow_config_override = true`; ordinary managed releases keep that setting false:
+
+```sh
+node scripts/test/seatbelt-packaged-smoke.mjs /absolute/path/to/review/pi-sandbox
+```
+
+This smoke exercises the installed compiled application, RPC/session replacement,
+managed approvals and MCP/Code Mode against local fixtures. Independently packed
+standard-extension acceptance remains `npm run test:extension`.
+
+Verify all seven tools, user `!`, canonical CWD, read-only and writable CWD,
+ordinary outside reads with denied writes, real host scratch, and existing
+canonical directory denials. Reject unsupported `local`, sandbox lifetime,
+nonempty hidden paths, missing/symlink/file denials, contradictory grants and
+unknown launcher fields. Verify none/host networking, no direct fallback, bounded
+admission/input/output, cancellation and close, and accurate diagnostics.
+
+Serial admission does not guarantee descendant cleanup. Include an explicit
+residual-risk test demonstrating that background descendants may outlive ordinary
+foreground completion with their original grants. Cancellation/close cleanup
+attempts apply only while the direct child remains active. Test fixtures must
+reap their own intentional survivors without adding a production observer or
+service. Re-run Linux Bubblewrap/direct checks when shared code changes.
+
 ### Real Bubblewrap
 
 Tests execute a disposable fixture through the installed `bwrap` binary and
@@ -202,7 +261,8 @@ Direct-executor tests separately prove Linux direct execution, host-home path
 resolution, ambient-plus-scoped environment construction, direct-argv request
 bounds, cancellation/error mapping, and unsupported-platform failure. Config
 tests prove direct mode requires explicit host networking. macOS command-profile
-tests and native release validation require the declared Homebrew GNU tools;
+tests and native release validation require the declared Homebrew GNU tools or
+the selected, pinned native tool bundle;
 they never substitute BSD utility semantics.
 
 Host fixtures use a disposable parent with separate `workspace` and
@@ -276,7 +336,8 @@ release test remains offline.
 
 Linux release testing runs locally with Node.js 24, Rust/Cargo 1.85 or newer,
 and Bubblewrap through `npm run verify:release`. macOS release testing runs on
-the target architecture with Node.js 24, Bun, and the Homebrew prerequisites;
+the target architecture with Node.js 24, Bun, and the system prerequisites or
+selected native tool bundle;
 it builds and validates the native direct-mode archive. Generated artifacts are
 not committed.
 

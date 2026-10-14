@@ -22,13 +22,20 @@ export interface DirectBackendConfig {
   readonly kind: "direct";
   readonly environment: Readonly<Record<string, string>>;
 }
+export interface SeatbeltBackendConfig {
+  readonly kind: "seatbelt";
+  readonly network: "none" | "host";
+  readonly cwdWritable: boolean;
+  readonly deniedPaths: readonly string[];
+  readonly environment: Readonly<Record<string, string>>;
+}
 interface CommonConfig {
-  readonly version: 4;
+  readonly version: 5;
   readonly userBash: boolean;
 }
 export interface OwnedSandboxConfig extends CommonConfig {
   readonly mode: "owned";
-  readonly backend: BubblewrapBackendConfig | DirectBackendConfig;
+  readonly backend: BubblewrapBackendConfig | DirectBackendConfig | SeatbeltBackendConfig;
 }
 export type SandboxExtensionConfig = OwnedSandboxConfig;
 
@@ -64,7 +71,7 @@ function environment(value: unknown): Readonly<Record<string, string>> {
 export function parseSandboxConfig(value: unknown): SandboxExtensionConfig {
   record(value);
   keys(value, ["version", "mode", "backend", "userBash"]);
-  if (value.version !== 4 || value.mode !== "owned" || typeof value.userBash !== "boolean")
+  if (value.version !== 5 || value.mode !== "owned" || typeof value.userBash !== "boolean")
     throw new Error("Unsupported sandbox configuration");
   record(value.backend);
   const input = value.backend;
@@ -72,6 +79,25 @@ export function parseSandboxConfig(value: unknown): SandboxExtensionConfig {
   if (input.kind === "direct") {
     keys(input, ["kind", "environment"]);
     backend = { kind: "direct", environment: environment(input.environment) };
+  } else if (input.kind === "seatbelt") {
+    keys(input, ["kind", "network", "cwdWritable", "deniedPaths", "environment"]);
+    if (
+      (input.network !== "none" && input.network !== "host") ||
+      typeof input.cwdWritable !== "boolean" ||
+      !Array.isArray(input.deniedPaths) ||
+      input.deniedPaths.length > 63 ||
+      new Set(input.deniedPaths).size !== input.deniedPaths.length
+    )
+      throw new Error("Invalid Seatbelt options");
+    const deniedPaths = input.deniedPaths as unknown[];
+    for (const entry of deniedPaths) absolute(entry);
+    backend = {
+      kind: "seatbelt",
+      network: input.network,
+      cwdWritable: input.cwdWritable,
+      deniedPaths: Object.freeze([...deniedPaths] as string[]),
+      environment: environment(input.environment),
+    };
   } else if (input.kind === "bubblewrap") {
     keys(input, [
       "kind",
@@ -106,7 +132,7 @@ export function parseSandboxConfig(value: unknown): SandboxExtensionConfig {
     };
   } else throw new Error("Unsupported sandbox backend");
   return Object.freeze({
-    version: 4,
+    version: 5,
     mode: "owned",
     backend: Object.freeze(backend),
     userBash: value.userBash,

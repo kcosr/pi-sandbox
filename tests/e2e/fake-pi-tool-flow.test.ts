@@ -283,7 +283,7 @@ describe.skipIf(!REAL_BWRAP_AVAILABLE).each(["/var/tmp", "/tmp"])(
         loadConfig: () =>
           Promise.resolve({
             ...allowAllConfig(),
-            filesystem: { cwdWritable: false, hiddenPaths: [] },
+            filesystem: { cwdWritable: false, hiddenPaths: [], deniedPaths: [] },
           }),
         executor,
       })(fakePi.api);
@@ -388,11 +388,11 @@ function nonInteractiveContext(): ExtensionContext {
 function allowAllConfig(): SandboxConfig {
   const allow = { audit: false, mode: "allow", sessionGrant: "never" } as const;
   return {
-    configVersion: 11,
+    configVersion: 12,
     codemode: { enabled: false, timeoutMs: 300000 },
     mcp: { servers: {} },
     sessions: { retentionDays: 0 },
-    filesystem: { cwdWritable: true, hiddenPaths: [] },
+    filesystem: { cwdWritable: true, hiddenPaths: [], deniedPaths: [] },
     audit: { enabled: false, facility: "local0" },
     modelsFile: "/etc/pi-sandbox/models.json",
     execution: { backend: "bubblewrap", processLifetime: "command" },

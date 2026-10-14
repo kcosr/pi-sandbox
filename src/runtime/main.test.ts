@@ -130,11 +130,11 @@ describe("administrative configuration", () => {
 
   it("enforces the execution backend's platform contract", () => {
     const config = {
-      configVersion: 11,
+      configVersion: 12,
       codemode: { enabled: false, timeoutMs: 300000 },
       mcp: { servers: {} },
       sessions: { retentionDays: 0 },
-      filesystem: { cwdWritable: true, hiddenPaths: [] },
+      filesystem: { cwdWritable: true, deniedPaths: [], hiddenPaths: [] },
       audit: { enabled: false, facility: "local0" },
       modelsFile: "/etc/pi-sandbox/models.json",
       execution: { backend: "bubblewrap", processLifetime: "command" },
@@ -145,6 +145,40 @@ describe("administrative configuration", () => {
       tools: {},
     } satisfies SandboxConfig;
     expect(() => assertExecutionPlatform(config, "linux")).not.toThrow();
+    const seatbelt = {
+      ...config,
+      execution: { backend: "seatbelt", processLifetime: "command" },
+      filesystem: { cwdWritable: false, hiddenPaths: [], deniedPaths: ["/Users/alice/private"] },
+    } satisfies SandboxConfig;
+    expect(() => assertExecutionPlatform(seatbelt, "darwin")).not.toThrow();
+    expect(() => assertExecutionPlatform(seatbelt, "linux")).toThrow("only on macOS");
+    expect(() =>
+      assertExecutionPlatform({ ...seatbelt, network: { mode: "local" } }, "darwin"),
+    ).toThrow("none or host");
+    expect(() =>
+      assertExecutionPlatform(
+        { ...seatbelt, execution: { backend: "seatbelt", processLifetime: "sandbox" } },
+        "darwin",
+      ),
+    ).toThrow("process_lifetime = command");
+    expect(() =>
+      assertExecutionPlatform(
+        { ...seatbelt, filesystem: { ...seatbelt.filesystem, hiddenPaths: ["/Users/private"] } },
+        "darwin",
+      ),
+    ).toThrow("hidden_paths = []");
+    expect(() =>
+      assertExecutionPlatform({ ...seatbelt, identity: { mode: "broker" } }, "darwin"),
+    ).toThrow("identity.mode = disabled");
+    expect(() =>
+      assertExecutionPlatform(
+        { ...seatbelt, audit: { enabled: true, facility: "local0" } },
+        "darwin",
+      ),
+    ).toThrow("audit.enabled = false");
+    expect(() =>
+      assertExecutionPlatform({ ...config, filesystem: seatbelt.filesystem }, "linux"),
+    ).toThrow("denied_paths requires Seatbelt");
     expect(() =>
       assertExecutionPlatform(
         {
@@ -181,7 +215,7 @@ describe("administrative configuration", () => {
           ...config,
           execution: { backend: "direct", processLifetime: "command" },
           network: { mode: "host" },
-          filesystem: { cwdWritable: true, hiddenPaths: ["/srv/runs"] },
+          filesystem: { cwdWritable: true, deniedPaths: [], hiddenPaths: ["/srv/runs"] },
         },
         "linux",
       ),
@@ -192,14 +226,14 @@ describe("administrative configuration", () => {
           ...config,
           execution: { backend: "direct", processLifetime: "command" },
           network: { mode: "host" },
-          filesystem: { cwdWritable: false, hiddenPaths: [] },
+          filesystem: { cwdWritable: false, deniedPaths: [], hiddenPaths: [] },
         },
         "linux",
       ),
     ).toThrow("Direct execution requires filesystem.cwd_writable = true");
     expect(() =>
       assertExecutionPlatform(
-        { ...config, filesystem: { cwdWritable: false, hiddenPaths: [] } },
+        { ...config, filesystem: { cwdWritable: false, deniedPaths: [], hiddenPaths: [] } },
         "linux",
       ),
     ).not.toThrow();
@@ -356,11 +390,11 @@ describe("administrative configuration", () => {
     ]);
     const allow = { audit: false, mode: "allow", sessionGrant: "never" } as const;
     const config = {
-      configVersion: 11,
+      configVersion: 12,
       codemode: { enabled: false, timeoutMs: 300000 },
       mcp: { servers: {} },
       sessions: { retentionDays: 0 },
-      filesystem: { cwdWritable: true, hiddenPaths: [] },
+      filesystem: { cwdWritable: true, deniedPaths: [], hiddenPaths: [] },
       audit: { enabled: false, facility: "local0" },
       modelsFile: "/etc/pi-sandbox/models.json",
       execution: { backend: "bubblewrap", processLifetime: "command" },
@@ -522,6 +556,7 @@ describe("administrative configuration", () => {
     expect(getHome).toHaveBeenCalledOnce();
     expect(effective.config.filesystem).toEqual({
       cwdWritable: false,
+      deniedPaths: [],
       hiddenPaths: ["/accounts/alice/private"],
     });
     expect(effective.identityEnvironment).toEqual({

@@ -566,7 +566,7 @@ text("MCP_REMOVAL_OK");`,
       if (serverFailure) throw serverFailure;
     }
 
-    if (config.execution.backend === "bubblewrap") {
+    if (["bubblewrap", "seatbelt"].includes(config.execution.backend)) {
       const parallelConfig = JSON.parse(JSON.stringify(config));
       if (config.execution.backend === "bubblewrap")
         parallelConfig.execution.process_lifetime = "sandbox";
@@ -576,7 +576,12 @@ text("MCP_REMOVAL_OK");`,
         parallelConfig.tools[name] = toolPolicy("allow");
       await writeFile(configPath, stringifyToml(parallelConfig));
       await writeFile(join(userState, "settings.json"), "{}");
-      await testParallelTools({ launch, modelsPath, workspace });
+      await testParallelTools({
+        launch,
+        modelsPath,
+        workspace,
+        serialCommands: config.execution.backend === "seatbelt",
+      });
     }
 
     config.codemode.enabled = false;

@@ -2,6 +2,7 @@ import { readFile } from "node:fs/promises";
 import { dirname, isAbsolute, normalize, resolve } from "node:path";
 
 import { parse as parseToml } from "@iarna/toml";
+import { loadToolBundle } from "./tool-bundle.mjs";
 
 const ROOT_KEYS = new Set(["version", "allow_config_override", "extension_manifests", "platforms"]);
 const PLATFORM_KEYS = new Set([
@@ -12,6 +13,7 @@ const PLATFORM_KEYS = new Set([
   "identity_socket_path",
   "audit_socket_path",
   "bubblewrap",
+  "tool_bundle",
 ]);
 const SYSTEM_BUBBLEWRAP_KEYS = new Set(["mode", "path"]);
 const BUNDLED_BUBBLEWRAP_KEYS = new Set(["mode", "binary", "version", "sha256", "license_file"]);
@@ -185,11 +187,16 @@ export async function loadDistribution(path, platform = process.platform) {
     platform === "linux"
       ? parseBubblewrap(selected.bubblewrap, manifestDirectory, libexecDir)
       : undefined;
+  const toolBundle =
+    selected.tool_bundle === undefined
+      ? undefined
+      : await loadToolBundle(selected.tool_bundle, manifestDirectory, platform, libexecDir);
 
   return Object.freeze({
     path: distributionPath,
     extensionManifests: Object.freeze(extensionManifests),
     ...(bubblewrap === undefined ? {} : { bubblewrap }),
+    ...(toolBundle === undefined ? {} : { toolBundle }),
     layout: Object.freeze({
       allowConfigOverride: root.allow_config_override,
       configDir,
@@ -203,10 +210,21 @@ export async function loadDistribution(path, platform = process.platform) {
         ? {}
         : { bubblewrap: Object.freeze({ mode: bubblewrap.mode, path: bubblewrap.path }) }),
       ...(serviceDir === undefined ? {} : { serviceDir }),
+      ...(toolBundle?.layout ?? {}),
     }),
   });
 }
 
-export function createCompiledLayoutModule(layout) {
-  return `export const compiledLayout = Object.freeze(${JSON.stringify(layout)});\n`;
+export function createCompiledLayoutModule(
+  layout,
+  { toolBundleDirectory, executableRelative = false } = {},
+) {
+  if (!layout.toolBundle)
+    return `export const compiledLayout = Object.freeze(${JSON.stringify(layout)});\n`;
+  const root = executableRelative
+    ? 'join(dirname(realpathSync(process.execPath)), "tools")'
+    : JSON.stringify(toolBundleDirectory ?? layout.toolBundle.root);
+  const commandNames = Object.keys(layout.toolBundle.commands);
+  const hostNames = Object.keys(layout.hostTools ?? {});
+  return `import { dirname, join } from "node:path";\nimport { realpathSync } from "node:fs";\nconst root = ${root};\nconst paths = names => Object.freeze(Object.fromEntries(names.map(name => [name, join(root, "bin", name)])));\nexport const compiledLayout = Object.freeze({...${JSON.stringify(layout)},toolBundle:Object.freeze({root,commands:paths(${JSON.stringify(commandNames)})}),hostTools:paths(${JSON.stringify(hostNames)})});\n`;
 }

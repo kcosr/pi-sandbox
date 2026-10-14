@@ -2,7 +2,7 @@
 
 This project provides a policy-gated execution boundary in a managed Pi
 distribution. Linux supports Bubblewrap and explicit direct execution;
-macOS supports direct execution.
+macOS packages select Seatbelt execution by default and support explicit direct execution.
 
 The current product contract is split by subject across `docs/`:
 
@@ -30,17 +30,19 @@ reimplemented rather than mechanically reapplied.
 ## End-state invariants
 
 - Support Linux x86-64/arm64 with `bubblewrap` or `direct` execution and macOS
-  x86-64/arm64 with `direct` execution. Never silently substitute one
+  x86-64/arm64 with `direct` or `seatbelt` execution. Qualify each macOS architecture separately. Never silently substitute one
   backend for another. The build-selected Linux distribution must choose either
   an absolute system Bubblewrap executable or a verified bundled executable;
   runtime configuration cannot change that provider.
+- Optional macOS native tools are selected only by the build distribution's pinned `tool_bundle` inventory. Keep system selection as the default. Admit no runtime configuration or environment override for tool directories; selected missing commands fail closed. Validate the full native dependency closure and preserve bundled licenses, provenance, hashes, and executable modes. Managed paths follow the real executable; standalone paths follow the extracted package. Confined backends must reject writable-workspace overlap and exclusions that hide selected prerequisites. Bundles are trusted installation code, not a new sandbox backend.
 - Preserve host absolute paths inside the sandbox.
-- Present the ordinary host filesystem read-only except main-policy `filesystem.hidden_paths`, which masks canonical existing directories with private read-only filesystems and regular files with private empty read-only data. Silently skip missing targets at worker startup while rejecting symlink components and other invalid targets; skipped paths created later on the host may remain visible until restart. Restore only the launch CWD through hidden ancestors at its identical path, read/write or read-only according to `filesystem.cwd_writable`, then honor explicit hidden descendants. User/group overrides cannot erase masks. Preserve private writable runtime/temp locations; reject hidden paths in direct mode and read-only CWD access with direct execution or CWD exactly `/tmp`.
+- In Bubblewrap mode, present the ordinary host filesystem read-only except main-policy `filesystem.hidden_paths`, which masks canonical existing directories with private read-only filesystems and regular files with private empty read-only data. Silently skip missing targets at worker startup while rejecting symlink components and other invalid targets; skipped paths created later on the host may remain visible until restart. Restore only the launch CWD through hidden ancestors at its identical path, read/write or read-only according to `filesystem.cwd_writable`, then honor explicit hidden descendants. User/group overrides cannot erase masks. Preserve private writable runtime/temp locations; reject hidden paths in direct mode and read-only CWD access with direct execution or CWD exactly `/tmp`.
 - Default Bubblewrap networking to `none`, denying connectable sockets. Permit
   `local` TCP/UDP on private loopback only, with no external routes or host Unix
   sockets. Restrict anonymous socket pairs to connected Unix stream pairs in
   both isolated modes. Explicit `host` shares unrestricted host networking.
   Require `host` whenever `direct` is selected.
+- On macOS, Seatbelt uses fixed `/usr/bin/sandbox-exec` with ordinary host paths, read-only host access except writable CWD and real host scratch directories, and base-policy `filesystem.denied_paths` for canonical existing directory denials. Denied entries are not empty masks. Reject `hidden_paths`, `network.mode = "local"`, and sandbox process lifetime in Seatbelt mode; other backends reject denied paths. No private `/tmp` or PID/network/mount namespaces are claimed. Serial command execution uses best-effort process-group cleanup only. Background descendants may survive ordinary completion, cancellation, close, or owner death with their original grants; cleanup attempts signal only a still-active direct child's process group. Add no watcher, guardian, observer, Python helper, or new service. Keep macOS broker and audit disabled.
 - Build one precompiled Bun `pi-sandbox` application from pinned Pi source and the separately maintained Pi Sandbox extension. Force that extension through Pi's inline factory API, disable Pi's built-in extension factories, and permit no user/project extensions or package-management commands. Package the optional user/group resolver as a separate static Rust broker; it is never a wrapper or sandbox backend.
 - Keep reusable tools and execution backends in `packages/sandbox-extension`,
   and reusable Git clone in `packages/git-extension`. Keep permissions and approval
@@ -55,12 +57,12 @@ reimplemented rather than mechanically reapplied.
   backend-neutral; managed backend selection and auditing belong to the application.
 - Read base policy and global scoped environment through the build-selected `config_dir/config.toml` entry point, or an explicit leading `--config FILE` only when the distribution was built with `allow_config_override = true`. Managed distributions must compile that switch as false and reject the flag. Require its administrator-selected `models_file`, disable Pi's internal model catalog, and fail closed when any effective input is invalid. Optional broker mode resolves kernel-authenticated accounts and primary/supplementary membership through the host account service. Root-managed `config_dir/users.d/*.toml` and `config_dir/groups.d/*.toml` rules select names or numeric IDs. Combine matching explicit permissions using least restrictive wins before overlaying defaults; reject conflicting backend, model, or scoped environment values. Return one environment and model, execution, network, filesystem, and complete named-tool invocation-policy patch. Logging remains parent-only. No matching rules means the main configuration is inherited unchanged. Scoped environment never selects or enables tools.
 - Preserve `PI_CODING_AGENT_DIR` for user state such as credentials, sessions, settings, skills, themes, and logs. It must not redirect administrative configuration or the model catalog.
-- Expand bare `~`, leading `~/`, and `{{username}}`/`{{uid}}` in configured hidden paths, scoped environment values, and explicit MCP stdio environment values. Resolve the invoking effective OS account once after broker merging; ignore ambient identity variables and CWD. MCP URLs remain literal, including query parameters. Revalidate expanded inputs, reject unknown macro syntax, preserve literal installation/config/model/executable paths, and never expand against the installer account during validation.
+- Expand bare `~`, leading `~/`, and `{{username}}`/`{{uid}}` in configured hidden and denied paths, scoped environment values, and explicit MCP stdio environment values. Resolve the invoking effective OS account once after broker merging; ignore ambient identity variables and CWD. MCP URLs remain literal, including query parameters. Revalidate expanded inputs, reject unknown macro syntax, preserve literal installation/config/model/executable paths, and never expand against the installer account during validation.
 - Require main-policy `[sessions].retention_days` (0 disables; packaged default 365). Use session-file modification time and refresh it on startup/resume when enabled. Await best-effort shallow cleanup before interface startup, normally once per 24 hours; only slow interactive sweeps display progress. Keep scheduling state under the agent directory, tolerate concurrent sweeps and cleanup errors, and leave audit-log retention to the host.
 - Replace all seven Pi built-ins (`read`, `grep`, `find`, `ls`, `write`, `edit`,
   and `bash`) and route user `!` shell commands through the selected execution
   backend.
-- Never fall back to direct execution after a Bubblewrap, approval,
+- Never fall back to direct execution after a Bubblewrap, Seatbelt, approval,
   cancellation, or lifecycle failure.
 - Permit administrator-configured host HTTP/stdio MCP through the managed adapter, with original-tool wildcard policies, typed catalog revisions and the shared approval engine. Code mode is an administrator-permitted QuickJS feature with ordinary Pi activation settings; all nested tools retain ordinary policy and execution boundaries. The MCP menu may persist enabled/exposure preferences for admitted servers only. Never accept user/project MCP connection definitions or general extension factories.
 - Keep tool availability separate from invocation approval. Support strict `allow`, `ask`, `deny`, and `disabled` modes.

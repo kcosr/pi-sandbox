@@ -359,9 +359,11 @@ export function createPiSandboxExtension(dependencies: ExtensionDependencies): E
       executionScope:
         (dependencies.executionBackend ?? features?.config.execution.backend) === "bubblewrap"
           ? "inside the Bubblewrap sandbox"
-          : (dependencies.executionBackend ?? features?.config.execution.backend) === "direct"
-            ? "directly on the host as the current user"
-            : "through the managed execution backend",
+          : (dependencies.executionBackend ?? features?.config.execution.backend) === "seatbelt"
+            ? "under the macOS Seatbelt filesystem and network policy"
+            : (dependencies.executionBackend ?? features?.config.execution.backend) === "direct"
+              ? "directly on the host as the current user"
+              : "through the managed execution backend",
     })(
       new Proxy(pi, {
         get(target, property): unknown {

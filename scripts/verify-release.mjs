@@ -1,8 +1,9 @@
 #!/usr/bin/env node
 
-import { spawn } from "node:child_process";
+import { execFileSync, spawn } from "node:child_process";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
+import { loadDistribution } from "./build/distribution.mjs";
 
 const repositoryRoot = dirname(dirname(fileURLToPath(import.meta.url)));
 const nodeMajor = Number.parseInt(process.versions.node.split(".", 1)[0] ?? "", 10);
@@ -16,7 +17,26 @@ if (!Number.isInteger(nodeMajor) || nodeMajor < 24) {
 const environment = { ...process.env };
 delete environment.NODE_ENV;
 const buildArguments = process.argv.slice(2);
+const distributionIndex = buildArguments.indexOf("--distribution");
+const distributionArguments =
+  distributionIndex < 0 ? [] : buildArguments.slice(distributionIndex, distributionIndex + 2);
+if (distributionArguments.length === 1 || distributionArguments[1]?.startsWith("--"))
+  throw new Error("--distribution requires a file");
+const extensionChecks = ["sandbox-extension", "git-extension"].map((name) => [
+  process.execPath,
+  [join(repositoryRoot, `scripts/test/${name}-package.mjs`), ...distributionArguments],
+]);
+if (distributionArguments.length) {
+  const distribution = await loadDistribution(distributionArguments[1]);
+  if (distribution.toolBundle)
+    environment.PI_SANDBOX_TEST_TOOL_BUNDLE = distribution.toolBundle.directory;
+}
 if (process.platform === "linux") environment.PI_SANDBOX_REQUIRE_BWRAP = "1";
+if (process.platform === "darwin") {
+  environment.PI_SANDBOX_REQUIRE_SEATBELT = "1";
+  environment.PI_SANDBOX_TEST_BUN ??=
+    environment.PI_SANDBOX_BUN ?? execFileSync("which", ["bun"], { encoding: "utf8" }).trim();
+}
 environment.PI_SANDBOX_TEST_TMPDIR ??= "/var/tmp";
 
 const commonChecks = [
@@ -34,7 +54,7 @@ const commonChecks = [
 const platformChecks =
   process.platform === "linux"
     ? [
-        ["npm", ["run", "test:extension"]],
+        ...extensionChecks,
         ["npm", ["run", "test:broker"]],
         ["npm", ["run", "test:audit-collector"]],
         ["npm", ["run", "test:systemd"]],
@@ -43,8 +63,11 @@ const platformChecks =
       ]
     : process.platform === "darwin"
       ? [
-          ["npm", ["run", "test:extension"]],
-          ["npm", ["run", "build:application"]],
+          ...extensionChecks,
+          [
+            process.execPath,
+            [join(repositoryRoot, "scripts/build-bundles.mjs"), ...distributionArguments],
+          ],
           ["npm", ["run", "test:install:macos"]],
         ]
       : (() => {

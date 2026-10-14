@@ -1,5 +1,7 @@
 #!/bin/sh
 set -eu
+bundled_commands=''
+bundle_has() { case " $bundled_commands " in *" $1 "*) return 0 ;; *) return 1 ;; esac; }
 
 usage() {
   echo "usage: install.sh [--replace-config]" >&2
@@ -55,14 +57,15 @@ if [ -z "$destdir" ]; then
 /usr/bin/wc'
   missing_executables=
   for executable in $required_executables; do
+    if bundle_has "${executable##*/}"; then continue; fi
     if [ ! -x "$executable" ]; then
       missing_executables="$missing_executables $executable"
     fi
   done
-  if ! command -v fd >/dev/null 2>&1 && ! command -v fdfind >/dev/null 2>&1; then
+  if ! bundle_has fd && ! command -v fd >/dev/null 2>&1 && ! command -v fdfind >/dev/null 2>&1; then
     missing_executables="$missing_executables fd-or-fdfind"
   fi
-  if ! command -v rg >/dev/null 2>&1; then
+  if ! bundle_has rg && ! command -v rg >/dev/null 2>&1; then
     missing_executables="$missing_executables rg"
   fi
   if [ -n "$missing_executables" ]; then
@@ -145,6 +148,11 @@ checksum_count=$(wc -l < "$checksums")
   echo "release payload checksum verification failed" >&2
   exit 1
 }
+for command in $bundled_commands; do
+  [ -f "$payload/tools/bin/$command" ] && [ -x "$payload/tools/bin/$command" ] && [ ! -L "$payload/tools/bin/$command" ] || {
+    echo "selected bundled executable is missing or invalid: $command" >&2; exit 1;
+  }
+done
 
 root_prefix=${destdir:-}
 install_base="${root_prefix}/usr/libexec/pi-sandbox"
@@ -159,11 +167,11 @@ service_unit="$systemd_target/pi-sandbox-identity-broker@.service"
 audit_service_unit="$systemd_target/pi-sandbox-audit@.service"
 config="$etc_target/config.toml"
 models="$etc_target/models.json"
-expected_link=../libexec/pi-sandbox/pi-sandbox
-expected_socket_unit_link=../../../libexec/pi-sandbox/systemd/pi-sandbox-identity-broker.socket
-expected_audit_socket_unit_link=../../../libexec/pi-sandbox/systemd/pi-sandbox-audit.socket
-expected_service_unit_link=../../../libexec/pi-sandbox/systemd/pi-sandbox-identity-broker@.service
-expected_audit_service_unit_link=../../../libexec/pi-sandbox/systemd/pi-sandbox-audit@.service
+expected_link="../libexec/pi-sandbox/pi-sandbox"
+expected_socket_unit_link="../../../libexec/pi-sandbox/systemd/pi-sandbox-identity-broker.socket"
+expected_audit_socket_unit_link="../../../libexec/pi-sandbox/systemd/pi-sandbox-audit.socket"
+expected_service_unit_link="../../../libexec/pi-sandbox/systemd/pi-sandbox-identity-broker@.service"
+expected_audit_service_unit_link="../../../libexec/pi-sandbox/systemd/pi-sandbox-audit@.service"
 
 path_exists() { [ -e "$1" ] || [ -L "$1" ]; }
 require_regular() {
@@ -359,6 +367,9 @@ cp -R "$payload/." "$stage/"
 find "$stage" -type d -exec chmod 0755 {} +
 find "$stage" -type f -exec chmod 0644 {} +
 chmod 0755 "$stage/pi-sandbox"
+for native_dir in "$stage/tools/bin" "$stage/tools/lib"; do
+  if [ -d "$native_dir" ]; then find "$native_dir" -type f -exec chmod 0755 {} +; fi
+done
 chmod 0755 "$stage/pi-sandbox-identity-broker"
 chmod 0755 "$stage/pi-sandbox-audit-collector"
 if [ "$bubblewrap_mode" = bundled ]; then chmod 0755 "$stage/bwrap"; fi

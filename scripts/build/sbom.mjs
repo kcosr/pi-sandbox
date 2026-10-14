@@ -46,6 +46,7 @@ export async function createSbom({
   sourceCommit,
   sourceDirty,
   bubblewrap,
+  toolBundle,
   payload,
 }) {
   const components = new Map();
@@ -151,6 +152,46 @@ export async function createSbom({
       version: bubblewrap.version,
       hashes: [{ alg: "SHA-256", content: bubblewrap.sha256 }],
     });
+  if (toolBundle) {
+    for (const source of toolBundle.inventory.sources)
+      add({
+        type: "application",
+        "bom-ref": `tool-source:${source.name}`,
+        name: source.name,
+        version: source.version,
+        licenses: [{ license: { name: source.license } }],
+        externalReferences: [
+          {
+            type: "distribution",
+            url: source.binaryUrl,
+            hashes: [{ alg: "SHA-256", content: source.binarySha256 }],
+          },
+          {
+            type: "source-distribution",
+            url: source.sourceUrl,
+            hashes: [{ alg: "SHA-256", content: source.sourceSha256 }],
+          },
+        ],
+        properties: [
+          property("license-files", JSON.stringify(source.licenseFiles)),
+          property("evidence", "pinned-tool-inventory"),
+        ],
+      });
+    for (const file of toolBundle.inventory.files.filter(
+      (item) => !item.path.startsWith("licenses/"),
+    ))
+      add({
+        type: "file",
+        "bom-ref": `tool-file:${file.path}`,
+        name: `tools/${file.path}`,
+        hashes: [{ alg: "SHA-256", content: file.sha256 }],
+        properties: [
+          property("source", file.source),
+          property("original-sha256", file.originalSha256),
+          property("inventory-sha256", toolBundle.inventorySha256),
+        ],
+      });
+  }
   // Copied executable assets are outside the bundler graph. Inventory their
   // actual bytes and embedded package metadata without inventing versions.
   async function inventoryAssets(directory, prefix = "") {

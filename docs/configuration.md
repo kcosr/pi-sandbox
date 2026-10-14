@@ -42,17 +42,18 @@ backend, process lifetime, network mode, CWD write access, and any subset of mod
 the main configuration remains unchanged. See
 [user and group environment and overrides](identity-broker.md).
 
-The required `execution` table selects `bubblewrap` or `direct`. Bubblewrap is
+The required `execution` table selects `bubblewrap`, `seatbelt`, or `direct`. Bubblewrap is
 available only on Linux. Direct execution is available on Linux and macOS and
 runs approved built-in operations with the invoking user's ordinary host
 filesystem and process authority. It is an explicit operating mode, never a
-fallback after a sandbox failure. macOS requires `identity.mode = disabled`.
+fallback after a sandbox failure. Seatbelt is the macOS packaged selection with the distinct contract below. macOS requires `identity.mode = disabled`.
 
 The required `network` table selects `none`, `local`, or `host` for built-in tools and
-shell commands. Bubblewrap supports all three. Direct execution requires `host` so a
+shell commands. Bubblewrap supports all three. Seatbelt accepts only `none` or `host`; `local` is rejected. Direct execution requires `host` so a
 configuration can never claim an isolation mode that the backend does not
 enforce. The Linux packaged default is Bubblewrap plus `none`; the macOS
-packaged default is direct plus `host`.
+packaged default is Seatbelt plus `none`. Both configuration files explicitly
+set `execution.backend`; a missing backend is an error.
 
 The required `[extensions]` table selects from the extensions compiled
 into this release. An empty table selects none. Each selected extension parses
@@ -78,7 +79,7 @@ Provider definitions and API-key resolution are documented separately in
 
 ### Home-directory and account expansion
 
-Schema 11 expands bare `~` and a leading `~/` in `filesystem.hidden_paths`,
+Schema 12 expands bare `~` and a leading `~/` in `filesystem.hidden_paths` and `filesystem.denied_paths`,
 every configured value under `environment.pi`, `environment.sandbox`, and
 `environment.extensions.<id>`, and MCP stdio `env` values. These fields also
 accept `{{username}}` and `{{uid}}` anywhere in a string. For example,
@@ -112,7 +113,7 @@ targets to exist. Operational startup validates expanded paths before masking.
 ## Complete example
 
 ```toml
-config_version = 11
+config_version = 12
 models_file = "/etc/pi-sandbox/models.json"
 
 [codemode]
@@ -130,6 +131,7 @@ retention_days = 365
 [filesystem]
 cwd_writable = true
 hidden_paths = []
+denied_paths = []
 
 [execution]
 backend = "bubblewrap"
@@ -335,12 +337,13 @@ configuration. Unknown fields and malformed dormant configurations are errors.
 
 ## Launch directory access
 
-Configuration schema 11 requires both keys in `[filesystem]`:
+Configuration schema 12 requires all three keys in `[filesystem]`:
 
 ```toml
 [filesystem]
 cwd_writable = true
 hidden_paths = []
+denied_paths = []
 ```
 
 `true` is the packaged default and permits Bubblewrap operations to write in
@@ -358,7 +361,7 @@ beneath `/tmp` therefore remain visible. CWD exactly `/tmp` is rejected when
 With `true`, the existing host-`/tmp` CWD behavior is retained. CWD `/` and paths
 overlapping `/proc`, `/sys`, `/dev`, or `/run` remain invalid.
 
-Direct execution requires `cwd_writable = true` and `hidden_paths = []`; it cannot enforce a read-only
+Direct execution requires `cwd_writable = true`, `hidden_paths = []`, and `denied_paths = []`; it cannot enforce a read-only
 host CWD. Managed host tools remain outside this restriction and can still
 write according to their compiled operation and the invoking user's authority.
 `cwd_writable` changes write access only. Use `hidden_paths` to remove selected
@@ -370,7 +373,7 @@ value. The final backend/filesystem combination is validated after overrides;
 switching a read-only base to direct execution also requires overriding
 `cwd_writable` to `true`.
 
-### Hidden files and directories
+### Hidden files and directories (Bubblewrap)
 
 `hidden_paths` is an explicit array of unique, normalized absolute file or directory
 paths, or home-relative paths written as `~` or `~/...`; both accept account macros. The default empty
@@ -394,6 +397,7 @@ For an evaluation worker launched in `/srv/evaluations/runs/run-a`:
 [filesystem]
 cwd_writable = true
 hidden_paths = ["/srv/evaluations/runs", "/srv/evaluations/transcripts"]
+denied_paths = []
 ```
 
 Sandboxed tools see a private read-only mask at the runs parent, with only
@@ -440,6 +444,52 @@ alone does not disable. Alternatively, supply explicit trusted prompt text or
 files outside writable workspaces. Do not add untrusted explicit resource paths.
 A tool mount cannot stop host Pi from following a context-file symlink into a
 hidden directory.
+
+### Denied directories (Seatbelt)
+
+Seatbelt is the macOS packaged default. Start with
+`config/default/config.seatbelt.toml`, or use these fields in a complete schema-12
+configuration:
+
+```toml
+[execution]
+backend = "seatbelt"
+process_lifetime = "command"
+
+[network]
+mode = "none"
+
+[filesystem]
+cwd_writable = false
+hidden_paths = []
+denied_paths = ["~/.ssh"]
+```
+
+`denied_paths` is required in every schema-12 configuration and must be empty
+for Bubblewrap and direct execution. Seatbelt requires empty `hidden_paths`.
+It accepts up to 63 unique normalized directory paths, with the same account
+macros and home expansion as hidden paths. Every expanded target must exist and
+be canonical at executor startup; regular files, symlink components and missing
+targets fail closed. A denied ancestor restores only the launch CWD subtree;
+explicit denials within CWD remain effective. Equality with the launch CWD is
+rejected, as are paths that conflict with required runtime grants. Denials
+cannot be removed by a user/group override. Denial is an
+access error, not an empty filesystem mask; directory entries may remain visible.
+
+`cwd_writable = false` permits reads but denies ordinary writes under CWD.
+Real host scratch storage remains writable and supplies HOME and TMPDIR; literal
+`/tmp` is not private. `network.mode = "none"` denies network operations through
+Seatbelt policy; `host` permits host networking subject to the remaining policy.
+There is no isolated loopback mode. Only serial `command` lifetime is supported.
+Process-group and scratch cleanup are best effort. Ordinary foreground completion
+may leave background descendants alive even in the same process group. Failure,
+cancellation and close signal the group only while the direct child is active;
+detached descendants can escape those attempts. Survivors retain their original
+grants, including after close or owner death. Changing policy or closing Pi does not revoke a surviving process's
+original grants. See [security.md](security.md#macos-seatbelt).
+
+macOS still requires `identity.mode = "disabled"` and `[audit].enabled = false`.
+Managed host Git and MCP retain their separate host authority.
 
 ## Session retention
 
@@ -491,6 +541,10 @@ enforced data-retention guarantee.
 
 ## Network modes
 
+The following namespace modes describe Bubblewrap. Seatbelt supports `none`
+through policy denial and `host` through the shared host network; it rejects
+`local` and creates no private namespace.
+
 | Mode    | Tool and shell network authority                                                      |
 | ------- | ------------------------------------------------------------------------------------- |
 | `none`  | Private network namespace with connectable socket creation denied                     |
@@ -516,9 +570,9 @@ and after broker execution and network overrides are applied.
 Managed host tools are unaffected by this table: they deliberately use the
 invoking user's host network namespace and ordinary host controls.
 
-## Background process lifetime
+## Background process lifetime (Bubblewrap)
 
-Optional `execution.process_lifetime` defaults to `command`, which removes all
+For Bubblewrap, optional `execution.process_lifetime` defaults to `command`, which removes all
 remaining sandbox command processes after every operation. With `sandbox`,
 background processes survive ordinary foreground completion, including nonzero
 exit codes, and remain available to subsequent calls. Lifetime covers the whole
@@ -560,6 +614,12 @@ impose a duration or disk quota on its surviving background processes.
 Direct execution requires `process_lifetime = "command"`; its behavior is
 unchanged. Administrator user/group overrides may set process lifetime, and the
 effective combination is validated after merging.
+
+Seatbelt also requires `command`, but this means serial admission with bounded
+execution, not descendant cleanup after completion. Ordinary background children
+may survive foreground exit with their original grants. Cleanup attempts only
+apply while the direct child remains active; see [Denied directories (Seatbelt)](#denied-directories-seatbelt)
+for its separate lifecycle and scratch contract.
 
 ## Compiled extensions
 

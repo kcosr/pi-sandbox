@@ -22,8 +22,11 @@ import {
   type SandboxCommandResult,
   type SandboxExecutionOptions,
   type SandboxExecutor,
+  type ToolBundle,
+  type ToolCommandPaths,
 } from "./contracts.js";
-import { LINUX_TOOL_COMMANDS, REQUIRED_SANDBOX_EXECUTABLES } from "./tool-commands.js";
+import { resolveDirectToolCommands } from "./direct-executor.js";
+import { assertToolBundlePlacement, snapshotToolBundle } from "./tool-bundle.js";
 import { buildSandboxSeccompFilter } from "./seccomp-boundary-filter.js";
 import {
   encodeWorkerFrame,
@@ -83,6 +86,12 @@ interface PendingExecution {
 export async function createBubblewrapExecutor(
   options: CreateBubblewrapExecutorOptions,
 ): Promise<SandboxExecutor> {
+  let toolBundle: ToolBundle | undefined;
+  try {
+    toolBundle = snapshotToolBundle(options.toolBundle);
+  } catch (cause) {
+    throw new SandboxExecutionError("sandbox_start_failed", { cause });
+  }
   const cwd = path.normalize(options.cwd);
   const processLifetime = options.processLifetime ?? "command";
   if (!PROCESS_LIFETIMES.includes(processLifetime)) {
@@ -129,7 +138,9 @@ export async function createBubblewrapExecutor(
   const environment = Object.freeze({ ...(options.environment ?? {}) });
   const hiddenPaths = Object.freeze([...(options.hiddenPaths ?? [])]);
   const hiddenMasks: HiddenPathMask[] = [];
+  const commands = await resolveDirectToolCommands("linux", toolBundle);
   try {
+    assertToolBundlePlacement(toolBundle, cwd, options.cwdWritable ?? true, hiddenPaths);
     const plan = planHiddenPaths(cwd, hiddenPaths);
     const effectivePaths = new Set([...plan.beforeCwd, ...plan.afterCwd]);
     for (const target of hiddenPaths) {
@@ -145,6 +156,7 @@ export async function createBubblewrapExecutor(
       environment,
       options.cwdWritable ?? true,
       hiddenMasks,
+      toolBundle,
     );
   } catch (cause) {
     throw new SandboxExecutionError("sandbox_start_failed", { cause });
@@ -166,6 +178,8 @@ export async function createBubblewrapExecutor(
     environment,
     options.cwdWritable ?? true,
     Object.freeze(hiddenMasks),
+    commands,
+    toolBundle,
   );
   try {
     await executor.start(workerCommand);
@@ -213,7 +227,6 @@ async function inspectHiddenPath(target: string): Promise<HiddenPathMask | undef
 }
 
 class PersistentBubblewrapExecutor implements SandboxExecutor {
-  public readonly commands = LINUX_TOOL_COMMANDS;
   public readonly home = "/run/pi-sandbox/home";
   readonly #decoder = new WorkerFrameDecoder(MAXIMUM_WORKER_RESPONSE_FRAME_BYTES);
   readonly #pending = new Map<number, PendingExecution>();
@@ -247,6 +260,8 @@ class PersistentBubblewrapExecutor implements SandboxExecutor {
     private readonly environment: Readonly<Record<string, string>>,
     private readonly cwdWritable: boolean,
     private readonly hiddenMasks: readonly HiddenPathMask[],
+    public readonly commands: ToolCommandPaths,
+    private readonly toolBundle: ToolBundle | undefined,
   ) {
     let finish!: () => void;
     this.#finished = new Promise<void>((resolve) => {
@@ -277,6 +292,7 @@ class PersistentBubblewrapExecutor implements SandboxExecutor {
           this.environment,
           this.cwdWritable,
           this.hiddenMasks,
+          this.toolBundle,
         ),
         {
           cwd: this.cwd,
@@ -322,7 +338,7 @@ class PersistentBubblewrapExecutor implements SandboxExecutor {
   }
 
   public async probe(signal?: AbortSignal): Promise<void> {
-    for (const executable of REQUIRED_SANDBOX_EXECUTABLES) {
+    for (const executable of Object.values(this.commands)) {
       await access(executable, fsConstants.X_OK).catch((cause: unknown) => {
         throw new SandboxExecutionError("sandbox_start_failed", {
           cause: new Error(`Required sandbox executable is unavailable: ${executable}`, {
@@ -334,11 +350,11 @@ class PersistentBubblewrapExecutor implements SandboxExecutor {
     const result = await this.execute(
       {
         argv: [
-          "/bin/sh",
+          this.commands.sh,
           "-c",
           'for executable do if ! test -x "$executable"; then printf "Required sandbox executable is unavailable: %s\\n" "$executable" >&2; exit 69; fi; done',
           "pi-sandbox-probe",
-          ...REQUIRED_SANDBOX_EXECUTABLES,
+          ...Object.values(this.commands),
         ],
         timeoutMs: 10_000,
         maxOutputBytes: 16_384,

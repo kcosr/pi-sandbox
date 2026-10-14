@@ -1,4 +1,12 @@
-import { mkdtempSync, mkdirSync, renameSync, rmSync, symlinkSync, unlinkSync } from "node:fs";
+import {
+  mkdtempSync,
+  mkdirSync,
+  realpathSync,
+  renameSync,
+  rmSync,
+  symlinkSync,
+  unlinkSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -13,7 +21,7 @@ afterEach(() => {
 
 describe("process workspace boundary", () => {
   it("requires the canonical launch spelling and rejects aliases that change context ancestry", () => {
-    const root = mkdtempSync(join(tmpdir(), "pi-workspace-"));
+    const root = realpathSync(mkdtempSync(join(tmpdir(), "pi-workspace-")));
     roots.push(root);
     const workspace = join(root, "run-a");
     const sibling = join(root, "run-b");

@@ -22,7 +22,7 @@
     "test:audit-collector": "node scripts/test-audit-collector.mjs",
     "test:broker": "node scripts/test-broker.mjs",
     "test:build-composition": "node scripts/test/build-composition.mjs",
-    "test:distribution": "node scripts/test/distribution.mjs",
+    "test:distribution": "node scripts/test/distribution.mjs && node --test scripts/test/tool-bundle.mjs",
     "test:install": "npm run test:install:linux && npm run test:install:macos",
     "test:install:linux": "node scripts/test/install-smoke.mjs",
     "test:install:macos": "node scripts/test/macos-install-smoke.mjs",

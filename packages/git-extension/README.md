@@ -49,8 +49,8 @@ Local repositories, remote helpers, unsupported protocols, URL passwords,
 queries and fragments are rejected.
 
 Clone executes **on the host**, outside sandbox filesystem and networking
-restrictions. Managed Bubblewrap mounts the launch directory at the same path,
-so sandbox tools can use the checkout there. A read-only sandbox mount does not
+restrictions. Managed Bubblewrap and Seatbelt preserve the launch directory at the same path,
+so sandbox tools can use the checkout there. A read-only sandbox policy does not
 prevent the host clone. For an application-supplied executor, visibility depends
 on the owner's filesystem configuration; Git does not copy into that environment.
 
