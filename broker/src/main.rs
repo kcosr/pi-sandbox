@@ -314,6 +314,9 @@ impl<'de> Deserialize<'de> for ToolOverrides {
 struct SubjectPolicy {
     mode: PolicyMode,
     session_grant: SessionGrantPolicy,
+    /// Bash-only command-class policy; see specs/bash-command-analysis.md.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    known_read_only: Option<ClassPolicy>,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
@@ -325,11 +328,29 @@ enum PolicyMode {
     Disabled,
 }
 
-#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
+/// Ordered from least to most permissive.
+#[derive(Clone, Copy, Debug, Deserialize, Serialize, PartialEq, Eq, PartialOrd, Ord)]
 #[serde(rename_all = "lowercase")]
 enum SessionGrantPolicy {
     Never,
     Offer,
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+struct ClassPolicy {
+    mode: ClassMode,
+    session_grant: SessionGrantPolicy,
+}
+
+/// Command-class modes, ordered from least to most permissive. Availability is
+/// tool-level only, so `disabled` is not a class mode.
+#[derive(Clone, Copy, Debug, Deserialize, Serialize, PartialEq, Eq, PartialOrd, Ord)]
+#[serde(rename_all = "lowercase")]
+enum ClassMode {
+    Deny,
+    Ask,
+    Allow,
 }
 
 #[derive(Debug, PartialEq, Eq)]
@@ -645,6 +666,7 @@ fn resolve_records(
     if Instant::now() >= deadline {
         return Err(LookupError::Io);
     }
+    normalize_class_policies(&mut result.overrides.tools);
     Ok(result)
 }
 
@@ -686,6 +708,53 @@ fn policy_rank(policy: &SubjectPolicy) -> u8 {
         PolicyMode::Allow => 4,
     }
 }
+/// Whether `class` is strictly more permissive than the tool's main policy.
+/// A class policy never applies under a disabled main policy.
+fn class_exceeds_main(class: &ClassPolicy, main: &SubjectPolicy) -> bool {
+    let main_mode = match main.mode {
+        PolicyMode::Disabled => return false,
+        PolicyMode::Deny => ClassMode::Deny,
+        PolicyMode::Ask => ClassMode::Ask,
+        PolicyMode::Allow => ClassMode::Allow,
+    };
+    class.mode > main_mode
+        || (class.mode == ClassMode::Ask
+            && main_mode == ClassMode::Ask
+            && class.session_grant > main.session_grant)
+}
+/// Least-restrictive join of class policies; an absent policy is the identity.
+fn join_class_policies(
+    left: Option<ClassPolicy>,
+    right: Option<ClassPolicy>,
+) -> Option<ClassPolicy> {
+    match (left, right) {
+        (None, policy) | (policy, None) => policy,
+        (Some(left), Some(right)) => {
+            let mode = left.mode.max(right.mode);
+            let session_grant = if mode == ClassMode::Ask {
+                left.session_grant.max(right.session_grant)
+            } else {
+                SessionGrantPolicy::Never
+            };
+            Some(ClassPolicy {
+                mode,
+                session_grant,
+            })
+        }
+    }
+}
+/// Drop combined class policies that no longer exceed their combined main policy.
+fn normalize_class_policies(tools: &mut ToolOverrides) {
+    for policy in tools.0.values_mut() {
+        if policy
+            .known_read_only
+            .as_ref()
+            .is_some_and(|class| !class_exceeds_main(class, policy))
+        {
+            policy.known_read_only = None;
+        }
+    }
+}
 fn merge_record(target: &mut IdentityRecord, incoming: IdentityRecord) -> Result<(), LookupError> {
     merge_environment(&mut target.environment.pi, incoming.environment.pi)?;
     merge_environment(
@@ -721,14 +790,17 @@ fn merge_record(target: &mut IdentityRecord, incoming: IdentityRecord) -> Result
         old.filesystem = Some(filesystem);
     }
     for (name, policy) in new.tools.0 {
-        if old
-            .tools
-            .0
-            .get(&name)
-            .is_none_or(|existing| policy_rank(&policy) > policy_rank(existing))
-        {
+        let Some(existing) = old.tools.0.get_mut(&name) else {
             old.tools.0.insert(name, policy);
+            continue;
+        };
+        let known_read_only =
+            join_class_policies(existing.known_read_only.take(), policy.known_read_only);
+        if policy_rank(&policy) > policy_rank(existing) {
+            existing.mode = policy.mode;
+            existing.session_grant = policy.session_grant;
         }
+        existing.known_read_only = known_read_only;
     }
     if !valid_environment(&target.environment) || !valid_overrides(old) {
         return Err(LookupError::InvalidFile);
@@ -787,10 +859,23 @@ fn parse_record(bytes: &[u8], kind: RecordKind) -> Result<IdentityRecord, Lookup
         || !valid_environment(&record.environment)
         || !valid_annotation(record.comment.as_deref(), 1024)
         || !valid_overrides(&record.overrides)
+        || !record_class_policies_exceed_main(&record.overrides.tools)
     {
         return Err(LookupError::InvalidFile);
     }
     Ok(record)
+}
+
+/// Per-file rule: a class policy must be strictly more permissive than the same
+/// file's main policy, which therefore cannot be `disabled`. Combined records
+/// are normalized instead of rejected.
+fn record_class_policies_exceed_main(tools: &ToolOverrides) -> bool {
+    tools.iter().all(|(_, policy)| {
+        policy
+            .known_read_only
+            .as_ref()
+            .is_none_or(|class| class_exceeds_main(class, policy))
+    })
 }
 
 fn valid_overrides(overrides: &IdentityOverrides) -> bool {
@@ -807,6 +892,11 @@ fn valid_overrides(overrides: &IdentityOverrides) -> bool {
             valid_tool_name(name)
                 && (!matches!(policy.session_grant, SessionGrantPolicy::Offer)
                     || matches!(policy.mode, PolicyMode::Ask))
+                && policy.known_read_only.as_ref().is_none_or(|class| {
+                    name == "bash"
+                        && (class.session_grant == SessionGrantPolicy::Never
+                            || class.mode == ClassMode::Ask)
+                })
         })
 }
 
@@ -1036,7 +1126,386 @@ session_grant = "offer"
             Some(SubjectPolicy {
                 mode: PolicyMode::Ask,
                 session_grant: SessionGrantPolicy::Offer,
+                known_read_only: None,
             })
+        );
+    }
+
+    const MAIN_POLICIES: [(&str, &str); 5] = [
+        ("disabled", "never"),
+        ("deny", "never"),
+        ("ask", "never"),
+        ("ask", "offer"),
+        ("allow", "never"),
+    ];
+    const CLASS_POLICIES: [(&str, &str); 4] = [
+        ("deny", "never"),
+        ("ask", "never"),
+        ("ask", "offer"),
+        ("allow", "never"),
+    ];
+
+    fn bash_rule(main: (&str, &str), class: Option<(&str, &str)>) -> String {
+        let mut body = format!(
+            "[overrides.tools.bash]\nmode = {:?}\nsession_grant = {:?}\n",
+            main.0, main.1
+        );
+        if let Some((mode, grant)) = class {
+            body.push_str(&format!(
+                "[overrides.tools.bash.known_read_only]\nmode = {mode:?}\nsession_grant = {grant:?}\n"
+            ));
+        }
+        body
+    }
+
+    fn class_policy(mode: &str, grant: &str) -> ClassPolicy {
+        toml::from_str(&format!("mode = {mode:?}\nsession_grant = {grant:?}")).unwrap()
+    }
+
+    #[test]
+    fn parses_known_read_only_only_when_strictly_more_permissive_than_bash() {
+        for (main_index, main) in MAIN_POLICIES.iter().enumerate() {
+            for (class_index, class) in CLASS_POLICIES.iter().enumerate() {
+                // Ranks: class index + 1 aligns with main index (disabled = 0).
+                let exceeds = main_index != 0 && class_index + 1 > main_index;
+                for (kind, selector) in [
+                    (RecordKind::User, "uid = 7"),
+                    (RecordKind::Group, "group = \"admin\""),
+                ] {
+                    let source = format!(
+                        "version = 8\n{selector}\n{}",
+                        bash_rule(*main, Some(*class))
+                    );
+                    let parsed = parse_record(source.as_bytes(), kind);
+                    if exceeds {
+                        assert_eq!(
+                            parsed
+                                .unwrap()
+                                .overrides
+                                .tools
+                                .get("bash")
+                                .unwrap()
+                                .known_read_only,
+                            Some(class_policy(class.0, class.1)),
+                            "main {main:?} class {class:?}"
+                        );
+                    } else {
+                        assert_eq!(
+                            parsed,
+                            Err(LookupError::InvalidFile),
+                            "main {main:?} class {class:?}"
+                        );
+                    }
+                }
+            }
+        }
+        let inline = parse_user_for_test(
+            b"version = 8\nuid = 7\n[overrides.tools.bash]\nmode = \"deny\"\nsession_grant = \"never\"\nknown_read_only = { mode = \"allow\", session_grant = \"never\" }\n",
+            7,
+        )
+        .unwrap();
+        assert_eq!(
+            inline.overrides.tools.get("bash").unwrap().known_read_only,
+            Some(class_policy("allow", "never"))
+        );
+        let without = parse_user_for_test(
+            format!(
+                "version = 8\nuid = 7\n{}",
+                bash_rule(("deny", "never"), None)
+            )
+            .as_bytes(),
+            7,
+        )
+        .unwrap();
+        assert_eq!(
+            without.overrides.tools.get("bash").unwrap().known_read_only,
+            None
+        );
+    }
+
+    #[test]
+    fn rejects_known_read_only_outside_bash_and_invalid_class_values() {
+        let class =
+            "[overrides.tools.{tool}.known_read_only]\nmode = \"allow\"\nsession_grant = \"never\"";
+        for tool in ["read", "write", "git_clone", "bash_extra"] {
+            let source = format!(
+                "version = 8\nuid = 7\n[overrides.tools.{tool}]\nmode = \"deny\"\nsession_grant = \"never\"\n{}\n",
+                class.replace("{tool}", tool)
+            );
+            assert_eq!(
+                parse_user_for_test(source.as_bytes(), 7),
+                Err(LookupError::InvalidFile),
+                "{tool}"
+            );
+        }
+        for table in [
+            "known_read_only",
+            "overrides.known_read_only",
+            "overrides.tools.bash.known_read_only.nested",
+        ] {
+            let source = format!(
+                "version = 8\nuid = 7\n[overrides.tools.bash]\nmode = \"deny\"\nsession_grant = \"never\"\n[{table}]\nmode = \"allow\"\nsession_grant = \"never\"\n"
+            );
+            assert_eq!(
+                parse_user_for_test(source.as_bytes(), 7),
+                Err(LookupError::InvalidFile),
+                "{table}"
+            );
+        }
+        for fields in [
+            "mode = \"disabled\"\nsession_grant = \"never\"",
+            "mode = \"Allow\"\nsession_grant = \"never\"",
+            "mode = \"allow\"\nsession_grant = \"always\"",
+            "mode = \"allow\"\nsession_grant = \"offer\"",
+            "mode = \"deny\"\nsession_grant = \"offer\"",
+            "mode = \"allow\"",
+            "session_grant = \"never\"",
+            "",
+            "mode = \"allow\"\nsession_grant = \"never\"\naudit = true",
+            "mode = \"allow\"\nsession_grant = \"never\"\nversion = 1",
+        ] {
+            let source = format!(
+                "version = 8\nuid = 7\n[overrides.tools.bash]\nmode = \"deny\"\nsession_grant = \"never\"\n[overrides.tools.bash.known_read_only]\n{fields}\n"
+            );
+            assert_eq!(
+                parse_user_for_test(source.as_bytes(), 7),
+                Err(LookupError::InvalidFile),
+                "{fields}"
+            );
+        }
+        for value in ["\"allow\"", "true", "[]"] {
+            let source = format!(
+                "version = 8\nuid = 7\n[overrides.tools.bash]\nmode = \"deny\"\nsession_grant = \"never\"\nknown_read_only = {value}\n"
+            );
+            assert_eq!(
+                parse_user_for_test(source.as_bytes(), 7),
+                Err(LookupError::InvalidFile),
+                "{value}"
+            );
+        }
+    }
+
+    fn rank(policy: (&str, &str)) -> usize {
+        MAIN_POLICIES.iter().position(|p| *p == policy).unwrap()
+    }
+
+    #[test]
+    fn combines_class_policies_by_join_and_normalizes_against_combined_main() {
+        // Every valid per-file bash policy, with and without a class policy.
+        let mut rules = Vec::new();
+        for main in MAIN_POLICIES {
+            rules.push((main, None));
+            for class in CLASS_POLICIES {
+                if main.0 != "disabled" && rank(class) > rank(main) {
+                    rules.push((main, Some(class)));
+                }
+            }
+        }
+        for left in &rules {
+            for right in &rules {
+                let main_rank = rank(left.0).max(rank(right.0));
+                let class_rank = [left.1, right.1].into_iter().flatten().map(rank).max();
+                let expected_class = class_rank
+                    .filter(|class| main_rank != 0 && *class > main_rank)
+                    .map(|class| class_policy(MAIN_POLICIES[class].0, MAIN_POLICIES[class].1));
+                for (first, second) in [(left, right), (right, left)] {
+                    let result = resolve(vec![
+                        record("uid = 1000", &bash_rule(first.0, first.1)),
+                        record("group = \"admin\"", &bash_rule(second.0, second.1)),
+                    ])
+                    .unwrap();
+                    let bash = result.overrides.tools.get("bash").unwrap();
+                    assert_eq!(
+                        policy_rank(bash) as usize,
+                        main_rank,
+                        "{first:?} {second:?}"
+                    );
+                    assert_eq!(bash.known_read_only, expected_class, "{first:?} {second:?}");
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn class_join_and_normalization_examples() {
+        let bash = |rules: Vec<IdentityRecord>| {
+            resolve(rules)
+                .unwrap()
+                .overrides
+                .tools
+                .get("bash")
+                .cloned()
+                .unwrap()
+        };
+        // Another rule raises the main policy to the class level: the class is dropped.
+        let dropped = bash(vec![
+            record(
+                "uid = 1000",
+                &bash_rule(("deny", "never"), Some(("ask", "never"))),
+            ),
+            record("gid = 20", &bash_rule(("ask", "never"), None)),
+        ]);
+        assert_eq!(
+            (dropped.mode, dropped.known_read_only),
+            (PolicyMode::Ask, None)
+        );
+        let dropped = bash(vec![
+            record(
+                "uid = 1000",
+                &bash_rule(("deny", "never"), Some(("allow", "never"))),
+            ),
+            record("gid = 20", &bash_rule(("allow", "never"), None)),
+        ]);
+        assert_eq!(
+            (dropped.mode, dropped.known_read_only),
+            (PolicyMode::Allow, None)
+        );
+        let dropped = bash(vec![
+            record(
+                "uid = 1000",
+                &bash_rule(("ask", "never"), Some(("ask", "offer"))),
+            ),
+            record("gid = 20", &bash_rule(("ask", "offer"), None)),
+        ]);
+        assert_eq!(
+            (dropped.session_grant, dropped.known_read_only),
+            (SessionGrantPolicy::Offer, None)
+        );
+        // Join takes the greater mode and grant, then normalizes the grant.
+        let joined = bash(vec![
+            record(
+                "uid = 1000",
+                &bash_rule(("deny", "never"), Some(("ask", "offer"))),
+            ),
+            record(
+                "gid = 20",
+                &bash_rule(("deny", "never"), Some(("allow", "never"))),
+            ),
+        ]);
+        assert_eq!(joined.known_read_only, Some(class_policy("allow", "never")));
+        let joined = bash(vec![
+            record(
+                "uid = 1000",
+                &bash_rule(("deny", "never"), Some(("ask", "offer"))),
+            ),
+            record(
+                "gid = 20",
+                &bash_rule(("deny", "never"), Some(("ask", "never"))),
+            ),
+        ]);
+        assert_eq!(joined.known_read_only, Some(class_policy("ask", "offer")));
+        // The main policy and the class policy may come from different rules.
+        let split = bash(vec![
+            record(
+                "uid = 1000",
+                &bash_rule(("deny", "never"), Some(("allow", "never"))),
+            ),
+            record("gid = 20", &bash_rule(("ask", "offer"), None)),
+            record(
+                "gid = 10",
+                "[overrides.tools.read]\nmode = \"allow\"\nsession_grant = \"never\"",
+            ),
+        ]);
+        assert_eq!(
+            (split.mode, split.session_grant, split.known_read_only),
+            (
+                PolicyMode::Ask,
+                SessionGrantPolicy::Offer,
+                Some(class_policy("allow", "never"))
+            )
+        );
+        // Unmatched rules do not contribute class policies.
+        let unmatched = bash(vec![
+            record("uid = 1000", &bash_rule(("deny", "never"), None)),
+            record(
+                "uid = 999",
+                &bash_rule(("deny", "never"), Some(("allow", "never"))),
+            ),
+        ]);
+        assert_eq!(unmatched.known_read_only, None);
+        // Normalization also drops a class under a disabled main policy.
+        let mut tools = ToolOverrides::default();
+        tools.0.insert(
+            "bash".into(),
+            SubjectPolicy {
+                mode: PolicyMode::Disabled,
+                session_grant: SessionGrantPolicy::Never,
+                known_read_only: Some(class_policy("allow", "never")),
+            },
+        );
+        normalize_class_policies(&mut tools);
+        assert_eq!(tools.get("bash").unwrap().known_read_only, None);
+    }
+
+    #[test]
+    fn serializes_class_policy_only_when_present() {
+        let result = resolve(vec![
+            record(
+                "uid = 1000",
+                &bash_rule(("ask", "never"), Some(("allow", "never"))),
+            ),
+            record(
+                "gid = 20",
+                "[overrides.tools.read]\nmode = \"allow\"\nsession_grant = \"never\"",
+            ),
+        ])
+        .unwrap();
+        assert_eq!(
+            serde_json::to_string(&result.overrides).unwrap(),
+            "{\"tools\":{\"bash\":{\"mode\":\"ask\",\"session_grant\":\"never\",\"known_read_only\":{\"mode\":\"allow\",\"session_grant\":\"never\"}},\"read\":{\"mode\":\"allow\",\"session_grant\":\"never\"}}}"
+        );
+        let dropped = resolve(vec![
+            record(
+                "uid = 1000",
+                &bash_rule(("ask", "never"), Some(("allow", "never"))),
+            ),
+            record("gid = 20", &bash_rule(("allow", "never"), None)),
+        ])
+        .unwrap();
+        assert_eq!(
+            serde_json::to_string(&dropped.overrides).unwrap(),
+            "{\"tools\":{\"bash\":{\"mode\":\"allow\",\"session_grant\":\"never\"}}}"
+        );
+    }
+
+    #[test]
+    fn serves_class_policy_from_protected_rule_files() {
+        use std::fs;
+        use std::os::unix::fs::PermissionsExt;
+        let root = temporary_path();
+        let users = root.join("users.d");
+        fs::create_dir_all(&users).unwrap();
+        for directory in [&root, &users] {
+            fs::set_permissions(directory, fs::Permissions::from_mode(0o755)).unwrap();
+        }
+        let uid = unsafe { libc::geteuid() };
+        let file = users.join("bash.toml");
+        fs::write(
+            &file,
+            format!(
+                "version = 8\nuid = {uid}\n{}",
+                bash_rule(("deny", "never"), Some(("ask", "offer")))
+            ),
+        )
+        .unwrap();
+        fs::set_permissions(&file, fs::Permissions::from_mode(0o600)).unwrap();
+        let (mut client, mut server_input) = UnixStream::pair().expect("socket pair");
+        let mut server_output = server_input.try_clone().expect("clone server socket");
+        client
+            .write_all(b"{\"version\":7,\"operation\":\"resolve-identity\"}\n")
+            .expect("write request");
+        let server_fd = server_input.as_raw_fd();
+        serve_one(&root, &mut server_input, &mut server_output, server_fd, uid)
+            .expect("serve request");
+        server_output
+            .shutdown(Shutdown::Write)
+            .expect("finish response");
+        let mut response = String::new();
+        client.read_to_string(&mut response).expect("read response");
+        fs::remove_dir_all(root).unwrap();
+        assert_eq!(
+            response,
+            "{\"version\":7,\"status\":\"ok\",\"environment\":{\"pi\":{},\"sandbox\":{},\"extensions\":{}},\"overrides\":{\"tools\":{\"bash\":{\"mode\":\"deny\",\"session_grant\":\"never\",\"known_read_only\":{\"mode\":\"ask\",\"session_grant\":\"offer\"}}}}}\n"
         );
     }
 

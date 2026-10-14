@@ -133,32 +133,45 @@ export async function createDirectExecutor(
   }
 
   const commands = await resolveDirectToolCommands(options.platform, toolBundle);
-  const environment = {
-    ...(options.ambientEnvironment ?? process.env),
-    ...options.environment,
-  };
-  if (toolBundle !== undefined)
-    environment.PATH = toolBundlePath(toolBundle, environment.PATH ?? "/usr/bin:/bin");
+  const environment = directCommandEnvironment(
+    options.ambientEnvironment ?? process.env,
+    options.environment,
+    toolBundle,
+  );
   const home = path.normalize(environment.HOME ?? homedir());
   if (!path.isAbsolute(home) || home.includes("\0")) {
     throw new SandboxExecutionError("sandbox_start_failed", {
       cause: new Error("direct_execution_home_invalid"),
     });
   }
-  // Direct tools share command scheduling with confined tools. Host Git keeps
-  // its independent HostCommandExecutor and established timing contract.
-  const inherited = Object.fromEntries(
-    Object.entries(environment).filter(
-      ([key, value]) => value !== undefined && !key.startsWith("PI_SANDBOX_"),
-    ),
-  );
   let limits: ResolvedSandboxLimits;
   try {
     limits = resolveSandboxLimits(options.limits);
   } catch (cause) {
     throw new SandboxExecutionError("sandbox_start_failed", { cause });
   }
-  return new DirectExecutor(cwd, home, commands, inherited, limits);
+  // Direct tools share command scheduling with confined tools. Host Git keeps
+  // its independent HostCommandExecutor and established timing contract.
+  return new DirectExecutor(cwd, home, commands, environment, limits);
+}
+
+/** Exact environment of every direct command: ambient, administrator values and tool-bundle PATH, without internal variables. */
+export function directCommandEnvironment(
+  ambientEnvironment: NodeJS.ProcessEnv,
+  environment?: Readonly<Record<string, string>>,
+  toolBundle?: ToolBundle,
+): Readonly<Record<string, string>> {
+  const combined = { ...ambientEnvironment, ...environment };
+  if (toolBundle !== undefined)
+    combined.PATH = toolBundlePath(toolBundle, combined.PATH ?? "/usr/bin:/bin");
+  return Object.freeze(
+    Object.fromEntries(
+      Object.entries(combined).filter(
+        (entry): entry is [string, string] =>
+          entry[1] !== undefined && !entry[0].startsWith("PI_SANDBOX_"),
+      ),
+    ),
+  );
 }
 
 class DirectExecutor implements SandboxExecutor {

@@ -169,6 +169,79 @@ describe("audit client", () => {
     },
   );
 
+  it.each([
+    ["tool_execution_intent", "known_read_only", 1, { approval_source: "policy" }],
+    ["tool_denied", "unclassified", 1, { approval_source: "policy", reason: "policy_denied" }],
+    ["tool_execution_intent", "unclassified", 1, { approval_source: "session_grant" }],
+    ["tool_execution_intent", "known_read_only", 0xffff_ffff, { approval_source: "prompt" }],
+  ] as const)(
+    "sends %s Bash decisions with %s command class metadata version %i",
+    async (name, commandClass, version, decision) => {
+      const requests: unknown[] = [];
+      const path = await listen((socket) =>
+        socket.on("data", (data) => {
+          requests.push(JSON.parse(data.toString()));
+          socket.write(acknowledgment);
+        }),
+      );
+      client = await connectAuditClient(path);
+      const call: AuditEvent = {
+        event: name,
+        pi_session_id: "pi-1",
+        invocation_id: "call-1",
+        tool: "bash",
+        boundary: "bubblewrap",
+        ...decision,
+        command_class: commandClass,
+        known_read_only_version: version,
+      };
+      await client.submit(call);
+      expect(requests).toEqual([{ version: 2, event: call }]);
+    },
+  );
+
+  it.each([
+    { command_class: "known_read_only" },
+    { known_read_only_version: 1 },
+    { command_class: "read_only", known_read_only_version: 1 },
+    { command_class: "known_read_only", known_read_only_version: 0 },
+    { command_class: "known_read_only", known_read_only_version: -1 },
+    { command_class: "known_read_only", known_read_only_version: 1.5 },
+    { command_class: "known_read_only", known_read_only_version: "1" },
+    { command_class: "known_read_only", known_read_only_version: 0x1_0000_0000 },
+    { command_class: "known_read_only", known_read_only_version: Number.MAX_SAFE_INTEGER + 1 },
+    { command_class: "unclassified", known_read_only_version: 1, tool: "write" },
+    { command_class: "unclassified", known_read_only_version: 1, event: "tool_requested" },
+    { command_class: "unclassified", known_read_only_version: 1, event: "tool_completed" },
+    {
+      command_class: "unclassified",
+      known_read_only_version: 1,
+      event: "session_started",
+      cwd: "/workspace",
+    },
+  ])("rejects invalid command class metadata %# without sending", async (metadata) => {
+    const requests: unknown[] = [];
+    const path = await listen((socket) =>
+      socket.on("data", (data) => {
+        requests.push(JSON.parse(data.toString()));
+        socket.write(acknowledgment);
+      }),
+    );
+    client = await connectAuditClient(path);
+    const call = {
+      event: "tool_execution_intent",
+      pi_session_id: "pi-1",
+      tool: "bash",
+      invocation_id: "call-1",
+      boundary: "bubblewrap",
+      approval_source: "policy",
+      ...metadata,
+    } as AuditEvent;
+    await expect(client.submit(call)).rejects.toThrow("Invalid audit event");
+    await client.submit(event);
+    expect(requests).toEqual([{ version: 2, event }]);
+  });
+
   it("serializes submissions and waits for fragmented acknowledgments", async () => {
     const requests: unknown[] = [];
     const path = await listen((socket) =>

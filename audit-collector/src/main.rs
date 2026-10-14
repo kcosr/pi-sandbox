@@ -65,6 +65,10 @@ struct Event {
     repository: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     command_truncated: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    command_class: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    known_read_only_version: Option<u32>,
 }
 
 #[derive(Deserialize)]
@@ -302,6 +306,16 @@ fn valid_event(e: &Event) -> bool {
         return false;
     }
     if e.command.is_some() && e.tool.as_deref() != Some("bash") {
+        return false;
+    }
+    // Bash command classification accompanies only bash decision events, as a pair.
+    if (e.command_class.is_some() || e.known_read_only_version.is_some())
+        && (e.command_class.is_none()
+            || e.known_read_only_version.is_none_or(|version| version == 0)
+            || !one_of(&e.command_class, &["known_read_only", "unclassified"])
+            || !matches!(e.event.as_str(), "tool_execution_intent" | "tool_denied")
+            || e.tool.as_deref() != Some("bash"))
+    {
         return false;
     }
     one_of(&e.boundary, &["bubblewrap", "direct", "host"])
@@ -731,6 +745,124 @@ mod tests {
         let mut event = tool();
         event["event"]["tool"] = serde_json::json!("write");
         assert!(read_frame(&mut Cursor::new(lines(&[event]))).is_err());
+    }
+
+    fn classified(event: &str, class: &str, version: u64) -> serde_json::Value {
+        let mut request = tool();
+        request["event"]["event"] = serde_json::json!(event);
+        if event == "tool_denied" {
+            request["event"]["approval_source"] = serde_json::json!("policy");
+            request["event"]["reason"] = serde_json::json!("policy_denied");
+        }
+        request["event"]["command_class"] = serde_json::json!(class);
+        request["event"]["known_read_only_version"] = serde_json::json!(version);
+        request
+    }
+
+    fn forwarded(request: serde_json::Value) -> serde_json::Value {
+        let mut messages = Vec::new();
+        serve(
+            &mut Cursor::new(lines(&[start("pi-1"), request])),
+            &mut Vec::new(),
+            credentials(),
+            "a",
+            16,
+            |_| Ok(Some("alice".to_owned())),
+            |message| {
+                messages.push(message.to_vec());
+                Ok(())
+            },
+        )
+        .unwrap();
+        assert_eq!(messages.len(), 2);
+        let line = std::str::from_utf8(&messages[1]).unwrap();
+        serde_json::from_str(line.split_once(": ").unwrap().1).unwrap()
+    }
+
+    #[test]
+    fn forwards_paired_bash_command_class_on_decision_events() {
+        for event in ["tool_execution_intent", "tool_denied"] {
+            for class in ["known_read_only", "unclassified"] {
+                for version in [1, u64::from(u32::MAX)] {
+                    let record = forwarded(classified(event, class, version));
+                    assert_eq!(record["event"], event);
+                    assert_eq!(record["command_class"], class);
+                    assert_eq!(record["known_read_only_version"], version);
+                }
+            }
+        }
+        let record = forwarded(tool());
+        assert!(record.get("command_class").is_none());
+        assert!(record.get("known_read_only_version").is_none());
+    }
+
+    #[test]
+    fn rejects_unpaired_misplaced_or_invalid_command_class() {
+        let accepted = |request: &serde_json::Value| {
+            read_frame(&mut Cursor::new(lines(std::slice::from_ref(request)))).is_ok()
+        };
+        let base = classified("tool_execution_intent", "known_read_only", 1);
+        assert!(accepted(&base));
+        for key in ["command_class", "known_read_only_version"] {
+            let mut request = base.clone();
+            request["event"].as_object_mut().unwrap().remove(key);
+            assert!(!accepted(&request), "{key}");
+            request["event"][key] = serde_json::Value::Null;
+            assert!(!accepted(&request), "{key}");
+        }
+        for value in [
+            serde_json::json!(""),
+            serde_json::json!("Known_read_only"),
+            serde_json::json!("known-read-only"),
+            serde_json::json!("read_only"),
+            serde_json::json!("unclassified "),
+            serde_json::json!(1),
+            serde_json::json!(["known_read_only"]),
+        ] {
+            let mut request = base.clone();
+            request["event"]["command_class"] = value.clone();
+            assert!(!accepted(&request), "{value}");
+        }
+        for value in [
+            serde_json::json!(0),
+            serde_json::json!(-1),
+            serde_json::json!(1.5),
+            serde_json::json!(1.0),
+            serde_json::json!("1"),
+            serde_json::json!(true),
+            serde_json::json!(u64::from(u32::MAX) + 1),
+        ] {
+            let mut request = base.clone();
+            request["event"]["known_read_only_version"] = value.clone();
+            assert!(!accepted(&request), "{value}");
+        }
+        let mut read = tool();
+        read["event"]["tool"] = serde_json::json!("read");
+        read["event"].as_object_mut().unwrap().remove("command");
+        read["event"]
+            .as_object_mut()
+            .unwrap()
+            .remove("command_truncated");
+        let mut requested = tool();
+        requested["event"]["event"] = serde_json::json!("tool_requested");
+        let mut completed = tool();
+        completed["event"]["event"] = serde_json::json!("tool_completed");
+        completed["event"]["outcome"] = serde_json::json!("success");
+        let ended = serde_json::json!({"version":2,"event":{"event":"session_ended","pi_session_id":"pi-1"}});
+        for unclassified in [
+            read,
+            requested,
+            completed,
+            mcp("http"),
+            start("pi-1"),
+            ended,
+        ] {
+            assert!(accepted(&unclassified), "{unclassified}");
+            let mut request = unclassified.clone();
+            request["event"]["command_class"] = serde_json::json!("unclassified");
+            request["event"]["known_read_only_version"] = serde_json::json!(1);
+            assert!(!accepted(&request), "{request}");
+        }
     }
 
     #[test]

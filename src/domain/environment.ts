@@ -26,6 +26,8 @@ const RESERVED_ENVIRONMENT_NAMES = new Set([
   "PI_SANDBOX_RUNTIME",
   "SHELLOPTS",
 ]);
+/** Bash imports these from the environment and they change how model commands parse or run. */
+const SANDBOX_SHELL_ENVIRONMENT_NAMES = new Set(["BASHOPTS", "CDPATH", "GLOBIGNORE", "IFS"]);
 const FIXED_SANDBOX_ENVIRONMENT_NAMES = new Set([
   "HOME",
   "USER",
@@ -116,7 +118,8 @@ function parseEnvironmentVariables(value: unknown, sandbox: boolean): Environmen
       Buffer.byteLength(name) > MAXIMUM_ENVIRONMENT_NAME_BYTES ||
       RESERVED_ENVIRONMENT_NAMES.has(name) ||
       name.startsWith("PI_SANDBOX_") ||
-      (sandbox && FIXED_SANDBOX_ENVIRONMENT_NAMES.has(name)) ||
+      (sandbox &&
+        (FIXED_SANDBOX_ENVIRONMENT_NAMES.has(name) || SANDBOX_SHELL_ENVIRONMENT_NAMES.has(name))) ||
       typeof variableValue !== "string" ||
       variableValue.includes("\0") ||
       Buffer.byteLength(variableValue) > MAXIMUM_ENVIRONMENT_VALUE_BYTES

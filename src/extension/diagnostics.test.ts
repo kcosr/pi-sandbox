@@ -319,4 +319,91 @@ Use /sandbox mounts or /sandbox policy for details.`);
     expect(detail).toContain("not restricted by the selected sandbox boundary");
     expect(detail).not.toContain("Has no network access");
   });
+
+  it("reports Bash command-class policies, active class grants, and the registry", () => {
+    const base = diagnosticConfig();
+    const config = {
+      ...base,
+      tools: {
+        ...base.tools,
+        bash: {
+          mode: "deny",
+          sessionGrant: "never",
+          audit: false,
+          commandClasses: { known_read_only: { mode: "ask", sessionGrant: "offer" } },
+        },
+      },
+    } satisfies SandboxConfig;
+    const input = {
+      config,
+      hasSessionGrant: (_subject: string, scope?: string) => scope === "known_read_only",
+      isToolActive: () => true,
+      commandAnalyzer: {
+        version: 2,
+        commands: [
+          { name: "pwd", kind: "shell_builtin", summary: "pwd" },
+          { name: "cd", kind: "shell_builtin", summary: "cd [DIR]" },
+          { name: "wc\u001b", kind: "executable", summary: "wc" },
+        ],
+      },
+    } as const;
+    const overview = formatSandboxPolicy(input);
+    expect(overview).toMatch(/\nbash\s+sandbox\s+deny\s+never\s+-\n/u);
+    expect(overview).toMatch(/\nbash \(known read-only\)\s+sandbox\s+ask\s+offer\s+yes\n/u);
+
+    expect(formatSandboxPolicy(input, "bash")).toBe(`Policy: bash
+
+Execution:         sandbox
+Mode:              deny
+Advertised:        yes
+Approval:          always denied
+Session option:    never
+Active grant:      -
+Known read-only:   ask
+  Approval:        session grant active
+  Session option:  offer
+  Active grant:    yes
+
+Known read-only commands (registry version 2):
+  Shell builtins: pwd, cd
+  Executables: wc\\u001b
+
+Scope:
+  Runs model-requested Bash inside the same sandbox.
+  May read visible host paths and write inside the launch directory and private runtime filesystems.
+  Structured tool policies do not further restrict an approved Bash command.
+  Has no network access.
+  Command classification selects only the approval policy; an approved command runs unchanged within the same boundary.`);
+
+    const withoutAnalyzer = {
+      config,
+      hasSessionGrant: input.hasSessionGrant,
+      isToolActive: input.isToolActive,
+    };
+    expect(formatSandboxPolicy(withoutAnalyzer, "bash")).toContain(
+      "Known read-only commands:\n  registry unavailable",
+    );
+    const unconfigured = {
+      config: base,
+      hasSessionGrant: () => false,
+      isToolActive: () => true,
+      commandAnalyzer: input.commandAnalyzer,
+    };
+    expect(formatSandboxPolicy(unconfigured, "bash")).toBe(`Policy: bash
+
+Execution:       sandbox
+Mode:            allow
+Advertised:      yes
+Approval:        not required
+Session option:  never
+Active grant:    -
+
+Scope:
+  Runs model-requested Bash inside the same sandbox.
+  May read visible host paths and write inside the launch directory and private runtime filesystems.
+  Structured tool policies do not further restrict an approved Bash command.
+  Has no network access.`);
+    expect(formatSandboxPolicy(unconfigured)).not.toContain("known read-only");
+    expect(formatSandboxPolicy(unconfigured, "write")).not.toContain("Known read-only");
+  });
 });

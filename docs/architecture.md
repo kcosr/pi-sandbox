@@ -245,6 +245,14 @@ of the final tool input, obtains the configured policy decision, and maps that
 same snapshot to either a sandbox request or the managed extension's fixed host
 request.
 
+When the effective Bash policy has a `known_read_only` class policy, the
+managed adapter first analyzes that snapshot's command with an analyzer created
+at startup for the selected backend's execution context. The resulting class is
+bound into the frozen approval request and its fingerprint, and the generic
+policy engine evaluates known read-only requests against the class policy and
+all others against the main policy. Classification never changes the executed
+request. See [configuration](configuration.md#known-read-only-bash-commands).
+
 Approval presentation and execution authority are separate:
 
 - policy decides whether a request may run;

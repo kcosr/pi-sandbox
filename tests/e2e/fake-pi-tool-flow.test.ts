@@ -1,5 +1,5 @@
 import { existsSync } from "node:fs";
-import { mkdir, mkdtemp, readFile, readdir, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, readdir, realpath, rm, writeFile } from "node:fs/promises";
 import path from "node:path";
 import type {
   ExtensionAPI,
@@ -9,6 +9,7 @@ import type {
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import type { SandboxConfig } from "../../src/domain/index.js";
 import { createPiSandboxExtension } from "../../src/extension/index.js";
+import { createConfiguredBashAnalyzer } from "../../src/runtime/bash-analysis.js";
 import {
   createBubblewrapExecutor,
   type SandboxCommandRequest,
@@ -367,6 +368,134 @@ describe.skipIf(!REAL_BWRAP_AVAILABLE).each(["/var/tmp", "/tmp"])(
     });
   },
 );
+
+// The real analyzer, constructed as the managed runtime does, classifies commands before approval.
+describe.skipIf(!REAL_BWRAP_AVAILABLE)(
+  "known read-only Bash commands with the real analyzer",
+  () => {
+    let baseDirectory: string;
+    let workspace: string;
+    let executor: RecordingExecutor;
+
+    beforeAll(async () => {
+      const fixtureRoot = process.env.PI_SANDBOX_TEST_TMPDIR ?? "/var/tmp";
+      baseDirectory = await realpath(await mkdtemp(path.join(fixtureRoot, "pi-sandbox-kro-e2e-")));
+      workspace = path.join(baseDirectory, "workspace");
+      await mkdir(workspace, { mode: 0o700 });
+      await writeFile(path.join(workspace, "listed.txt"), "content\n");
+      executor = new RecordingExecutor(
+        await createBubblewrapExecutor({
+          cwd: workspace,
+          bubblewrapPath: BWRAP_PATH,
+          workerCommand: testSandboxWorkerCommand(),
+        }),
+      );
+      await executor.probe();
+    });
+
+    afterAll(async () => {
+      await executor?.close();
+      if (baseDirectory) await rm(baseDirectory, { recursive: true, force: true });
+    });
+
+    async function start(bash: SandboxConfig["tools"][string]): Promise<FakePi> {
+      const config = { ...allowAllConfig(), tools: { ...allowAllConfig().tools, bash } };
+      const bashAnalyzer = createConfiguredBashAnalyzer({
+        config,
+        cwd: workspace,
+        sandboxEnvironment: config.environment.sandbox,
+        ambientEnvironment: process.env,
+      });
+      expect(bashAnalyzer).toBeDefined();
+      const fakePi = new FakePi();
+      await createPiSandboxExtension({
+        cwd: workspace,
+        configPath: "/etc/pi-sandbox/config.toml",
+        userStateDir: "/home/test/.pi/agent",
+        loadConfig: () => Promise.resolve(config),
+        executor,
+        ...(bashAnalyzer === undefined ? {} : { bashAnalyzer }),
+      })(fakePi.api);
+      await fakePi.emit("session_start", {}, nonInteractiveContext());
+      return fakePi;
+    }
+
+    function bashCommands(): readonly string[] {
+      return executor.requests
+        .filter((request) => request.argv[0] === "/bin/bash")
+        .map((request) => request.argv[2] ?? "");
+    }
+
+    it("runs known read-only pipelines without a prompt and explains denied commands", async () => {
+      const fakePi = await start({
+        audit: false,
+        mode: "deny",
+        sessionGrant: "never",
+        commandClasses: { known_read_only: { mode: "allow", sessionGrant: "never" } },
+      });
+      const before = bashCommands().length;
+      expect(resultText(await invoke(fakePi, "bash", { command: "ls | head" }))).toContain(
+        "listed.txt",
+      );
+      await expect(invoke(fakePi, "bash", { command: "touch x" })).rejects.toThrow(
+        'Pi Sandbox denied bash: policy_denied; not a known read-only command: "touch" is not a known read-only command',
+      );
+      expect(bashCommands().slice(before)).toEqual(["ls | head"]);
+      expect(existsSync(path.join(workspace, "x"))).toBe(false);
+      await fakePi.emit("session_shutdown", {}, nonInteractiveContext());
+    });
+
+    it("limits a class-scoped session grant to known read-only commands", async () => {
+      const fakePi = await start({
+        audit: false,
+        mode: "ask",
+        sessionGrant: "never",
+        commandClasses: { known_read_only: { mode: "ask", sessionGrant: "offer" } },
+      });
+      const prompts: Array<{ readonly title: string; readonly choices: readonly string[] }> = [];
+      const interactive = {
+        hasUI: true,
+        ui: {
+          select: (title: string, choices: readonly string[]) => {
+            prompts.push({ title, choices });
+            return Promise.resolve(
+              choices.includes("Allow known read-only commands for session")
+                ? "Allow known read-only commands for session"
+                : "Deny",
+            );
+          },
+        },
+      } as unknown as ExtensionContext;
+      const before = bashCommands().length;
+      await invokeWith(fakePi, "bash", { command: "ls | head" }, interactive);
+      await invokeWith(fakePi, "bash", { command: "ls -a" }, interactive);
+      await expect(invokeWith(fakePi, "bash", { command: "touch x" }, interactive)).rejects.toThrow(
+        /^Pi Sandbox denied bash: user_denied$/u,
+      );
+      expect(prompts).toEqual([
+        {
+          title: "Allow bash (known read-only): ls | head?",
+          choices: ["Allow once", "Allow known read-only commands for session", "Deny"],
+        },
+        { title: "Allow bash: touch x?", choices: ["Allow once", "Deny"] },
+      ]);
+      expect(bashCommands().slice(before)).toEqual(["ls | head", "ls -a"]);
+      expect(existsSync(path.join(workspace, "x"))).toBe(false);
+      await fakePi.emit("session_shutdown", {}, nonInteractiveContext());
+    });
+  },
+);
+
+async function invokeWith(
+  fakePi: FakePi,
+  name: string,
+  parameters: unknown,
+  context: ExtensionContext,
+): Promise<unknown> {
+  const tool = fakePi.tools.get(name);
+  if (!tool) throw new Error(`missing_fake_tool:${name}`);
+  return tool.execute(`call-${name}`, parameters, undefined, undefined, context);
+}
 
 async function invoke(fakePi: FakePi, name: string, parameters: unknown): Promise<unknown> {
   const tool = fakePi.tools.get(name);

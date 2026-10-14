@@ -5,7 +5,7 @@ import type {
   ToolDefinition,
 } from "@earendil-works/pi-coding-agent";
 import { Text } from "@earendil-works/pi-tui";
-import { ToolAuditor } from "../audit/tools.js";
+import { ToolAuditor, type CommandClassAudit } from "../audit/tools.js";
 
 import type { SandboxConfig, ToolName } from "../domain/index.js";
 import type {
@@ -16,12 +16,26 @@ import type {
 } from "../managed-extensions/sdk.js";
 import type { PiToolExtension } from "../managed-extensions/sdk.js";
 import {
+  COMMAND_CLASS_TOOL,
   PolicyEngine,
+  approvalSubjectLabel,
+  boundedDisplayText,
+  commandClassLabel,
+  hasCommandClassPolicies,
   prepareApprovalRequest,
+  type ApprovalDecision,
   type JsonObject,
   type ApprovalRequest,
   TOOL_NAMES,
 } from "../permissions/index.js";
+import {
+  BASH_ANALYSIS_ISSUE_CODES,
+  COMMAND_CLASSES,
+  type BashAnalysis,
+  type BashCommandAnalyzer,
+  type BashRequestClass,
+} from "../permissions/bash/contracts.js";
+import { snapshotJsonObject } from "../../packages/sandbox-extension/src/invocation.js";
 import { SandboxExecutionError } from "../../packages/sandbox-extension/src/runtime/index.js";
 import {
   formatSandboxMounts,
@@ -47,7 +61,18 @@ interface ExtensionState {
   started: boolean;
   stopped: boolean;
   auditor: ToolAuditor | undefined;
+  bashAnalyzer: BashCommandAnalyzer | undefined;
 }
+
+/** Analyzer result bound into one approval request. */
+interface CommandClassification {
+  readonly commandClass: BashRequestClass;
+  readonly version: number;
+  /** Bounded first analyzer issue for an unclassified command. */
+  readonly issue?: string;
+}
+
+const MAXIMUM_ANALYSIS_ISSUE_BYTES = 512;
 
 async function registerPiToolExtensions(
   pi: ExtensionAPI,
@@ -145,13 +170,78 @@ async function authorize<T extends JsonObject>(
   if (state.policy === undefined || state.stopped) {
     throw new Error("Pi Sandbox is not available");
   }
+  let arguments_: JsonObject = rawArguments;
+  let classification: CommandClassification | undefined;
+  if (subject === COMMAND_CLASS_TOOL && hasCommandClassPolicies(state.config?.tools[subject])) {
+    // Analyze the same immutable snapshot that the approval request freezes.
+    arguments_ = snapshotJsonObject(rawArguments);
+    classification = await classifyCommand(state.bashAnalyzer, arguments_);
+  }
   const request = prepareApprovalRequest({
     subject,
-    display: approvalPreview(subject, rawArguments),
-    arguments: rawArguments,
+    display: approvalPreview(
+      approvalSubjectLabel(subject, classification?.commandClass),
+      arguments_,
+    ),
+    arguments: arguments_,
+    ...(classification === undefined ? {} : { commandClass: classification.commandClass }),
   });
-  await authorizeRequest(state, request, ctx, signal);
+  await authorizeRequest(state, request, ctx, signal, classification);
   return request.arguments as T;
+}
+
+/** Analyzer failures fail closed: the request stays unclassified and keeps the main policy. */
+async function classifyCommand(
+  analyzer: BashCommandAnalyzer | undefined,
+  arguments_: JsonObject,
+): Promise<CommandClassification> {
+  if (analyzer === undefined)
+    throw new Error("Pi Sandbox Bash command analyzer is not initialized");
+  const version = analyzer.version;
+  const unclassified = (issue: string): CommandClassification =>
+    Object.freeze({
+      commandClass: "unclassified",
+      version,
+      issue: boundedDisplayText(issue, MAXIMUM_ANALYSIS_ISSUE_BYTES),
+    });
+  const command = arguments_.command;
+  if (typeof command !== "string") return unclassified("the command is not a string");
+  let analysis: BashAnalysis;
+  try {
+    const result: unknown = await analyzer.analyze(command);
+    if (!isBashAnalysis(result, version)) return unclassified("command analysis failed");
+    analysis = result;
+  } catch {
+    return unclassified("command analysis failed");
+  }
+  return analysis.commandClass === "unclassified"
+    ? unclassified(analysis.issue.message)
+    : Object.freeze({ commandClass: analysis.commandClass, version });
+}
+
+/** A classified result names every stage; an unclassified one carries a well-formed issue. */
+function isBashAnalysis(value: unknown, version: number): value is BashAnalysis {
+  if (typeof value !== "object" || value === null) return false;
+  const result = value as Record<string, unknown>;
+  if (result.version !== version) return false;
+  if (result.commandClass === "unclassified") {
+    const issue = result.issue;
+    if (typeof issue !== "object" || issue === null) return false;
+    const fields = issue as Record<string, unknown>;
+    return (
+      (BASH_ANALYSIS_ISSUE_CODES as readonly unknown[]).includes(fields.code) &&
+      typeof fields.message === "string" &&
+      fields.message.length > 0 &&
+      (fields.offset === undefined ||
+        (Number.isSafeInteger(fields.offset) && (fields.offset as number) >= 0))
+    );
+  }
+  return (
+    (COMMAND_CLASSES as readonly unknown[]).includes(result.commandClass) &&
+    Array.isArray(result.commands) &&
+    result.commands.length > 0 &&
+    result.commands.every((name) => typeof name === "string" && name.length > 0)
+  );
 }
 
 async function authorizeRequest(
@@ -159,6 +249,7 @@ async function authorizeRequest(
   request: ApprovalRequest,
   ctx: ExtensionContext,
   signal?: AbortSignal,
+  classification?: CommandClassification,
 ): Promise<void> {
   if (state.policy === undefined || state.stopped) {
     throw new Error("Pi Sandbox is not available");
@@ -168,10 +259,37 @@ async function authorizeRequest(
     ...(ui === undefined ? {} : { ui }),
     ...(signal === undefined ? {} : { signal }),
   });
-  await state.auditor?.decision(decision, request.subject);
-  if (!decision.allowed)
-    throw new Error(`Pi Sandbox denied ${request.subject}: ${decision.reason}`);
+  await state.auditor?.decision(decision, request.subject, classificationAudit(classification));
+  if (!decision.allowed) throw new Error(denialMessage(request.subject, decision, classification));
   if (signal?.aborted === true) throw new SandboxExecutionError("sandbox_aborted");
+}
+
+function classificationAudit(
+  classification: CommandClassification | undefined,
+): CommandClassAudit | undefined {
+  return classification === undefined
+    ? undefined
+    : {
+        command_class: classification.commandClass,
+        known_read_only_version: classification.version,
+      };
+}
+
+/** A policy denial names the analyzer's first issue so the model can adjust instead of retrying. */
+function denialMessage(
+  subject: ToolName,
+  decision: Extract<ApprovalDecision, { allowed: false }>,
+  classification: CommandClassification | undefined,
+): string {
+  const message = `Pi Sandbox denied ${subject}: ${decision.reason}`;
+  if (
+    decision.reason !== "policy_denied" ||
+    classification?.commandClass !== "unclassified" ||
+    classification.issue === undefined
+  )
+    return message;
+  const classes = COMMAND_CLASSES.map(commandClassLabel).join(" or ");
+  return `${message}; not a ${classes} command: ${classification.issue}`;
 }
 
 function registerManagedTools(
@@ -293,6 +411,7 @@ export function createPiSandboxExtension(dependencies: ExtensionDependencies): E
       started: false,
       stopped: false,
       auditor: undefined,
+      bashAnalyzer: dependencies.bashAnalyzer,
     };
 
     const starts: Array<(event: unknown, ctx: ExtensionContext) => unknown> = [];
@@ -440,9 +559,12 @@ export function createPiSandboxExtension(dependencies: ExtensionDependencies): E
               formatSandboxPolicy(
                 {
                   config,
-                  hasSessionGrant: (candidate) => policy.hasSessionGrant(candidate),
+                  hasSessionGrant: (candidate, scope) => policy.hasSessionGrant(candidate, scope),
                   isToolActive: (candidate) => activeTools.has(candidate),
                   hostToolScopes,
+                  ...(state.bashAnalyzer === undefined
+                    ? {}
+                    : { commandAnalyzer: state.bashAnalyzer }),
                 },
                 subject,
               ),
@@ -467,6 +589,11 @@ export function createPiSandboxExtension(dependencies: ExtensionDependencies): E
       state.policy = new PolicyEngine(config.tools, mcp?.resolveSubject);
       await dependencies.onSessionStart?.(ctx.sessionManager.getSessionFile());
       try {
+        if (
+          hasCommandClassPolicies(config.tools[COMMAND_CLASS_TOOL]) &&
+          state.bashAnalyzer === undefined
+        )
+          throw new Error("Pi Sandbox Bash command analyzer is not initialized");
         await dependencies.executor.probe();
         state.executor = dependencies.executor;
         if (config.audit.enabled) {

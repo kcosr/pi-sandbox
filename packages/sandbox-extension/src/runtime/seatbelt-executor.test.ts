@@ -20,7 +20,11 @@ import { createSocket } from "node:dgram";
 import path from "node:path";
 import { build } from "esbuild";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from "vitest";
-import { createSeatbeltExecutor, type CreateSeatbeltExecutorOptions } from "./seatbelt-executor.js";
+import {
+  createSeatbeltExecutor,
+  seatbeltCommandEnvironment,
+  type CreateSeatbeltExecutorOptions,
+} from "./seatbelt-executor.js";
 import { resolveDirectToolCommands } from "./direct-executor.js";
 import type { SandboxExecutor } from "./contracts.js";
 
@@ -56,6 +60,26 @@ async function waitForFile(file: string): Promise<string> {
   }
   throw new Error(`fixture did not write ${file}`);
 }
+
+it("describes the fixed and administrator Seatbelt command environment", () => {
+  const environment = seatbeltCommandEnvironment(
+    { ADMIN_VALUE: "configured" },
+    { root: "/opt/pi-sandbox/tools", commands: {} },
+  );
+  expect(environment).toEqual({
+    ADMIN_VALUE: "configured",
+    PATH: "/opt/pi-sandbox/tools/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin",
+    LANG: "C.UTF-8",
+  });
+  expect(Object.isFrozen(environment)).toBe(true);
+  expect(seatbeltCommandEnvironment().PATH).toBe(
+    "/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin",
+  );
+  for (const name of ["PATH", "HOME", "BASH_ENV", "PI_SANDBOX_VALUE"])
+    expect(() => seatbeltCommandEnvironment({ [name]: "/x" })).toThrow(
+      "sandbox_environment_invalid",
+    );
+});
 
 it("requires genuine native Seatbelt and GNU prerequisites when requested", () => {
   if (process.env.PI_SANDBOX_REQUIRE_SEATBELT === "1") {
@@ -141,6 +165,7 @@ describe.skipIf(prerequisite !== undefined)("native Seatbelt executor", () => {
         expect(env.path).toBe(
           `${toolBundle === undefined ? "" : `${toolBundle.root}/bin:`}/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin`,
         );
+        expect(env.path).toBe(seatbeltCommandEnvironment({}, toolBundle).PATH);
         const input = Buffer.from([0, 255, 12, 127, 0]);
         const chunks: Buffer[] = [];
         const binary = await executor.execute(

@@ -168,8 +168,10 @@ the main configuration's structure. `overrides.models_file` selects a model
 file; `overrides.execution.backend` accepts `bubblewrap` or `direct`;
 `overrides.network.mode` accepts `none`, `local`, or `host`; and
 `overrides.filesystem.cwd_writable` is boolean. Each named entry in
-`overrides.tools` requires both `mode` and `session_grant`. Tool names must
-belong to the exact active base policy, including selected compiled tools.
+`overrides.tools` requires both `mode` and `session_grant`; `bash` may also
+carry the optional [known read-only class](#known-read-only-bash-class). Tool
+names must belong to the exact active base policy, including selected compiled
+tools.
 MCP server definitions, their per-server tool policies, and the code-mode switch
 are main-policy-only; neither rule files nor broker responses accept overrides
 for them. Per-user MCP credentials can use `environment.pi` values, explicitly
@@ -185,6 +187,7 @@ not compete in this comparison, and user rules do not apply last.
 | Setting                         | Combination                                                                                                     |
 | ------------------------------- | --------------------------------------------------------------------------------------------------------------- |
 | Tool invocation policy          | Most permissive complete pair wins: `disabled/never` < `deny/never` < `ask/never` < `ask/offer` < `allow/never` |
+| Bash known read-only class      | Join of present class policies, kept only if strictly more permissive than the combined Bash policy             |
 | Network mode                    | Most permissive wins: `none` < `local` < `host`                                                                 |
 | CWD writable                    | `true` wins over `false`                                                                                        |
 | Execution backend or model file | Different explicit values are a configuration error                                                             |
@@ -215,6 +218,76 @@ rejected. All `.toml` files are validated, including unmatched rules. The two
 directories together allow at most 256 rule files and 4 MiB of TOML, with at most
 1 MiB per file. Combined environment values and responses also retain their
 size limits.
+
+### Known read-only Bash class
+
+A rule may give its own Bash policy a
+[known read-only class policy](configuration.md#known-read-only-bash-commands).
+Rule files stay at `version = 8`:
+
+```toml
+version = 8
+group = "developers"
+
+[overrides.tools.bash]
+mode = "deny"
+session_grant = "never"
+
+[overrides.tools.bash.known_read_only]
+mode = "allow"
+session_grant = "never"
+```
+
+An inline `known_read_only = { mode = "allow", session_grant = "never" }` is
+equivalent. Each file is validated on its own with the base-configuration rules:
+the table is accepted only under `overrides.tools.bash`, has exactly `mode`
+(`allow`, `ask` or `deny`) and `session_grant`, permits `offer` only with `ask`,
+and must be strictly more permissive than the same file's Bash policy, which
+therefore cannot be `disabled`. An invalid file stops startup like any other
+invalid rule, even when it does not match the caller.
+
+Matching rules combine in two parts. The main Bash pair keeps the ordinary
+most-permissive selection. Class policies combine with the join: the greater
+mode and the greater session option, keeping `offer` only for `ask`. A rule
+without a class policy contributes nothing to the join. The combined class
+policy is then normalized against the combined main policy: it is dropped when
+it is not strictly more permissive or the main policy is `disabled`.
+Normalization never rejects. For example, a rule with Bash `allow` and another
+with Bash `deny` plus class `allow` combine to Bash `allow` with no class policy.
+
+The broker response carries the class in the same Bash entry, still under
+protocol version 7, and omits it when absent:
+
+```json
+{
+  "overrides": {
+    "tools": {
+      "bash": {
+        "mode": "ask",
+        "session_grant": "never",
+        "known_read_only": { "mode": "allow", "session_grant": "never" }
+      }
+    }
+  }
+}
+```
+
+The client accepts `known_read_only` only for `bash`, with exactly `mode` and
+`session_grant`, and rejects a class policy that is not normalized as
+`identity_broker_response_invalid`. A returned Bash policy replaces the base
+Bash policy wholesale, including its class policy. When matching rules set Bash
+but none supplies `known_read_only`, or normalization drops it, the user has no
+class policy even if the base configuration has one. Repeat the class table in
+rules that should keep it.
+
+The effective policy is then validated again. Class `allow` still requires
+`read`, `grep`, `find` and `ls` to be `allow` after all overrides, so a rule that
+changes one of them can make the inherited base class policy invalid. Startup
+then fails with:
+
+```text
+effective tool policy after identity overrides is invalid: tools.bash.known_read_only.mode "allow" requires tools.<tool>.mode "allow" (it is "<mode>"); allow read, grep, find, ls or use a stricter bash.known_read_only mode in the base configuration or identity broker rules
+```
 
 ### Account lookup and lifecycle
 

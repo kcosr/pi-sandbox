@@ -28,6 +28,9 @@ export interface AuditEvent {
   repository?: string;
   command?: string;
   command_truncated?: boolean;
+  /** Present on Bash decision events only while the effective policy has a class policy. */
+  command_class?: "known_read_only" | "unclassified";
+  known_read_only_version?: number;
 }
 
 export interface AuditClient {
@@ -36,6 +39,8 @@ export interface AuditClient {
 }
 
 const DEADLINE_MS = 10_000;
+/** The audit collector stores the registry version as an unsigned 32-bit integer. */
+export const MAXIMUM_KNOWN_READ_ONLY_VERSION = 0xffff_ffff;
 const MAX_REQUEST_BYTES = 32_768;
 const MAX_RESPONSE_BYTES = 4_096;
 
@@ -102,6 +107,7 @@ function validateEvent(event: AuditEvent): void {
       "invalid_prompt_decision",
     ],
     outcome: ["success", "error", "cancelled", "timeout"],
+    command_class: ["known_read_only", "unclassified"],
   };
   const allowed = new Set([
     ...Object.keys(limits),
@@ -109,6 +115,7 @@ function validateEvent(event: AuditEvent): void {
     "command",
     "command_truncated",
     "duration_ms",
+    "known_read_only_version",
   ]);
   const invalid = () => {
     throw new Error("Invalid audit event");
@@ -161,6 +168,17 @@ function validateEvent(event: AuditEvent): void {
       /[\uD800-\uDFFF]/u.test(event.command) ||
       event.command.includes("\0") ||
       typeof event.command_truncated !== "boolean")
+  )
+    invalid();
+  if ((event.command_class === undefined) !== (event.known_read_only_version === undefined))
+    invalid();
+  if (
+    event.command_class !== undefined &&
+    (event.tool !== "bash" ||
+      (event.event !== "tool_execution_intent" && event.event !== "tool_denied") ||
+      !Number.isSafeInteger(event.known_read_only_version) ||
+      event.known_read_only_version! < 1 ||
+      event.known_read_only_version! > MAXIMUM_KNOWN_READ_ONLY_VERSION)
   )
     invalid();
   if (

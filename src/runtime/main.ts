@@ -56,6 +56,7 @@ import { applyManagedEnvironment } from "./environment.js";
 import { assertExecutionPrerequisites } from "./prerequisites.js";
 import { createWorkspaceBoundary } from "./workspace.js";
 import { createManagedCleanup, createManagedExecutor } from "./managed-executor.js";
+import { createConfiguredBashAnalyzer } from "./bash-analysis.js";
 import { readAccountIdentity } from "./account-home.js";
 import { createMachineIdResolver, readMachineId } from "./machine-id.js";
 import type { SandboxArguments } from "./config-arguments.js";
@@ -501,6 +502,13 @@ export async function runPiSandbox({ piArgs: args, configPath }: SandboxArgument
     (instance) => instance.requiredHostExecutables,
   );
   await assertExecutionPrerequisites(config.execution.backend, buildLayout, managedExecutables);
+  const bashAnalyzer = createConfiguredBashAnalyzer({
+    config,
+    cwd,
+    sandboxEnvironment: identityEnvironment.sandbox,
+    ambientEnvironment: ambientHostEnvironment,
+    ...(buildLayout.toolBundle ? { toolBundle: buildLayout.toolBundle } : {}),
+  });
   const executor = createManagedExecutor({
     cwd,
     create: () =>
@@ -552,6 +560,7 @@ export async function runPiSandbox({ piArgs: args, configPath }: SandboxArgument
         toolArguments: args,
         loadConfig: () => Promise.resolve(config),
         executor,
+        ...(bashAnalyzer === undefined ? {} : { bashAnalyzer }),
         ...(auditClient === undefined ? {} : { auditClient }),
         managedExtensions,
         piToolExtensions,

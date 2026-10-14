@@ -8,6 +8,7 @@ import {
   type SandboxCommandResult,
   type SandboxExecutionOptions,
   type SandboxExecutor,
+  type ToolBundle,
   type ToolCommandPaths,
 } from "./contracts.js";
 import { resolveDirectToolCommands } from "./direct-executor.js";
@@ -77,6 +78,23 @@ function profileArguments(profile: SeatbeltProfile, command: readonly string[]):
   ];
 }
 
+const SEATBELT_PATH = "/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin";
+
+/**
+ * Administrator and fixed values every Seatbelt command receives. The executor adds
+ * HOME, TMPDIR, TMP, TEMP and XDG_* for the private scratch directories it creates at startup.
+ */
+export function seatbeltCommandEnvironment(
+  environment?: Readonly<Record<string, string>>,
+  toolBundle?: ToolBundle,
+): Readonly<Record<string, string>> {
+  return Object.freeze({
+    ...seatbeltEnvironment(environment),
+    PATH: toolBundlePath(snapshotToolBundle(toolBundle), SEATBELT_PATH),
+    LANG: "C.UTF-8",
+  });
+}
+
 /** Native command confinement with best-effort process-group cleanup, never arbitrary-descendant ownership. */
 export async function createSeatbeltExecutor(
   options: CreateSeatbeltExecutorOptions,
@@ -87,7 +105,7 @@ export async function createSeatbeltExecutor(
     validateSeatbeltOptions(options);
     const basePolicy = seatbeltBasePolicy(options);
     const limits = resolveSeatbeltLimits(options.limits);
-    const environment = seatbeltEnvironment(options.environment);
+    const environment = seatbeltCommandEnvironment(options.environment, options.toolBundle);
     const toolBundle = snapshotToolBundle(options.toolBundle);
     if (process.platform !== "darwin" || !["arm64", "x64"].includes(process.arch))
       throw new Error("sandbox_seatbelt_platform_unsupported");
@@ -144,11 +162,6 @@ export async function createSeatbeltExecutor(
       Object.freeze(executables),
       Object.freeze({
         ...environment,
-        PATH: toolBundlePath(
-          toolBundle,
-          "/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin",
-        ),
-        LANG: "C.UTF-8",
         HOME: writable[0]!,
         TMPDIR: writable[1]!,
         TMP: writable[1]!,

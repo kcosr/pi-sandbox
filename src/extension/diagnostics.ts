@@ -12,6 +12,13 @@ import {
   describeBubblewrapMounts,
   safeSandboxEnvironment,
 } from "../../packages/sandbox-extension/src/runtime/bubblewrap-policy.js";
+import {
+  COMMAND_CLASS_TOOL,
+  commandClassLabel,
+  type CommandClassPolicy,
+  type SessionGrantScope,
+} from "../permissions/index.js";
+import { COMMAND_CLASSES, type BashCommandAnalyzer } from "../permissions/bash/contracts.js";
 
 export type SandboxDiagnosticSubject = string;
 
@@ -32,9 +39,10 @@ interface SandboxSummaryInput {
 
 interface PolicyDiagnosticInput {
   readonly config: SandboxConfig;
-  readonly hasSessionGrant: (subject: ApprovalSubject) => boolean;
+  readonly hasSessionGrant: (subject: ApprovalSubject, scope?: SessionGrantScope) => boolean;
   readonly isToolActive: (subject: ToolName) => boolean;
   readonly hostToolScopes?: Readonly<Record<string, string>>;
+  readonly commandAnalyzer?: Pick<BashCommandAnalyzer, "version" | "commands">;
 }
 
 const SANDBOX_SUBJECT_SCOPES: Readonly<Record<string, readonly string[]>> = Object.freeze({
@@ -142,17 +150,27 @@ export function formatSandboxPolicy(
   subject?: SandboxDiagnosticSubject,
 ): string {
   if (subject !== undefined) return formatSubjectPolicy(input, subject);
-  const rows = diagnosticSubjects(input.config).map((candidate) => {
+  const rows = diagnosticSubjects(input.config).flatMap((candidate) => {
     const policy = getSubjectPolicy(input.config, candidate);
+    const boundary = executionBoundary(input, candidate);
     return [
-      candidate,
-      executionBoundary(input, candidate),
-      policy.mode,
-      policy.sessionGrant,
-      activeGrantDisplay(
-        policy,
-        candidate === "user_shell" ? false : input.hasSessionGrant(candidate),
-      ),
+      [
+        candidate,
+        boundary,
+        policy.mode,
+        policy.sessionGrant,
+        activeGrantDisplay(
+          policy,
+          candidate === "user_shell" ? false : input.hasSessionGrant(candidate),
+        ),
+      ],
+      ...commandClassPolicies(policy).map(([commandClass, classPolicy]) => [
+        `${candidate} (${commandClassLabel(commandClass)})`,
+        boundary,
+        classPolicy.mode,
+        classPolicy.sessionGrant,
+        activeGrantDisplay(classPolicy, input.hasSessionGrant(candidate, commandClass)),
+      ]),
     ];
   });
   return `Effective policy\n\n${formatTable(
@@ -191,9 +209,57 @@ function formatSubjectPolicy(
     ["Session option", policy.sessionGrant],
     ["Active grant", activeGrantDisplay(policy, granted)],
   ];
-  return `Policy: ${subject}\n\n${formatKeyValues(rows)}\n\nScope:\n${subjectScope(input, subject)
-    .map((line) => `  ${line}`)
-    .join("\n")}`;
+  const classSections: string[] = [];
+  if (subject === COMMAND_CLASS_TOOL) {
+    for (const [commandClass, classPolicy] of commandClassPolicies(policy)) {
+      const label = capitalize(commandClassLabel(commandClass));
+      const classGranted = input.hasSessionGrant(subject, commandClass);
+      rows.push(
+        [label, classPolicy.mode],
+        ["  Approval", approvalDisplay(classPolicy, classGranted)],
+        ["  Session option", classPolicy.sessionGrant],
+        ["  Active grant", activeGrantDisplay(classPolicy, classGranted)],
+      );
+      classSections.push(commandClassSection(label, input.commandAnalyzer));
+    }
+  }
+  const scope = [
+    ...subjectScope(input, subject),
+    ...(classSections.length === 0
+      ? []
+      : [
+          "Command classification selects only the approval policy; an approved command runs unchanged within the same boundary.",
+        ]),
+  ];
+  return `Policy: ${subject}\n\n${formatKeyValues(rows)}${classSections
+    .map((section) => `\n\n${section}`)
+    .join("")}\n\nScope:\n${scope.map((line) => `  ${line}`).join("\n")}`;
+}
+
+function commandClassPolicies(
+  policy: SubjectPolicy,
+): readonly (readonly [(typeof COMMAND_CLASSES)[number], CommandClassPolicy])[] {
+  return COMMAND_CLASSES.flatMap((commandClass) => {
+    const classPolicy = policy.commandClasses?.[commandClass];
+    return classPolicy === undefined ? [] : [[commandClass, classPolicy] as const];
+  });
+}
+
+function commandClassSection(
+  label: string,
+  analyzer: PolicyDiagnosticInput["commandAnalyzer"],
+): string {
+  if (analyzer === undefined) return `${label} commands:\n  registry unavailable`;
+  const names = (kind: "shell_builtin" | "executable") =>
+    analyzer.commands
+      .filter((command) => command.kind === kind)
+      .map((command) => safeDisplay(command.name))
+      .join(", ") || "none";
+  return `${label} commands (registry version ${analyzer.version}):\n  Shell builtins: ${names("shell_builtin")}\n  Executables: ${names("executable")}`;
+}
+
+function capitalize(value: string): string {
+  return `${value.slice(0, 1).toUpperCase()}${value.slice(1)}`;
 }
 
 function executionBoundary(input: PolicyDiagnosticInput, subject: string): string {
@@ -307,11 +373,11 @@ function getSubjectPolicy(config: SandboxConfig, subject: SandboxDiagnosticSubje
   return policy;
 }
 
-function activeGrantDisplay(policy: SubjectPolicy, granted: boolean): string {
+function activeGrantDisplay(policy: Pick<SubjectPolicy, "mode">, granted: boolean): string {
   return policy.mode === "ask" ? (granted ? "yes" : "no") : "-";
 }
 
-function approvalDisplay(policy: SubjectPolicy, granted: boolean): string {
+function approvalDisplay(policy: Pick<SubjectPolicy, "mode">, granted: boolean): string {
   switch (policy.mode) {
     case "allow":
       return "not required";

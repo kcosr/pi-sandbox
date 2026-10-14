@@ -30,6 +30,10 @@ interface Invocation {
   approval?: ApprovalDecision["source"];
 }
 
+export type CommandClassAudit = Required<
+  Pick<AuditEvent, "command_class" | "known_read_only_version">
+>;
+
 function errorOutcome(error: unknown, signal?: AbortSignal): "error" | "cancelled" | "timeout" {
   if (signal?.aborted === true) return "cancelled";
   const seen = new Set<Error>();
@@ -120,10 +124,21 @@ export class ToolAuditor {
     await this.submit({ event: "session_ended", pi_session_id: id });
   }
 
-  public async decision(decision: ApprovalDecision, tool?: string): Promise<void> {
+  public async decision(
+    decision: ApprovalDecision,
+    tool?: string,
+    classification?: CommandClassAudit,
+  ): Promise<void> {
     const invocation = this.invocation.getStore();
     if (invocation === undefined || (tool !== undefined && invocation.fields.tool !== tool)) return;
     invocation.approval = decision.source;
+    const classFields =
+      classification === undefined
+        ? {}
+        : {
+            command_class: classification.command_class,
+            known_read_only_version: classification.known_read_only_version,
+          };
     if (!decision.allowed) {
       invocation.denied = true;
       await this.submit({
@@ -131,12 +146,14 @@ export class ToolAuditor {
         event: "tool_denied",
         approval_source: decision.source,
         reason: decision.reason,
+        ...classFields,
       });
     } else {
       await this.submit({
         ...invocation.fields,
         event: "tool_execution_intent",
         approval_source: decision.source,
+        ...classFields,
       });
     }
   }
