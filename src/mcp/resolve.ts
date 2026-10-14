@@ -6,6 +6,7 @@ import {
   type SandboxConfig,
 } from "../domain/index.js";
 import { isMcpHeaderValue } from "../config/mcp.js";
+import { createMachineIdResolver, readMachineId } from "../runtime/machine-id.js";
 
 export interface ResolvedMcpServer {
   readonly policy: McpServerConfig;
@@ -63,8 +64,10 @@ export async function resolveMcpServers(
   environment: NodeJS.ProcessEnv,
   getIdentity: () => AccountIdentity,
   checkExecutable: (path: string) => Promise<void> = (path) => access(path, constants.X_OK),
+  getMachineId: () => string = readMachineId,
 ): Promise<readonly ResolvedMcpServer[]> {
   const snapshot = Object.freeze({ ...environment });
+  const machineId = createMachineIdResolver(getMachineId);
   let identity: AccountIdentity | undefined;
   const account = (): AccountIdentity => {
     if (identity !== undefined) return identity;
@@ -128,7 +131,7 @@ export async function resolveMcpServers(
         const explicit = Object.fromEntries(
           Object.entries(policy.env).map(([name, value]) => [
             name,
-            expandAccountValue(value, account),
+            expandAccountValue(value, account, true, machineId),
           ]),
         );
         literals = checkedMap({ ...baseline, ...explicit }, false);

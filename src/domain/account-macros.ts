@@ -5,7 +5,8 @@ export interface AccountIdentity {
   readonly uid: number;
   readonly homeDirectory: string;
 }
-type AccountPart = { readonly literal: string } | { readonly macro: "username" | "uid" };
+type AccountMacro = "username" | "uid" | "machine_id";
+type AccountPart = { readonly literal: string } | { readonly macro: AccountMacro };
 
 function parts(value: string): AccountPart[] {
   const result: AccountPart[] = [];
@@ -15,11 +16,11 @@ function parts(value: string): AccountPart[] {
       literal += value.slice(i, i + 2);
       i += 4;
     } else if (value.startsWith("{{", i)) {
-      const match = /^\{\{(username|uid)\}\}/u.exec(value.slice(i));
+      const match = /^\{\{(username|uid|machine_id)\}\}/u.exec(value.slice(i));
       if (match === null) throw new Error("Invalid account macro syntax");
       if (literal !== "") result.push({ literal });
       literal = "";
-      result.push({ macro: match[1] as "username" | "uid" });
+      result.push({ macro: match[1] as AccountMacro });
       i += match[0].length;
     } else if (value.startsWith("}}", i)) {
       throw new Error("Invalid account macro syntax");
@@ -41,12 +42,23 @@ export function expandAccountValue(
   value: string,
   getIdentity: () => AccountIdentity,
   expandHome = true,
+  getMachineId?: () => string,
 ): string {
   const parsed = parts(value);
   let identity: AccountIdentity | undefined;
   const account = (): AccountIdentity => (identity ??= getIdentity());
+  let machineId: string | undefined;
+  const machine = (): string => {
+    if (getMachineId === undefined) {
+      throw new Error("The machine_id macro requires an operating-system machine ID resolver");
+    }
+    return (machineId ??= getMachineId());
+  };
   let result = parsed
-    .map((part) => ("literal" in part ? part.literal : String(account()[part.macro])))
+    .map((part) => {
+      if ("literal" in part) return part.literal;
+      return part.macro === "machine_id" ? machine() : String(account()[part.macro]);
+    })
     .join("");
   if (expandHome && (value === "~" || value.startsWith("~/"))) {
     const home = account().homeDirectory;

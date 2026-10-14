@@ -368,6 +368,15 @@ shipped with the matching application.
 
 ## Managed MCP and code mode
 
+Machine-ID controls cover symbolic installation validation, expansion after
+broker merging, one shared lazy lookup across scopes and MCP, environment
+precedence, unsupported/failed lookup and server-local stdio failure. Reader
+fixtures check fixed executable/arguments, cleared environment, output/deadline
+bounds and strict UUID parsing without committing a real machine identifier.
+Native macOS package acceptance must verify host lookup under Node, Bun and
+the compiled application without making live provider requests. Literal URLs,
+HTTP headers and credential references must remain unexpanded.
+
 Offline fixtures verify administrator-only configuration, credential projection,
 path/environment account macros and literal URL query preservation, original-name wildcard policies, bounded
 approvals, exact grants, stale-catalog revocation, tool narrowing and session

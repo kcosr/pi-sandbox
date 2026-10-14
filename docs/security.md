@@ -147,6 +147,16 @@ remain outside the containment guarantee.
 Account macros in configured paths and environment values use the invoking
 effective OS identity, not ambient environment variables. MCP URLs remain
 literal. Account identifiers do not authenticate a user to a remote service.
+The optional macOS `{{machine_id}}` macro reads the host's `IOPlatformUUID`
+through a fixed, bounded host command with a cleared environment, only when
+configured. It does not trust an ambient identifier or executable path. The
+UUID is shared across accounts and can permit correlation across services;
+administrators choose its recipients through scoped environment configuration.
+It is not secret, an unforgeable identity, or device attestation. A copied UUID
+can be replayed. Using it as a provider bearer value preserves the provider's
+existing credential precedence and requires server support; it creates no new
+authentication guarantee. Unsupported or failed lookup rejects effective
+policy; an MCP-stdio-only lookup failure disables only the affected server.
 
 ## Fail-closed guarantees
 

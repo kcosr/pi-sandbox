@@ -57,6 +57,7 @@ import { assertExecutionPrerequisites } from "./prerequisites.js";
 import { createWorkspaceBoundary } from "./workspace.js";
 import { createManagedCleanup, createManagedExecutor } from "./managed-executor.js";
 import { readAccountIdentity } from "./account-home.js";
+import { createMachineIdResolver, readMachineId } from "./machine-id.js";
 import type { SandboxArguments } from "./config-arguments.js";
 import {
   createSessionMaintenance,
@@ -182,6 +183,7 @@ export async function resolveEffectiveAdministrativeConfiguration(
   resolveIdentity?: BrokerIdentityResolver,
   configPath = SYSTEM_CONFIG_PATH,
   getAccountIdentity: () => AccountIdentity = readAccountIdentity,
+  getMachineId: () => string = readMachineId,
 ): Promise<{
   readonly config: SandboxConfig;
   readonly modelsPath: string;
@@ -202,6 +204,7 @@ export async function resolveEffectiveAdministrativeConfiguration(
     overridden.filesystem,
     combinedEnvironment,
     getAccountIdentity,
+    createMachineIdResolver(getMachineId),
   );
   const effectiveEnvironment = expanded.environment;
   const config = Object.freeze({
@@ -475,6 +478,7 @@ export async function runPiSandbox({ piArgs: args, configPath }: SandboxArgument
   const ambientHostEnvironment = { ...process.env };
   let accountIdentity: AccountIdentity | undefined;
   const getAccountIdentity = () => (accountIdentity ??= readAccountIdentity());
+  const getMachineId = createMachineIdResolver();
   const { config, modelsPath, identityEnvironment } =
     await resolveEffectiveAdministrativeConfiguration(
       "/",
@@ -482,6 +486,7 @@ export async function runPiSandbox({ piArgs: args, configPath }: SandboxArgument
       undefined,
       configPath,
       getAccountIdentity,
+      getMachineId,
     );
   const { cwd, validateSessionCwd } = createWorkspaceBoundary(process.cwd());
   const managedExtensions = instantiateConfiguredManagedExtensions(config);
@@ -520,7 +525,13 @@ export async function runPiSandbox({ piArgs: args, configPath }: SandboxArgument
     try {
       const userStateDir = getAgentDir();
       const servers = isManagedMcpSelected(args)
-        ? await resolveMcpServers(config.mcp, process.env, getAccountIdentity)
+        ? await resolveMcpServers(
+            config.mcp,
+            process.env,
+            getAccountIdentity,
+            undefined,
+            getMachineId,
+          )
         : [];
       const mcpPreferences = servers.some((server) => server.status === "ready")
         ? await loadMcpPreferences(userStateDir)

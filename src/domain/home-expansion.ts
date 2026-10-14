@@ -11,13 +11,17 @@ export function expandManagedHomePaths(
   filesystem: FilesystemConfig,
   environment: ManagedEnvironment,
   getIdentity: () => AccountIdentity,
+  getMachineId?: () => string,
 ): Readonly<{
   filesystem: FilesystemConfig;
   environment: ManagedEnvironment;
 }> {
   let identity: AccountIdentity | undefined;
   const account = (): AccountIdentity => (identity ??= getIdentity());
-  const expand = (value: string): string => expandAccountValue(value, account);
+  let machineId: string | undefined;
+  const machine =
+    getMachineId === undefined ? undefined : (): string => (machineId ??= getMachineId());
+  const expand = (value: string): string => expandAccountValue(value, account, true, machine);
 
   const hiddenPaths = filesystem.hiddenPaths.map(expand);
   if (

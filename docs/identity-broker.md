@@ -103,6 +103,11 @@ independently of `$HOME`, the broker's root account, and the launch directory,
 then rechecks its bounds. `{{username}}` and `{{uid}}` expand in these configured
 values using the same effective OS account; `$USER`, `$LOGNAME`, and `SUDO_USER`
 are ignored. Expansion is single-pass; `{{{{` and `}}}}` escape literal braces.
+On macOS `{{machine_id}}` resolves the host hardware UUID independently of the
+account lookup, once only if a merged value requests it. The broker does not
+read hardware identity; it still returns symbolic values. Referencing this
+macro on unsupported platforms fails effective policy resolution. It is a
+copyable machine identifier, not a credential or account-authentication claim.
 Unknown macro syntax is an error. Other values remain literal. See
 [home-directory and account expansion](configuration.md#home-directory-and-account-expansion).
 

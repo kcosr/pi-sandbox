@@ -254,8 +254,8 @@ validation of known compiled tools in broker patches.
 
 ### Account macros
 
-In addition to existing bare `~` and leading `~/` expansion, support exactly
-`{{username}}` and `{{uid}}` in configured hidden paths, all configured scoped
+In addition to existing bare `~` and leading `~/` expansion, support
+`{{username}}` and `{{uid}}` in configured hidden and denied paths, all configured scoped
 environment values, and explicit stdio `env` values. Resolve the effective UID
 and canonical username from the invoking account's OS database, using the same
 lookup as account-home expansion; never use ambient `USER`, `LOGNAME`, `HOME`,
@@ -266,6 +266,13 @@ in these fields; `{{{{` and `}}}}` escape literal opening/closing double braces.
 Existing path/environment validation and size bounds apply after expansion.
 Installation validation checks syntax without resolving the installer's account.
 Inherited ambient values and values read through `*_from_env` are not templated.
+
+These same fields accept macOS-only `{{machine_id}}`. Resolve the hardware UUID
+through a fixed bounded OS query only when an effective value requests it, sharing
+one result across startup without ambient overrides. A lookup failure in policy
+fails startup; an MCP-stdio-only failure makes that server unavailable. Installation
+validation checks syntax without reading hardware identity. The UUID is a copyable
+identifier, not a secret or device attestation. See `docs/configuration.md`.
 
 HTTP `url` is literal and does not support macro interpolation. Preserve ordinary
 query parameters and existing percent escapes without decoding/re-encoding them.

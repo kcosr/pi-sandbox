@@ -79,12 +79,13 @@ Provider definitions and API-key resolution are documented separately in
 
 ### Home-directory and account expansion
 
-Schema 12 expands bare `~` and a leading `~/` in `filesystem.hidden_paths` and `filesystem.denied_paths`,
+Schema 13 expands bare `~` and a leading `~/` in `filesystem.hidden_paths` and `filesystem.denied_paths`,
 every configured value under `environment.pi`, `environment.sandbox`, and
 `environment.extensions.<id>`, and MCP stdio `env` values. These fields also
 accept `{{username}}` and `{{uid}}` anywhere in a string. For example,
 `/srv/accounts/{{username}}` becomes `/srv/accounts/alice`, and `~/cache/{{uid}}`
-becomes `/home/alice/cache/1001` for that account.
+becomes `/home/alice/cache/1001` for that account. On macOS these same fields also
+accept `{{machine_id}}`, which expands to the host's hardware UUID (`IOPlatformUUID`).
 
 Expansion happens once at operational startup, after broker rules are merged,
 using the invoking effective user's canonical OS account name, numeric UID,
@@ -92,6 +93,22 @@ and home. It ignores `$HOME`, `$USER`, `$LOGNAME`, `SUDO_USER`, and CWD. The loo
 uses `/usr/bin/getent` on Linux or `/usr/bin/dscacheutil` on macOS, with a cleared
 environment, bounded output, and a five-second deadline. Missing account identity
 fails operational resolution when needed.
+
+Machine identity is independent of account identity. The application reads it
+only when an effective configured value requests `{{machine_id}}`, using fixed
+`/usr/sbin/ioreg` with cleared environment, bounded output, and a five-second
+deadline. One startup shares the result across policy and MCP resolution; it
+does not consult environment variables or a user-selected executable. Values
+overwritten during broker merging are not resolved. A referenced machine ID on
+an unsupported platform or an unavailable/invalid UUID fails effective policy
+startup. A failure used only by an MCP stdio `env` value instead marks that
+server `configuration-value-unavailable`. Unused macros trigger no lookup.
+Installation validation leaves the macro symbolic and performs no hardware lookup.
+
+The UUID is the same across accounts on a physical Mac and normally survives
+OS upgrades, but hardware replacement or VM identity changes can change it.
+It is a copyable identifier, not a secret or proof of possession. See the
+[model configuration example](models.md#macos-machine-identity).
 
 Replacement text is not expanded recursively. Write `{{{{` and `}}}}` for literal
 double braces; unknown or malformed macro syntax is an error. Embedded tildes,
