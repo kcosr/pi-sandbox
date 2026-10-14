@@ -115,7 +115,7 @@ For example, with Bash disabled and read requiring approval in the main policy:
 `/etc/pi-sandbox/groups.d/admin.toml`:
 
 ```toml
-version = 7
+version = 8
 group = "admin"
 
 [overrides.tools.bash]
@@ -126,7 +126,7 @@ session_grant = "offer"
 `/etc/pi-sandbox/groups.d/log-readers.toml`:
 
 ```toml
-version = 7
+version = 8
 group = "log-readers"
 
 [overrides.tools.read]
@@ -141,7 +141,7 @@ can grant the same kind of exception:
 `/etc/pi-sandbox/users.d/alice.toml`:
 
 ```toml
-version = 7
+version = 8
 user = "alice"
 
 [overrides.tools.write]
@@ -161,7 +161,6 @@ host account service.
 `environment` and `overrides` are optional patches. Environment scopes follow
 the main configuration's structure. `overrides.models_file` selects a model
 file; `overrides.execution.backend` accepts `bubblewrap` or `direct`;
-`overrides.execution.process_lifetime` accepts `command` or `sandbox`;
 `overrides.network.mode` accepts `none`, `local`, or `host`; and
 `overrides.filesystem.cwd_writable` is boolean. Each named entry in
 `overrides.tools` requires both `mode` and `session_grant`. Tool names must
@@ -182,7 +181,6 @@ not compete in this comparison, and user rules do not apply last.
 | ------------------------------- | --------------------------------------------------------------------------------------------------------------- |
 | Tool invocation policy          | Most permissive complete pair wins: `disabled/never` < `deny/never` < `ask/never` < `ask/offer` < `allow/never` |
 | Network mode                    | Most permissive wins: `none` < `local` < `host`                                                                 |
-| Process lifetime                | `sandbox` wins over `command`                                                                                   |
 | CWD writable                    | `true` wins over `false`                                                                                        |
 | Execution backend or model file | Different explicit values are a configuration error                                                             |
 | Scoped environment variable     | Different values for the same scope, extension, and variable are a configuration error                          |
@@ -192,18 +190,9 @@ Rules can replace a default restriction, but cannot revoke permission granted
 by another matching rule. For a common staff/admin setup, keep staff access in
 the default policy and use an admin rule for extra permissions.
 
-Execution overrides contain either or both of `backend` and `process_lifetime`;
-an empty execution table is rejected. Omitted fields do not contribute a default
-while rules are combined. For example, a rule may grant persistence without
-repeating the backend:
-
-```toml
-[overrides.execution]
-process_lifetime = "sandbox"
-
-[overrides.network]
-mode = "local"
-```
+Execution overrides contain only `backend`; an empty execution table is rejected.
+The command timeout maximum belongs to base policy and cannot be overridden by
+user/group files or broker responses. Removed lifetime fields are rejected.
 
 Parent tool `audit` flags and the global `[audit]` settings remain unchanged.
 Rules cannot select extensions, change extension configuration, redirect the
@@ -211,7 +200,7 @@ broker socket, change mount locations or host visibility, or change the fixed
 human-shell behavior. Environment values cannot enable tools or grant approval.
 
 The combined effective configuration is validated again: direct execution
-requires `network.mode = "host"`, `execution.process_lifetime = "command"`,
+requires `network.mode = "host"`,
 `filesystem.cwd_writable = true`, and empty
 `filesystem.hidden_paths`. Hidden paths belong exclusively to the main configuration;
 user/group rules cannot replace or erase them.
@@ -241,7 +230,7 @@ timeout fails startup rather than silently dropping group rules.
 
 The broker receives the compiled configuration directory as its executable
 argument and reads both protected rule directories for each connection. Its
-protocol is newline-delimited JSON version 6 with operation `resolve-identity`;
+protocol is newline-delimited JSON version 7 with operation `resolve-identity`;
 requests contain no claimed identity. It returns only the combined matching
 patch, not unrelated rule contents or annotations. Administrators can atomically
 replace files without restarting the socket.

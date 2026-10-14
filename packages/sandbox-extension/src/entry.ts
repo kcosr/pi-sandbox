@@ -39,15 +39,19 @@ async function createExecutor(
   cwd: string,
 ): Promise<SandboxExecutor> {
   const backend = config.backend;
+  const limits =
+    config.maximumTimeoutMs === undefined ? {} : { maximumTimeoutMs: config.maximumTimeoutMs };
   if (backend.kind === "direct")
     return createDirectExecutor({
       cwd,
+      limits,
       environment: backend.environment,
       ...(builtToolBundle ? { toolBundle: builtToolBundle } : {}),
     });
   if (backend.kind === "seatbelt")
     return createSeatbeltExecutor({
       cwd,
+      limits,
       cwdWritable: backend.cwdWritable,
       deniedPaths: backend.deniedPaths,
       networkMode: backend.network,
@@ -72,9 +76,9 @@ async function createExecutor(
     throw new Error("Worker requires Node 24+ or Bun 1.3.14+");
   return createBubblewrapExecutor({
     cwd,
+    limits,
     bubblewrapPath: backend.executable,
     networkMode: backend.network,
-    processLifetime: backend.processLifetime,
     cwdWritable: backend.cwdWritable,
     hiddenPaths: backend.hiddenPaths,
     environment: backend.environment,

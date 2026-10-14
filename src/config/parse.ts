@@ -6,7 +6,6 @@ import {
   POLICY_MODES,
   EXECUTION_BACKENDS,
   NETWORK_MODES,
-  PROCESS_LIFETIMES,
   SESSION_GRANT_POLICIES,
   TOOL_NAMES,
   type IdentityConfig,
@@ -365,24 +364,33 @@ function parseExecution(value: unknown, issues: string[]): ExecutionConfig | und
     return undefined;
   }
 
-  inspectAllowedKeys(value, ["backend", "process_lifetime"], "config.execution", issues);
+  inspectAllowedKeys(value, ["backend", "max_command_timeout_seconds"], "config.execution", issues);
   const backend = enumValue(
     own(value, "backend"),
     EXECUTION_BACKENDS,
     "config.execution.backend",
     issues,
   );
-  const processLifetime = Object.hasOwn(value, "process_lifetime")
-    ? enumValue(
-        value.process_lifetime,
-        PROCESS_LIFETIMES,
-        "config.execution.process_lifetime",
-        issues,
-      )
-    : "command";
-  return backend === undefined || processLifetime === undefined
+  let maximumTimeoutMs: number | undefined;
+  if (Object.hasOwn(value, "max_command_timeout_seconds")) {
+    const seconds = value.max_command_timeout_seconds;
+    if (
+      typeof seconds !== "number" ||
+      !Number.isFinite(seconds) ||
+      seconds <= 0 ||
+      seconds * 1_000 > 2_147_483_647
+    ) {
+      issues.push(
+        "config.execution.max_command_timeout_seconds must be positive finite seconds at most 2147483.647",
+      );
+    } else maximumTimeoutMs = Math.ceil(seconds * 1_000);
+  }
+  return backend === undefined
     ? undefined
-    : Object.freeze({ backend, processLifetime });
+    : Object.freeze({
+        backend,
+        ...(maximumTimeoutMs === undefined ? {} : { maximumTimeoutMs }),
+      });
 }
 
 export function parseConfig(
@@ -405,8 +413,8 @@ export function parseConfig(
   inspectKeys(parsed, ROOT_KEYS, "config", issues);
 
   const configVersion = own(parsed, "config_version");
-  if (configVersion !== 12) {
-    issues.push("config.config_version must be the integer 12");
+  if (configVersion !== 13) {
+    issues.push("config.config_version must be the integer 13");
   }
 
   const modelsFileValue = own(parsed, "models_file");
@@ -449,11 +457,6 @@ export function parseConfig(
   if (execution?.backend === "direct" && network?.mode !== "host") {
     issues.push('config.network.mode must be "host" when config.execution.backend is "direct"');
   }
-  if (execution?.backend === "direct" && execution.processLifetime !== "command") {
-    issues.push(
-      'config.execution.process_lifetime must be "command" when config.execution.backend is "direct"',
-    );
-  }
   if (execution?.backend === "direct" && filesystem?.cwdWritable === false) {
     issues.push(
       'config.filesystem.cwd_writable must be true when config.execution.backend is "direct"',
@@ -474,10 +477,6 @@ export function parseConfig(
     );
   }
   if (execution?.backend === "seatbelt") {
-    if (execution.processLifetime !== "command")
-      issues.push(
-        'config.execution.process_lifetime must be "command" when config.execution.backend is "seatbelt"',
-      );
     if (network?.mode === "local")
       issues.push(
         'config.network.mode must be "none" or "host" when config.execution.backend is "seatbelt"',
@@ -516,7 +515,7 @@ export function parseConfig(
   }
 
   return Object.freeze({
-    configVersion: 12,
+    configVersion: 13,
     codemode,
     mcp,
     audit,

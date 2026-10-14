@@ -14,11 +14,8 @@ export {
 export { buildSandboxSeccompFilter } from "./seccomp-boundary-filter.js";
 export {
   NETWORK_MODES,
-  PROCESS_LIFETIMES,
   type NetworkMode,
-  type ProcessLifetime,
   DEFAULT_SANDBOX_OUTPUT_LIMIT_BYTES,
-  DEFAULT_SANDBOX_TIMEOUT_MS,
   SandboxExecutionError,
   TOOL_COMMAND_NAMES,
   type CreateBubblewrapExecutorOptions,

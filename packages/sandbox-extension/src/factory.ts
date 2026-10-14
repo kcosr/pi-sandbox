@@ -321,7 +321,7 @@ function registerTools(pi: ExtensionAPI, options: SandboxExtensionOptions): void
     const base = withoutToolFields(createBashToolDefinition(cwd), "execute");
     pi.registerTool({
       ...base,
-      description: `Execute a Bash command ${executionScope}. Output is a bounded tail; earlier output is discarded rather than written to a host temporary file. Timeout defaults to 120 seconds and may be set from greater than 0 through 600 seconds.`,
+      description: `Execute a Bash command ${executionScope}. Output is a bounded tail; earlier output is discarded rather than written to a host temporary file. Timeout is optional, in positive seconds, subject to any administrator maximum.`,
       promptGuidelines: [],
       parameters: {
         ...base.parameters,
@@ -329,9 +329,9 @@ function registerTools(pi: ExtensionAPI, options: SandboxExtensionOptions): void
           ...base.parameters.properties,
           timeout: {
             ...base.parameters.properties.timeout,
-            description: "Timeout in seconds (default 120, maximum 600)",
+            description: "Optional timeout in seconds; administrator maximum applies",
             exclusiveMinimum: 0,
-            maximum: 600,
+            maximum: 2_147_483.647,
           },
         },
       },
@@ -406,8 +406,8 @@ function isSandboxAbort(error: unknown): boolean {
 }
 
 function bashTimeoutMilliseconds(seconds: number): number {
-  if (!Number.isFinite(seconds) || seconds <= 0 || seconds > 600) {
-    throw new Error("Bash timeout must be greater than 0 and at most 600 seconds");
+  if (!Number.isFinite(seconds) || seconds <= 0 || seconds * 1_000 > 2_147_483_647) {
+    throw new Error("Bash timeout must be greater than 0 and at most 2147483.647 seconds");
   }
   return Math.ceil(seconds * 1_000);
 }

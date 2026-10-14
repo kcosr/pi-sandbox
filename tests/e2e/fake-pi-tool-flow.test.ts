@@ -388,14 +388,14 @@ function nonInteractiveContext(): ExtensionContext {
 function allowAllConfig(): SandboxConfig {
   const allow = { audit: false, mode: "allow", sessionGrant: "never" } as const;
   return {
-    configVersion: 12,
+    configVersion: 13,
     codemode: { enabled: false, timeoutMs: 300000 },
     mcp: { servers: {} },
     sessions: { retentionDays: 0 },
     filesystem: { cwdWritable: true, hiddenPaths: [], deniedPaths: [] },
     audit: { enabled: false, facility: "local0" },
     modelsFile: "/etc/pi-sandbox/models.json",
-    execution: { backend: "bubblewrap", processLifetime: "command" },
+    execution: { backend: "bubblewrap" },
     identity: { mode: "disabled" },
     network: { mode: "none" },
     environment: { pi: {}, sandbox: {}, extensions: {} },

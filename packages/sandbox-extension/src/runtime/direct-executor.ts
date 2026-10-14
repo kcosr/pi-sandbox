@@ -3,17 +3,18 @@ import { access, realpath, stat } from "node:fs/promises";
 import { homedir } from "node:os";
 import path from "node:path";
 
+import { CommandRegistry } from "./command-registry.js";
+import { startSandboxProcess } from "./command-process.js";
 import {
-  createHostCommandExecutor,
-  HostCommandExecutionError,
-  type HostCommandExecutor,
-} from "./host-command/index.js";
+  resolveSandboxLimits,
+  validateCommandRequest,
+  type ResolvedSandboxLimits,
+} from "./command-limits.js";
 import {
   SandboxExecutionError,
   TOOL_COMMAND_NAMES,
   type SandboxCommandRequest,
   type SandboxCommandResult,
-  type SandboxExecutionErrorCode,
   type SandboxExecutionOptions,
   type SandboxExecutor,
   type SandboxResourceLimits,
@@ -144,20 +145,30 @@ export async function createDirectExecutor(
       cause: new Error("direct_execution_home_invalid"),
     });
   }
-  const host = createHostCommandExecutor({
-    cwd,
-    environment,
-    ...(options.limits === undefined ? {} : { limits: options.limits }),
-  });
-  return new DirectExecutor(cwd, home, commands, host);
+  // Direct tools share command scheduling with confined tools. Host Git keeps
+  // its independent HostCommandExecutor and established timing contract.
+  const inherited = Object.fromEntries(
+    Object.entries(environment).filter(
+      ([key, value]) => value !== undefined && !key.startsWith("PI_SANDBOX_"),
+    ),
+  );
+  let limits: ResolvedSandboxLimits;
+  try {
+    limits = resolveSandboxLimits(options.limits);
+  } catch (cause) {
+    throw new SandboxExecutionError("sandbox_start_failed", { cause });
+  }
+  return new DirectExecutor(cwd, home, commands, inherited, limits);
 }
 
 class DirectExecutor implements SandboxExecutor {
+  readonly #commands = new CommandRegistry();
   public constructor(
     public readonly cwd: string,
     public readonly home: string,
     public readonly commands: ToolCommandPaths,
-    private readonly host: HostCommandExecutor,
+    private readonly environment: NodeJS.ProcessEnv,
+    private readonly limits: ResolvedSandboxLimits,
   ) {}
 
   public async probe(signal?: AbortSignal): Promise<void> {
@@ -169,7 +180,11 @@ class DirectExecutor implements SandboxExecutor {
       }
     }
     const result = await this.execute(
-      { argv: [this.commands.sh, "-c", "exit 0"], maxOutputBytes: 4096 },
+      {
+        argv: [this.commands.sh, "-c", "exit 0"],
+        timeoutMs: Math.min(10_000, this.limits.maximumTimeoutMs ?? 10_000),
+        maxOutputBytes: 4096,
+      },
       signal === undefined ? {} : { signal },
     );
     if (result.exitCode !== 0) throw new SandboxExecutionError("sandbox_start_failed");
@@ -177,26 +192,43 @@ class DirectExecutor implements SandboxExecutor {
 
   public execute(
     request: SandboxCommandRequest,
-    options?: SandboxExecutionOptions,
+    options: SandboxExecutionOptions = {},
   ): Promise<SandboxCommandResult> {
-    if (request.cwd !== undefined || request.environment !== undefined) {
-      return Promise.reject(new SandboxExecutionError("sandbox_invalid_request"));
-    }
-    return this.host.execute(request, options).catch((error: unknown) => {
-      throw translateHostError(error);
-    });
+    const snapshot = { ...options };
+    return this.#commands
+      .run(snapshot.signal, async (signal) => {
+        if (request.cwd !== undefined || request.environment !== undefined)
+          throw new SandboxExecutionError("sandbox_invalid_request");
+        const validated = validateCommandRequest(request, this.limits);
+        if (signal.aborted) throw signal.reason;
+        const child = startSandboxProcess({
+          executable: validated.argv[0],
+          argv: validated.argv.slice(1),
+          cwd: this.cwd,
+          environment: this.environment,
+          stdin: validated.stdin,
+          timeoutMs: validated.timeoutMs,
+          maxOutputBytes: validated.maxOutputBytes,
+          ...(snapshot.onStdout === undefined ? {} : { onStdout: snapshot.onStdout }),
+          ...(snapshot.onStderr === undefined ? {} : { onStderr: snapshot.onStderr }),
+        });
+        const abort = () => child.abort(signal.reason as SandboxExecutionError);
+        signal.addEventListener("abort", abort, { once: true });
+        if (signal.aborted) abort();
+        try {
+          return await child.result;
+        } finally {
+          signal.removeEventListener("abort", abort);
+        }
+      })
+      .catch((cause: unknown) => {
+        throw cause instanceof SandboxExecutionError
+          ? cause
+          : new SandboxExecutionError("sandbox_process_failed", { cause });
+      });
   }
 
   public close(): Promise<void> {
-    return this.host.close();
+    return this.#commands.close();
   }
-}
-
-function translateHostError(error: unknown): SandboxExecutionError {
-  if (!(error instanceof HostCommandExecutionError)) {
-    return new SandboxExecutionError("sandbox_process_failed", { cause: error });
-  }
-  const suffix = error.code.slice("host_command_".length);
-  const code = `sandbox_${suffix}` as SandboxExecutionErrorCode;
-  return new SandboxExecutionError(code, { cause: error });
 }

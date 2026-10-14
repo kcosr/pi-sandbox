@@ -90,14 +90,14 @@ function config(
   overrides: Partial<Record<ToolName, "allow" | "ask" | "deny" | "disabled">> = {},
 ): SandboxConfig {
   return {
-    configVersion: 12,
+    configVersion: 13,
     codemode: { enabled: false, timeoutMs: 300000 },
     mcp: { servers: {} },
     sessions: { retentionDays: 0 },
     filesystem: { cwdWritable: true, deniedPaths: [], hiddenPaths: [] },
     audit: { enabled: false, facility: "local0" },
     modelsFile: "/etc/pi-sandbox/models.json",
-    execution: { backend: "bubblewrap", processLifetime: "command" },
+    execution: { backend: "bubblewrap" },
     identity: { mode: "disabled" },
     network: { mode: "none" },
     environment: { pi: {}, sandbox: {}, extensions: {} },
@@ -981,7 +981,7 @@ describe("Pi Sandbox extension", () => {
     const executor = fakeExecutor();
     await start(pi, executor, {
       ...config(),
-      execution: { backend: "direct", processLifetime: "command" },
+      execution: { backend: "direct" },
       network: { mode: "host" },
     });
 
@@ -1004,14 +1004,14 @@ describe("Pi Sandbox extension", () => {
       expect.anything(),
     );
 
-    await executeTool(pi, "bash", { command: "true", timeout: 600 });
-    expect(execute.mock.calls.at(-1)?.[0].timeoutMs).toBe(600_000);
+    await executeTool(pi, "bash", { command: "true", timeout: 3600 });
+    expect(execute.mock.calls.at(-1)?.[0].timeoutMs).toBe(3_600_000);
     await expect(executeTool(pi, "bash", { command: "true", timeout: 0 })).rejects.toThrow(
-      "greater than 0 and at most 600",
+      "greater than 0 and at most 2147483.647",
     );
-    await expect(executeTool(pi, "bash", { command: "true", timeout: 600.1 })).rejects.toThrow(
-      "greater than 0 and at most 600",
-    );
+    await expect(
+      executeTool(pi, "bash", { command: "true", timeout: 2_147_483.648 }),
+    ).rejects.toThrow("greater than 0 and at most 2147483.647");
     await executeTool(pi, "bash", { command: "true" });
     expect(execute.mock.calls.at(-1)?.[0].timeoutMs).toBeUndefined();
   });

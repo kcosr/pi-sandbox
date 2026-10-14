@@ -33,14 +33,13 @@ executables:
 
 ```json
 {
-  "version": 5,
+  "version": 6,
   "mode": "owned",
   "backend": {
     "kind": "bubblewrap",
     "executable": "/usr/bin/bwrap",
     "runtime": "/usr/bin/node",
     "network": "none",
-    "processLifetime": "command",
     "cwdWritable": true,
     "hiddenPaths": [],
     "environment": {}
@@ -64,22 +63,25 @@ back to host execution. Among competing extension tool names or user-shell
 handlers, pinned Pi uses the first applicable extension in runner order; load
 sandbox before competing replacements. Other extension JavaScript remains host code.
 
-Standalone configuration version 5 contains execution settings only. To update a
-version-2 configuration, remove `tools` and set `version` to `5`. Old versions and
-unknown fields are rejected. Version-4 execution shapes retain their fields with
-version 5; Seatbelt adds the explicit backend below. Approvals are part of managed Pi Sandbox; its TOML
-configuration and mandatory policy remain unchanged.
+Standalone configuration version 6 contains execution settings only. Old versions
+and removed `processLifetime` fields are rejected; there is no compatibility parser.
+Approvals remain part of managed Pi Sandbox's TOML policy.
 
-Bubblewrap requires Linux user namespaces and the GNU command prerequisites
-listed in the repository's installation guide. `network: "local"` enables only
-the sandbox's loopback TCP/UDP; `host` shares host networking. `processLifetime:
-"sandbox"` preserves background programs between completed operations and runs
-up to four commands concurrently, with a maximum of 64 outstanding requests.
-Excess submissions fail with `sandbox_queue_full`. Default
-examples use command lifetime, which cleans up descendants after each operation.
-Cancellation and errors may clean up all sandbox programs in either mode. In
-sandbox lifetime this interrupts other active calls; queued work starts only
-after cleanup finishes. Cancelling queued work affects only that request.
+The optional common `maximumTimeoutMs` field caps every command, independent of
+backend. It accepts positive finite milliseconds through 2147483647. Without a
+cap or caller timeout there is no timer. An omitted caller timeout uses the cap;
+a shorter value wins; a value above it is rejected. Timers start at successful
+launch, excluding approvals, file coordination and transport waiting, and remain
+active through output draining. Each command in a file operation is timed separately.
+Host Git, MCP and Code Mode keep their own timing contracts.
+
+Bubblewrap requires Linux user namespaces and the documented GNU prerequisites.
+`network: "local"` enables sandbox-loopback TCP/UDP; `host` shares host networking.
+All backends retain Pi's scheduling without a serial queue or fixed command-count
+limits. Same-file mutations remain coordinated. Background descendants may survive
+completion. Cancellation and failure affect only their request; active group
+cleanup is best effort. Linux final shutdown terminates its namespace; fatal worker
+or transport failure can abort the executor. No watcher or monitoring daemon is added.
 
 The extension owns one backend per Pi process. Conversation switching keeps that
 backend. Quit closes it; extension
@@ -95,7 +97,7 @@ For explicit host execution, replace `backend` with:
 ```
 
 Direct mode keeps the existing platform-specific command prerequisites and
-command-scoped cleanup.
+best-effort command-group cleanup.
 
 For opt-in macOS Seatbelt, replace `backend` with:
 
@@ -120,7 +122,7 @@ except writable CWD and executor-owned real host scratch. HOME and TMPDIR use
 that scratch; literal `/tmp` is not private. It accepts no launcher override,
 worker runtime, `hiddenPaths`, or `processLifetime` field.
 
-Commands are serial, with bounded input/output/time and admission. Normal
+Commands may overlap, with bounded input/output and optional command timeouts. Normal
 foreground completion can leave background descendants alive, including those
 still in its process group. Cancellation, timeout, output failure and close
 attempt process-group cleanup only while the direct child remains active.

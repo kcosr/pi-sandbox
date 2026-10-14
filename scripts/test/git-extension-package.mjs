@@ -93,7 +93,7 @@ async function scenario(directory, variant, artifacts, backend) {
   await writeFile(
     sandboxConfig,
     JSON.stringify({
-      version: 5,
+      version: 6,
       mode: "owned",
       userBash: false,
       backend:
@@ -103,7 +103,6 @@ async function scenario(directory, variant, artifacts, backend) {
               executable: "/usr/bin/bwrap",
               runtime: process.execPath,
               network: "none",
-              processLifetime: "command",
               cwdWritable: true,
               hiddenPaths: [],
               environment: {},

@@ -58,7 +58,7 @@ Options:
   --pi-source-archive FILE  Use this source archive instead of downloading it
   --out DIRECTORY          Write release output here (default: release)
   --config FILE            Package this default config.toml (default: the
-                            platform's Bubblewrap or direct-mode config)
+                            platform's Bubblewrap or Seatbelt config)
   --models FILE            Package this default models.json
                             (default: config/default/models.json)
   --distribution FILE      Select extensions and installation layout

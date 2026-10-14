@@ -31,15 +31,13 @@ describe.skipIf(!AVAILABLE)("Bubblewrap transport progress", () => {
     await rm(directory, { recursive: true, force: true });
   });
 
-  it.each(["command", "sandbox"] as const)(
-    "%s acknowledgements tolerate a slowly progressing input backlog",
-    async (processLifetime) => {
-      const worker = path.join(directory, "slow-input-worker.mjs");
-      // Apply real pipe backpressure while delivering partial frames steadily.
-      // A fixed 10s completion/retirement deadline would kill healthy work.
-      await writeFile(
-        worker,
-        `import { existsSync, writeFileSync } from "node:fs";
+  it("a command timeout excludes a slowly progressing input backlog", async () => {
+    const worker = path.join(directory, "slow-input-worker.mjs");
+    // Apply real pipe backpressure while delivering partial frames steadily.
+    // A fixed 10s completion/retirement deadline would kill healthy work.
+    await writeFile(
+      worker,
+      `import { existsSync, writeFileSync } from "node:fs";
 import { setTimeout as delay } from "node:timers/promises";
 import { runSandboxWorker } from ${JSON.stringify(path.resolve("packages/sandbox-extension/src/runtime/worker.ts"))};
 const on = process.stdin.on.bind(process.stdin);
@@ -69,46 +67,52 @@ process.stdin.on = (event, listener) => {
 };
 await runSandboxWorker();
 `,
-      );
-      executor = await createBubblewrapExecutor({
-        cwd,
-        bubblewrapPath: BWRAP_PATH,
-        processLifetime,
-        workerCommand: [testSandboxWorkerCommand()[0], worker],
-      });
-      const first = executor.execute({
-        argv: [
-          "/bin/sh",
-          "-c",
-          "touch first-started; while ! test -e release; do sleep 0.01; done; printf first",
-        ],
-        timeoutMs: 30_000,
-      });
-      const firstSucceeded = expect(first).resolves.toMatchObject({
-        exitCode: 0,
-        stdout: Buffer.from("first"),
-      });
-      await expect.poll(() => existsSync(path.join(cwd, "first-started"))).toBe(true);
-      await writeFile(path.join(cwd, "throttle"), "");
-      const started = Date.now();
-      const second = executor.execute({
-        argv: ["/usr/bin/wc", "-c"],
-        stdin: Buffer.alloc(2 * 1024 * 1024, 97),
-        timeoutMs: 30_000,
-      });
-      const secondSucceeded = expect(second).resolves.toMatchObject({
-        exitCode: 0,
-        stdout: Buffer.from("2097152\n"),
-      });
-      await expect.poll(() => existsSync(path.join(cwd, "throttling"))).toBe(true);
-      await writeFile(path.join(cwd, "release"), "");
-      await Promise.all([firstSucceeded, secondSucceeded]);
-      expect(Date.now() - started).toBeGreaterThanOrEqual(11_000);
-      await expect(executor.execute({ argv: ["/bin/printf", "healthy"] })).resolves.toMatchObject({
-        exitCode: 0,
-        stdout: Buffer.from("healthy"),
-      });
-    },
-    40_000,
-  );
+    );
+    executor = await createBubblewrapExecutor({
+      cwd,
+      bubblewrapPath: BWRAP_PATH,
+      workerCommand: [testSandboxWorkerCommand()[0], worker],
+    });
+    const first = executor.execute({
+      argv: [
+        "/bin/sh",
+        "-c",
+        "touch first-started; while ! test -e release; do sleep 0.01; done; printf first",
+      ],
+      timeoutMs: 30_000,
+    });
+    const firstSucceeded = expect(first).resolves.toMatchObject({
+      exitCode: 0,
+      stdout: Buffer.from("first"),
+    });
+    await expect.poll(() => existsSync(path.join(cwd, "first-started"))).toBe(true);
+    await writeFile(path.join(cwd, "throttle"), "");
+    const started = Date.now();
+    const second = executor.execute({
+      argv: ["/usr/bin/wc", "-c"],
+      stdin: Buffer.alloc(2 * 1024 * 1024, 97),
+      timeoutMs: 1_000,
+    });
+    const secondSucceeded = expect(second).resolves.toMatchObject({
+      exitCode: 0,
+      stdout: Buffer.from("2097152\n"),
+    });
+    await expect.poll(() => existsSync(path.join(cwd, "throttling"))).toBe(true);
+    const cancelled = new AbortController();
+    const queued = executor.execute(
+      { argv: ["/bin/touch", "never-launched"] },
+      { signal: cancelled.signal },
+    );
+    const neverLaunched = expect(queued).rejects.toMatchObject({ code: "sandbox_aborted" });
+    cancelled.abort();
+    await neverLaunched;
+    await writeFile(path.join(cwd, "release"), "");
+    await Promise.all([firstSucceeded, secondSucceeded]);
+    expect(Date.now() - started).toBeGreaterThanOrEqual(11_000);
+    expect(existsSync(path.join(cwd, "never-launched"))).toBe(false);
+    await expect(executor.execute({ argv: ["/bin/printf", "healthy"] })).resolves.toMatchObject({
+      exitCode: 0,
+      stdout: Buffer.from("healthy"),
+    });
+  }, 40_000);
 });

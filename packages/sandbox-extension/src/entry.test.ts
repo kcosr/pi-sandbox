@@ -13,7 +13,7 @@ import { LINUX_TOOL_COMMANDS, type SandboxExecutor } from "./runtime/index.js";
 type Handler = (event: { reason?: string }, ctx: ExtensionContext) => unknown;
 function directConfig() {
   return parseSandboxConfig({
-    version: 5,
+    version: 6,
     mode: "owned",
     backend: { kind: "direct", environment: {} },
     userBash: false,

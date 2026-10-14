@@ -1,19 +1,13 @@
 import { constants } from "node:fs";
 import { open } from "node:fs/promises";
 import { isAbsolute, normalize } from "node:path";
-import {
-  NETWORK_MODES,
-  PROCESS_LIFETIMES,
-  type NetworkMode,
-  type ProcessLifetime,
-} from "./runtime/contracts.js";
+import { NETWORK_MODES, type NetworkMode } from "./runtime/contracts.js";
 
 export interface BubblewrapBackendConfig {
   readonly kind: "bubblewrap";
   readonly executable: string;
   readonly runtime: string;
   readonly network: NetworkMode;
-  readonly processLifetime: ProcessLifetime;
   readonly cwdWritable: boolean;
   readonly hiddenPaths: readonly string[];
   readonly environment: Readonly<Record<string, string>>;
@@ -30,7 +24,8 @@ export interface SeatbeltBackendConfig {
   readonly environment: Readonly<Record<string, string>>;
 }
 interface CommonConfig {
-  readonly version: 5;
+  readonly version: 6;
+  readonly maximumTimeoutMs?: number;
   readonly userBash: boolean;
 }
 export interface OwnedSandboxConfig extends CommonConfig {
@@ -43,8 +38,15 @@ function record(value: unknown): asserts value is Record<string, unknown> {
   if (value === null || typeof value !== "object" || Array.isArray(value))
     throw new Error("Expected configuration object");
 }
-function keys(value: Record<string, unknown>, required: readonly string[]): void {
-  if (Object.keys(value).sort().join(",") !== [...required].sort().join(","))
+function keys(
+  value: Record<string, unknown>,
+  required: readonly string[],
+  optional: readonly string[] = [],
+): void {
+  if (
+    required.some((key) => !Object.hasOwn(value, key)) ||
+    Object.keys(value).some((key) => !required.includes(key) && !optional.includes(key))
+  )
     throw new Error("Invalid sandbox configuration keys");
 }
 function absolute(value: unknown): asserts value is string {
@@ -70,8 +72,16 @@ function environment(value: unknown): Readonly<Record<string, string>> {
 }
 export function parseSandboxConfig(value: unknown): SandboxExtensionConfig {
   record(value);
-  keys(value, ["version", "mode", "backend", "userBash"]);
-  if (value.version !== 5 || value.mode !== "owned" || typeof value.userBash !== "boolean")
+  keys(value, ["version", "mode", "backend", "userBash"], ["maximumTimeoutMs"]);
+  if (
+    Object.hasOwn(value, "maximumTimeoutMs") &&
+    (typeof value.maximumTimeoutMs !== "number" ||
+      !Number.isFinite(value.maximumTimeoutMs) ||
+      value.maximumTimeoutMs <= 0 ||
+      value.maximumTimeoutMs > 2_147_483_647)
+  )
+    throw new Error("maximumTimeoutMs must be positive finite milliseconds at most 2147483647");
+  if (value.version !== 6 || value.mode !== "owned" || typeof value.userBash !== "boolean")
     throw new Error("Unsupported sandbox configuration");
   record(value.backend);
   const input = value.backend;
@@ -104,7 +114,6 @@ export function parseSandboxConfig(value: unknown): SandboxExtensionConfig {
       "executable",
       "runtime",
       "network",
-      "processLifetime",
       "cwdWritable",
       "hiddenPaths",
       "environment",
@@ -113,7 +122,6 @@ export function parseSandboxConfig(value: unknown): SandboxExtensionConfig {
     absolute(input.runtime);
     if (
       !NETWORK_MODES.includes(input.network as NetworkMode) ||
-      !PROCESS_LIFETIMES.includes(input.processLifetime as ProcessLifetime) ||
       typeof input.cwdWritable !== "boolean" ||
       !Array.isArray(input.hiddenPaths)
     )
@@ -125,17 +133,19 @@ export function parseSandboxConfig(value: unknown): SandboxExtensionConfig {
       executable: input.executable,
       runtime: input.runtime,
       network: input.network as NetworkMode,
-      processLifetime: input.processLifetime as ProcessLifetime,
       cwdWritable: input.cwdWritable,
       hiddenPaths: Object.freeze([...hiddenPaths] as string[]),
       environment: environment(input.environment),
     };
   } else throw new Error("Unsupported sandbox backend");
   return Object.freeze({
-    version: 5,
+    version: 6,
     mode: "owned",
     backend: Object.freeze(backend),
     userBash: value.userBash,
+    ...(value.maximumTimeoutMs === undefined
+      ? {}
+      : { maximumTimeoutMs: value.maximumTimeoutMs as number }),
   });
 }
 export async function readSandboxConfig(file: string): Promise<SandboxExtensionConfig> {

@@ -226,6 +226,10 @@ async function createProbedExecutor(
   ambientEnvironment: NodeJS.ProcessEnv,
 ): Promise<SandboxExecutor> {
   let executor: SandboxExecutor;
+  const limits =
+    config.execution.maximumTimeoutMs === undefined
+      ? {}
+      : { maximumTimeoutMs: config.execution.maximumTimeoutMs };
   try {
     if (config.execution.backend === "bubblewrap") {
       const bubblewrap = buildLayout.bubblewrap;
@@ -234,9 +238,9 @@ async function createProbedExecutor(
       }
       executor = await createBubblewrapExecutor({
         cwd,
+        limits,
         bubblewrapPath: bubblewrap.path,
         networkMode: config.network.mode,
-        processLifetime: config.execution.processLifetime,
         cwdWritable: config.filesystem.cwdWritable,
         hiddenPaths: config.filesystem.hiddenPaths,
         ...(buildLayout.toolBundle ? { toolBundle: buildLayout.toolBundle } : {}),
@@ -247,6 +251,7 @@ async function createProbedExecutor(
         throw new Error("Seatbelt does not support local networking");
       executor = await createSeatbeltExecutor({
         cwd,
+        limits,
         cwdWritable: config.filesystem.cwdWritable,
         deniedPaths: config.filesystem.deniedPaths,
         ...(buildLayout.toolBundle ? { toolBundle: buildLayout.toolBundle } : {}),
@@ -256,6 +261,7 @@ async function createProbedExecutor(
     } else if (config.execution.backend === "direct") {
       executor = await createDirectExecutor({
         cwd,
+        limits,
         environment,
         ambientEnvironment,
         ...(buildLayout.toolBundle ? { toolBundle: buildLayout.toolBundle } : {}),
@@ -309,8 +315,6 @@ export function assertExecutionPlatform(
     if (platform !== "darwin") throw new Error("Seatbelt execution is supported only on macOS");
     if (config.network.mode === "local")
       throw new Error("Seatbelt execution requires network.mode = none or host");
-    if (config.execution.processLifetime !== "command")
-      throw new Error("Seatbelt execution requires execution.process_lifetime = command");
     if (config.filesystem.hiddenPaths.length > 0)
       throw new Error("Seatbelt execution requires filesystem.hidden_paths = []");
   } else if (config.filesystem.deniedPaths.length > 0) {
@@ -318,9 +322,6 @@ export function assertExecutionPlatform(
   }
   if (config.execution.backend === "direct" && config.network.mode !== "host") {
     throw new Error("Direct execution requires network.mode = host");
-  }
-  if (config.execution.backend === "direct" && config.execution.processLifetime !== "command") {
-    throw new Error("Direct execution requires execution.process_lifetime = command");
   }
   if (config.execution.backend === "direct" && !config.filesystem.cwdWritable) {
     throw new Error("Direct execution requires filesystem.cwd_writable = true");
