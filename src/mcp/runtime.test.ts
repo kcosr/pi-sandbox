@@ -6,6 +6,8 @@ import { PolicyEngine } from "../permissions/index.js";
 import { ManagedMcpRuntime, type McpCatalogItem, type ManagedMcpOptions } from "./runtime.js";
 import type { ManagedMcpPreferences } from "./preferences.js";
 import { mcpSubject, matchesMcpPattern } from "./policy.js";
+import { parseMcpConfig } from "../config/mcp.js";
+import { resolveMcpServers } from "./resolve.js";
 
 const allow = { mode: "allow", sessionGrant: "never", audit: false } as const;
 const config: McpServerConfig = {
@@ -470,6 +472,41 @@ describe("MCP dispatch lifecycle", () => {
 });
 
 describe("HTTP dispatch and protocol cleanup", () => {
+  it("passes configured bearer credentials through to the HTTP transport without diagnostic disclosure", async () => {
+    const parsed = parseMcpConfig(
+      {
+        servers: {
+          docs: {
+            enabled: true,
+            transport: "http",
+            exposure: "direct",
+            url: "https://example.com/mcp",
+            bearer_token_from_env: "MCP_TOKEN",
+            default_policy: { mode: "allow", session_grant: "never", audit: false },
+          },
+        },
+      },
+      undefined,
+    );
+    const servers = await resolveMcpServers(parsed, { MCP_TOKEN: "private-test-token" }, () => {
+      throw new Error("HTTP credentials do not require account lookup");
+    });
+    const runtime: ManagedMcpRuntime = new ManagedMcpRuntime({
+      cwd: "/work",
+      servers,
+      selected: () => true,
+      getPolicy: () => new PolicyEngine({}, runtime.resolveSubject),
+      getAuditor: () => undefined,
+    });
+    let options!: ManagedMcpOptions;
+    runtime.extension((value) => {
+      options = value;
+      return () => {};
+    });
+    const transport = options.createTransport({ name: "docs" }) as StreamableHttpTransport;
+    expect(transport.options.headers).toEqual({ Authorization: "Bearer private-test-token" });
+    expect(runtime.diagnostics()).not.toContain("private-test-token");
+  });
   it("permits bounded cancellation and DELETE after invocation abort but rejects another tool call", async () => {
     const { runtime, connection } = setup();
     let options!: ManagedMcpOptions;

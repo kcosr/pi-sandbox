@@ -267,7 +267,7 @@ enabled = true
 transport = "http"
 url = "https://mcp.example/mcp?workspace=shared"
 exposure = "direct"
-headers_from_env = { Authorization = "DOCS_AUTHORIZATION" }
+bearer_token_from_env = "DOCS_TOKEN"
 
 [mcp.servers.docs.default_policy]
 mode = "ask"
@@ -303,7 +303,13 @@ grant covers exactly one server/tool, never its wildcard rule or an entire serve
 HTTP URLs require HTTPS, except HTTP to literal `localhost`, `127.0.0.1`, or
 `[::1]`. `headers` supplies literal header values; `headers_from_env` maps each
 header name to one effective Pi environment variable. Supply the complete value,
-including `Bearer ` for bearer authentication. Transport-controlled headers and
+including `Bearer ` for bearer authentication. Alternatively, HTTP-only
+`bearer_token_from_env = "DOCS_TOKEN"` reads a raw token from that effective Pi
+environment variable and supplies `Authorization: Bearer <token>`. Supply only
+the token, without the `Bearer ` prefix or whitespace. This setting cannot be
+combined with an `Authorization` entry in either header map, regardless of case;
+other headers can still be configured. The generated header counts toward the
+same per-value and combined byte limits. Transport-controlled headers and
 CR/LF are rejected, and literal/referenced destinations must be disjoint without
 regard to case. Redirects and browser OAuth are unsupported.
 
