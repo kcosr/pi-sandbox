@@ -509,7 +509,7 @@ async function main() {
   validateNativeToolBundle(distribution.toolBundle, target.os, process.arch);
   options.config ??= join(
     repositoryRoot,
-    target.os === "darwin" ? "config/default/config.direct.toml" : "config/default/config.toml",
+    target.os === "darwin" ? "config/default/config.seatbelt.toml" : "config/default/config.toml",
   );
   validateLock(lock);
   await assertRegularFile(options.config, "default configuration");

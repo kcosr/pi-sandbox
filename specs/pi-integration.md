@@ -401,7 +401,7 @@ rejections remain enforced. The setting applies to built-ins and user shell;
 managed host tools retain their declared host authority.
 
 Managed schema 12 additionally requires `[filesystem].denied_paths`, empty for
-Bubblewrap/direct. Opt-in macOS Seatbelt rejects hidden paths, sandbox lifetime
+Bubblewrap/direct. macOS Seatbelt rejects hidden paths, sandbox lifetime
 and local networking, and accepts canonical existing directory denials. A denied
 ancestor admits only CWD; explicit interior denials remain effective. Denials are
 access restrictions, not empty masks. CWD and real host scratch writes follow

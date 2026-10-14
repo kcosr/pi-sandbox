@@ -343,7 +343,7 @@ pinned Pi build seam before its cache or PATH search.
 
 ## Seatbelt executor
 
-Opt-in macOS `seatbelt` execution uses the fixed system `/usr/bin/sandbox-exec`
+The macOS packaged `seatbelt` backend uses the fixed system `/usr/bin/sandbox-exec`
 launcher. The same seven-tool factory and user shell adapter supply direct argv,
 bounded input/output, cancellation and output callbacks through the backend-neutral
 executor. It uses the existing macOS GNU command profile or selected bundled commands. The host application,

@@ -2,7 +2,7 @@
 
 This project provides a policy-gated execution boundary in a managed Pi
 distribution. Linux supports Bubblewrap and explicit direct execution;
-macOS supports direct execution and opt-in Seatbelt execution.
+macOS packages select Seatbelt execution by default and support explicit direct execution.
 
 The current product contract is split by subject across `docs/`:
 

@@ -41,8 +41,8 @@ launcher contract; admission checks do not make host-side resource reads atomic.
 
 ## macOS Seatbelt
 
-Seatbelt is an opt-in macOS policy backend using the trusted system
-`/usr/bin/sandbox-exec`; direct remains the packaged default. It constrains tool
+Seatbelt is the macOS packaged policy backend using the trusted system
+`/usr/bin/sandbox-exec`. It constrains tool
 children, not Pi or managed host tools. Ordinary host paths stay readable, while
 ordinary file writes are limited to the allowed CWD and executor-owned real host
 scratch directories. `cwd_writable = false` removes CWD write authority.

@@ -417,7 +417,7 @@ The installed configuration uses `config_version = 12` and must include the
 base tool policy, explicit `filesystem.hidden_paths` and `filesystem.denied_paths` (both empty by default), and explicit `[environment.pi]`,
 `[environment.sandbox]`, and `[environment.extensions]` tables, even when the
 environment tables are empty. Set `execution.backend = "bubblewrap"` on Linux
-for containment, opt into `execution.backend = "seatbelt"` on macOS for the documented Seatbelt policy, or use `execution.backend = "direct"` on Linux/macOS for
+for containment, use `execution.backend = "seatbelt"` on macOS for the documented Seatbelt policy, or use `execution.backend = "direct"` on Linux/macOS for
 policy-gated execution in the user's host security context. Direct mode also
 requires `network.mode = "host"`, `filesystem.cwd_writable = true`, and
 empty `filesystem.hidden_paths` and `filesystem.denied_paths`; macOS
@@ -437,9 +437,11 @@ schema 8 also need the required session policy. Alternatively, explicitly
 replace configuration with the packaged defaults.
 
 To migrate schema 11, add `denied_paths = []` to `[filesystem]` and set
-`config_version = 12`. Seatbelt is optional: the macOS packaged default remains
-direct. The complete opt-in example is `config/default/config.seatbelt.toml`.
-It requires `network.mode` of `none` or `host`, command lifetime, empty hidden
+`config_version = 12`. The macOS packaged default selects Seatbelt with networking
+disabled, using `config/default/config.seatbelt.toml`. Ordinary upgrades preserve
+existing configuration, including an explicit direct backend. Builds can select
+`config/default/config.direct.toml` with `--config` when direct execution is intended.
+Seatbelt requires `network.mode` of `none` or `host`, command lifetime, empty hidden
 paths, disabled broker identity and disabled audit. No helper service, watcher,
 Python runtime or private namespace is installed. macOS arm64 and x86-64 release
 qualification must run separately.

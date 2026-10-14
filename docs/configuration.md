@@ -46,13 +46,14 @@ The required `execution` table selects `bubblewrap`, `seatbelt`, or `direct`. Bu
 available only on Linux. Direct execution is available on Linux and macOS and
 runs approved built-in operations with the invoking user's ordinary host
 filesystem and process authority. It is an explicit operating mode, never a
-fallback after a sandbox failure. Seatbelt is an opt-in macOS backend with the distinct contract below. macOS requires `identity.mode = disabled`.
+fallback after a sandbox failure. Seatbelt is the macOS packaged selection with the distinct contract below. macOS requires `identity.mode = disabled`.
 
 The required `network` table selects `none`, `local`, or `host` for built-in tools and
 shell commands. Bubblewrap supports all three. Seatbelt accepts only `none` or `host`; `local` is rejected. Direct execution requires `host` so a
 configuration can never claim an isolation mode that the backend does not
 enforce. The Linux packaged default is Bubblewrap plus `none`; the macOS
-packaged default is direct plus `host`.
+packaged default is Seatbelt plus `none`. Both configuration files explicitly
+set `execution.backend`; a missing backend is an error.
 
 The required `[extensions]` table selects from the extensions compiled
 into this release. An empty table selects none. Each selected extension parses
@@ -446,7 +447,7 @@ hidden directory.
 
 ### Denied directories (Seatbelt)
 
-Seatbelt is opt-in; the macOS packaged default stays direct. Start with
+Seatbelt is the macOS packaged default. Start with
 `config/default/config.seatbelt.toml`, or use these fields in a complete schema-12
 configuration:
 
