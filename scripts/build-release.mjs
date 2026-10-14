@@ -639,7 +639,6 @@ async function main() {
         "packages/codemode/test/managed-limits.test.ts",
         "packages/coding-agent/test/args.test.ts",
         "packages/coding-agent/test/print-mode.test.ts",
-        "packages/coding-agent/test/resource-loader-theme.test.ts",
         "packages/coding-agent/test/compaction-serialization.test.ts",
         "packages/coding-agent/test/suite/agent-session-prompt.test.ts",
         "packages/coding-agent/test/mcp-extension.test.ts",
@@ -651,6 +650,12 @@ async function main() {
       ],
       { cwd: sourceRoot, env: { ...cleanEnvironment, PI_OFFLINE: "1" } },
     );
+
+    // This upstream fixture resolves bundled themes from its package CWD.
+    await run("npm", ["exec", "--", "vitest", "run", "test/resource-loader-theme.test.ts"], {
+      cwd: join(sourceRoot, "packages/coding-agent"),
+      env: { ...cleanEnvironment, PI_OFFLINE: "1" },
+    });
 
     await copyPrivateEntrypoint(sourceRoot);
     const stagingDirectory = join(temporaryDirectory, "release-stage");

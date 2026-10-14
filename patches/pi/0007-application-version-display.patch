@@ -1,5 +1,5 @@
 diff --git a/packages/coding-agent/src/main.ts b/packages/coding-agent/src/main.ts
-index 89f9250..cc2bfc8 100644
+index eb8f0a0..7d46a99 100644
 --- a/packages/coding-agent/src/main.ts
 +++ b/packages/coding-agent/src/main.ts
 @@ -571,6 +571,8 @@ async function promptForMissingSessionCwd(
@@ -11,7 +11,7 @@ index 89f9250..cc2bfc8 100644
  	extensionFactories?: InlineExtension[];
  	createModelRuntime?: ModelRuntimeFactory;
  	/** Reject a target workspace before reading its settings or resources. */
-@@ -645,7 +647,7 @@ export async function main(args: string[], options?: MainOptions) {
+@@ -647,7 +649,7 @@ export async function main(args: string[], options?: MainOptions) {
  	time("parseArgs");
  
  	if (parsed.version) {
@@ -29,7 +29,7 @@ index 89f9250..cc2bfc8 100644
  			startupDiagnostics,
  			modelFallbackMessage,
 diff --git a/packages/coding-agent/src/modes/interactive/interactive-mode.ts b/packages/coding-agent/src/modes/interactive/interactive-mode.ts
-index 9d0caf3..8485bdc 100644
+index 1a91e62..2d0f5d3 100644
 --- a/packages/coding-agent/src/modes/interactive/interactive-mode.ts
 +++ b/packages/coding-agent/src/modes/interactive/interactive-mode.ts
 @@ -423,6 +423,8 @@ function formatLoginProviderCompletionDescription(provider: LoginProviderComplet
@@ -56,7 +56,7 @@ index 9d0caf3..8485bdc 100644
  			// Build startup instructions using keybinding hint helpers
 diff --git a/packages/coding-agent/test/managed-version.test.ts b/packages/coding-agent/test/managed-version.test.ts
 new file mode 100644
-index 0000000..f9b4c3e
+index 0000000..f85417c
 --- /dev/null
 +++ b/packages/coding-agent/test/managed-version.test.ts
 @@ -0,0 +1,30 @@
@@ -80,13 +80,13 @@ index 0000000..f9b4c3e
 +	vi.unstubAllEnvs();
 +	rmSync(agentDir, { recursive: true, force: true });
 +});
-+test.each([undefined, "1.1.0+ps.0.6.0", "1.1.0+ps.0.6.0.dev.g1234567"])(
++test.each([undefined, "1.2.0+ps.0.6.0", "1.2.0+ps.0.6.0.dev.g1234567"])(
 +	"version output accepts a presentation override: %s", async (displayVersion) => {
 +		const log = vi.spyOn(console, "log").mockImplementation(() => {});
 +		const exit = new Error("version exit");
 +		vi.spyOn(process, "exit").mockImplementation(() => { throw exit; });
 +		await expect(main(["--version"], displayVersion === undefined ? {} : { displayVersion })).rejects.toBe(exit);
 +		expect(log).toHaveBeenCalledExactlyOnceWith(displayVersion ?? VERSION);
-+		expect(VERSION).toBe("1.1.0");
++		expect(VERSION).toBe("1.2.0");
 +	},
 +);
