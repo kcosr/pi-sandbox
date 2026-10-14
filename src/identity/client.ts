@@ -1,6 +1,7 @@
 import { createConnection } from "node:net";
 
 import {
+  COMMAND_CLASS_MODES,
   POLICY_MODES,
   NETWORK_MODES,
   SESSION_GRANT_POLICIES,
@@ -14,10 +15,18 @@ import {
   type ManagedEnvironment,
   type NetworkConfig,
   type SandboxConfig,
+  type CommandClassPolicy,
   type SubjectPolicy,
   type ToolPolicy,
   type IdentityOverrides,
 } from "../domain/index.js";
+import { COMMAND_CLASSES, type CommandClass } from "../permissions/bash/contracts.js";
+import {
+  COMMAND_CLASS_TOOL,
+  commandClassAllowRequirements,
+  commandClassPolicyViolation,
+  commandClassPreconditionIssues,
+} from "../permissions/command-classes.js";
 
 export const IDENTITY_BROKER_PROTOCOL_VERSION = 7;
 export const IDENTITY_BROKER_TIMEOUT_MS = 10_000;
@@ -164,6 +173,7 @@ export function applyIdentityOverrides(
         : Object.freeze({ ...overrides.tools[toolName], audit: base.tools[toolName]!.audit }),
     ]),
   ) as Record<string, ToolPolicy>;
+  assertEffectiveCommandClassPolicies(tools);
   return Object.freeze({
     configVersion: 13,
     codemode: base.codemode,
@@ -179,6 +189,21 @@ export function applyIdentityOverrides(
     extensions: base.extensions,
     tools: Object.freeze(tools),
   });
+}
+
+/** A broker overlay can change read-tool policies without the bash table that relied on them. */
+function assertEffectiveCommandClassPolicies(tools: Readonly<Record<string, ToolPolicy>>): void {
+  const issues = commandClassPreconditionIssues(tools, "tools");
+  if (issues.length === 0) return;
+  const remedies = COMMAND_CLASSES.filter(
+    (commandClass) => tools[COMMAND_CLASS_TOOL]?.commandClasses?.[commandClass]?.mode === "allow",
+  ).map(
+    (commandClass) =>
+      `allow ${commandClassAllowRequirements(commandClass).join(", ")} or use a stricter ${COMMAND_CLASS_TOOL}.${commandClass} mode`,
+  );
+  throw new Error(
+    `effective tool policy after identity overrides is invalid: ${issues.join("; ")}; ${remedies.join("; ")} in the base configuration or identity broker rules`,
+  );
 }
 
 function applyExecutionOverride(
@@ -244,7 +269,7 @@ function parseIdentityOverrides(value: unknown): IdentityOverrides {
     }
     for (const toolName of Object.keys(value.tools)) {
       if (!validToolName(toolName)) throw invalidResponse();
-      tools[toolName] = parseSubjectPolicy(value.tools[toolName]);
+      tools[toolName] = parseSubjectPolicy(value.tools[toolName], toolName);
     }
   }
   return Object.freeze({
@@ -268,13 +293,54 @@ function validToolName(value: string): boolean {
   return /^[a-z][a-z0-9_]{0,63}$/u.test(value);
 }
 
-function parseSubjectPolicy(value: unknown): SubjectPolicy {
+function parseSubjectPolicy(value: unknown, toolName: string): SubjectPolicy {
+  const classes: readonly CommandClass[] = toolName === COMMAND_CLASS_TOOL ? COMMAND_CLASSES : [];
+  if (
+    !isRecord(value) ||
+    !Object.hasOwn(value, "mode") ||
+    !Object.hasOwn(value, "session_grant") ||
+    !hasAllowedKeys(value, ["mode", "session_grant", ...classes])
+  ) {
+    throw invalidResponse();
+  }
+  const mode = value.mode;
+  const sessionGrant = value.session_grant;
+  if (
+    typeof mode !== "string" ||
+    !POLICY_MODES.includes(mode as (typeof POLICY_MODES)[number]) ||
+    typeof sessionGrant !== "string" ||
+    !SESSION_GRANT_POLICIES.includes(sessionGrant as (typeof SESSION_GRANT_POLICIES)[number]) ||
+    (mode !== "ask" && sessionGrant === "offer")
+  ) {
+    throw invalidResponse();
+  }
+  const policy = {
+    mode: mode as SubjectPolicy["mode"],
+    sessionGrant: sessionGrant as SubjectPolicy["sessionGrant"],
+  };
+  const commandClasses: Partial<Record<CommandClass, CommandClassPolicy>> = {};
+  for (const commandClass of classes) {
+    if (!Object.hasOwn(value, commandClass)) continue;
+    const classPolicy = parseCommandClassPolicy(value[commandClass]);
+    // The broker normalizes merged rules; an unnormalized class policy is a protocol violation.
+    if (commandClassPolicyViolation(policy, classPolicy) !== undefined) throw invalidResponse();
+    commandClasses[commandClass] = classPolicy;
+  }
+  return Object.freeze({
+    ...policy,
+    ...(Object.keys(commandClasses).length === 0
+      ? {}
+      : { commandClasses: Object.freeze(commandClasses) }),
+  });
+}
+
+function parseCommandClassPolicy(value: unknown): CommandClassPolicy {
   if (!isRecord(value) || !hasExactKeys(value, ["mode", "session_grant"])) {
     throw invalidResponse();
   }
   if (
     typeof value.mode !== "string" ||
-    !POLICY_MODES.includes(value.mode as (typeof POLICY_MODES)[number]) ||
+    !COMMAND_CLASS_MODES.includes(value.mode as (typeof COMMAND_CLASS_MODES)[number]) ||
     typeof value.session_grant !== "string" ||
     !SESSION_GRANT_POLICIES.includes(
       value.session_grant as (typeof SESSION_GRANT_POLICIES)[number],
@@ -284,8 +350,8 @@ function parseSubjectPolicy(value: unknown): SubjectPolicy {
     throw invalidResponse();
   }
   return Object.freeze({
-    mode: value.mode as SubjectPolicy["mode"],
-    sessionGrant: value.session_grant as SubjectPolicy["sessionGrant"],
+    mode: value.mode as CommandClassPolicy["mode"],
+    sessionGrant: value.session_grant as CommandClassPolicy["sessionGrant"],
   });
 }
 

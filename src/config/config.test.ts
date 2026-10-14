@@ -631,6 +631,147 @@ describe("parseConfig", () => {
     ).toThrow("config.tools.write.session_grant must be one of: never, offer");
   });
 
+  describe("known read-only class policy", () => {
+    const BASH = '[tools.bash]\naudit = false\nmode = "allow"\nsession_grant = "never"';
+
+    function withClass(main: string, table: string, extra = ""): string {
+      return completeConfig().replace(
+        BASH,
+        `[tools.bash]\naudit = false\n${main}\n\n[tools.bash.known_read_only]\n${table}${extra}`,
+      );
+    }
+
+    it("parses an optional strictly more permissive class policy for Bash", () => {
+      const config = parseConfig(
+        withClass(
+          'mode = "deny"\nsession_grant = "never"',
+          'mode = "allow"\nsession_grant = "never"',
+        ),
+      );
+      expect(config.tools.bash).toEqual({
+        mode: "deny",
+        sessionGrant: "never",
+        audit: false,
+        commandClasses: { known_read_only: { mode: "allow", sessionGrant: "never" } },
+      });
+      expect(Object.isFrozen(config.tools.bash?.commandClasses)).toBe(true);
+      expect(Object.isFrozen(config.tools.bash?.commandClasses?.known_read_only)).toBe(true);
+      expect(parseConfig(completeConfig()).tools.bash).not.toHaveProperty("commandClasses");
+    });
+
+    it.each([
+      ['mode = "deny"\nsession_grant = "never"', 'mode = "ask"\nsession_grant = "never"'],
+      ['mode = "deny"\nsession_grant = "never"', 'mode = "ask"\nsession_grant = "offer"'],
+      ['mode = "ask"\nsession_grant = "never"', 'mode = "ask"\nsession_grant = "offer"'],
+      ['mode = "ask"\nsession_grant = "never"', 'mode = "allow"\nsession_grant = "never"'],
+      ['mode = "ask"\nsession_grant = "offer"', 'mode = "allow"\nsession_grant = "never"'],
+    ])("accepts main %j with class %j", (main, table) => {
+      expect(parseConfig(withClass(main, table)).tools.bash?.commandClasses).toBeDefined();
+    });
+
+    it("accepts the table only under Bash (rule 1)", () => {
+      for (const tool of ["read", "write", "edit"] as const) {
+        expect(() =>
+          parseConfig(
+            `${completeConfig()}\n[tools.${tool}.known_read_only]\nmode = "allow"\nsession_grant = "never"\n`,
+          ),
+        ).toThrow(`config.tools.${tool}.known_read_only is not a recognized field`);
+      }
+    });
+
+    it.each([
+      ['mode = "allow"', "config.tools.bash.known_read_only.session_grant is required"],
+      ['session_grant = "never"', "config.tools.bash.known_read_only.mode is required"],
+      [
+        'mode = "allow"\nsession_grant = "never"\naudit = true',
+        "config.tools.bash.known_read_only.audit is not a recognized field",
+      ],
+      [
+        'mode = "disabled"\nsession_grant = "never"',
+        "config.tools.bash.known_read_only.mode must be one of: allow, ask, deny",
+      ],
+      [
+        'mode = "allow"\nsession_grant = "always"',
+        "config.tools.bash.known_read_only.session_grant must be one of: never, offer",
+      ],
+      [
+        'mode = "allow"\nsession_grant = "offer"',
+        'config.tools.bash.known_read_only.session_grant may be "offer" only when mode is "ask"',
+      ],
+      [
+        'mode = "deny"\nsession_grant = "offer"',
+        'config.tools.bash.known_read_only.session_grant may be "offer" only when mode is "ask"',
+      ],
+    ])("rejects malformed class table %j (rules 2 and 3)", (table, issue) => {
+      expect(() => parseConfig(withClass('mode = "deny"\nsession_grant = "never"', table))).toThrow(
+        issue,
+      );
+    });
+
+    it("rejects a non-table class entry", () => {
+      expect(() =>
+        parseConfig(
+          completeConfig().replace(
+            BASH,
+            '[tools.bash]\naudit = false\nmode = "deny"\nsession_grant = "never"\nknown_read_only = "allow"',
+          ),
+        ),
+      ).toThrow("config.tools.bash.known_read_only must be a table");
+    });
+
+    it.each([
+      ['mode = "allow"\nsession_grant = "never"', 'mode = "allow"\nsession_grant = "never"'],
+      ['mode = "allow"\nsession_grant = "never"', 'mode = "ask"\nsession_grant = "offer"'],
+      ['mode = "ask"\nsession_grant = "offer"', 'mode = "ask"\nsession_grant = "offer"'],
+      ['mode = "ask"\nsession_grant = "offer"', 'mode = "ask"\nsession_grant = "never"'],
+      ['mode = "ask"\nsession_grant = "never"', 'mode = "ask"\nsession_grant = "never"'],
+      ['mode = "ask"\nsession_grant = "never"', 'mode = "deny"\nsession_grant = "never"'],
+      ['mode = "deny"\nsession_grant = "never"', 'mode = "deny"\nsession_grant = "never"'],
+    ])("rejects main %j with no-effect class %j (rule 4)", (main, table) => {
+      expect(() => parseConfig(withClass(main, table))).toThrow(
+        "config.tools.bash.known_read_only must be strictly more permissive than config.tools.bash",
+      );
+    });
+
+    it("rejects any class policy under a disabled main policy (rule 5)", () => {
+      expect(() =>
+        parseConfig(
+          withClass(
+            'mode = "disabled"\nsession_grant = "never"',
+            'mode = "allow"\nsession_grant = "never"',
+          ),
+        ),
+      ).toThrow(
+        'config.tools.bash.known_read_only is not permitted when config.tools.bash.mode is "disabled"',
+      );
+    });
+
+    it("requires read, grep, find and ls to allow when the class allows (rule 6)", () => {
+      for (const tool of ["read", "grep", "find", "ls"] as const) {
+        for (const mode of ["ask", "deny", "disabled"]) {
+          const source = withClass(
+            'mode = "ask"\nsession_grant = "never"',
+            'mode = "allow"\nsession_grant = "never"',
+          ).replace(
+            `[tools.${tool}]\naudit = false\nmode = "allow"`,
+            `[tools.${tool}]\naudit = false\nmode = "${mode}"`,
+          );
+          expect(() => parseConfig(source)).toThrow(
+            `config.tools.bash.known_read_only.mode "allow" requires config.tools.${tool}.mode "allow" (it is "${mode}")`,
+          );
+          expect(
+            parseConfig(
+              source.replace(
+                '[tools.bash.known_read_only]\nmode = "allow"\nsession_grant = "never"',
+                '[tools.bash.known_read_only]\nmode = "ask"\nsession_grant = "offer"',
+              ),
+            ).tools.bash?.commandClasses?.known_read_only,
+          ).toEqual({ mode: "ask", sessionGrant: "offer" });
+        }
+      }
+    });
+  });
+
   it("rejects offering session grants when there is no approval prompt", () => {
     for (const mode of ["allow", "deny", "disabled"]) {
       expect(() =>

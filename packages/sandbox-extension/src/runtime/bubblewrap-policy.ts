@@ -28,10 +28,14 @@ const SAFE_ENVIRONMENT = Object.freeze({
 
 const RESERVED_ENVIRONMENT_VARIABLES = new Set([
   "BASH_ENV",
+  "BASHOPTS",
   "BUN_OPTIONS",
+  "CDPATH",
   "DYLD_INSERT_LIBRARIES",
   "DYLD_LIBRARY_PATH",
   "ENV",
+  "GLOBIGNORE",
+  "IFS",
   "LD_AUDIT",
   "LD_LIBRARY_PATH",
   "LD_PRELOAD",
@@ -160,10 +164,7 @@ export function buildBubblewrapArguments(
   for (const target of [...masks.beforeCwd, ...masks.afterCwd]) {
     if (kinds.get(target) === "directory") args.push("--remount-ro", target);
   }
-  for (const [key, value] of Object.entries(SAFE_ENVIRONMENT)) {
-    args.push("--setenv", key, key === "PATH" ? toolBundlePath(bundle, value) : value);
-  }
-  for (const [key, value] of customEnvironment) {
+  for (const [key, value] of commandEnvironmentEntries(customEnvironment, bundle)) {
     args.push("--setenv", key, value);
   }
   args.push(
@@ -177,6 +178,33 @@ export function buildBubblewrapArguments(
     ...argv,
   );
   return Object.freeze(args);
+}
+
+/** Exact environment of every sandboxed command: fixed values, tool-bundle PATH, then administrator values. */
+export function bubblewrapCommandEnvironment(
+  environment: Readonly<Record<string, string>> = {},
+  toolBundle?: ToolBundle,
+): Readonly<Record<string, string>> {
+  return Object.freeze(
+    Object.fromEntries(
+      commandEnvironmentEntries(
+        validateSandboxEnvironment(environment),
+        snapshotToolBundle(toolBundle),
+      ),
+    ),
+  );
+}
+
+function commandEnvironmentEntries(
+  customEnvironment: readonly (readonly [string, string])[],
+  bundle: ToolBundle | undefined,
+): readonly (readonly [string, string])[] {
+  return [
+    ...Object.entries(SAFE_ENVIRONMENT).map(
+      ([key, value]) => [key, key === "PATH" ? toolBundlePath(bundle, value) : value] as const,
+    ),
+    ...customEnvironment,
+  ];
 }
 
 function validateSandboxEnvironment(

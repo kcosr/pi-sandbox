@@ -733,7 +733,10 @@ Accepted session grants:
 - never alter filesystem, environment, or network authority.
 
 An `edit` grant does not authorize `write`, and no grant can enable a disabled
-tool. User `!` shell does not use grants or approval policy.
+tool. User `!` shell does not use grants or approval policy. With a Bash
+`known_read_only` class policy, a grant accepted for a known read-only command
+covers only later known read-only commands; see
+[scoped grants](#prompts-and-scoped-session-grants).
 
 ## Interactive diagnostics
 
@@ -755,7 +758,9 @@ user-state directory, code-mode enablement, and MCP server count. `/sandbox moun
 policy or explicitly reports that direct mode has no mount boundary.
 `/sandbox policy` lists every configured model-tool
 mode, the fixed user-shell behavior, session-grant options, and current
-memory-only grants; an optional subject shows its scope in more detail.
+memory-only grants; an optional subject shows its scope in more detail. A Bash
+class policy adds its own row and detail; see
+[diagnostics](#known-read-only-diagnostics).
 
 The command uses the configuration already admitted at startup and the mount
 plan used to create Bubblewrap. It does not rerun a shell command, reread
@@ -790,7 +795,8 @@ An approval-required operation is denied when:
 
 ## Bash scope
 
-Model Bash uses the configured `tools.bash` policy. Explicit user `!` shell is
+Model Bash uses the configured `tools.bash` policy, refined by an optional
+[known read-only class policy](#known-read-only-bash-commands). Explicit user `!` shell is
 always allowed without a prompt because it is an action directly invoked by the
 user. Both use the configured backend. In direct mode they run as the current
 user without filesystem or network containment.
@@ -810,6 +816,315 @@ CWD only when `filesystem.cwd_writable = true`; the rest of the ordinary host
 filesystem remains read-only. Its network authority is the effective `network`
 mode. Structured-tool policies do not intercept file or network operations
 performed by Bash.
+
+## Known read-only Bash commands
+
+An optional class policy lets model Bash commands that Pi Sandbox recognizes as
+read-only use a more permissive policy than other Bash commands:
+
+```toml
+[tools.bash]
+mode = "deny"
+session_grant = "never"
+audit = true
+
+[tools.bash.known_read_only]
+mode = "allow"
+session_grant = "never"
+```
+
+`[tools.bash]` remains the main policy for every command the class does not
+cover. When the effective Bash policy has a class policy, Pi Sandbox analyzes
+the exact command text of each model `bash` call before preparing its approval
+request and classifies it as `known_read_only` or `unclassified`. Classification
+selects only the approval policy. An approved command runs unchanged as
+`bash -c <command>` through the selected backend with the same filesystem,
+network and environment authority as any other approved Bash command. Without
+the table, Bash is not analyzed and behavior is unchanged. See
+[security](security.md#known-read-only-bash-commands) for the guarantee and its
+limits.
+
+"Known" means listed in a reviewed, compiled-in registry. The registry is
+intentionally not exhaustive: an unlisted command that only reads, or a listed
+command with an unlisted option, is unclassified and uses the main policy.
+
+### Class policy validation
+
+The table is an additive optional field of configuration schema 13. It accepts
+exactly `mode` (`allow`, `ask` or `deny`) and `session_grant` (`never` or
+`offer`). Availability remains tool-level: `disabled` is not a class mode, and
+`audit` stays on `[tools.bash]`. Each violation is reported in the ordinary
+`Invalid pi-sandbox configuration in <path>:` list:
+
+1. The table is accepted only under `[tools.bash]`. Elsewhere it is
+   `config.tools.<tool>.known_read_only is not a recognized field`. A non-table
+   value is `config.tools.bash.known_read_only must be a table`.
+2. Missing or extra fields report
+   `config.tools.bash.known_read_only.<field> is required` or
+   `config.tools.bash.known_read_only.<field> is not a recognized field`.
+   Invalid values report
+   `config.tools.bash.known_read_only.mode must be one of: allow, ask, deny` or
+   `config.tools.bash.known_read_only.session_grant must be one of: never, offer`.
+3. `offer` requires `ask`:
+   `config.tools.bash.known_read_only.session_grant may be "offer" only when mode is "ask"`.
+4. The class policy must be strictly more permissive than the main policy:
+   `config.tools.bash.known_read_only must be strictly more permissive than config.tools.bash (mode deny < ask < allow, or ask with session_grant "offer" over "never"); otherwise it has no effect`.
+5. A class policy is not permitted under a disabled main policy:
+   `config.tools.bash.known_read_only is not permitted when config.tools.bash.mode is "disabled"; availability is tool-level only`.
+6. Class `allow` requires `read`, `grep`, `find` and `ls` to be `allow`, one
+   issue per tool:
+   `config.tools.bash.known_read_only.mode "allow" requires config.tools.<tool>.mode "allow" (it is "<mode>")`.
+
+Rule 4 exists because the model chooses the command text and can always move a
+command out of the class, for example by adding a variable or an unlisted
+option. A class policy stricter than the main policy would protect nothing, so
+it is rejected rather than silently ignored. Rule 6 makes skipping the prompt
+justified: the typed read and search tools can already observe the same data
+without a prompt.
+
+Broker rule files carry the same table with the same per-file rules. After user
+and group rules are applied, rule 6 is checked again on the effective policy and
+startup fails with:
+
+```text
+effective tool policy after identity overrides is invalid: tools.bash.known_read_only.mode "allow" requires tools.<tool>.mode "allow" (it is "<mode>"); allow read, grep, find, ls or use a stricter bash.known_read_only mode in the base configuration or identity broker rules
+```
+
+See [identity broker](identity-broker.md#known-read-only-bash-class) for
+merging and replacement.
+
+### Decisions
+
+Modes are ordered `deny < ask < allow` and session options `never < offer`.
+Unclassified commands use the main policy. Known read-only commands use the
+join of both policies: the greater mode and the greater session option, keeping
+`offer` only when the joined mode is `ask`. Because every accepted class policy
+is strictly more permissive, the join equals the class policy. Every accepted
+combination:
+
+| `[tools.bash]` | `known_read_only` | Unclassified commands                | Known read-only commands                |
+| -------------- | ----------------- | ------------------------------------ | --------------------------------------- |
+| `deny`         | `ask`/`never`     | Denied with feedback                 | Prompted: **Allow once**, **Deny**      |
+| `deny`         | `ask`/`offer`     | Denied with feedback                 | Prompted, with the class session choice |
+| `deny`         | `allow`           | Denied with feedback                 | Run without a prompt                    |
+| `ask`/`never`  | `ask`/`offer`     | Prompted: **Allow once**, **Deny**   | Prompted, with the class session choice |
+| `ask`/`never`  | `allow`           | Prompted: **Allow once**, **Deny**   | Run without a prompt                    |
+| `ask`/`offer`  | `allow`           | Prompted, with **Allow for session** | Run without a prompt                    |
+
+`deny` plus a class policy runs only known read-only commands. Every other
+combination, including any class policy under `allow` or `disabled`, is
+rejected. Prompted requests are denied as usual without an interactive UI.
+
+### Prompts and scoped session grants
+
+Known read-only approval prompts use the subject label `bash (known read-only)`,
+for example `Allow bash (known read-only): ls -la src?`. Unclassified prompts
+keep `Allow bash: <command>?`.
+
+Session grants are scoped by the class of the request that created them:
+
+- **Allow for session** on an unclassified command has tool scope and covers
+  every later Bash command;
+- **Allow known read-only commands for session** on a known read-only command
+  has class scope and covers only later known read-only commands.
+
+Both remain memory-only and are cleared with every session lifecycle event that
+clears other grants. Changing either the main or the class policy invalidates
+them. A class grant is broad: it admits every later known read-only command,
+including reads of any path visible to the selected backend.
+
+### Denial feedback
+
+When the main policy denies an unclassified command, the error returned to the
+model names the first reason the command was not recognized, so the model can
+use a dedicated tool or a simpler command instead of retrying:
+
+```text
+Pi Sandbox denied bash: policy_denied; not a known read-only command: <reason>
+```
+
+For example, `touch x` reports `"touch" is not a known read-only command`. The
+reason is a printable-ASCII, plain-English explanation of at most about 160
+characters that quotes the command only as short escaped excerpts. An unsafe
+command-wide environment variable or locale is reported first; otherwise the
+first problem in source order is reported. Pi Sandbox additionally limits the
+reason, including any ellipsis, to 512 bytes and replaces control characters.
+If analysis fails or returns an invalid result, the command is unclassified and
+the reason is `command analysis failed`. Prompt denials,
+cancellation, missing UI and `disabled` keep their ordinary messages. Without a
+class policy, denials are unchanged.
+
+### Recognized syntax
+
+The analyzer never executes, expands or resolves the command through a shell.
+It accepts only a literal subset of Bash whose meaning is the same in GNU Bash
+3.2 and later under `bash -c`; anything else is unclassified, with no attempt to
+recover:
+
+- **Input:** at most 16 KiB of UTF-8. Control characters other than tab and
+  newline, DEL and invalid Unicode are rejected even inside quotes. Non-ASCII
+  characters are accepted only inside quotes, and only when the execution
+  locale is C, POSIX or UTF-8.
+- **Words:** unquoted letters, digits and `_ . / , : @ % + = -`; single-quoted
+  text; and double-quoted text without `"`, `\`, `$`, `` ` `` or `!`. There are
+  no variables, command substitution, globs, brace or tilde expansion, escapes,
+  comments, line continuations, arithmetic, process substitution, subshells or
+  grouping.
+- **Structure:** commands joined by `|` into pipelines, pipelines joined by `&&`
+  or `||`, and statements separated by `;` or newlines. A newline directly after
+  `&&`, `||` or `|` continues the command. Leading, trailing and repeated
+  newlines and one trailing `;` are allowed. Empty statements, `;;`, background
+  `&`, `|&`, `!` and parentheses are rejected.
+- **Commands:** the first word of every stage must exactly match a registry
+  command name. Unquoted reserved words such as `if`, `time` or `coproc`,
+  assignment-shaped words such as `LC_ALL=C sort`, and paths such as `/bin/cat`
+  are rejected. Every branch of `&&`, `||` and `;` is checked; control flow is
+  not evaluated.
+
+Redirections may appear anywhere in a stage, with optional blanks before the
+target. A digit-only word written immediately before `<` or `>` is the
+descriptor number, and only descriptors 0, 1 and 2 are accepted:
+
+| Form                                                                                      | Meaning                             |
+| ----------------------------------------------------------------------------------------- | ----------------------------------- |
+| `>/dev/null`, `>>/dev/null`, `1>/dev/null`, `2>/dev/null`, `1>>/dev/null`, `2>>/dev/null` | Discard the stream                  |
+| `&>/dev/null`                                                                             | Discard stdout and stderr           |
+| `2>&1`, `1>&2`, `>&1`, `>&2`, `2>&2`, `1>&1`                                              | Duplicate between stdout and stderr |
+| `<file`, `0<file`                                                                         | Read a file                         |
+
+Discard targets must be exactly `/dev/null`, and duplication targets an unquoted
+`1` or `2`. Input targets cannot name `/dev/tcp` or `/dev/udp`, including
+spellings with repeated slashes. Output to any file, other descriptors, `<&`,
+`>&-`, `<>`, `>|`, `&>>`, here-documents, here-strings and statements consisting
+only of redirections are rejected.
+
+A command is also unclassified when the execution environment could change which
+program runs or how Bash starts, or make every program load code or write files:
+for example a project-local executable earlier in `PATH`, an exported Bash
+function, a non-empty `BASH_ENV`, `SHELLOPTS`, `BASHOPTS` or `EXECIGNORE`, or
+any non-empty `LD_*`, `DYLD_*` or `GCONV_PATH` variable. See
+[execution-context checks](security.md#execution-context-checks).
+
+### Known read-only command registry
+
+Registry version 1 contains the shell builtins `cd`, `echo`, `false`, `pwd` and
+`true`, and the executables `basename`, `cat`, `cut`, `diff`, `dirname`, `du`,
+`find`, `grep`, `head`, `ls`, `nl`, `readlink`, `realpath`, `rg`, `sed`, `sort`,
+`stat`, `tail`, `tr`, `uniq` and `wc`. Builtins are not resolved through `PATH`;
+executables must resolve outside the launch directory.
+
+The table below is generated from the registry and is the complete accepted
+set: any option or operand form it does not list makes the command unclassified.
+Parsing follows GNU `getopt_long`, the most permissive interpretation across the
+implementations considered: GNU coreutils, findutils, grep and sed; uutils
+coreutils; and the BSD and macOS userland. Busybox applets are not covered.
+Long options must be spelled in full, because GNU and uutils accept
+abbreviations; short options may be clustered; `--` ends options; and options
+after operands are still checked. Options whose meaning differs or is doubtful
+on any considered implementation are omitted. A few accepted options take
+values differently, which changes only which words are read as data: BSD
+`stat -f` and `-t` take a format argument, so the next word becomes a format
+instead of a file, and BSD `grep --context` and `diff --context` or `--unified`
+take only an optional attached value. Operand limits count every word
+after the first operand, as implementations that stop option parsing there
+would: `uniq a -c` is rejected because BSD `uniq` would write a file named
+`-c`. Option values and file operands are data or paths to read; paths are not
+confined, so any path visible to the backend may be read.
+
+Notable exclusions include `find -exec`, `-execdir`, `-ok`, `-okdir`,
+`-delete`, `-fprint`, `-fprint0`, `-fprintf`, `-fls` and unknown primaries;
+`rg --pre`, `--pre-glob`, `-z`/`--search-zip` and `--hostname-bin`; every `sed`
+use except `-n` (or `--quiet`/`--silent`, one of which is required) with one
+`Np`, `N,Mp`, `$p` or `N,$p` script and at most one file; `sort -o`, `-T` and
+`--compress-program`; `tail -f`, `-F`, `--follow`, `--retry`, `--pid` and `-s`;
+a second `uniq` operand, which names an output file; and BSD `cat -l`. `rg` is
+unclassified while `RIPGREP_CONFIG_PATH` is set unless `--no-config` is given,
+and `grep` while `GREP_OPTIONS` is set. `cd` accepts at most one operand and
+changes only the directory of the same `bash -c` process. `git`, interpreters
+and shells, wrappers such as `env`, `xargs`, `timeout` and `command`,
+network-capable tools, pagers, editors and `printf` are not in the registry.
+Each registry change increments its version, which diagnostics and event records
+report. To regenerate the table after a registry change, run
+`PI_SANDBOX_UPDATE_DOCS=1 npx vitest run src/permissions/known-read-only-docs.test.ts`.
+
+<!-- known-read-only-commands:start -->
+
+<!-- prettier-ignore -->
+| Command | Kind | Accepted options and operands |
+| --- | --- | --- |
+| `basename` | executable | Options: `-a`/`--multiple`, `-s SUFFIX`/`--suffix=SUFFIX`, `-z`/`--zero`. Operands: names (not read). |
+| `cat` | executable | Options: `-A`/`--show-all`, `-b`/`--number-nonblank`, `-e`, `-E`/`--show-ends`, `-n`/`--number`, `-s`/`--squeeze-blank`, `-t`, `-T`/`--show-tabs`, `-u`, `-v`/`--show-nonprinting`. Operands: files to read. |
+| `cd` | shell builtin | Options: `-L`, `-P`. Operands: at most one directory. |
+| `cut` | executable | Options: `-b LIST`/`--bytes=LIST`, `-c LIST`/`--characters=LIST`, `-d DELIM`/`--delimiter=DELIM`, `-f LIST`/`--fields=LIST`, `-n`, `-s`/`--only-delimited`, `-z`/`--zero-terminated`, `--complement`, `--output-delimiter=STRING`. Operands: files to read. |
+| `diff` | executable | Options: `-a`/`--text`, `-b`/`--ignore-space-change`, `-B`/`--ignore-blank-lines`, `-c`, `-C NUM`, `--context[=NUM]`, `-d`/`--minimal`, `-i`/`--ignore-case`, `-I RE`/`--ignore-matching-lines=RE`, `-N`/`--new-file`, `-p`/`--show-c-function`, `-q`/`--brief`, `-r`/`--recursive`, `-s`/`--report-identical-files`, `-t`/`--expand-tabs`, `-T`/`--initial-tab`, `-u`, `-U NUM`, `--unified[=NUM]`, `-w`/`--ignore-all-space`, `-W NUM`/`--width=NUM`, `-x PAT`/`--exclude=PAT`, `-X FILE`/`--exclude-from=FILE`, `-y`/`--side-by-side`, `--normal`, `--strip-trailing-cr`, `--suppress-common-lines`, `--color[=WHEN]`. Operands: files or directories to compare. |
+| `dirname` | executable | Options: `-z`/`--zero`. Operands: names (not read). |
+| `du` | executable | Options: `-a`/`--all`, `-c`/`--total`, `-d N`/`--max-depth=N`, `-h`/`--human-readable`, `-H`, `-k`, `-L`/`--dereference`, `-m`, `-P`/`--no-dereference`, `-s`/`--summarize`, `-x`/`--one-file-system`, `--apparent-size`, `--si`. Operands: files or directories to measure. |
+| `echo` | shell builtin | Any words; output only. |
+| `false` | shell builtin | Any words (ignored). |
+| `find` | executable | Leading options: `-H`, `-L`, `-P`. Operands: starting paths, then an expression of operators `(`, `)`, `!`, `-not`, `-a`, `-and`, `-o`, `-or`; primaries without arguments `-depth`, `-empty`, `-executable`, `-false`, `-follow`, `-ls`, `-mount`, `-nogroup`, `-noleaf`, `-nouser`, `-print`, `-print0`, `-prune`, `-quit`, `-readable`, `-true`, `-writable`, `-xdev`; primaries with one argument `-amin`, `-anewer`, `-atime`, `-cmin`, `-cnewer`, `-ctime`, `-fstype`, `-gid`, `-group`, `-ilname`, `-iname`, `-inum`, `-ipath`, `-iregex`, `-iwholename`, `-links`, `-lname`, `-maxdepth`, `-mindepth`, `-mmin`, `-mtime`, `-name`, `-newer`, `-path`, `-perm`, `-printf`, `-regex`, `-regextype`, `-samefile`, `-size`, `-type`, `-uid`, `-user`, `-wholename`, `-newerXY` (`XY` from `aBcm` then `aBcmt`). |
+| `grep` | executable | Options: `-E`/`--extended-regexp`, `-F`/`--fixed-strings`, `-G`/`--basic-regexp`, `-P`/`--perl-regexp`, `-e PATTERNS`/`--regexp=PATTERNS`, `-f FILE`/`--file=FILE`, `-i`/`--ignore-case`, `-w`/`--word-regexp`, `-x`/`--line-regexp`, `-s`/`--no-messages`, `-v`/`--invert-match`, `-m NUM`/`--max-count=NUM`, `-b`/`--byte-offset`, `-n`/`--line-number`, `--line-buffered`, `-H`/`--with-filename`, `-h`/`--no-filename`, `-o`/`--only-matching`, `-q`/`--quiet`, `--silent`, `-a`/`--text`, `-I`, `-r`/`--recursive`, `-R`/`--dereference-recursive`, `--include=GLOB`, `--exclude=GLOB`, `--exclude-dir=GLOB`, `-L`/`--files-without-match`, `-l`/`--files-with-matches`, `-c`/`--count`, `-A NUM`/`--after-context=NUM`, `-B NUM`/`--before-context=NUM`, `-C NUM`/`--context=NUM`, `--color[=WHEN]`, `--colour[=WHEN]`. Operands: a pattern (unless `-e`/`-f`), then files or directories to read. Unclassified while `GREP_OPTIONS` is non-empty. |
+| `head` | executable | Options: `-c NUM`/`--bytes=NUM`, `-n NUM`/`--lines=NUM`, `-q`/`--quiet`, `--silent`, `-v`/`--verbose`, `-NUM`. Operands: files to read. |
+| `ls` | executable | Options: `-1`, `-a`/`--all`, `-A`/`--almost-all`, `-C`, `-c`, `-d`/`--directory`, `-F`, `--classify[=WHEN]`, `--color[=WHEN]`, `-g`, `-H`/`--dereference-command-line`, `-h`/`--human-readable`, `-i`/`--inode`, `-k`, `-L`/`--dereference`, `-l`, `-m`, `-n`/`--numeric-uid-gid`, `-o`, `-p`, `-R`/`--recursive`, `-r`/`--reverse`, `-S`, `-s`/`--size`, `-t`, `-u`, `-x`, `--full-time`, `--group-directories-first`, `--sort=WORD`, `--time=WORD`. Operands: files or directories to list. |
+| `nl` | executable | Options: `-b STYLE`/`--body-numbering=STYLE`, `-d CC`/`--section-delimiter=CC`, `-f STYLE`/`--footer-numbering=STYLE`, `-h STYLE`/`--header-numbering=STYLE`, `-i NUM`/`--line-increment=NUM`, `-l NUM`/`--join-blank-lines=NUM`, `-n FORMAT`/`--number-format=FORMAT`, `-p`/`--no-renumber`, `-s STRING`/`--number-separator=STRING`, `-v NUM`/`--starting-line-number=NUM`, `-w NUM`/`--number-width=NUM`. Operands: files to read. |
+| `pwd` | shell builtin | Options: `-L`, `-P`. Operands: none. |
+| `readlink` | executable | Options: `-f`/`--canonicalize`, `-e`/`--canonicalize-existing`, `-m`/`--canonicalize-missing`, `-n`/`--no-newline`, `-q`/`--quiet`, `-s`/`--silent`, `-v`/`--verbose`, `-z`/`--zero`. Operands: paths to resolve. |
+| `realpath` | executable | Options: `-e`/`--canonicalize-existing`, `-m`/`--canonicalize-missing`, `-L`/`--logical`, `-P`/`--physical`, `-q`/`--quiet`, `-s`/`--strip`, `--no-symlinks`, `-z`/`--zero`, `--relative-to=DIR`, `--relative-base=DIR`. Operands: paths to resolve. |
+| `rg` | executable | Options: `-A NUM`/`--after-context=NUM`, `-B NUM`/`--before-context=NUM`, `-C NUM`/`--context=NUM`, `-a`/`--text`, `-b`/`--byte-offset`, `-c`/`--count`, `--count-matches`, `-s`/`--case-sensitive`, `--color=WHEN`, `--column`, `--crlf`, `-d NUM`/`--max-depth=NUM`, `-e PATTERN`/`--regexp=PATTERN`, `-f PATTERNFILE`/`--file=PATTERNFILE`, `-F`/`--fixed-strings`, `--files`, `-l`/`--files-with-matches`, `--files-without-match`, `-L`/`--follow`, `-g GLOB`/`--glob=GLOB`, `--glob-case-insensitive`, `--iglob=GLOB`, `-H`/`--with-filename`, `-I`/`--no-filename`, `--heading`, `--no-heading`, `--hidden`, `-i`/`--ignore-case`, `--json`, `-m NUM`/`--max-count=NUM`, `-M NUM`/`--max-columns=NUM`, `--max-filesize=SIZE`, `-n`/`--line-number`, `-N`/`--no-line-number`, `--no-config`, `--no-ignore`, `--no-ignore-dot`, `--no-ignore-exclude`, `--no-ignore-files`, `--no-ignore-global`, `--no-ignore-parent`, `--no-ignore-vcs`, `--no-messages`, `--no-require-git`, `-0`/`--null`, `--null-data`, `--one-file-system`, `-o`/`--only-matching`, `-p`/`--pretty`, `-P`/`--pcre2`, `-q`/`--quiet`, `-r REPLACEMENT`/`--replace=REPLACEMENT`, `-S`/`--smart-case`, `--sort=SORTBY`, `--sortr=SORTBY`, `--stats`, `-t TYPE`/`--type=TYPE`, `-T TYPE`/`--type-not=TYPE`, `--type-list`, `--trim`, `-u`/`--unrestricted`, `-U`/`--multiline`, `--multiline-dotall`, `-v`/`--invert-match`, `--vimgrep`, `-w`/`--word-regexp`, `-x`/`--line-regexp`. Operands: a pattern (unless `-e`/`-f`), then files or directories to search. Unclassified while `RIPGREP_CONFIG_PATH` is non-empty unless `--no-config` is given. |
+| `sed` | executable | Options: `-n`/`--quiet`, `--silent`. Operands: one script of the form `Np`, `N,Mp`, `$p` or `N,$p` (decimal `N`, `M`), then at most one file. One of `-n`, `--quiet` or `--silent` is required. |
+| `sort` | executable | Options: `-b`/`--ignore-leading-blanks`, `-c`, `-C`, `-d`/`--dictionary-order`, `-f`/`--ignore-case`, `-g`/`--general-numeric-sort`, `-h`/`--human-numeric-sort`, `-i`/`--ignore-nonprinting`, `-k KEYDEF`/`--key=KEYDEF`, `-m`/`--merge`, `-M`/`--month-sort`, `-n`/`--numeric-sort`, `-r`/`--reverse`, `-R`/`--random-sort`, `-s`/`--stable`, `-S SIZE`/`--buffer-size=SIZE`, `-t SEP`/`--field-separator=SEP`, `-u`/`--unique`, `-V`/`--version-sort`, `-z`/`--zero-terminated`, `--sort=WORD`. Operands: files to read. |
+| `stat` | executable | Options: `-L`/`--dereference`, `-c FORMAT`/`--format=FORMAT`, `--printf=FORMAT`, `-f`/`--file-system`, `-t`/`--terse`. Operands: files to describe. |
+| `tail` | executable | Options: `-c NUM`/`--bytes=NUM`, `-n NUM`/`--lines=NUM`, `-q`/`--quiet`, `--silent`, `-v`/`--verbose`, `-NUM`. Operands: files to read. Operands starting with `+` are not accepted. |
+| `tr` | executable | Options: `-c`/`--complement`, `-C`, `-d`/`--delete`, `-s`/`--squeeze-repeats`, `-t`/`--truncate-set1`. Operands: character sets (not files); reads standard input only. |
+| `true` | shell builtin | Any words (ignored). |
+| `uniq` | executable | Options: `-c`/`--count`, `-d`/`--repeated`, `-D`, `-f N`/`--skip-fields=N`, `-i`/`--ignore-case`, `-s N`/`--skip-chars=N`, `-u`/`--unique`. Operands: at most one input file (a second operand names an output file). |
+| `wc` | executable | Options: `-c`/`--bytes`, `-l`/`--lines`, `-m`/`--chars`, `-w`/`--words`, `-L`/`--max-line-length`. Operands: files to read. |
+
+<!-- known-read-only-commands:end -->
+
+### Code mode, user shell and extensions
+
+Nested code-mode `bash` calls use the same analysis, policies, prompts and
+grants as ordinary calls. User `!` commands are never analyzed: they remain
+fixed-allow and run through the selected backend. The standalone
+`@kcosr/pi-sandbox-extension` package has no approvals and does not classify
+commands.
+
+The analyzer is created once at startup, only when the effective Bash policy has
+a class policy. If it cannot be created, startup fails with
+`Bash command analysis could not be initialized: <cause>`; it never falls back to
+unclassified or direct execution.
+
+### Known read-only diagnostics
+
+`/sandbox policy` adds a `bash (known read-only)` row showing the class policy
+and its class-scoped grant:
+
+```text
+SUBJECT                 EXECUTION  MODE   SESSION OPTION  ACTIVE GRANT
+bash                    sandbox    deny   never           -
+bash (known read-only)  sandbox    ask    offer           yes
+```
+
+`/sandbox policy bash` shows the class policy, the registry version and the
+known command names, and states that classification does not change execution:
+
+```text
+Known read-only:   ask
+  Approval:        session grant active
+  Session option:  offer
+  Active grant:    yes
+
+Known read-only commands (registry version 1):
+  Shell builtins: cd, echo, false, pwd, true
+  Executables: basename, cat, cut, diff, dirname, du, find, grep, head, ls, nl, readlink, realpath, rg, sed, sort, stat, tail, tr, uniq, wc
+
+Scope:
+  ...
+  Command classification selects only the approval policy; an approved command runs unchanged within the same boundary.
+```
+
+Without a class policy, `/sandbox policy` and `/sandbox policy bash` are
+unchanged and show no class rows.
 
 ## Tool event logging
 
@@ -839,6 +1154,14 @@ count toward that bound. Invalid target paths are omitted, and command capture
 stops before a NUL or an unpaired Unicode surrogate with the truncation flag set. Commands may themselves contain inline
 content or credentials; length limits do not redact them. Session events include
 the captured launch CWD. Records use JSON escaping to remain single-line.
+
+When the effective Bash policy has a `known_read_only` class policy, Bash
+`tool_execution_intent` and `tool_denied` records also carry `command_class`
+(`known_read_only` or `unclassified`) and `known_read_only_version`, the
+positive registry version used for the decision. Both fields appear together,
+only on those two Bash events, and are absent without a class policy.
+`approval_source` keeps its existing values; a class-scoped grant reports
+`session_grant`.
 
 Before an admitted logged tool runs, its execution-intent record must be
 acknowledged by the collector. Acknowledgment means successful submission to

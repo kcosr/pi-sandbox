@@ -5,7 +5,11 @@ import { join } from "node:path";
 
 import { afterEach, describe, expect, it } from "vitest";
 
-import { createDirectExecutor, resolveDirectToolCommands } from "./direct-executor.js";
+import {
+  createDirectExecutor,
+  directCommandEnvironment,
+  resolveDirectToolCommands,
+} from "./direct-executor.js";
 
 const toolBundle = selectedTestToolBundle();
 const selectedTools = toolBundle === undefined ? {} : { toolBundle };
@@ -52,6 +56,45 @@ describe("direct executor", () => {
     } finally {
       await executor.close();
     }
+  });
+
+  it("passes exactly the described command environment", async () => {
+    const ambientEnvironment = {
+      HOME: "/Users/alice",
+      PATH: "/usr/bin:/bin",
+      KEEP: "ambient",
+      PI_SANDBOX_SECRET: "internal",
+      UNSET: undefined,
+    };
+    const environment = { KEEP: "scoped" };
+    const expected = directCommandEnvironment(ambientEnvironment, environment, toolBundle);
+    expect(expected).not.toHaveProperty("PI_SANDBOX_SECRET");
+    expect(expected).not.toHaveProperty("UNSET");
+    expect(Object.isFrozen(expected)).toBe(true);
+    const executor = await createDirectExecutor({
+      cwd: await temporaryCwd(),
+      ...selectedTools,
+      ambientEnvironment,
+      environment,
+    });
+    try {
+      const result = await executor.execute({
+        argv: [
+          executor.commands.sh,
+          "-c",
+          'printf "%s|%s|%s" "$PATH" "$KEEP" "${PI_SANDBOX_SECRET-unset}"',
+        ],
+      });
+      expect(result.stdout.toString()).toBe(`${expected.PATH}|scoped|unset`);
+    } finally {
+      await executor.close();
+    }
+    expect(
+      directCommandEnvironment({ PATH: "/usr/bin" }, {}, { root: "/opt/tools", commands: {} }).PATH,
+    ).toBe("/opt/tools/bin:/usr/bin");
+    expect(directCommandEnvironment({}, {}, { root: "/opt/tools", commands: {} }).PATH).toBe(
+      "/opt/tools/bin:/usr/bin:/bin",
+    );
   });
 
   it("preserves bounded execution errors", async () => {

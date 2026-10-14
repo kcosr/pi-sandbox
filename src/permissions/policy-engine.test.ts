@@ -290,3 +290,235 @@ describe("PolicyEngine", () => {
     await expect(next).resolves.toMatchObject({ allowed: true, source: "prompt" });
   });
 });
+
+describe("command-class policies", () => {
+  function bashPolicy(
+    main: SubjectPolicy,
+    knownReadOnly?: NonNullable<SubjectPolicy["commandClasses"]>["known_read_only"],
+  ): SubjectPolicy {
+    return knownReadOnly === undefined
+      ? main
+      : { ...main, commandClasses: { known_read_only: knownReadOnly } };
+  }
+
+  function bashRequest(commandClass?: "known_read_only" | "unclassified", command = "ls") {
+    return prepareApprovalRequest({
+      subject: "bash",
+      display: `bash: ${command}`,
+      arguments: { command },
+      ...(commandClass === undefined ? {} : { commandClass }),
+    });
+  }
+
+  it("binds the analyzed class into the frozen request and its fingerprint", async () => {
+    const known = bashRequest("known_read_only");
+    const unclassified = bashRequest("unclassified");
+    const absent = bashRequest();
+    expect(known.commandClass).toBe("known_read_only");
+    expect(Object.isFrozen(known)).toBe(true);
+    expect(absent).not.toHaveProperty("commandClass");
+    expect(new Set([known, unclassified, absent].map((item) => item.fingerprint)).size).toBe(3);
+    expect(bashRequest("known_read_only").fingerprint).toBe(known.fingerprint);
+
+    const forged = Object.freeze({ ...unclassified, commandClass: "known_read_only" as const });
+    const engine = new PolicyEngine(
+      policies({
+        bash: bashPolicy(
+          { mode: "deny", sessionGrant: "never" },
+          { mode: "allow", sessionGrant: "never" },
+        ),
+      }),
+    );
+    await expect(engine.evaluate(forged)).rejects.toThrow("fingerprint does not match");
+    expect(() =>
+      prepareApprovalRequest({
+        subject: "bash",
+        display: "bash: ls",
+        arguments: { command: "ls" },
+        commandClass: "harmless" as "known_read_only",
+      }),
+    ).toThrow("command class is not recognized");
+  });
+
+  it.each([
+    // main, class, known_read_only result, unclassified result
+    ["deny", "never", "allow", "never", "policy_allowed", "policy_denied"],
+    ["deny", "never", "ask", "never", "no_ui", "policy_denied"],
+    ["ask", "never", "allow", "never", "policy_allowed", "no_ui"],
+    ["ask", "never", "ask", "offer", "no_ui", "no_ui"],
+    ["ask", "offer", "allow", "never", "policy_allowed", "no_ui"],
+  ] as const)(
+    "evaluates main %s/%s with class %s/%s by the join only for classified requests",
+    async (mainMode, mainGrant, classMode, classGrant, known, unclassified) => {
+      const engine = new PolicyEngine(
+        policies({
+          bash: bashPolicy(
+            { mode: mainMode, sessionGrant: mainGrant },
+            { mode: classMode, sessionGrant: classGrant },
+          ),
+        }),
+      );
+      await expect(engine.evaluate(bashRequest("known_read_only"))).resolves.toMatchObject({
+        reason: known,
+      });
+      await expect(engine.evaluate(bashRequest("unclassified"))).resolves.toMatchObject({
+        reason: unclassified,
+      });
+      await expect(engine.evaluate(bashRequest())).resolves.toMatchObject({
+        reason: unclassified,
+      });
+    },
+  );
+
+  it("uses the main policy when a classified request has no class policy or the tool is disabled", async () => {
+    const engine = new PolicyEngine(policies({ bash: { mode: "deny", sessionGrant: "never" } }));
+    await expect(engine.evaluate(bashRequest("known_read_only"))).resolves.toMatchObject({
+      reason: "policy_denied",
+    });
+    const disabled = new PolicyEngine(
+      policies({
+        bash: bashPolicy(
+          { mode: "disabled", sessionGrant: "never" },
+          { mode: "allow", sessionGrant: "never" },
+        ),
+      }),
+    );
+    await expect(disabled.evaluate(bashRequest("known_read_only"))).resolves.toMatchObject({
+      reason: "disabled",
+    });
+  });
+
+  it("offers class-scoped session grants that cover only later classified requests", async () => {
+    const ui = new RecordingUi(() => "allow_session");
+    const engine = new PolicyEngine(
+      policies({
+        bash: bashPolicy(
+          { mode: "ask", sessionGrant: "never" },
+          { mode: "ask", sessionGrant: "offer" },
+        ),
+      }),
+    );
+    await expect(engine.evaluate(bashRequest("known_read_only"), { ui })).resolves.toMatchObject({
+      allowed: true,
+      source: "prompt",
+    });
+    expect(ui.prompts[0]).toMatchObject({
+      allowForSession: true,
+      sessionGrantScope: "known_read_only",
+    });
+    expect(engine.hasSessionGrant("bash", "known_read_only")).toBe(true);
+    expect(engine.hasSessionGrant("bash")).toBe(false);
+    await expect(
+      engine.evaluate(bashRequest("known_read_only", "cat a"), { ui }),
+    ).resolves.toMatchObject({ allowed: true, source: "session_grant" });
+    expect(ui.prompts).toHaveLength(1);
+
+    const unclassified = new RecordingUi(() => "allow_once");
+    await expect(
+      engine.evaluate(bashRequest("unclassified"), { ui: unclassified }),
+    ).resolves.toMatchObject({ allowed: true, source: "prompt" });
+    expect(unclassified.prompts[0]).toMatchObject({
+      allowForSession: false,
+      sessionGrantScope: "tool",
+    });
+    await expect(engine.evaluate(bashRequest("unclassified"))).resolves.toMatchObject({
+      reason: "no_ui",
+    });
+
+    engine.clearSessionGrants();
+    expect(engine.hasSessionGrant("bash", "known_read_only")).toBe(false);
+    await expect(engine.evaluate(bashRequest("known_read_only"))).resolves.toMatchObject({
+      reason: "no_ui",
+    });
+  });
+
+  it("lets a tool-scoped grant cover classified requests", async () => {
+    // Not a valid administrator policy, but it isolates the generic lookup rule.
+    const ui = new RecordingUi(() => "allow_session");
+    const engine = new PolicyEngine(
+      policies({
+        bash: bashPolicy(
+          { mode: "ask", sessionGrant: "offer" },
+          { mode: "ask", sessionGrant: "offer" },
+        ),
+      }),
+    );
+    await engine.evaluate(bashRequest("unclassified"), { ui });
+    expect(ui.prompts[0]?.sessionGrantScope).toBe("tool");
+    expect(engine.hasSessionGrant("bash")).toBe(true);
+    expect(engine.hasSessionGrant("bash", "known_read_only")).toBe(false);
+    await expect(engine.evaluate(bashRequest("known_read_only"))).resolves.toMatchObject({
+      allowed: true,
+      source: "session_grant",
+    });
+    await expect(engine.evaluate(bashRequest("unclassified"))).resolves.toMatchObject({
+      allowed: true,
+      source: "session_grant",
+    });
+    expect(ui.prompts).toHaveLength(1);
+  });
+
+  it("rejects a class-scoped session decision when the class does not offer one", async () => {
+    const engine = new PolicyEngine(
+      policies({
+        bash: bashPolicy(
+          { mode: "deny", sessionGrant: "never" },
+          { mode: "ask", sessionGrant: "never" },
+        ),
+      }),
+    );
+    await expect(
+      engine.evaluate(bashRequest("known_read_only"), {
+        ui: new RecordingUi(() => "allow_session"),
+      }),
+    ).resolves.toMatchObject({ allowed: false, reason: "invalid_prompt_decision" });
+    expect(engine.hasSessionGrant("bash", "known_read_only")).toBe(false);
+  });
+
+  it("includes class policies in grant revisions", async () => {
+    let classGrant: "never" | "offer" = "offer";
+    const engine = new PolicyEngine({}, (subject) =>
+      subject === "dynamic_bash"
+        ? {
+            revision: "fixed",
+            policy: {
+              mode: "deny",
+              sessionGrant: "never",
+              commandClasses: { known_read_only: { mode: "ask", sessionGrant: classGrant } },
+            },
+          }
+        : undefined,
+    );
+    const request = prepareApprovalRequest({
+      subject: "dynamic_bash",
+      display: "dynamic_bash: ls",
+      arguments: { command: "ls" },
+      commandClass: "known_read_only",
+    });
+    await engine.evaluate(request, { ui: new RecordingUi(() => "allow_session") });
+    expect(engine.hasSessionGrant("dynamic_bash", "known_read_only")).toBe(true);
+    classGrant = "never";
+    expect(engine.hasSessionGrant("dynamic_bash", "known_read_only")).toBe(false);
+    classGrant = "offer";
+    expect(engine.hasSessionGrant("dynamic_bash", "known_read_only")).toBe(true);
+    engine.invalidateSubject("dynamic_bash");
+    expect(engine.hasSessionGrant("dynamic_bash", "known_read_only")).toBe(false);
+  });
+
+  it("freezes a private copy of class policies", async () => {
+    const classPolicy = { mode: "allow" as "allow" | "deny", sessionGrant: "never" as const };
+    const engine = new PolicyEngine(
+      policies({
+        bash: {
+          mode: "deny",
+          sessionGrant: "never",
+          commandClasses: { known_read_only: classPolicy },
+        },
+      }),
+    );
+    classPolicy.mode = "deny";
+    await expect(engine.evaluate(bashRequest("known_read_only"))).resolves.toMatchObject({
+      allowed: true,
+    });
+  });
+});

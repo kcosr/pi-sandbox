@@ -353,6 +353,50 @@ describe("ToolAuditor", () => {
     expect(f.events.at(-1)).toMatchObject({ approval_source: "prompt", reason: "user_denied" });
   });
 
+  it("adds Bash command class metadata only to decision events", async () => {
+    const { auditor, events, definition, invoke } = fixture();
+    const classification = {
+      command_class: "known_read_only",
+      known_read_only_version: 3,
+    } as const;
+    await invoke(
+      definition(async () => {
+        await auditor.decision(
+          { allowed: true, source: "policy", reason: "policy_allowed" },
+          "bash",
+          classification,
+        );
+        return success;
+      }, "bash"),
+      { command: "ls" },
+    );
+    expect(events.map((event) => [event.event, event.command_class])).toEqual([
+      ["session_started", undefined],
+      ["tool_requested", undefined],
+      ["tool_execution_intent", "known_read_only"],
+      ["tool_completed", undefined],
+    ]);
+    expect(events[2]).toMatchObject({ known_read_only_version: 3, approval_source: "policy" });
+    expect(events[3]).not.toHaveProperty("known_read_only_version");
+
+    await invoke(
+      definition(async () => {
+        await auditor.decision(
+          { allowed: false, source: "policy", reason: "policy_denied" },
+          "bash",
+          { command_class: "unclassified", known_read_only_version: 3 },
+        );
+        throw new Error("denied");
+      }, "bash"),
+      { command: "rm x" },
+    ).catch(() => undefined);
+    expect(events.at(-1)).toMatchObject({
+      event: "tool_denied",
+      command_class: "unclassified",
+      known_read_only_version: 3,
+    });
+  });
+
   it("snapshots arguments before waiting for the first acknowledgment", async () => {
     let release!: () => void;
     const pending = new Promise<void>((resolve) => {

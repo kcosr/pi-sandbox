@@ -4,10 +4,17 @@ export {
   TOOL_NAMES,
   type BuiltInToolName,
 } from "../../packages/sandbox-extension/src/invocation.js";
-export { POLICY_MODES, SESSION_GRANT_POLICIES } from "../permissions/contracts.js";
+export {
+  COMMAND_CLASS_MODES,
+  POLICY_MODES,
+  SESSION_GRANT_POLICIES,
+} from "../permissions/contracts.js";
 export type {
   ToolName,
   ApprovalSubject,
+  CommandClassMode,
+  CommandClassPolicies,
+  CommandClassPolicy,
   PolicyMode,
   SessionGrantPolicy,
   SubjectPolicy,

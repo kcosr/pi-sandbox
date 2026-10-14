@@ -1,5 +1,7 @@
 import { createHash } from "node:crypto";
 
+import { COMMAND_CLASSES, type BashRequestClass, type CommandClass } from "./bash/contracts.js";
+import { commandClassPolicy, freezeCommandClassPolicies, joinPolicies } from "./command-classes.js";
 import type { ApprovalSubject, SubjectPolicy } from "./contracts.js";
 
 import {
@@ -23,15 +25,21 @@ export interface ApprovalRequest {
   readonly subject: ApprovalSubject;
   readonly display: string;
   readonly arguments: JsonObject;
+  /** Analyzer result bound before approval; absent when the subject has no class policy. */
+  readonly commandClass?: BashRequestClass;
   readonly fingerprint: string;
   readonly [approvalRequestBrand]: true;
 }
 
 export type ApprovalPromptDecision = "allow_once" | "allow_session" | "deny";
 
+/** A tool-scope grant covers every request; a class-scope grant covers only that class. */
+export type SessionGrantScope = "tool" | CommandClass;
+
 export interface ApprovalPrompt {
   readonly request: ApprovalRequest;
   readonly allowForSession: boolean;
+  readonly sessionGrantScope: SessionGrantScope;
 }
 
 export interface ApprovalUi {
@@ -137,37 +145,53 @@ export function prepareApprovalRequest(input: {
   readonly subject: ApprovalSubject;
   readonly display: string;
   readonly arguments: JsonObject;
+  readonly commandClass?: BashRequestClass;
 }): ApprovalRequest {
   if (input.display.length === 0) {
     throw new Error("Approval request display must not be empty");
   }
+  const commandClass = input.commandClass;
+  if (
+    commandClass !== undefined &&
+    commandClass !== "unclassified" &&
+    !(COMMAND_CLASSES as readonly string[]).includes(commandClass)
+  ) {
+    throw new Error("Approval request command class is not recognized");
+  }
 
   const argumentsCopy = snapshotJsonObject(input.arguments);
-
-  const fingerprintInput = canonicalizeJson(
-    {
-      version: 1,
-      subject: input.subject,
-      display: input.display,
-      arguments: argumentsCopy,
-    },
-    "request",
-  );
-  const fingerprint = createHash("sha256").update(fingerprintInput, "utf8").digest("hex");
-
   return Object.freeze({
     subject: input.subject,
     display: input.display,
     arguments: argumentsCopy,
-    fingerprint,
+    ...(commandClass === undefined ? {} : { commandClass }),
+    fingerprint: requestFingerprint(input.subject, input.display, argumentsCopy, commandClass),
     [approvalRequestBrand]: true as const,
   });
+}
+
+function requestFingerprint(
+  subject: ApprovalSubject,
+  display: string,
+  arguments_: JsonObject,
+  commandClass: BashRequestClass | undefined,
+): string {
+  const fingerprintInput = canonicalizeJson(
+    { version: 2, subject, display, arguments: arguments_, commandClass: commandClass ?? null },
+    "request",
+  );
+  return createHash("sha256").update(fingerprintInput, "utf8").digest("hex");
+}
+
+interface EffectivePolicy {
+  readonly policy: SubjectPolicy;
+  readonly scope: SessionGrantScope;
 }
 
 export class PolicyEngine {
   private readonly resolveSubject: SubjectPolicyResolver;
   private readonly promptMutex = new AsyncMutex();
-  private readonly sessionGrants = new Map<ApprovalSubject, string>();
+  private readonly sessionGrants = new Map<ApprovalSubject, Map<SessionGrantScope, string>>();
   private readonly subjectEpochs = new Map<ApprovalSubject, number>();
   private grantEpoch = 0;
 
@@ -191,6 +215,10 @@ export class PolicyEngine {
       this.subjectEpochs.get(subject) ?? 0,
       resolved.policy.mode,
       resolved.policy.sessionGrant,
+      COMMAND_CLASSES.map((commandClass) => {
+        const policy = resolved.policy.commandClasses?.[commandClass];
+        return policy === undefined ? null : [commandClass, policy.mode, policy.sessionGrant];
+      }),
     ]);
   }
 
@@ -204,12 +232,15 @@ export class PolicyEngine {
     return policy !== undefined && policy.mode !== "disabled";
   }
 
-  public hasSessionGrant(subject: ApprovalSubject): boolean {
+  /** Whether a current grant exists in exactly this scope; evaluation also accepts a tool grant for a class. */
+  public hasSessionGrant(subject: ApprovalSubject, scope: SessionGrantScope = "tool"): boolean {
     const current = this.resolveSubject(subject);
+    if (current === undefined) return false;
+    const effective = effectivePolicy(current.policy, scope === "tool" ? undefined : scope);
     return (
-      current !== undefined &&
-      current.policy.mode === "ask" &&
-      this.sessionGrants.get(subject) === this.revision(subject, current)
+      effective.scope === scope &&
+      effective.policy.mode === "ask" &&
+      this.sessionGrants.get(subject)?.get(scope) === this.revision(subject, current)
     );
   }
 
@@ -232,9 +263,9 @@ export class PolicyEngine {
     if (resolved === undefined) {
       return denied("policy", "policy_denied");
     }
-    const policy = resolved.policy;
+    const effective = effectivePolicy(resolved.policy, request.commandClass);
     const revision = this.revision(request.subject, resolved);
-    switch (policy.mode) {
+    switch (effective.policy.mode) {
       case "allow":
         return { allowed: true, source: "policy", reason: "policy_allowed" };
       case "deny":
@@ -242,17 +273,33 @@ export class PolicyEngine {
       case "disabled":
         return denied("policy", "disabled");
       case "ask":
-        return this.evaluatePrompt(request, policy, revision, options);
+        return this.evaluatePrompt(request, resolved.policy, effective, revision, options);
     }
+  }
+
+  private isCovered(
+    subject: ApprovalSubject,
+    main: SubjectPolicy,
+    scope: SessionGrantScope,
+    revision: string,
+  ): boolean {
+    const grants = this.sessionGrants.get(subject);
+    return (
+      grants !== undefined &&
+      ((main.mode === "ask" && grants.get("tool") === revision) ||
+        (scope !== "tool" && grants.get(scope) === revision))
+    );
   }
 
   private async evaluatePrompt(
     request: ApprovalRequest,
-    policy: SubjectPolicy,
+    main: SubjectPolicy,
+    effective: EffectivePolicy,
     revision: string,
     options: EvaluateApprovalOptions,
   ): Promise<ApprovalDecision> {
-    if (this.hasSessionGrant(request.subject)) {
+    const { policy, scope } = effective;
+    if (this.isCovered(request.subject, main, scope, revision)) {
       return { allowed: true, source: "session_grant", reason: "session_granted" };
     }
     const ui = options.ui;
@@ -278,7 +325,7 @@ export class PolicyEngine {
       release();
       return denied("policy", "policy_denied");
     }
-    if (this.hasSessionGrant(request.subject)) {
+    if (this.isCovered(request.subject, main, scope, revision)) {
       release();
       return { allowed: true, source: "session_grant", reason: "session_granted" };
     }
@@ -287,6 +334,7 @@ export class PolicyEngine {
         Object.freeze({
           request,
           allowForSession: policy.sessionGrant === "offer",
+          sessionGrantScope: scope,
         }),
         options.signal ?? new AbortController().signal,
       ),
@@ -314,16 +362,33 @@ export class PolicyEngine {
         return { allowed: true, source: "prompt", reason: "user_allowed" };
       case "deny":
         return denied("prompt", "user_denied");
-      case "allow_session":
+      case "allow_session": {
         if (policy.sessionGrant !== "offer") {
           return denied("prompt", "invalid_prompt_decision");
         }
-        this.sessionGrants.set(request.subject, revision);
+        const grants =
+          this.sessionGrants.get(request.subject) ?? new Map<SessionGrantScope, string>();
+        grants.set(scope, revision);
+        this.sessionGrants.set(request.subject, grants);
         return { allowed: true, source: "prompt", reason: "user_allowed" };
+      }
       default:
         return denied("prompt", "invalid_prompt_decision");
     }
   }
+}
+
+/** Classified requests use the join with their class policy; all others use the main policy. */
+function effectivePolicy(
+  policy: SubjectPolicy,
+  commandClass: BashRequestClass | undefined,
+): EffectivePolicy {
+  if (commandClass === undefined || commandClass === "unclassified")
+    return { policy, scope: "tool" };
+  const classPolicy = commandClassPolicy(policy, commandClass);
+  return classPolicy === undefined || policy.mode === "disabled"
+    ? { policy, scope: "tool" }
+    : { policy: joinPolicies(policy, classPolicy), scope: commandClass };
 }
 
 function denied(
@@ -335,7 +400,13 @@ function denied(
 
 function freezePolicies(policies: ApprovalPolicies): ApprovalPolicies {
   const copy = Object.fromEntries(
-    Object.entries(policies).map(([subject, policy]) => [subject, Object.freeze({ ...policy })]),
+    Object.entries(policies).map(([subject, policy]) => {
+      const commandClasses = freezeCommandClassPolicies(policy.commandClasses);
+      return [
+        subject,
+        Object.freeze(commandClasses === undefined ? { ...policy } : { ...policy, commandClasses }),
+      ];
+    }),
   ) as Record<ApprovalSubject, SubjectPolicy>;
   return Object.freeze(copy);
 }
@@ -344,20 +415,12 @@ function verifyPreparedRequest(request: ApprovalRequest): void {
   if (request[approvalRequestBrand] !== true || !Object.isFrozen(request)) {
     throw new Error("Approval request was not prepared by prepareApprovalRequest");
   }
-  const expected = createHash("sha256")
-    .update(
-      canonicalizeJson(
-        {
-          version: 1,
-          subject: request.subject,
-          display: request.display,
-          arguments: request.arguments,
-        },
-        "request",
-      ),
-      "utf8",
-    )
-    .digest("hex");
+  const expected = requestFingerprint(
+    request.subject,
+    request.display,
+    request.arguments,
+    request.commandClass,
+  );
   if (request.fingerprint !== expected) {
     throw new Error("Approval request fingerprint does not match its contents");
   }

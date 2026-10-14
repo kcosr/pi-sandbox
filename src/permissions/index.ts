@@ -9,11 +9,17 @@ export type {
   EvaluateApprovalOptions,
   JsonObject,
   JsonValue,
+  SessionGrantScope,
   SubjectPolicyResolver,
   ResolvedSubjectPolicy,
 } from "./policy-engine.js";
 
-export { TOOL_NAMES, POLICY_MODES, SESSION_GRANT_POLICIES } from "./contracts.js";
+export {
+  TOOL_NAMES,
+  POLICY_MODES,
+  SESSION_GRANT_POLICIES,
+  COMMAND_CLASS_MODES,
+} from "./contracts.js";
 export type {
   BuiltInToolName,
   ToolName,
@@ -21,5 +27,23 @@ export type {
   PolicyMode,
   SessionGrantPolicy,
   SubjectPolicy,
+  CommandClassMode,
+  CommandClassPolicy,
+  CommandClassPolicies,
 } from "./contracts.js";
-export { approvalPreview, approvalUi } from "./approval.js";
+export {
+  COMMAND_CLASS_TOOL,
+  commandClassAllowRequirements,
+  commandClassPolicyViolation,
+  commandClassPreconditionIssues,
+  hasCommandClassPolicies,
+  joinPolicies,
+} from "./command-classes.js";
+export {
+  approvalPreview,
+  approvalSubjectLabel,
+  approvalUi,
+  boundedDisplayText,
+  commandClassLabel,
+  sessionGrantChoice,
+} from "./approval.js";

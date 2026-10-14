@@ -390,3 +390,94 @@ code VM source/call/output limits, deadlines and awaited nested cancellation.
 The packaged fixture exercises the compiled application with a local scripted
 provider and local MCP servers; it never contacts a live model provider. Project
 `.env` files must not redirect session storage through Bun environment autoload.
+
+## Bash command analysis
+
+Analyzer unit tests cover the recognizer, the option engine, every registry
+profile with accepted and rejected forms, issue ordering and printable-ASCII
+messages, and the execution-context checks with an injected filesystem probe:
+`BASH_ENV`, `SHELLOPTS`, `BASHOPTS` and `EXECIGNORE`; `LD_*`, `DYLD_*` and
+`GCONV_PATH`, including look-alike names that must not match; non-ASCII input
+under C, UTF-8 and other locales; every exported-function form and an exported
+`command_not_found_handle`; missing, empty, relative and launch-directory `PATH`
+entries, including symlinked entries; missing or non-regular executables;
+executables resolving into the launch directory; resolution shared within one
+analysis; and `RIPGREP_CONFIG_PATH` and `GREP_OPTIONS`. A known-bypass corpus
+must stay unclassified, including brace and glob words (`rg --pre{=,=sh}`,
+`find . -de\lete`), line continuation, ANSI-C quoting, `${x@P}`, arithmetic
+substitution, assignment prefixes (`PAGER=curl …`), reserved words, GNU
+abbreviations (`sort --compress=sh`), `uniq a b` and `uniq a -c`, `sed …e`,
+`/dev/tcp` input, descriptors above 2, `&>>`, background `&` and multi-line
+pipelines. Recognizer tests additionally reject control characters inside
+quotes, invalid Unicode and repeated-slash `/dev/tcp` spellings.
+
+The differential integration test
+`tests/integration/bash-known-read-only-differential.test.ts` runs every accepted
+corpus entry under the real `/bin/bash` with POSIX `sh` stub executables on an
+isolated `PATH`. Each stub records its argv, the file type of descriptors 0–2
+and every marker it reads from standard input, and writes a unique marker to
+standard output and standard error; standard input and input files carry their
+own markers. The test predicts from the parse which stages run, their argv and
+descriptor types, and where every marker must arrive: a capture file, the stage
+reading a pipe, or nowhere for `/dev/null`. This checks stage wiring, capture
+routing, discards and duplication in source order without device or inode
+numbers, so it runs unchanged on Linux and macOS. It also checks every accepted
+input of a seeded generated corpus, and that deliberately wrong predictions
+fail. It skips only when `/bin/bash`, `/usr/bin/mktemp`, `/bin/cat` or `/bin/mv`
+is missing.
+
+`src/permissions/known-read-only-docs.test.ts` fails when the generated command
+table in [configuration](configuration.md#known-read-only-command-registry)
+differs from the registry, and when Prettier would change the generated block.
+Regenerate the table with:
+
+```sh
+PI_SANDBOX_UPDATE_DOCS=1 npx vitest run src/permissions/known-read-only-docs.test.ts
+```
+
+The real-Bubblewrap end-to-end suite runs the real analyzer, constructed as the
+managed runtime does, through the managed extension: with main `deny` and class
+`allow`, `ls | head` runs without a prompt and `touch x` is denied with
+not-a-known-read-only feedback; with main `ask` and class `ask`/`offer`, a
+class-scoped session grant covers later known read-only commands but not an
+unclassified command.
+
+Managed integration tests prove:
+
+- strict parsing of `[tools.bash.known_read_only]`, rejection under other tools,
+  every validation rule and its message, and the read-tool precondition on both
+  the base policy and the effective policy after broker overrides;
+- strict broker-response parsing, rejection of unnormalized class policies, and
+  wholesale Bash replacement including an absent class policy;
+- the join, request binding of the class into the frozen fingerprint, scoped
+  session grants, revisions that include class policies, and prompt labels;
+- analysis of the exact executed snapshot, including nested code-mode Bash
+  calls, no analysis without a class policy or for user `!`, fail-closed
+  handling of analyzer exceptions and malformed results, denial feedback bounded
+  to 512 bytes, and startup refusal without an analyzer;
+- per-backend execution contexts that match the environments the executors
+  construct;
+- paired audit fields only on Bash decision events, with versions bounded to the
+  collector's range; and
+- `/sandbox policy` class rows, grants, registry version and command names,
+  with output unchanged when no class policy is configured.
+
+Broker tests cover per-file class validation, the class join across matching
+rules, and normalization for every main and class combination. Collector tests
+accept and forward the paired fields on Bash decision events and reject
+unpaired, misplaced, non-Bash, zero or out-of-range values.
+
+Native macOS qualification is a Mac-owner item. A first native run on macOS
+26.7.1 with `/bin/bash` 3.2.57 passed the analyzer unit tests and probed every
+registry option spelling (946 generic and 164 `find` cases) against the
+utilities resolved by both the packaged Seatbelt system `PATH` and the selected
+tool-bundle prefix, without finding an accepted option that writes files, runs
+programs or locks. Its differential run
+failed only in the earlier identity-based harness: `/dev/fd` reports a synthetic
+device, and the two ends of a pipe report different inodes. The portable
+marker-based harness above replaces it and passed natively at `1750997`,
+including every accepted input of the seeded generated corpus. Stubs write each
+marker in its own subshell, because Bash 3.2 `printf` otherwise keeps a failed
+broken-pipe write buffered and later flushes it to standard error. The
+Apple `cat` Unix-domain socket fallback is recorded as a residual risk in
+[security](security.md#parser-and-shell-differentials).

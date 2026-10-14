@@ -3,6 +3,7 @@ import { parse as parseToml } from "@iarna/toml";
 import {
   AUDIT_FACILITIES,
   type AuditConfig,
+  COMMAND_CLASS_MODES,
   POLICY_MODES,
   EXECUTION_BACKENDS,
   NETWORK_MODES,
@@ -15,6 +16,10 @@ import {
   type NetworkConfig,
   type SandboxConfig,
   type SessionsConfig,
+  type CommandClassPolicies,
+  type CommandClassPolicy,
+  type PolicyMode,
+  type SessionGrantPolicy,
   type ToolPolicy,
   type ToolPolicies,
   isNormalizedAbsoluteFilePath,
@@ -24,6 +29,12 @@ import {
   validateAccountTemplate,
 } from "../domain/index.js";
 import type { ManagedExtensionCatalog } from "../managed-extensions/catalog.js";
+import { COMMAND_CLASSES } from "../permissions/bash/contracts.js";
+import {
+  COMMAND_CLASS_TOOL,
+  commandClassPolicyViolation,
+  commandClassPreconditionIssues,
+} from "../permissions/command-classes.js";
 import { parseCodeModeConfig, parseMcpConfig } from "./mcp.js";
 import { ConfigError } from "./errors.js";
 
@@ -45,6 +56,7 @@ const ROOT_KEYS = [
   "tools",
 ] as const;
 const POLICY_KEYS = ["mode", "session_grant", "audit"] as const;
+const COMMAND_CLASS_POLICY_KEYS = ["mode", "session_grant"] as const;
 const IDENTITY_MODES = ["disabled", "broker"] as const;
 
 function isRecord(value: unknown): value is UnknownRecord {
@@ -62,8 +74,9 @@ function inspectKeys(
   expectedKeys: readonly string[],
   path: string,
   issues: string[],
+  optionalKeys: readonly string[] = [],
 ): void {
-  const expected = new Set(expectedKeys);
+  const expected = new Set([...expectedKeys, ...optionalKeys]);
 
   for (const key of Object.keys(record).sort()) {
     if (!expected.has(key)) {
@@ -107,6 +120,7 @@ function enumValue<const T extends readonly string[]>(
 function parseSubjectPolicy(
   value: unknown,
   path: string,
+  toolName: string,
   issues: string[],
 ): ToolPolicy | undefined {
   if (!isRecord(value)) {
@@ -114,7 +128,13 @@ function parseSubjectPolicy(
     return undefined;
   }
 
-  inspectKeys(value, POLICY_KEYS, path, issues);
+  inspectKeys(
+    value,
+    POLICY_KEYS,
+    path,
+    issues,
+    toolName === COMMAND_CLASS_TOOL ? COMMAND_CLASSES : [],
+  );
   const mode = enumValue(own(value, "mode"), POLICY_MODES, `${path}.mode`, issues);
   const sessionGrant = enumValue(
     own(value, "session_grant"),
@@ -126,6 +146,10 @@ function parseSubjectPolicy(
   if (mode !== "ask" && sessionGrant === "offer") {
     issues.push(`${path}.session_grant may be "offer" only when mode is "ask"`);
   }
+  const commandClasses =
+    toolName === COMMAND_CLASS_TOOL
+      ? parseCommandClassPolicies(value, path, mode, sessionGrant, issues)
+      : undefined;
 
   if (mode === undefined || sessionGrant === undefined) {
     return undefined;
@@ -136,7 +160,66 @@ function parseSubjectPolicy(
     issues.push(`${path}.audit must be a boolean`);
     return undefined;
   }
-  return Object.freeze({ mode, sessionGrant, audit });
+  return Object.freeze({
+    mode,
+    sessionGrant,
+    audit,
+    ...(commandClasses === undefined ? {} : { commandClasses }),
+  });
+}
+
+function parseCommandClassPolicies(
+  value: UnknownRecord,
+  path: string,
+  mode: PolicyMode | undefined,
+  sessionGrant: SessionGrantPolicy | undefined,
+  issues: string[],
+): CommandClassPolicies | undefined {
+  const policies: Partial<Record<(typeof COMMAND_CLASSES)[number], CommandClassPolicy>> = {};
+  for (const commandClass of COMMAND_CLASSES) {
+    if (!Object.hasOwn(value, commandClass)) continue;
+    const classPath = `${path}.${commandClass}`;
+    const table = value[commandClass];
+    if (!isRecord(table)) {
+      issues.push(`${classPath} must be a table`);
+      continue;
+    }
+    inspectKeys(table, COMMAND_CLASS_POLICY_KEYS, classPath, issues);
+    const classMode = enumValue(
+      own(table, "mode"),
+      COMMAND_CLASS_MODES,
+      `${classPath}.mode`,
+      issues,
+    );
+    const classSessionGrant = enumValue(
+      own(table, "session_grant"),
+      SESSION_GRANT_POLICIES,
+      `${classPath}.session_grant`,
+      issues,
+    );
+    if (classMode !== "ask" && classSessionGrant === "offer") {
+      issues.push(`${classPath}.session_grant may be "offer" only when mode is "ask"`);
+      continue;
+    }
+    if (classMode === undefined || classSessionGrant === undefined) continue;
+    const policy = Object.freeze({ mode: classMode, sessionGrant: classSessionGrant });
+    if (mode === undefined || sessionGrant === undefined) continue;
+    switch (commandClassPolicyViolation({ mode, sessionGrant }, policy)) {
+      case "main_disabled":
+        issues.push(
+          `${classPath} is not permitted when ${path}.mode is "disabled"; availability is tool-level only`,
+        );
+        break;
+      case "not_more_permissive":
+        issues.push(
+          `${classPath} must be strictly more permissive than ${path} (mode deny < ask < allow, or ask with session_grant "offer" over "never"); otherwise it has no effect`,
+        );
+        break;
+      case undefined:
+        policies[commandClass] = policy;
+    }
+  }
+  return Object.keys(policies).length === 0 ? undefined : Object.freeze(policies);
 }
 
 function parseToolPolicies(
@@ -153,7 +236,12 @@ function parseToolPolicies(
   const entries: Record<string, ToolPolicy> = {};
 
   for (const toolName of toolNames) {
-    const policy = parseSubjectPolicy(own(value, toolName), `config.tools.${toolName}`, issues);
+    const policy = parseSubjectPolicy(
+      own(value, toolName),
+      `config.tools.${toolName}`,
+      toolName,
+      issues,
+    );
     if (policy !== undefined) {
       entries[toolName] = policy;
     }
@@ -162,6 +250,7 @@ function parseToolPolicies(
   if (toolNames.some((toolName) => entries[toolName] === undefined)) {
     return undefined;
   }
+  issues.push(...commandClassPreconditionIssues(entries, "config.tools"));
 
   return Object.freeze(entries);
 }

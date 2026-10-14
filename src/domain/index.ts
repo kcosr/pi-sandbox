@@ -1,6 +1,7 @@
 export {
   AUDIT_FACILITIES,
   IDENTITY_BROKER_SOCKET_PATH,
+  COMMAND_CLASS_MODES,
   EXECUTION_BACKENDS,
   NETWORK_MODES,
   POLICY_MODES,
@@ -15,6 +16,9 @@ export type {
   ApprovalSubject,
   BuiltInToolName,
   BrokerIdentityConfig,
+  CommandClassMode,
+  CommandClassPolicies,
+  CommandClassPolicy,
   DisabledIdentityConfig,
   EnvironmentVariables,
   ExecutionBackend,

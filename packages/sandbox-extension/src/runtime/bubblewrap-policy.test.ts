@@ -3,6 +3,7 @@ import {
   BUBBLEWRAP_FILE_MASK_FIRST_FD,
   BUBBLEWRAP_SECCOMP_FD,
   assertSandboxCwd,
+  bubblewrapCommandEnvironment,
   buildBubblewrapArguments,
   describeBubblewrapMounts,
   planHiddenPaths,
@@ -184,6 +185,32 @@ describe("Bubblewrap policy", () => {
     expect(environment).not.toHaveProperty("AWS_ACCESS_KEY_ID");
   });
 
+  it("describes exactly the environment set for sandboxed commands", () => {
+    const bundle = { root: "/opt/pi-sandbox/tools", commands: {} };
+    const custom = { Z_LAST: "z", CUSTOM_VALUE: "custom" };
+    const args = buildBubblewrapArguments(
+      "/home/person/project",
+      ["/bin/true"],
+      "none",
+      custom,
+      true,
+      [],
+      bundle,
+    );
+    const set: Array<[string, string]> = [];
+    args.forEach((value, index) => {
+      if (value === "--setenv") set.push([args[index + 1]!, args[index + 2]!]);
+    });
+    const environment = bubblewrapCommandEnvironment(custom, bundle);
+    expect(Object.entries(environment)).toEqual(set);
+    expect(environment.PATH).toBe(`/opt/pi-sandbox/tools/bin:${safeSandboxEnvironment().PATH}`);
+    expect(Object.isFrozen(environment)).toBe(true);
+    expect(bubblewrapCommandEnvironment()).toEqual(safeSandboxEnvironment());
+    expect(() => bubblewrapCommandEnvironment({ PATH: "/tmp" })).toThrow(
+      "sandbox_environment_invalid",
+    );
+  });
+
   it("adds validated custom variables after the fixed environment", () => {
     const args = buildBubblewrapArguments("/home/person/project", ["/bin/true"], "none", {
       Z_LAST: "z",
@@ -201,6 +228,10 @@ describe("Bubblewrap policy", () => {
   it.each([
     { environment: { HOME: "/host/home" }, label: "fixed name" },
     { environment: { NODE_OPTIONS: "--require=payload" }, label: "runtime injection name" },
+    { environment: { BASHOPTS: "expand_aliases" }, label: "Bash option name" },
+    { environment: { CDPATH: "/tmp" }, label: "cd search path" },
+    { environment: { GLOBIGNORE: "*" }, label: "glob ignore list" },
+    { environment: { IFS: "x" }, label: "field separator" },
     { environment: { PI_SANDBOX_INTERNAL_TOKEN: "secret" }, label: "reserved prefix" },
     { environment: { "BAD-NAME": "value" }, label: "invalid name" },
     { environment: { VALID_NAME: "nul\0value" }, label: "NUL value" },

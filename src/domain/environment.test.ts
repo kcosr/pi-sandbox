@@ -26,6 +26,22 @@ describe("managed administrative environment", () => {
     });
   });
 
+  it.each(["BASHOPTS", "CDPATH", "GLOBIGNORE", "IFS"])(
+    "rejects shell-sensitive %s only in the sandbox scope",
+    (name) => {
+      expect(() =>
+        parseManagedEnvironment({ pi: {}, sandbox: { [name]: "x" }, extensions: {} }),
+      ).toThrow("managed_environment_invalid");
+      expect(
+        parseManagedEnvironment({
+          pi: { [name]: "x" },
+          sandbox: {},
+          extensions: { "service-api": { [name]: "x" } },
+        }).pi,
+      ).toEqual({ [name]: "x" });
+    },
+  );
+
   it("revalidates aggregate limits after overlay", () => {
     const variables = (prefix: string) =>
       Object.fromEntries(Array.from({ length: 128 }, (_, index) => [`${prefix}_${index}`, "x"]));

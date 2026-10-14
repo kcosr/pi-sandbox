@@ -201,6 +201,133 @@ describe("broker response", () => {
     }
   });
 
+  it("parses an optional normalized known read-only class policy for Bash only", () => {
+    const response = (tools: unknown) =>
+      JSON.stringify({
+        version: 7,
+        status: "ok",
+        environment: { pi: {}, sandbox: {}, extensions: {} },
+        overrides: { tools },
+      });
+    expect(
+      parseBrokerResponse(
+        response({
+          bash: {
+            mode: "ask",
+            session_grant: "never",
+            known_read_only: { mode: "allow", session_grant: "never" },
+          },
+          write: { mode: "deny", session_grant: "never" },
+        }),
+      ),
+    ).toMatchObject({
+      overrides: {
+        tools: {
+          bash: {
+            mode: "ask",
+            sessionGrant: "never",
+            commandClasses: { known_read_only: { mode: "allow", sessionGrant: "never" } },
+          },
+          write: { mode: "deny", sessionGrant: "never" },
+        },
+      },
+    });
+    expect(
+      parseBrokerResponse(response({ bash: { mode: "ask", session_grant: "never" } })),
+    ).not.toHaveProperty("overrides.tools.bash.commandClasses");
+    for (const [main, knownReadOnly] of [
+      [
+        { mode: "deny", session_grant: "never" },
+        { mode: "ask", session_grant: "offer" },
+      ],
+      [
+        { mode: "ask", session_grant: "never" },
+        { mode: "ask", session_grant: "offer" },
+      ],
+      [
+        { mode: "ask", session_grant: "offer" },
+        { mode: "allow", session_grant: "never" },
+      ],
+    ]) {
+      expect(
+        parseBrokerResponse(response({ bash: { ...main, known_read_only: knownReadOnly } })),
+      ).toHaveProperty("overrides.tools.bash.commandClasses.known_read_only");
+    }
+    for (const tools of [
+      {
+        write: {
+          mode: "deny",
+          session_grant: "never",
+          known_read_only: { mode: "allow", session_grant: "never" },
+        },
+      },
+      { bash: { mode: "deny", session_grant: "never", known_read_only: null } },
+      { bash: { mode: "deny", session_grant: "never", known_read_only: {} } },
+      { bash: { mode: "deny", session_grant: "never", known_read_only: { mode: "allow" } } },
+      {
+        bash: {
+          mode: "deny",
+          session_grant: "never",
+          known_read_only: { mode: "allow", session_grant: "never", audit: true },
+        },
+      },
+      {
+        bash: {
+          mode: "deny",
+          session_grant: "never",
+          known_read_only: { mode: "disabled", session_grant: "never" },
+        },
+      },
+      {
+        bash: {
+          mode: "deny",
+          session_grant: "never",
+          known_read_only: { mode: "allow", session_grant: "offer" },
+        },
+      },
+      {
+        bash: {
+          mode: "deny",
+          session_grant: "never",
+          known_read_only: { mode: "deny", session_grant: "never" },
+        },
+      },
+      {
+        bash: {
+          mode: "ask",
+          session_grant: "offer",
+          known_read_only: { mode: "ask", session_grant: "offer" },
+        },
+      },
+      {
+        bash: {
+          mode: "allow",
+          session_grant: "never",
+          known_read_only: { mode: "allow", session_grant: "never" },
+        },
+      },
+      {
+        bash: {
+          mode: "disabled",
+          session_grant: "never",
+          known_read_only: { mode: "allow", session_grant: "never" },
+        },
+      },
+      {
+        bash: {
+          mode: "deny",
+          session_grant: "never",
+          knownReadOnly: { mode: "allow", session_grant: "never" },
+        },
+      },
+      { bash: { mode: "deny", known_read_only: { mode: "allow", session_grant: "never" } } },
+    ]) {
+      expect(() => parseBrokerResponse(response(tools))).toThrow(
+        "identity_broker_response_invalid",
+      );
+    }
+  });
+
   it("rejects environment responses that exceed bounded sizes", () => {
     const tooManyVariables = Object.fromEntries(
       Array.from({ length: 129 }, (_, index) => [`VARIABLE_${index}`, "value"]),
@@ -424,6 +551,98 @@ describe("identity overrides", () => {
         tools: { unknown_tool: { mode: "deny", sessionGrant: "never" } },
       }),
     ).toThrow("override for unavailable tool: unknown_tool");
+  });
+});
+
+describe("identity command-class overrides", () => {
+  const allow = { audit: true, mode: "allow", sessionGrant: "never" } as const;
+  const base = {
+    configVersion: 13,
+    codemode: { enabled: false, timeoutMs: 300000 },
+    mcp: { servers: {} },
+    sessions: { retentionDays: 365 },
+    filesystem: { cwdWritable: true, deniedPaths: [], hiddenPaths: [] },
+    audit: { enabled: false, facility: "local0" },
+    modelsFile: "/etc/pi-sandbox/models.json",
+    execution: { backend: "bubblewrap" },
+    identity: { mode: "broker" },
+    network: { mode: "none" },
+    environment: { pi: {}, sandbox: {}, extensions: {} },
+    extensions: {},
+    tools: {
+      read: allow,
+      grep: allow,
+      find: allow,
+      ls: allow,
+      write: allow,
+      edit: allow,
+      bash: {
+        audit: true,
+        mode: "deny",
+        sessionGrant: "never",
+        commandClasses: { known_read_only: { mode: "allow", sessionGrant: "never" } },
+      },
+    },
+  } satisfies SandboxConfig;
+
+  it("replaces the whole Bash policy, including an absent class policy", () => {
+    expect(applyIdentityOverrides(base, { tools: {} }).tools.bash).toBe(base.tools.bash);
+    const withoutClass = applyIdentityOverrides(base, {
+      tools: { bash: { mode: "ask", sessionGrant: "never" } },
+    });
+    expect(withoutClass.tools.bash).toEqual({ mode: "ask", sessionGrant: "never", audit: true });
+    const withClass = applyIdentityOverrides(base, {
+      tools: {
+        bash: {
+          mode: "ask",
+          sessionGrant: "never",
+          commandClasses: { known_read_only: { mode: "ask", sessionGrant: "offer" } },
+        },
+      },
+    });
+    expect(withClass.tools.bash).toEqual({
+      mode: "ask",
+      sessionGrant: "never",
+      audit: true,
+      commandClasses: { known_read_only: { mode: "ask", sessionGrant: "offer" } },
+    });
+  });
+
+  it("fails closed when overlays leave a class allow without allowed read tools", () => {
+    expect(() =>
+      applyIdentityOverrides(base, {
+        tools: { grep: { mode: "ask", sessionGrant: "never" } },
+      }),
+    ).toThrow(
+      'effective tool policy after identity overrides is invalid: tools.bash.known_read_only.mode "allow" requires tools.grep.mode "allow" (it is "ask"); allow read, grep, find, ls or use a stricter bash.known_read_only mode in the base configuration or identity broker rules',
+    );
+    expect(() =>
+      applyIdentityOverrides(
+        { ...base, tools: { ...base.tools, bash: { ...allow, mode: "deny" } } },
+        {
+          tools: {
+            read: { mode: "deny", sessionGrant: "never" },
+            bash: {
+              mode: "deny",
+              sessionGrant: "never",
+              commandClasses: { known_read_only: { mode: "allow", sessionGrant: "never" } },
+            },
+          },
+        },
+      ),
+    ).toThrow('requires tools.read.mode "allow" (it is "deny")');
+    expect(
+      applyIdentityOverrides(base, {
+        tools: {
+          grep: { mode: "ask", sessionGrant: "never" },
+          bash: {
+            mode: "deny",
+            sessionGrant: "never",
+            commandClasses: { known_read_only: { mode: "ask", sessionGrant: "never" } },
+          },
+        },
+      }).tools.bash?.commandClasses,
+    ).toEqual({ known_read_only: { mode: "ask", sessionGrant: "never" } });
   });
 });
 

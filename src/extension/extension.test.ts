@@ -27,6 +27,8 @@ import { SandboxExecutionError } from "../../packages/sandbox-extension/src/runt
 import { createPiSandboxExtension } from "./index.js";
 import { LINUX_TOOL_COMMANDS } from "../../packages/sandbox-extension/src/runtime/index.js";
 import type { AuditClient, AuditEvent } from "../audit/client.js";
+import type { BashAnalysis, BashCommandAnalyzer } from "../permissions/bash/contracts.js";
+import type { CommandClassPolicy, SubjectPolicy } from "../permissions/index.js";
 import type { SandboxExecutor } from "./types.js";
 
 type Handler = (event: never, context: ExtensionContext) => unknown;
@@ -79,6 +81,7 @@ function fakePi(settings: ReturnType<ExtensionAPI["getSettings"]> = {}): FakePi 
     getActiveTools() {
       return [...(activeTools.at(-1) ?? [])];
     },
+    getAllTools: () => [...tools.values()],
     exec: vi.fn(() =>
       Promise.resolve({ code: 0, stdout: "standard output", stderr: "", killed: false }),
     ),
@@ -1619,5 +1622,463 @@ describe("Pi Sandbox extension", () => {
     ).toBe(true);
     // eslint-disable-next-line @typescript-eslint/unbound-method -- Vitest inspects the mock without invoking it.
     expect(executor.close).not.toHaveBeenCalled();
+  });
+});
+
+describe("known read-only Bash commands", () => {
+  const REDIRECTION_ISSUE = "output redirection to a file is not read-only";
+
+  function classified(command: string): BashAnalysis {
+    return command.startsWith("ls")
+      ? { commandClass: "known_read_only", version: 7, commands: ["ls"] }
+      : {
+          commandClass: "unclassified",
+          version: 7,
+          issue: { code: "unsupported_redirection", message: REDIRECTION_ISSUE, offset: 5 },
+        };
+  }
+
+  function fakeAnalyzer(
+    classify: (command: string) => BashAnalysis | Promise<BashAnalysis> = classified,
+  ): BashCommandAnalyzer & { readonly analyzed: string[] } {
+    const analyzed: string[] = [];
+    return {
+      version: 7,
+      commands: [
+        { name: "cd", kind: "shell_builtin", summary: "cd [DIR]" },
+        { name: "ls", kind: "executable", summary: "ls [-la] [FILE...]" },
+        { name: "cat", kind: "executable", summary: "cat [FILE...]" },
+      ],
+      analyzed,
+      async analyze(command) {
+        analyzed.push(command);
+        return classify(command);
+      },
+    };
+  }
+
+  function classConfig(main: SubjectPolicy, knownReadOnly?: CommandClassPolicy): SandboxConfig {
+    const base = config();
+    return {
+      ...base,
+      tools: {
+        ...base.tools,
+        bash: {
+          ...main,
+          audit: false,
+          ...(knownReadOnly === undefined
+            ? {}
+            : { commandClasses: { known_read_only: knownReadOnly } }),
+        },
+      },
+    };
+  }
+
+  async function startClassified(
+    cfg: SandboxConfig,
+    analyzer?: BashCommandAnalyzer,
+    auditClient?: AuditClient,
+  ) {
+    const pi = fakePi();
+    const executor = fakeExecutor();
+    await createPiSandboxExtension({
+      cwd: "/work/project",
+      configPath: "/etc/pi-sandbox/config.toml",
+      userStateDir: "/home/test/.pi/agent",
+      loadConfig: () => Promise.resolve(cfg),
+      executor,
+      ...(analyzer === undefined ? {} : { bashAnalyzer: analyzer }),
+      ...(auditClient === undefined ? {} : { auditClient }),
+    })(pi.api);
+    await pi.handlers.get("session_start")?.(undefined as never, context());
+    return { pi, executor };
+  }
+
+  function promptingContext(answer: (choices: readonly string[]) => string | undefined) {
+    const prompts: Array<{ readonly title: string; readonly choices: readonly string[] }> = [];
+    const notices: string[] = [];
+    const ctx = context({
+      hasUI: true,
+      select: (title, ...rest) => {
+        const choices = (rest as unknown as [readonly string[]])[0];
+        prompts.push({ title, choices });
+        return Promise.resolve(answer(choices));
+      },
+      notify: (message) => notices.push(message),
+    });
+    return { ctx, prompts, notices };
+  }
+
+  function runBash(pi: FakePi, command: string, ctx = context()) {
+    return pi.tools.get("bash")!.execute("call-bash", { command }, undefined, undefined, ctx);
+  }
+
+  const bashCalls = (executor: ReturnType<typeof fakeExecutor>) =>
+    executor.calls.filter((call) => call.argv[1] === "-c").map((call) => call.argv[2]);
+
+  it("allows known read-only commands without a prompt and explains unclassified denials", async () => {
+    const analyzer = fakeAnalyzer();
+    const { pi, executor } = await startClassified(
+      classConfig(
+        { mode: "deny", sessionGrant: "never" },
+        { mode: "allow", sessionGrant: "never" },
+      ),
+      analyzer,
+    );
+    const { ctx, prompts } = promptingContext(() => "Deny");
+    await expect(runBash(pi, "ls -la", ctx)).resolves.toBeDefined();
+    expect(prompts).toHaveLength(0);
+    await expect(runBash(pi, "echo x > out", ctx)).rejects.toThrow(
+      `Pi Sandbox denied bash: policy_denied; not a known read-only command: ${REDIRECTION_ISSUE}`,
+    );
+    expect(bashCalls(executor)).toEqual(["ls -la"]);
+    expect(analyzer.analyzed).toEqual(["ls -la", "echo x > out"]);
+    await executeTool(pi, "write", { path: "note.txt", content: "text" });
+    expect(analyzer.analyzed).toHaveLength(2);
+  });
+
+  it.each<[string, (command: string) => BashAnalysis | Promise<BashAnalysis>]>([
+    ["throws", () => Promise.reject(new Error("analyzer crashed"))],
+    [
+      "reports another registry version",
+      (): BashAnalysis => ({ commandClass: "known_read_only", version: 8, commands: ["ls"] }),
+    ],
+    ["returns no result", () => null as unknown as BashAnalysis],
+    [
+      "returns an unknown class",
+      () => ({ commandClass: "safe", version: 7, commands: [] }) as unknown as BashAnalysis,
+    ],
+    [
+      "omits the issue",
+      () => ({ commandClass: "unclassified", version: 7 }) as unknown as BashAnalysis,
+    ],
+    [
+      "omits the stage commands",
+      () => ({ commandClass: "known_read_only", version: 7 }) as unknown as BashAnalysis,
+    ],
+    [
+      "reports no stage commands",
+      (): BashAnalysis => ({ commandClass: "known_read_only", version: 7, commands: [] }),
+    ],
+    [
+      "reports an empty stage command",
+      (): BashAnalysis => ({ commandClass: "known_read_only", version: 7, commands: ["ls", ""] }),
+    ],
+    [
+      "reports a non-string stage command",
+      () =>
+        ({
+          commandClass: "known_read_only",
+          version: 7,
+          commands: ["ls", 1],
+        }) as unknown as BashAnalysis,
+    ],
+    [
+      "reports an unknown issue code",
+      () =>
+        ({
+          commandClass: "unclassified",
+          version: 7,
+          issue: { code: "unreadable", message: REDIRECTION_ISSUE },
+        }) as unknown as BashAnalysis,
+    ],
+    [
+      "reports a non-string issue message",
+      () =>
+        ({
+          commandClass: "unclassified",
+          version: 7,
+          issue: { code: "unsupported_syntax", message: 1 },
+        }) as unknown as BashAnalysis,
+    ],
+    [
+      "reports an empty issue message",
+      (): BashAnalysis => ({
+        commandClass: "unclassified",
+        version: 7,
+        issue: { code: "unsupported_syntax", message: "" },
+      }),
+    ],
+    ...[-1, 1.5, Number.NaN, "3", null].map((offset): [string, () => BashAnalysis] => [
+      `reports issue offset ${String(offset)}`,
+      () =>
+        ({
+          commandClass: "unclassified",
+          version: 7,
+          issue: { code: "unsupported_syntax", message: REDIRECTION_ISSUE, offset },
+        }) as unknown as BashAnalysis,
+    ]),
+  ])("fails closed when the analyzer %s", async (_name, classify) => {
+    const { pi, executor } = await startClassified(
+      classConfig(
+        { mode: "deny", sessionGrant: "never" },
+        { mode: "allow", sessionGrant: "never" },
+      ),
+      fakeAnalyzer(classify),
+    );
+    await expect(runBash(pi, "ls")).rejects.toThrow(
+      "Pi Sandbox denied bash: policy_denied; not a known read-only command: command analysis failed",
+    );
+    expect(bashCalls(executor)).toEqual([]);
+  });
+
+  it("bounds and sanitizes analyzer issues in the denial message", async () => {
+    const prefix = "Pi Sandbox denied bash: policy_denied; not a known read-only command: ";
+    const denialIssue = async (message: string): Promise<string> => {
+      const { pi } = await startClassified(
+        classConfig(
+          { mode: "deny", sessionGrant: "never" },
+          { mode: "ask", sessionGrant: "never" },
+        ),
+        fakeAnalyzer(() => ({
+          commandClass: "unclassified",
+          version: 7,
+          issue: { code: "unsupported_syntax", message, offset: 0 },
+        })),
+      );
+      const error = (await runBash(pi, "x").catch((cause: unknown) => cause)) as Error;
+      expect(error.message.startsWith(prefix)).toBe(true);
+      return error.message.slice(prefix.length);
+    };
+    const sanitized = await denialIssue(`bad\u001b[31m${"x".repeat(2_000)}`);
+    expect(sanitized).toMatch(/^bad \[31mx+…$/u);
+    expect(Buffer.byteLength(sanitized)).toBe(512);
+    const exact = `${"é".repeat(255)}xy`;
+    expect(Buffer.byteLength(exact)).toBe(512);
+    expect(await denialIssue(exact)).toBe(exact);
+    const over = await denialIssue(`${exact}z`);
+    expect(over).toBe(`${"é".repeat(254)}…`);
+    expect(Buffer.byteLength(over)).toBeLessThanOrEqual(512);
+  });
+
+  it("labels class prompts and grants only class-scoped session approval", async () => {
+    const { pi, executor } = await startClassified(
+      classConfig({ mode: "deny", sessionGrant: "never" }, { mode: "ask", sessionGrant: "offer" }),
+      fakeAnalyzer(),
+    );
+    const { ctx, prompts, notices } = promptingContext(
+      () => "Allow known read-only commands for session",
+    );
+    await runBash(pi, "ls", ctx);
+    expect(prompts).toEqual([
+      {
+        title: "Allow bash (known read-only): ls?",
+        choices: ["Allow once", "Allow known read-only commands for session", "Deny"],
+      },
+    ]);
+    await runBash(pi, "ls -a", ctx);
+    expect(prompts).toHaveLength(1);
+    await expect(runBash(pi, "rm -rf target", ctx)).rejects.toThrow(
+      `Pi Sandbox denied bash: policy_denied; not a known read-only command: ${REDIRECTION_ISSUE}`,
+    );
+    expect(bashCalls(executor)).toEqual(["ls", "ls -a"]);
+    await pi.commands.get("sandbox")?.handler("policy bash", ctx as never);
+    expect(notices.at(-1)).toContain("Known read-only:   ask");
+    expect(notices.at(-1)).toContain("  Approval:        session grant active");
+    expect(notices.at(-1)).toContain("  Active grant:    yes");
+    expect(notices.at(-1)).toContain("Known read-only commands (registry version 7):");
+    expect(notices.at(-1)).toContain("  Shell builtins: cd\n  Executables: ls, cat");
+    await pi.commands.get("sandbox")?.handler("policy", ctx as never);
+    expect(notices.at(-1)).toMatch(/bash \(known read-only\)\s+sandbox\s+ask\s+offer\s+yes/u);
+  });
+
+  it("prompts unclassified commands under the main policy with tool-scoped choices", async () => {
+    const { pi } = await startClassified(
+      classConfig({ mode: "ask", sessionGrant: "never" }, { mode: "ask", sessionGrant: "offer" }),
+      fakeAnalyzer(),
+    );
+    const { ctx, prompts } = promptingContext(() => "Deny");
+    await expect(runBash(pi, "echo > out", ctx)).rejects.toThrow(
+      /^Pi Sandbox denied bash: user_denied$/u,
+    );
+    expect(prompts).toEqual([
+      { title: "Allow bash: echo > out?", choices: ["Allow once", "Deny"] },
+    ]);
+  });
+
+  it("uses the exact frozen command for analysis and execution", async () => {
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const analyzer = fakeAnalyzer(async (command) => {
+      await gate;
+      return classified(command);
+    });
+    const { pi, executor } = await startClassified(
+      classConfig(
+        { mode: "deny", sessionGrant: "never" },
+        { mode: "allow", sessionGrant: "never" },
+      ),
+      analyzer,
+    );
+    const input = { command: "ls" };
+    const running = pi.tools.get("bash")!.execute("call", input, undefined, undefined, context());
+    input.command = "rm -rf /work/project";
+    release();
+    await running;
+    expect(analyzer.analyzed).toEqual(["ls"]);
+    expect(bashCalls(executor)).toEqual(["ls"]);
+  });
+
+  it("does not analyze Bash without an effective class policy", async () => {
+    const analyzer = fakeAnalyzer();
+    const { pi } = await startClassified(
+      classConfig({ mode: "ask", sessionGrant: "never" }),
+      analyzer,
+    );
+    const { ctx, prompts } = promptingContext(() => "Allow once");
+    await runBash(pi, "ls", ctx);
+    expect(analyzer.analyzed).toEqual([]);
+    expect(prompts[0]?.title).toBe("Allow bash: ls?");
+    const notices: string[] = [];
+    await pi.commands
+      .get("sandbox")
+      ?.handler("policy bash", context({ notify: (message) => notices.push(message) }) as never);
+    expect(notices.at(-1)).not.toContain("Known read-only");
+    expect(notices.at(-1)).not.toContain("registry version");
+  });
+
+  it("classifies nested code-mode Bash calls through the managed authorization path", async () => {
+    const analyzer = fakeAnalyzer();
+    const base = classConfig(
+      { mode: "deny", sessionGrant: "never" },
+      { mode: "allow", sessionGrant: "never" },
+    );
+    const cfg = { ...base, codemode: { enabled: true, timeoutMs: 10_000 } };
+    const pi = fakePi();
+    const executor = fakeExecutor();
+    await createPiSandboxExtension({
+      cwd: "/work/project",
+      configPath: "/etc/pi-sandbox/config.toml",
+      userStateDir: "/home/test/.pi/agent",
+      loadConfig: () => Promise.resolve(cfg),
+      executor,
+      bashAnalyzer: analyzer,
+      features: { config: cfg, servers: [], selected: () => true },
+    })(pi.api);
+    await pi.handlers.get("session_start")?.(undefined as never, context());
+    const bash = pi.tools.get("bash")!;
+    let nested = 0;
+    const ctx = {
+      ...context(),
+      sessionManager: { ...context().sessionManager, getBranch: () => [] },
+      tools: [bash],
+      async executeTool(name: string, args: unknown, options: { signal?: AbortSignal }) {
+        const id = `nested-${++nested}`;
+        try {
+          const result = await pi.tools
+            .get(name)!
+            .execute(id, args, options.signal, undefined, ctx);
+          return { toolCall: { id }, result, isError: false };
+        } catch (error) {
+          const text = error instanceof Error ? error.message : String(error);
+          return { toolCall: { id }, result: { content: [{ type: "text", text }] }, isError: true };
+        }
+      },
+    } as unknown as ExtensionToolContext;
+    const result = await pi.tools.get("codemode")!.execute(
+      "script-1",
+      {
+        code: 'await tools.bash({ command: "ls -la" });\ntry { await tools.bash({ command: "echo x > out" }); } catch (error) { return String(error.message); }',
+      },
+      undefined,
+      undefined,
+      ctx,
+    );
+    expect(analyzer.analyzed).toEqual(["ls -la", "echo x > out"]);
+    expect(bashCalls(executor)).toEqual(["ls -la"]);
+    expect(JSON.stringify(result)).toContain(`not a known read-only command: ${REDIRECTION_ISSUE}`);
+  });
+
+  it("never analyzes fixed-allow user shell commands", async () => {
+    const analyzer = fakeAnalyzer();
+    const { pi, executor } = await startClassified(
+      classConfig(
+        { mode: "deny", sessionGrant: "never" },
+        { mode: "allow", sessionGrant: "never" },
+      ),
+      analyzer,
+    );
+    const result = (await pi.handlers.get("user_bash")?.(
+      {
+        type: "user_bash",
+        command: "echo human > out",
+        cwd: "/work/project",
+        excludeFromContext: false,
+      } as never,
+      context(),
+    )) as UserBashEventResult;
+    expect(result.result?.exitCode).toBe(0);
+    expect(bashCalls(executor)).toEqual(["echo human > out"]);
+    expect(analyzer.analyzed).toEqual([]);
+  });
+
+  it("refuses to start when a class policy has no analyzer", async () => {
+    const pi = fakePi();
+    await createPiSandboxExtension({
+      cwd: "/work/project",
+      configPath: "/etc/pi-sandbox/config.toml",
+      userStateDir: "/home/test/.pi/agent",
+      loadConfig: () =>
+        Promise.resolve(
+          classConfig(
+            { mode: "deny", sessionGrant: "never" },
+            { mode: "allow", sessionGrant: "never" },
+          ),
+        ),
+      executor: fakeExecutor(),
+    })(pi.api);
+    await expect(pi.handlers.get("session_start")?.(undefined as never, context())).rejects.toThrow(
+      "Pi Sandbox Bash command analyzer is not initialized",
+    );
+    expect(pi.tools.has("bash")).toBe(false);
+  });
+
+  it("audits the command class and registry version on Bash decisions only", async () => {
+    const events: AuditEvent[] = [];
+    const auditClient: AuditClient = {
+      submit(event) {
+        events.push(event);
+        return Promise.resolve();
+      },
+      close: async () => {},
+    };
+    const base = classConfig(
+      { mode: "deny", sessionGrant: "never" },
+      { mode: "allow", sessionGrant: "never" },
+    );
+    const cfg = {
+      ...base,
+      audit: { enabled: true, facility: "local0" as const },
+      tools: Object.fromEntries(
+        Object.entries(base.tools).map(([name, policy]) => [name, { ...policy, audit: true }]),
+      ),
+    };
+    const { pi } = await startClassified(cfg, fakeAnalyzer(), auditClient);
+    await runBash(pi, "ls");
+    await expect(runBash(pi, "echo > out")).rejects.toThrow("policy_denied");
+    await executeTool(pi, "write", { path: "note.txt", content: "text" });
+    const decisions = events
+      .filter((event) => event.event === "tool_execution_intent" || event.event === "tool_denied")
+      .map((event) => [
+        event.tool,
+        event.event,
+        event.command_class,
+        event.known_read_only_version,
+      ]);
+    expect(decisions).toEqual([
+      ["bash", "tool_execution_intent", "known_read_only", 7],
+      ["bash", "tool_denied", "unclassified", 7],
+      ["write", "tool_execution_intent", undefined, undefined],
+    ]);
+    expect(
+      events.filter(
+        (event) =>
+          event.event !== "tool_execution_intent" &&
+          event.event !== "tool_denied" &&
+          event.command_class !== undefined,
+      ),
+    ).toEqual([]);
   });
 });

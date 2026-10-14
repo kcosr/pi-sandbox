@@ -5,6 +5,7 @@ import type { HostCommandExecutor } from "../../packages/sandbox-extension/src/r
 import type { ManagedExtensionInstance, PiToolExtension } from "../managed-extensions/sdk.js";
 import type { SandboxExecutor } from "../../packages/sandbox-extension/src/runtime/index.js";
 import type { AuditClient } from "../audit/client.js";
+import type { BashCommandAnalyzer } from "../permissions/bash/contracts.js";
 
 export interface ExtensionDependencies {
   readonly features?: {
@@ -24,6 +25,8 @@ export interface ExtensionDependencies {
   /** Managed application metadata; not part of the reusable executor interface. */
   readonly executionBackend?: ExecutionBackend;
   readonly executor: SandboxExecutor;
+  /** Required exactly when the effective Bash policy has a command-class policy. */
+  readonly bashAnalyzer?: BashCommandAnalyzer;
   readonly auditClient?: AuditClient;
   readonly managedExtensions?: readonly ManagedExtensionInstance[];
   readonly piToolExtensions?: readonly PiToolExtension[];

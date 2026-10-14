@@ -210,6 +210,7 @@ host fallback:
 - an unsafe managed-executable argument is supplied;
 - the selected command process cannot start or report a coherent result;
 - a required model-tool approval cannot be obtained;
+- a configured Bash class policy has no working command analyzer;
 - a request is malformed, oversized, cancelled, or stale;
 - a mutation's outcome cannot be proven; or
 - process-tree cleanup cannot be proven.
@@ -339,6 +340,12 @@ original tool name, and `http` or `stdio` transport. Nested audited calls carry
 `parent_invocation_id` from trusted execution context, never from script arguments.
 An unaudited nested tool does not produce decision records for its parent.
 
+With a Bash class policy, Bash decision records carry the paired
+`command_class` and `known_read_only_version` fields. Both the application and
+the collector require them together, only on Bash `tool_execution_intent` and
+`tool_denied` events, with a version from 1 through 4294967295. They describe
+the classification used for policy, not the command's actual effects.
+
 When global auditing is enabled, code mode records outer lifecycle metadata
 without script source; nested built-in and MCP tools follow their own audit
 settings. MCP arguments, results, headers, environment values, and server error
@@ -448,6 +455,216 @@ values overlaid. They also inherit the user's real `HOME`. This is intentional
 host compatibility, not secret isolation; typed model tools and especially an
 approved Bash command may observe ambient user credentials.
 
+## Known read-only Bash commands
+
+The optional `[tools.bash.known_read_only]` class policy is an approval-policy
+input, not a boundary. Classification never changes execution: the frozen
+approval request is still the exact command the selected executor runs as
+`bash -c <command>`, with the backend's ordinary filesystem, network and
+environment authority. Bubblewrap or Seatbelt remains the security boundary;
+direct mode has none. See
+[configuration](configuration.md#known-read-only-bash-commands) for the policy
+contract.
+
+### What the class guarantees
+
+A command is `known_read_only` only when every pipeline stage is accepted by its
+reviewed registry profile, every redirection is in the accepted set, and the
+execution-context checks pass. Such a command:
+
+- runs only reviewed shell builtins or reviewed executables resolved outside the
+  launch directory;
+- reads only data visible to the executor, at any path the backend exposes;
+- writes only captured stdout/stderr, pipes between stages, `/dev/null`, and
+  private temporary files a reviewed program manages itself, such as `sort`
+  spill files under `TMPDIR`; and
+- opens no network connection, starts no background job, and changes no shell or
+  environment state beyond `cd` within the same `bash -c` process. The one
+  documented exception is Apple `cat`'s Unix-domain socket fallback, described
+  under [parser and shell differentials](#parser-and-shell-differentials).
+
+This is capability equivalence, not harmlessness. With `read`, `grep`, `find`
+and `ls` already `allow`, a known read-only command can observe nothing those
+tools cannot observe inside the same boundary; this is why class `allow`
+requires them, both in the base TOML and after broker overrides. Reading is still
+disclosure to the model and its provider. Credentials and other data the
+backend exposes can be read without a prompt, exactly as with the typed tools.
+Use `filesystem.hidden_paths` or `filesystem.denied_paths` to remove such data
+from every tool.
+
+"Known" means curated, not exhaustive. Unlisted commands, unlisted options and
+unrecognized syntax are unclassified and use the main policy. The class can only
+be more permissive than the main policy: the model chooses the command text and
+can always move a command out of the class, for example by adding a variable, so
+a stricter class policy would be bypassable and is rejected. The main policy is
+the floor for every Bash command.
+
+Classification fails closed. An analyzer exception, a result with another
+registry version, or a malformed result makes the request unclassified. The
+analyzer runs on the same immutable argument snapshot that is approved and
+executed, and the class is bound into the request's integrity fingerprint, so a
+later change cannot reuse a classification. A configured class policy without a
+working analyzer aborts startup; there is no fallback to unclassified evaluation
+or to another backend. User `!` commands are never analyzed.
+
+### Execution-context checks
+
+The analyzer is created once at startup with the context the executor uses: the
+backend, the canonical launch directory and the environment passed to `bash -c`
+children. That environment comes from the executors' own construction:
+
+- Bubblewrap: fixed sandbox values, the effective `environment.sandbox` values
+  and the tool-bundle `PATH`;
+- Seatbelt: fixed values, the effective `environment.sandbox` values and the
+  tool-bundle `PATH`. The per-startup scratch `HOME`, `TMPDIR`, `TMP`, `TEMP` and
+  `XDG_*` directories are created later and are not consulted by any check;
+- direct: the ambient environment captured at startup without `PI_SANDBOX_*`
+  variables, overlaid with `environment.sandbox` and the tool-bundle `PATH`.
+
+A command is unclassified when:
+
+1. `BASH_ENV`, `SHELLOPTS`, `BASHOPTS` or `EXECIGNORE` is non-empty. Bash
+   imports these at startup: `BASH_ENV` startup code could redefine commands,
+   `SHELLOPTS=xtrace` with an inherited `PS4` containing `$(...)` runs code
+   before any analyzed command, `BASHOPTS` can enable `expand_aliases` or
+   `extglob`, and `EXECIGNORE` changes executable lookup. This makes the whole
+   command unclassified;
+2. any `LD_*` or `DYLD_*` variable, or `GCONV_PATH`, is non-empty. Dynamic-loader
+   and C-library hooks such as `LD_PRELOAD`, `LD_AUDIT`, `LD_DEBUG_OUTPUT`,
+   `LD_PROFILE_OUTPUT` or `DYLD_INSERT_LIBRARIES`, and `iconv` module loading
+   through `GCONV_PATH`, can make any program load code or write files. This
+   also makes the whole command unclassified;
+3. the command contains non-ASCII text and the effective locale (the first
+   non-empty of `LC_ALL`, `LC_CTYPE` and `LANG`) is neither C, POSIX nor UTF-8,
+   because other multibyte encodings could decode bytes into shell syntax;
+4. the environment exports a Bash function named after a command the input
+   uses, including builtins. Exported functions are recognized as
+   `BASH_FUNC_name` or `__BASH_FUNC<name>` variables with a `%%` or `()` suffix,
+   and as legacy variables whose value starts with `()`;
+5. an executable stage is used while a `command_not_found_handle` function is
+   exported;
+6. for an executable stage, `PATH` is missing or empty, or lookup meets an
+   empty or relative entry, or an entry inside the launch directory by its path
+   or after resolving symbolic links, before finding the command; finds no
+   regular executable file; or resolves through `realpath` to a file inside the
+   launch directory. Without `PATH`, Bash would use a compiled-in search path
+   that can include the current directory; or
+7. a profile's environment dependency is set: `RIPGREP_CONFIG_PATH` while `rg`
+   is used without `--no-config`, or `GREP_OPTIONS` while `grep` is used, which
+   Apple grep and older GNU grep honor.
+
+Builtins are not looked up in `PATH`. Lookup uses the host process's view of the
+filesystem when the command is analyzed, not the sandbox view at execution. One
+analysis resolves each command name once for all of its stages; nothing is
+cached between commands.
+
+These environment inputs are administrator or launching-user values, not
+model-controlled. Configuration rejects administrator `BASH_ENV`, `SHELLOPTS`,
+`LD_PRELOAD`, `LD_LIBRARY_PATH`, `LD_AUDIT`, `DYLD_INSERT_LIBRARIES` and
+`DYLD_LIBRARY_PATH` values for every backend, and the managed runtime removes
+the last five from its own environment before direct mode captures it.
+`environment.sandbox` and the Bubblewrap executor also reject `BASHOPTS`,
+`CDPATH`, `GLOBIGNORE` and `IFS`, as Seatbelt does. Seatbelt also rejects every
+`LD_*` and `DYLD_*` name, and neither isolated
+backend accepts an administrator `PATH` or exported-function name. Under those
+backends only administrator `environment.sandbox` values can trigger the
+environment checks; the inherited direct-mode environment can trigger any of
+them. A user who exports these variables keeps Bash access; affected commands
+use the main policy.
+
+The checks target variables that change which program runs, how Bash starts, or
+whether every program loads foreign code or writes files. Other
+environment-driven behavior of administrator or user values, such as locale
+data, `TMPDIR` or tool-specific settings, applies equally to the typed `read`,
+`grep`, `find` and `ls` tools, which run in the same backend environment, so it
+gives a known read-only command no capability those tools lack.
+
+### Backend guarantees and residual risk
+
+- **Bubblewrap and Seatbelt:** a misclassified command remains contained by the
+  boundary: read-only host paths outside the configured CWD access, masked or
+  denied paths, and network `none` by default. It has the same authority as any
+  approved Bash command, including writes in a writable CWD and private
+  temporary storage. Classification only reduces prompts within that boundary.
+  Seatbelt's fixed `PATH` includes Homebrew directories that are often owned by
+  the user; sandboxed commands cannot write them, but host software can, and
+  the analyzer trusts executables it resolves there.
+- **Direct:** there is no OS boundary, so a misclassification runs with the
+  user's full authority. The context checks reject project-local executables
+  and startup hooks, but a model that has already been allowed to write outside
+  the project, through approved `write`, `edit` or Bash, can place an executable
+  in a user-writable `PATH` directory outside the launch directory, such as
+  `~/.local/bin`. A later known read-only command resolving it would then run
+  without a prompt under class `allow`. Other processes running as the user can
+  also replace an executable between analysis and execution. This residual risk
+  is accepted. Prefer class `ask` in direct mode, or keep `PATH` directories that
+  precede system tools unwritable by the account.
+- **Temporary files:** reviewed programs such as `sort` may create, write and
+  remove private spill files when their input exceeds memory; this is allowed
+  by the class definition. The files land in private `/tmp` under Bubblewrap
+  and executor scratch under Seatbelt. In direct mode `sort` creates and removes
+  them in the user's real `TMPDIR` (or `/tmp` when it is unset), where other
+  processes of the account can see them while they exist.
+- **Resources:** known read-only commands are bounded only by the shell output
+  limit, cancellation and the optional administrator command maximum; there is
+  no implicit timeout. Large traversals, unbounded device reads and blocking
+  reads from FIFOs consume time and host resources until a limit applies.
+
+### Parser and shell differentials
+
+Classification is only as accurate as the analyzer's model of how Bash parses
+and runs the command. A differential, where the analyzer sees a listed command
+with accepted arguments but Bash or the program interprets the text
+differently, would let an unreviewed effect run under the class policy. Typical
+sources are expansions, globbing, escapes, shell options, GNU option
+abbreviations and implementation-specific options.
+
+The recognizer limits this risk by accepting only a strict literal subset whose
+meaning is identical in GNU Bash 3.2 and later under `bash -c` with no startup
+file. Every expansion-bearing character outside quotes is rejected, control
+characters and invalid Unicode are rejected even inside quotes, and there is no
+error recovery: any doubt is unclassified. Command names must match exactly;
+paths, reserved words and assignment-shaped words are rejected; and only
+descriptors 0, 1 and 2 may be redirected. Options use positive lists with full
+long-option names and GNU argument permutation, while operand limits count every
+word after the first operand. Together these take the most permissive reading
+across GNU coreutils, findutils, grep and sed, uutils coreutils and the BSD and
+macOS userland; options whose meaning is doubtful on any of them are omitted.
+Busybox applets are not covered. A known-bypass corpus must stay unclassified,
+and differential tests run accepted inputs and a seeded generated corpus under
+real `/bin/bash` with stub executables, comparing the recorded argv, descriptor
+types and the destinations of unique stream markers with the parse.
+
+Some accepted options take values differently across implementations; this
+changes only which words are read as data. BSD `stat -f` and `-t` take a format
+argument where GNU treats them as flags, so the following word becomes a format
+instead of a file, and BSD `grep --context` and `diff --context` or `--unified`
+accept an optional attached value where GNU `grep --context` requires one, so a
+following number becomes a pattern or file operand. Every reading is
+read-only.
+
+A recognizer or registry defect, or an implementation option with an
+unreviewed effect, can still misclassify a command. Bubblewrap and Seatbelt
+contain the result; direct mode does not. The differential test runs unchanged
+on Linux and macOS and passed natively under macOS `/bin/bash` 3.2. It runs stub
+executables, so it verifies Bash parsing and stream wiring, not utility
+behavior. Registry option semantics on the macOS system utilities and the
+selected tool bundle were reviewed separately by native probes of every
+accepted option spelling (see [testing](testing.md#bash-command-analysis)).
+Event records carry the registry version used for each decision.
+
+Apple `cat` has a Unix-domain socket fallback: its manual page and source
+connect to a socket path given as an operand and read what the peer sends. On
+the tested Mac (macOS 26.7.1), Apple `cat` failed before connecting
+(`ai_family not supported`), so no positive control was possible. An
+independent control showed that Seatbelt `network = "none"` denies Unix-domain
+connects with `EPERM` while `host` permits them. The typed `read` tool runs the
+same `/bin/cat`, so capability equivalence holds. The remaining exposure is
+Seatbelt with network `host`, or direct mode, where `cat` of a socket path may
+connect to a local service and read whatever it sends on connect. This is a
+documented residual risk, not a claim that known read-only commands perform no
+local IPC.
+
 ## Residual risks
 
 - Bubblewrap shares the host kernel; it is not a virtual-machine boundary.
@@ -457,7 +674,14 @@ approved Bash command may observe ambient user credentials.
 - An approved Bash command has all authority exposed by the sandbox mounts and
   effective network mode.
 - Read-only visibility may expose sensitive contents to a model through an
-  allowed read or shell operation.
+  allowed read or shell operation, including known read-only Bash commands that
+  run without a prompt.
+- In direct mode, a misclassified known read-only command, or an executable
+  planted in a user-writable `PATH` directory outside the project, runs with the
+  user's full authority.
+- On macOS under Seatbelt network `host` or in direct mode, a known read-only
+  Apple `cat` of a Unix-domain socket path may connect to a local service and
+  read what it sends on connect.
 - Resource exhaustion requires separate host controls; v1 does not claim a
   complete cgroup or seccomp policy.
 - The local user can run unrelated software outside the managed executable.

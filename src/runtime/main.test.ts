@@ -11,7 +11,7 @@ import { InMemoryCredentialStore } from "@earendil-works/pi-ai";
 import { SandboxExecutionError } from "../../packages/sandbox-extension/src/runtime/contracts.js";
 
 import { IDENTITY_BROKER_SOCKET_PATH } from "../domain/index.js";
-import type { SandboxConfig } from "../domain/index.js";
+import type { IdentityOverrides, SandboxConfig } from "../domain/index.js";
 import { createManagedExtensionCatalog } from "../managed-extensions/catalog.js";
 import {
   defineManagedHostEnvironment,
@@ -855,6 +855,34 @@ describe("administrative configuration", () => {
         }),
       ),
     ).rejects.toThrow("Direct execution requires network.mode = host");
+  });
+
+  it("validates the known read-only allow precondition on the effective broker policy", async () => {
+    const root = await createRoot();
+    const configPath = rooted(root, "/etc/pi-sandbox/config.toml");
+    const source = await readFile(configPath, "utf8");
+    await writeFile(rooted(root, "/etc/pi-sandbox/models.json"), JSON.stringify({ providers: {} }));
+    await writeFile(
+      configPath,
+      `${source.replace('mode = "disabled"', 'mode = "broker"')}\n[tools.bash.known_read_only]\nmode = "allow"\nsession_grant = "never"\n`,
+    );
+    const resolve = (tools: IdentityOverrides["tools"]) =>
+      resolveEffectiveAdministrativeConfiguration(root, {}, () =>
+        Promise.resolve({
+          environment: { pi: {}, sandbox: {}, extensions: {} },
+          overrides: { tools },
+        }),
+      );
+    await expect(resolve({})).resolves.toHaveProperty(
+      "config.tools.bash.commandClasses.known_read_only.mode",
+      "allow",
+    );
+    await expect(resolve({ ls: { mode: "ask", sessionGrant: "never" } })).rejects.toThrow(
+      'tools.bash.known_read_only.mode "allow" requires tools.ls.mode "allow" (it is "ask")',
+    );
+    await expect(
+      resolve({ bash: { mode: "ask", sessionGrant: "never" } }),
+    ).resolves.not.toHaveProperty("config.tools.bash.commandClasses");
   });
 
   it("preserves the base command timeout cap through broker backend selection", async () => {
