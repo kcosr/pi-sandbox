@@ -1,9 +1,6 @@
 export const NETWORK_MODES = Object.freeze(["none", "local", "host"] as const);
 export type NetworkMode = (typeof NETWORK_MODES)[number];
 
-export const PROCESS_LIFETIMES = Object.freeze(["command", "sandbox"] as const);
-export type ProcessLifetime = (typeof PROCESS_LIFETIMES)[number];
-
 export const TOOL_COMMAND_NAMES = Object.freeze([
   "bash",
   "sh",
@@ -33,11 +30,10 @@ export interface ToolBundle {
   readonly commands: Readonly<Partial<Record<ToolCommandName, string>>>;
 }
 
-export const DEFAULT_SANDBOX_TIMEOUT_MS = 120_000;
 export const DEFAULT_SANDBOX_OUTPUT_LIMIT_BYTES = 1_048_576;
 
 export interface SandboxResourceLimits {
-  readonly defaultTimeoutMs?: number;
+  /** Optional trusted maximum; also applies when a request omits its timeout. */
   readonly maximumTimeoutMs?: number;
   readonly defaultOutputBytes?: number;
   readonly maximumOutputBytes?: number;
@@ -54,8 +50,6 @@ export interface CreateBubblewrapExecutorOptions {
   readonly hiddenPaths?: readonly string[];
   /** Tool and shell network authority. Omitted means a private offline namespace. */
   readonly networkMode?: NetworkMode;
-  /** Whether background processes survive ordinary command completion. Defaults to command. */
-  readonly processLifetime?: ProcessLifetime;
   /** Administrator-provided variables added to the fixed sandbox environment. */
   readonly environment?: Readonly<Record<string, string>>;
   readonly toolBundle?: ToolBundle;

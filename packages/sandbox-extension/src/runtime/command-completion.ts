@@ -13,7 +13,10 @@ export interface CommandExit {
  * would truncate active output (upstream issue #5303). The worker's ordinary
  * timeout and output limits remain responsible for bounding a noisy descendant.
  */
-export function waitForSandboxCommand(child: ChildProcess): Promise<CommandExit> {
+export function waitForSandboxCommand(
+  child: ChildProcess,
+  options: { readonly signal?: AbortSignal; readonly isOutputPending?: () => boolean } = {},
+): Promise<CommandExit> {
   return new Promise((resolve, reject) => {
     let result: CommandExit | undefined;
     let settled = false;
@@ -30,6 +33,7 @@ export function waitForSandboxCommand(child: ChildProcess): Promise<CommandExit>
       child.stderr?.removeListener("end", onStderrEnd);
       child.stdout?.removeListener("data", onData);
       child.stderr?.removeListener("data", onData);
+      options.signal?.removeEventListener("abort", onAbort);
       child.stdin?.destroy();
       child.stdout?.destroy();
       child.stderr?.destroy();
@@ -43,6 +47,12 @@ export function waitForSandboxCommand(child: ChildProcess): Promise<CommandExit>
     const armIdleTimer = (): void => {
       if (idleTimer !== undefined) clearTimeout(idleTimer);
       idleTimer = setTimeout(() => {
+        // Backpressure is not output inactivity: a paused stream may still have
+        // buffered bytes waiting for its consumer to accept the previous chunk.
+        if (options.isOutputPending?.()) {
+          armIdleTimer();
+          return;
+        }
         if (result !== undefined) finish(result);
       }, POST_EXIT_IDLE_MS);
     };
@@ -68,11 +78,21 @@ export function waitForSandboxCommand(child: ChildProcess): Promise<CommandExit>
     };
     const onExit = (exitCode: number | null, signal: NodeJS.Signals | null): void => {
       result = { exitCode, signal };
+      if (options.signal?.aborted) {
+        finish(result);
+        return;
+      }
       finishIfEnded();
       if (!settled) armIdleTimer();
     };
     const onClose = (exitCode: number | null, signal: NodeJS.Signals | null): void => {
       finish({ exitCode, signal });
+    };
+    const onAbort = (): void => {
+      child.stdin?.destroy();
+      child.stdout?.destroy();
+      child.stderr?.destroy();
+      if (result !== undefined) finish(result);
     };
 
     child.stdout?.once("end", onStdoutEnd);
@@ -82,5 +102,7 @@ export function waitForSandboxCommand(child: ChildProcess): Promise<CommandExit>
     child.once("error", onError);
     child.once("exit", onExit);
     child.once("close", onClose);
+    options.signal?.addEventListener("abort", onAbort, { once: true });
+    if (options.signal?.aborted) onAbort();
   });
 }
