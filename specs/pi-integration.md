@@ -67,8 +67,8 @@ Sandbox factory through the inline extension-factory option. It must:
   and bug-report uploads; administrator-configured model and MCP connections
   remain available;
 - disable external session sharing through `/share` for every destination, omit
-  it from command discovery and CLI help (including `PI_SHARE_VIEWER_URL`), and
-  retain local `/export`;
+  it from command discovery and CLI help (including `PI_SHARE_VIEWER_URL`), omit
+  its destination picker from `/settings`, and retain local `/export`;
 - preserve skills, options that disable skills, and options that narrow the
   visible tool catalog; and
 - fail closed before interactive startup if managed initialization fails.

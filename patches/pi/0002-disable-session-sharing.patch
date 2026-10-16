@@ -22,8 +22,61 @@ index dc98f1d..d5f2dc7 100644
  	{ name: "bug", description: "Report a bug to the Pi developers", argumentHint: "<description>" },
  	{ name: "copy", description: "Copy last agent message to clipboard" },
  	{ name: "name", description: "Set session display name" },
+diff --git a/packages/coding-agent/src/modes/interactive/components/settings-selector.ts b/packages/coding-agent/src/modes/interactive/components/settings-selector.ts
+index e0cca78..cdeb80a 100644
+--- a/packages/coding-agent/src/modes/interactive/components/settings-selector.ts
++++ b/packages/coding-agent/src/modes/interactive/components/settings-selector.ts
+@@ -21,7 +21,6 @@ import {
+ 	type FullscreenExitOutput,
+ 	type MermaidRenderingMode,
+ 	type QuietStartup,
+-	type SessionShareDestination,
+ 	type TuiMode,
+ 	type WarningSettings,
+ } from "../../../core/settings-manager.ts";
+@@ -71,7 +70,6 @@ export interface SettingsConfig {
+ 	steeringMode: "all" | "one-at-a-time";
+ 	followUpMode: "all" | "one-at-a-time";
+ 	transport: Transport;
+-	sessionShareDestination: SessionShareDestination;
+ 	httpIdleTimeoutMs: number;
+ 	cacheWarmingMode: CacheWarmingMode;
+ 	thinkingLevel: ThinkingLevel;
+@@ -113,7 +111,6 @@ export interface SettingsCallbacks {
+ 	onSteeringModeChange: (mode: "all" | "one-at-a-time") => void;
+ 	onFollowUpModeChange: (mode: "all" | "one-at-a-time") => void;
+ 	onTransportChange: (transport: Transport) => void;
+-	onSessionShareDestinationChange: (destination: SessionShareDestination) => void;
+ 	onHttpIdleTimeoutMsChange: (timeoutMs: number) => void;
+ 	onCacheWarmingModeChange: (mode: CacheWarmingMode) => void;
+ 	onModelThinkingLevelChange: (provider: string, modelId: string, level: ThinkingLevel) => void;
+@@ -512,14 +509,6 @@ export class SettingsSelectorComponent extends Container {
+ 				currentValue: config.transport,
+ 				values: ["sse", "websocket", "websocket-cached", "auto"],
+ 			},
+-			{
+-				id: "share-destination",
+-				label: "Session share destination",
+-				description:
+-					"Where to upload sessions with /share (auto prefers Radius when authenticated, otherwise GitHub Gist)",
+-				currentValue: config.sessionShareDestination,
+-				values: ["auto", "gist", "radius"],
+-			},
+ 			{
+ 				id: "http-idle-timeout",
+ 				label: "HTTP idle timeout",
+@@ -911,9 +900,6 @@ export class SettingsSelectorComponent extends Container {
+ 					case "transport":
+ 						callbacks.onTransportChange(newValue as Transport);
+ 						break;
+-					case "share-destination":
+-						callbacks.onSessionShareDestinationChange(newValue as SessionShareDestination);
+-						break;
+ 					case "http-idle-timeout": {
+ 						const choice = HTTP_IDLE_TIMEOUT_CHOICES.find((item) => item.label === newValue);
+ 						if (choice) {
 diff --git a/packages/coding-agent/src/modes/interactive/interactive-mode.ts b/packages/coding-agent/src/modes/interactive/interactive-mode.ts
-index ce23984..32af6b5 100644
+index ce23984..d788e5e 100644
 --- a/packages/coding-agent/src/modes/interactive/interactive-mode.ts
 +++ b/packages/coding-agent/src/modes/interactive/interactive-mode.ts
 @@ -185,7 +185,6 @@ import { editInExternalEditor } from "./external-editor.ts";
@@ -43,7 +96,25 @@ index ce23984..32af6b5 100644
  				await this.handleShareCommand();
  				this.editor.setText("");
  				return;
-@@ -6627,14 +6626,7 @@ export class InteractiveMode {
+@@ -4940,7 +4939,6 @@ export class InteractiveMode {
+ 					steeringMode: this.session.steeringMode,
+ 					followUpMode: this.session.followUpMode,
+ 					transport: this.settingsManager.getTransport(),
+-					sessionShareDestination: this.settingsManager.getSessionShareDestination(),
+ 					httpIdleTimeoutMs: this.settingsManager.getHttpIdleTimeoutMs(),
+ 					cacheWarmingMode: this.settingsManager.getCacheWarmingMode(),
+ 					thinkingLevel: this.settingsManager.getDefaultThinkingLevel() ?? DEFAULT_THINKING_LEVEL,
+@@ -5012,9 +5010,6 @@ export class InteractiveMode {
+ 						this.settingsManager.setTransport(transport);
+ 						this.session.agent.transport = transport;
+ 					},
+-					onSessionShareDestinationChange: (destination) => {
+-						this.settingsManager.setSessionShareDestination(destination);
+-					},
+ 					onHttpIdleTimeoutMsChange: (timeoutMs) => {
+ 						this.settingsManager.setHttpIdleTimeoutMs(timeoutMs);
+ 						configureHttpDispatcher(timeoutMs);
+@@ -6627,14 +6622,7 @@ export class InteractiveMode {
  	}
  
  	private async handleShareCommand(): Promise<void> {
@@ -125,3 +196,46 @@ index 0000000..4b1c1d8
 +		expect(fetch).not.toHaveBeenCalled();
 +	});
 +});
+diff --git a/packages/coding-agent/test/settings-selector.test.ts b/packages/coding-agent/test/settings-selector.test.ts
+index 35b9bfe..9ac5ef0 100644
+--- a/packages/coding-agent/test/settings-selector.test.ts
++++ b/packages/coding-agent/test/settings-selector.test.ts
+@@ -63,10 +63,11 @@ describe("SettingsSelectorComponent", () => {
+ 		expect(onWheelScrollLinesChange.mock.calls.flat()).toEqual([10, "auto", 1]);
+ 	});
+ 
+-	it("cycles through share destinations", () => {
+-		const onSessionShareDestinationChange = vi.fn();
++	it.each(["auto", "gist", "radius"])("omits sharing controls despite a saved %s destination", (destination) => {
+ 		const config = {
+-			sessionShareDestination: "auto",
++			// A stored ordinary-Pi preference cannot restore disabled sharing controls.
++			sessionShareDestination: destination,
++			transport: "sse",
+ 			warnings: {},
+ 			defaultModel: "not set",
+ 			availableDefaultModels: [],
+@@ -74,15 +75,15 @@ describe("SettingsSelectorComponent", () => {
+ 			modelThinkingLevels: {},
+ 			availableThemes: [],
+ 		} as unknown as SettingsConfig;
+-		const callbacks = {
+-			onSessionShareDestinationChange,
+-		} as unknown as SettingsCallbacks;
++		const callbacks = {} as SettingsCallbacks;
++		const positive = new SettingsSelectorComponent(config, callbacks).getSettingsList();
++		for (const character of "Transport") positive.handleInput(character);
++		expect(stripAnsi(positive.render(120).join("\n"))).toContain("sse");
+ 		const list = new SettingsSelectorComponent(config, callbacks).getSettingsList();
+-		list.selectItem("share-destination");
+-
+-		for (let i = 0; i < 3; i++) list.handleInput("\r");
+-
+-		expect(onSessionShareDestinationChange.mock.calls.flat()).toEqual(["gist", "radius", "auto"]);
++		for (const character of "Session share destination") list.handleInput(character);
++		const rendered = stripAnsi(list.render(120).join("\n"));
++		expect(rendered).toContain("No matching settings");
++		expect(rendered).not.toContain("Where to upload sessions");
+ 	});
+ 
+ 	it("keeps the configured fixed theme marked while browsing", () => {

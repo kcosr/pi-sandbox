@@ -667,18 +667,28 @@ index 0000000..8aa2fa7
 +	});
 +});
 diff --git a/packages/codemode/test/worker-lifetime.test.ts b/packages/codemode/test/worker-lifetime.test.ts
-index 67ac4b2..af9c2fb 100644
+index 67ac4b2..567c524 100644
 --- a/packages/codemode/test/worker-lifetime.test.ts
 +++ b/packages/codemode/test/worker-lifetime.test.ts
-@@ -214,15 +214,17 @@ describe.each(runtimes)("$name process lifetime", ({ name, command, available })
+@@ -214,15 +214,28 @@ describe.each(runtimes)("$name process lifetime", ({ name, command, available })
  		name === "Node" ? "exits promptly after %s with a real worker" : "settles %s promptly with a real worker",
  		async (how) => {
  			const fixture = fileURLToPath(new URL("./fixtures/worker-process-exit.ts", import.meta.url));
+-			const { stdout } = await promisify(execFile)(command, [fixture, how], { timeout: 20000 });
 +			// Observe owner exit from the parent. Bun 1.3.14 can finish this worker
 +			// process without invoking its process.on("exit") callback.
-+			const started = performance.now();
- 			const { stdout } = await promisify(execFile)(command, [fixture, how], { timeout: 20000 });
-+			const elapsedMs = performance.now() - started;
++			let resultReceivedAt: number | undefined;
++			let exitedAt: number | undefined;
++			let received = "";
++			const pending = promisify(execFile)(command, [fixture, how], { timeout: 20000 });
++			pending.child.stdout?.on("data", (chunk: string | Buffer) => {
++				received += chunk.toString();
++				if (resultReceivedAt === undefined && received.includes("\n")) resultReceivedAt = performance.now();
++			});
++			pending.child.once("exit", () => {
++				exitedAt = performance.now();
++			});
++			const { stdout } = await pending;
  			const lines = stdout.trim().split(/\r?\n/);
 -			expect(lines).toHaveLength(2);
 +			expect(lines).toHaveLength(1);
@@ -688,7 +698,9 @@ index 67ac4b2..af9c2fb 100644
 -			expect(exit.type).toBe("exit");
  			expect(result.elapsedMs).toBeLessThan(1000);
 -			if (name === "Node") expect(exit.elapsedMs - result.elapsedMs).toBeLessThan(1000);
-+			if (name === "Node") expect(elapsedMs - result.elapsedMs).toBeLessThan(1000);
++			expect(resultReceivedAt).toBeDefined();
++			expect(exitedAt).toBeDefined();
++			if (name === "Node") expect(exitedAt! - resultReceivedAt!).toBeLessThan(1000);
  		},
  		25000,
  	);
