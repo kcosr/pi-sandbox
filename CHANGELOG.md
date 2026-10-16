@@ -21,14 +21,14 @@
 
 ### Changed
 
-- Upgrade managed and standalone Pi integration to 1.3.0, preserving sandbox policies, disabled sharing and configured-only models.
+- Upgrade managed and standalone Pi integration to 1.3.0, preserving sandbox policies, disabled sharing and configured-only model catalogs. ([#36](https://github.com/kcosr/pi-sandbox/pull/36))
 
 - Upgrade managed and standalone Pi integration to 1.2.0, preserving configured-only models, MCP approvals and bounded Code Mode execution. ([#33](https://github.com/kcosr/pi-sandbox/pull/33))
 - Follow Pi's parallel scheduling across backends, isolate command cancellation from peers, and replace implicit timeouts with an optional administrator maximum. ([#30](https://github.com/kcosr/pi-sandbox/pull/30))
 
 ### Fixed
 
-- Format numeric-string and null read ranges using Pi's renderer while preserving full paths and tool-home labels.
+- Format numeric-string and null read ranges using Pi's renderer while preserving full paths and tool-home labels. ([#36](https://github.com/kcosr/pi-sandbox/pull/36))
 
 - Preserve full paths in sandbox tool cards and label explicit `~` paths as tool-home paths instead of abbreviating them against Pi's host home. ([#35](https://github.com/kcosr/pi-sandbox/pull/35))
 - Exclude stock Pi tool implementations from managed sessions so tool selection and MCP catalog refresh cannot restore policy-disabled tools. ([#33](https://github.com/kcosr/pi-sandbox/pull/33))
