@@ -13,19 +13,22 @@ production services.
 
 ## Purpose and scope
 
-In the default Linux Bubblewrap mode, Pi Sandbox runs model tools and
-user-invoked `!` shell commands inside a Bubblewrap boundary. By default, direct filesystem changes are confined to the directory
-from which the user launched it, while the rest of the ordinary host filesystem
-is mounted read-only. `filesystem.hidden_paths` masks selected existing files and directories while
-restoring the launch workspace through a hidden parent. Setting
-`filesystem.cwd_writable = false` also makes the
-launch directory read-only, while preserving writable private temporary storage. Within the launch directory, administrators determine
-which model tools are available and which permitted tools require user
-approval. They also determine whether tool networking is isolated or allowed to
-use the host network. Approval operates within the limits established by that
-policy and the sandbox boundary. Linux and macOS also support explicit direct
-mode, which preserves tool exposure, approval policy, bounded process handling,
-and typed tools but provides no filesystem or network containment. macOS packages select Seatbelt filesystem and network policy by default, with real host scratch directories and best-effort process-group cleanup. Background descendants may survive ordinary completion, cancellation, shutdown, or owner death with their original grants.
+Pi Sandbox runs its seven filesystem and shell tools and user-invoked `!`
+commands through the administrator-selected backend: Bubblewrap on Linux,
+Seatbelt on macOS, or explicit direct execution. Administrators determine which
+model tools are available, which require approval, whether the launch directory
+is writable, and which tool networking mode is permitted. Approval never
+broadens the configured execution boundary.
+
+Both confined backends preserve host absolute paths and make ordinary host files
+read-only outside the writable launch directory and runtime scratch locations.
+Bubblewrap provides private mounts, temporary storage and namespaces;
+`filesystem.hidden_paths` masks selected files and directories. Seatbelt uses
+host paths and real host scratch directories; `filesystem.denied_paths` denies
+access to selected directories instead of masking them. Seatbelt cleanup is best
+effort: background descendants may survive completion, cancellation, shutdown,
+or owner death with their original grants. Direct mode preserves tool policy,
+approvals and typed operations but provides no filesystem or network containment.
 
 Pi Sandbox is designed for interactive use with an attentive user. Its boundary
 governs operations routed through `pi-sandbox` and complements the account and
@@ -33,11 +36,14 @@ server controls that govern other software run by the logged-in user.
 
 ## Execution backends and reusable extensions
 
-| Backend              | Supported hosts                                  | Tool filesystem                                                             | Tool networking                   |
-| -------------------- | ------------------------------------------------ | --------------------------------------------------------------------------- | --------------------------------- |
-| Bubblewrap (default) | Linux x86-64 / arm64                             | Host read-only, selected launch directory writable, optional masks          | None, private loopback, or host   |
-| Seatbelt (default)   | macOS arm64 / x86-64 (qualify each architecture) | Host read-only, optional writable CWD, real host scratch, directory denials | None or host; no private loopback |
-| Direct (explicit)    | Linux and macOS x86-64 / arm64                   | Ordinary host access                                                        | Host                              |
+| Backend                             | Supported hosts                                  | Tool filesystem                                                             | Tool networking                   |
+| ----------------------------------- | ------------------------------------------------ | --------------------------------------------------------------------------- | --------------------------------- |
+| Bubblewrap (Linux packaged default) | Linux x86-64 / arm64                             | Host read-only, optional writable CWD, private runtime/temp storage, masks  | None, private loopback, or host   |
+| Seatbelt (macOS packaged default)   | macOS arm64 / x86-64 (qualify each architecture) | Host read-only, optional writable CWD, real host scratch, directory denials | None or host; no private loopback |
+| Direct (explicit)                   | Linux and macOS x86-64 / arm64                   | Ordinary host access                                                        | Host                              |
+
+Packaged defaults are explicit policy settings. `execution.backend` is required
+in configuration; there is no automatic backend fallback.
 
 Ordinary Pi can load the same [sandbox tools](packages/sandbox-extension/README.md)
 or the independent [Git extension](packages/git-extension/README.md). These
@@ -49,44 +55,51 @@ application owns the implementation, isolation boundary and cleanup.
 
 ## Isolation at a glance
 
-This diagram shows the default Bubblewrap mode. The backend table above describes
-the other execution boundaries.
+The configured backend determines where the seven tools and user `!` commands
+run. Model traffic, managed host tools and MCP remain outside the tool sandbox.
+The backend table above summarizes the platform differences.
 
 ```mermaid
 flowchart LR
     User[User] --> Pi["Pi UI and model runtime<br/>(host)"]
     Policy[Administrative policy] --> Pi
-    Pi <--> Provider[Internal model provider]
+    Pi <--> Provider[Configured model provider]
+    Pi --> Backend[Selected execution backend]
+    Pi --> HostTools["Managed host tools and MCP<br/>outside the tool sandbox"]
+    Backend --> Direct["Explicit direct execution<br/>no OS confinement"]
 
-    subgraph Sandbox["Process-lifetime Bubblewrap boundary"]
+    subgraph Sandbox["Sandboxed tool execution<br/>Bubblewrap (Linux) / Seatbelt (macOS)"]
         direction TB
-        Operations["Model tools and user-invoked<br/>shell commands"]
+        Operations["Seven tools and user-invoked<br/>shell commands"]
         LaunchDirectory["Launch directory<br/>configured read/write or read-only"]
-        HostFilesystem["Other host filesystem<br/>read-only"]
-        Network["Tool network<br/>isolated or administrator-enabled host access"]
+        HostFilesystem["Other ordinary host paths<br/>read-only, with masks or directory denials"]
+        Scratch["Writable runtime/temp storage<br/>private mounts or host scratch"]
+        Network["Tool networking<br/>none or host; private loopback on Linux"]
 
         Operations --> LaunchDirectory
         Operations --> HostFilesystem
+        Operations --> Scratch
         Operations --> Network
     end
 
-    Pi --> Operations
+    Backend --> Operations
 ```
 
 ## What it enforces
 
-- The ordinary host filesystem, except configured hidden files and directories, is visible at its normal absolute paths and
-  mounted read-only. The launch directory is explicitly bound at the same path,
-  read/write or read-only according to `filesystem.cwd_writable`, and is the
-  working directory for every built-in tool and shell operation.
+- Bubblewrap and Seatbelt preserve ordinary host absolute paths, with configured
+  exclusions and read-only access outside writable workspace/runtime locations.
+  The launch directory remains the working directory for all seven tools and
+  shell commands. `filesystem.cwd_writable` controls writes there for both
+  confined backends; direct mode uses ordinary host permissions.
 - Administrator policy determines whether model tools capable of modifying
   files in the launch directory are available and whether they require user
   approval.
-- One process-lifetime sandbox provides private temporary and runtime
-  directories shared by tool calls in that Pi invocation, administrator-selected
-  network isolation or host-network access, and a sanitized environment that
-  excludes ambient provider tokens and host socket descriptors while admitting
-  only explicitly configured, model-visible sandbox variables.
+- Bubblewrap owns a process-lifetime namespace with private temporary/runtime
+  storage. Seatbelt applies policy to independent commands using real host
+  scratch directories and best-effort cleanup. Both use cleared tool environments
+  with fixed runtime values and explicitly configured sandbox variables.
+  Tool networking follows the selected backend's supported policy modes.
 - All seven Pi tools (`read`, `grep`, `find`, `ls`, `write`, `edit`, and `bash`)
   and user `!` commands use the selected backend. The model-visible `bash` tool
   can be disabled while typed tools remain available; human `!` remains fixed-allow.
@@ -94,7 +107,7 @@ flowchart LR
   build-selected distribution manifest; its
   required `models_file` selects the complete model catalog. Pi's internal model
   catalog is disabled.
-- The main configuration defines the global scoped environment. An optional
+- The main configuration defines the global scoped environment. On Linux, an optional
   root broker can combine named or numeric user/group rules into a patch for environment, model
   catalog, execution backend, network mode, CWD write access, and complete per-tool policy
   overrides without exposing other users' files.
@@ -138,7 +151,7 @@ inactive unless configured:
 pi-sandbox
   -> managed Pi
      -> forced Pi Sandbox extension and approval policy
-     -> selected Bubblewrap worker or direct executor
+     -> selected executor: Bubblewrap (Linux), Seatbelt (macOS), or direct
         -> bounded tool operations with backend-specific lifecycle
 ```
 

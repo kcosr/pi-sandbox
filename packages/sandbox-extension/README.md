@@ -1,9 +1,10 @@
 # Pi sandbox extension
 
 The same filesystem and shell implementation used by Pi Sandbox, packaged for
-ordinary Pi. Pi stays on the host. Bubblewrap runs tools inside its filesystem,
-network and process boundary. Explicit direct mode executes tools as the host
-user and provides no sandbox isolation.
+ordinary Pi. Pi stays on the host. The configured backend runs tools through
+Bubblewrap's filesystem, network and process namespaces on Linux or Seatbelt's
+filesystem and network policy on macOS. Explicit direct mode executes tools as
+the host user and provides no sandbox isolation.
 
 This package does not impose the managed application's administrator controls.
 Other extensions and host MCP servers are outside this execution boundary.
@@ -28,8 +29,8 @@ Install the resulting tarball alongside ordinary Pi **1.3.0**. Its public Pi
 peer dependencies must resolve to that version. No private repository, adjacent
 source checkout or second bundled Pi SDK is required.
 
-Create a private JSON file outside the project, owned by your account and mode 0600. Use absolute paths for your installed Bubblewrap and Node 24 or Bun 1.3.14+
-executables:
+Create a private JSON file outside the project, owned by your account and mode 0600. For Linux Bubblewrap, use absolute paths for your installed Bubblewrap and
+Node 24 or Bun 1.3.14+ executables. Seatbelt and direct configurations follow below:
 
 ```json
 {
@@ -80,8 +81,9 @@ Bubblewrap requires Linux user namespaces and the documented GNU prerequisites.
 All backends retain Pi's scheduling without a serial queue or fixed command-count
 limits. Same-file mutations remain coordinated. Background descendants may survive
 completion. Cancellation and failure affect only their request; active group
-cleanup is best effort. Linux final shutdown terminates its namespace; fatal worker
-or transport failure can abort the executor. No watcher or monitoring daemon is added.
+cleanup is best effort. Bubblewrap's final shutdown terminates its namespace;
+fatal worker or transport failure can abort that executor. No watcher or monitoring
+daemon is added.
 
 The extension owns one backend per Pi process. Conversation switching keeps that
 backend. Quit closes it; extension

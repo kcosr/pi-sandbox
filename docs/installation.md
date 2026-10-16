@@ -547,8 +547,8 @@ pi-sandbox
 Before starting the interactive application, the executable validates the
 compiled extension catalog, loads the base policy, optionally resolves the
 calling account and groups, validates the selected extensions, effective model catalog, exact
-tool policy, and conditional executable prerequisites, and probes a real
-Bubblewrap operation for the launch directory. Any failure stops startup. No
+tool policy, and conditional executable prerequisites, and probes the selected
+execution backend for the launch directory. Any failure stops startup. No
 stock tool or host-execution fallback is available.
 
 After selecting the Pi session, startup also awaits optional retention cleanup
@@ -611,8 +611,9 @@ their separate host authority.
 
 The packaged `network.mode = "none"` intentionally disables networking for tools
 and shell commands. Provider traffic still works because Pi itself remains
-host-side. `network.mode = "local"` allows only sandbox-loopback TCP/UDP, so a
-host browser cannot connect to a sandbox server. An administrator may select
+host-side. Only Linux Bubblewrap supports `network.mode = "local"`; it allows
+private sandbox-loopback TCP/UDP, so a host browser cannot connect to a sandbox
+server. Seatbelt supports only `none` or `host`. An administrator may select
 `network.mode = "host"` for unrestricted host loopback, LAN, and Internet access;
 restart `pi-sandbox` after changing the effective configuration.
 

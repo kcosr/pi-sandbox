@@ -222,7 +222,7 @@ extension whose required absolute executable is absent aborts startup.
 ## Managed host-tool authority
 
 Managed host tools intentionally execute as the invoking Unix user outside
-Bubblewrap. They retain the host filesystem view, network namespace, user
+the selected sandbox. They retain the host filesystem view, network namespace, user
 configuration, most ambient environment, proxies, and reachable services. Each
 compiled extension declares the managed variable names it accepts, inherited
 names or prefixes it removes, and fixed values it applies. Broker values can
@@ -326,15 +326,16 @@ wants only typed model operations, but it does not turn direct mode into a
 sandbox. User `!` remains available because it is invoked by the human rather
 than advertised to the model.
 
-The read-only CWD setting is a Bubblewrap filesystem restriction. It applies to
+The read-only CWD setting is enforced by Bubblewrap and Seatbelt. It applies to
 model Bash and human shell commands as well as typed tools; an approval cannot
 bypass it. Direct mode rejects the setting, and managed host tools retain their
-explicit host authority. Writable private runtime/temp storage remains available.
+explicit host authority. Writable private runtime/temp storage remains available
+in Bubblewrap; Seatbelt uses writable real host scratch directories.
 
 ## Audit correlation
 
 The application and collector use strict audit wire version 2; the collector emits
-record schema version 3 and requires configuration version 11. They must be
+record schema version 3 and requires configuration version 13. They must be
 installed from the same release. MCP records carry the configured server ID,
 original tool name, and `http` or `stdio` transport. Nested audited calls carry
 `parent_invocation_id` from trusted execution context, never from script arguments.

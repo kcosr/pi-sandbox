@@ -345,9 +345,9 @@ release test remains offline.
 Linux release testing runs locally with Node.js 24, Rust/Cargo 1.85 or newer,
 and Bubblewrap through `npm run verify:release`. macOS release testing runs on
 the target architecture with Node.js 24, Bun, and the system prerequisites or
-selected native tool bundle;
-it builds and validates the native direct-mode archive. Generated artifacts are
-not committed.
+selected native tool bundle. It builds and validates the native archive with
+Seatbelt selected by default and qualifies both Seatbelt and explicit direct
+execution. Generated artifacts are not committed.
 
 If a test must skip because the developer host lacks Bubblewrap or user
 namespaces, the output must explain the missing prerequisite. Release

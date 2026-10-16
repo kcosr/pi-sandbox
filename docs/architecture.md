@@ -37,23 +37,24 @@ in runner order providing a tool name wins, and user-shell dispatch stops at its
 first handler. Our sandbox and Git tools have disjoint names. Arbitrary managed
 extension loading is not added; the existing managed/`pi-tool` composition remains.
 
-Ordinary Pi starts the existing Bubblewrap worker through a packaged JavaScript
-entry and an explicitly configured Node/Bun runtime. Managed Pi continues to use
+When Bubblewrap is selected, ordinary Pi starts its worker through a packaged
+JavaScript entry and an explicitly configured Node/Bun runtime. Managed Pi uses
 its compiled internal-worker entry. These are two launch forms for the same
-implementation, not separate executors or a new monitoring service.
+implementation, not separate executors or a new monitoring service. Seatbelt and
+direct execution launch commands without a Bubblewrap worker.
 
 ## Boundary placement
 
 Pi Sandbox deliberately keeps the stock Pi process on the host. Pi owns the
 terminal UI, provider credentials, provider traffic, and session state. The
 compiled Pi Sandbox extension owns tool presentation, approval, and process
-lifecycle. One Bubblewrap worker lives for the `pi-sandbox` process; each
-allowed built-in operation runs through the administrator-selected Bubblewrap, Seatbelt
-or direct backend.
+lifecycle. Each allowed built-in operation runs through the
+administrator-selected Bubblewrap, Seatbelt or direct backend. When Bubblewrap
+is selected, one worker lives for the `pi-sandbox` process.
 
 ```text
 trusted host
-  optional root systemd identity broker
+  optional root systemd identity broker (Linux)
     -> SO_PEERCRED UID -> host account/group lookup -> optional users.d + groups.d rules
   prebuilt Bun pi-sandbox executable
     pinned, minimally patched Pi runtime
@@ -106,7 +107,7 @@ Code mode and MCP have bounded source, output, catalog, concurrency and duration
 limits. Tool calls are never automatically replayed after transport failures.
 Shutdown closes admission, cancels scripts and calls, reaps owned stdio process
 groups, and awaits local cleanup before ending audit identity. The process-owned
-Bubblewrap worker remains available for the next logical session. Results stay
+execution backend remains available for the next logical session. Results stay
 inline; no host temporary output files are presented as sandbox-readable paths.
 
 ## RPC and session lifecycle
@@ -291,8 +292,8 @@ identity. The central host executor uses an absolute executable, direct
 argument vector, bounded standard input, duration, and output; it never invokes
 a shell. Cancellation, timeout, output overflow, shutdown, or process-start
 failure terminates the command process group and fails the operation. Host
-tools are outside Bubblewrap and therefore outside its mount, seccomp, and
-network policy.
+tools are outside the selected sandbox and therefore outside its filesystem,
+network and process restrictions.
 
 Managed-extension API version 3 lets each tool provide a short call summary.
 The central Pi Sandbox adapter validates and bounds that plain-text summary and
