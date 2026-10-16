@@ -313,6 +313,16 @@ is busy; queued messages join that run, and cancellation during setup reaches
 the run. Preserve print mode's nonzero exit for a final answer truncated at the
 output-token limit. Test these upstream behaviors against the patched source.
 
+Managed environment guidance distinguishes the executor's actual tool home from
+the invoking OS account's home, without changing either environment. Keep the
+account-home hint optional, independent of ambient identity variables, and
+qualified by effective filesystem restrictions. Refresh the named prompt section
+without duplicating or replacing other system-prompt contributions. File-tool
+call rendering must not abbreviate absolute host paths using Pi's process home.
+Use the public renderer override API, retain safe previews and result rendering,
+and label explicit tool-home paths without resolving historical calls against a
+new executor. Rendering must not read target files or change execution arguments.
+
 Do not solve upstream merge conflicts by adding compatibility aliases or by
 supporting both managed and obsolete launch shapes in Pi Sandbox. Reimplement
 the behavioral seams against the new Pi structure, update focused upstream

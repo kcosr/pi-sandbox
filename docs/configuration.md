@@ -271,6 +271,15 @@ also active, the guidance reserves it for programs, builds, tests, and operation
 without a suitable dedicated tool. This is refreshed before each agent run and
 preserves user system-prompt replacements and additions.
 
+Managed runs also receive a short environment note identifying the tools' actual
+home directory. `$HOME` in Bash and leading `~` in file-tool arguments refer to
+that tool home, which can differ from the user's home. When available, the user's
+home comes from the effective OS account rather than ambient `HOME` or `USER`.
+The note distinguishes policy-restricted locations and the workspace; it does
+not grant access or promise that every file beneath the user's home is readable.
+Use absolute paths when referring to files in the user's home. The note does not
+change HOME, caches, mount policy, or scoped environment settings.
+
 Code mode exposes a restricted JavaScript runtime whose nested tool calls use the same
 policies and approval prompts as ordinary calls. There is no `tools.codemode`
 policy or separate outer approval. The overall deadline includes nested approval
@@ -773,10 +782,18 @@ compiled extensions.
 ## Prompt behavior
 
 The extension freezes an exact request snapshot before policy evaluation and
-executes that same snapshot after approval. Pi's built-in renderers present
-their normal request details, except that edit calls show only the path: Pi's
-edit diff preview reads the target file in the host process before approval, so
-Pi Sandbox replaces it for every edit call, including while `edit` is disabled.
+executes that same snapshot after approval. File-tool call cards preserve
+absolute paths instead of shortening the Pi process's home to `~`. Explicit
+`~` and `~/...` arguments carry a `tool home` label and have no host-file link;
+historical calls are not reinterpreted against a new executor's home. Read line
+ranges, search options, and write content previews remain visible. Edit calls
+show only the path: Pi's edit diff preview reads the target file in the host
+process before approval, so Pi Sandbox replaces it for every edit call,
+including while `edit` is disabled. Call presentation uses Pi's extension
+renderer API; execution arguments, result content, and Bash command text are
+unchanged.
+Existing absolute-path links navigate the host filesystem; they do not establish
+that a private or externally supplied executor exposes the same file there.
 Managed API version 3 tools may provide a short, single-line call summary that
 Pi Sandbox bounds and renders in the same tool card. `git_clone` shows its
 repository locator. A standard Pi extension keeps its own tool renderer, if

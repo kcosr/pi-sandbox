@@ -89,6 +89,17 @@ export async function testManagedMcpCodemode({
           ),
         );
         assert.equal(
+          systemPrompt.split("Tool home: $HOME in Bash and ~ in tool paths resolve to").length - 1,
+          1,
+          `${marker}: home context is present once, independently of code-mode activation`,
+        );
+        if (process.platform === "linux") {
+          assert(
+            systemPrompt.includes("/run/pi-sandbox/home"),
+            `${marker}: home context identifies the Bubblewrap tool home`,
+          );
+        }
+        assert.equal(
           systemPrompt.includes("Prefer dedicated tools for file operations and code mode"),
           providerScenario.codemode,
           `${marker}: guidance follows actual code-mode activation`,

@@ -2,7 +2,11 @@ import { execFileSync } from "node:child_process";
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-import { readAccountIdentity } from "./account-home.js";
+import {
+  createAccountIdentityResolver,
+  readAccountIdentity,
+  resolvePromptAccountHome,
+} from "./account-home.js";
 
 vi.mock("node:child_process", () => ({ execFileSync: vi.fn() }));
 
@@ -36,6 +40,54 @@ afterEach(() => {
 });
 
 describe("account home lookup", () => {
+  it("shares one lazy identity lookup across prompt, policy and MCP consumers", async () => {
+    const identity = { username: "alice", uid: 1001, homeDirectory: "/home/alice" };
+    const lookup = vi.fn(() => identity);
+    const resolve = createAccountIdentityResolver(lookup);
+    expect(lookup).not.toHaveBeenCalled();
+    expect(await resolvePromptAccountHome(resolve, (path) => Promise.resolve(path))).toBe(
+      "/home/alice",
+    );
+    expect(resolve()).toBe(identity);
+    expect(resolve()).toBe(identity);
+    expect(lookup).toHaveBeenCalledOnce();
+  });
+
+  it("caches optional identity failure while retaining required macro failure", async () => {
+    const lookup = vi.fn((): never => {
+      throw new Error("account unavailable");
+    });
+    const resolve = createAccountIdentityResolver(lookup);
+    const canonicalize = vi.fn((path: string) => Promise.resolve(path));
+    expect(await resolvePromptAccountHome(resolve, canonicalize)).toBeUndefined();
+    expect(() => resolve()).toThrow("account unavailable");
+    expect(() => resolve()).toThrow("account unavailable");
+    expect(lookup).toHaveBeenCalledOnce();
+    expect(canonicalize).not.toHaveBeenCalled();
+  });
+
+  it("canonicalizes only prompt metadata while preserving account macro spelling", async () => {
+    const identity = { username: "alice", uid: 1001, homeDirectory: "/home/alias" };
+    const resolve = createAccountIdentityResolver(() => identity);
+    const canonicalize = vi.fn(() => Promise.resolve("/srv/hidden/alice"));
+    expect(await resolvePromptAccountHome(resolve, canonicalize)).toBe("/srv/hidden/alice");
+    expect(canonicalize).toHaveBeenCalledExactlyOnceWith("/home/alias");
+    expect(resolve().homeDirectory).toBe("/home/alias");
+  });
+
+  it("omits optional home context when canonicalization fails or returns an unsafe path", async () => {
+    const identity = () => ({ username: "alice", uid: 1001, homeDirectory: "/home/alice" });
+    expect(
+      await resolvePromptAccountHome(identity, () => Promise.reject(new Error("EACCES"))),
+    ).toBeUndefined();
+    expect(
+      await resolvePromptAccountHome(identity, () => Promise.resolve("/home/alice\ntext")),
+    ).toBeUndefined();
+    expect(
+      await resolvePromptAccountHome(identity, () => Promise.resolve("relative")),
+    ).toBeUndefined();
+  });
+
   it("uses the effective UID with fixed executable, clean environment, and bounded I/O", () => {
     vi.stubEnv("HOME", "/attacker/home");
     vi.stubEnv("USER", "attacker");

@@ -1,4 +1,5 @@
 import { execFileSync } from "node:child_process";
+import { realpath } from "node:fs/promises";
 
 import { isNormalizedAbsoluteFilePath, type AccountIdentity } from "../domain/index.js";
 
@@ -84,5 +85,37 @@ export function readAccountIdentity(): AccountIdentity {
   } catch {
     // Never expose command output (which includes account metadata) through errors or causes.
     throw new Error(ACCOUNT_HOME_ERROR);
+  }
+}
+
+/** Share one OS lookup, including failure, across policy, prompt and MCP resolution. */
+export function createAccountIdentityResolver(
+  getIdentity: () => AccountIdentity = readAccountIdentity,
+): () => AccountIdentity {
+  let result: { readonly value: AccountIdentity } | { readonly error: unknown } | undefined;
+  return () => {
+    if (result === undefined) {
+      try {
+        result = { value: getIdentity() };
+      } catch (error) {
+        result = { error };
+      }
+    }
+    if ("error" in result) throw result.error;
+    return result.value;
+  };
+}
+
+/** Optional prompt metadata uses canonical paths so aliases cannot bypass policy comparisons. */
+export async function resolvePromptAccountHome(
+  getIdentity: () => AccountIdentity,
+  canonicalize: (path: string) => Promise<string> = realpath,
+): Promise<string | undefined> {
+  try {
+    const home = await canonicalize(getIdentity().homeDirectory);
+    return home === "/" || isNormalizedAbsoluteFilePath(home) ? home : undefined;
+  } catch {
+    // A missing account or inaccessible home must not break a session that needs no macros.
+    return undefined;
   }
 }

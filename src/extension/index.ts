@@ -50,6 +50,7 @@ import { approvalUi, approvalPreview } from "../permissions/index.js";
 import { ManagedMcpRuntime } from "../mcp/runtime.js";
 import { createManagedCodemodeExtension } from "../codemode/index.js";
 import { isManagedToolSelected, selectManagedActiveTools } from "../runtime/arguments.js";
+import { toolEnvironmentPrompt } from "./environment-prompt.js";
 
 interface ExtensionState {
   executor: SandboxExecutor | undefined;
@@ -695,6 +696,19 @@ export function createPiSandboxExtension(dependencies: ExtensionDependencies): E
     pi.on("before_agent_start", (event) => {
       const active = new Set(pi.getActiveTools());
       const sections = event.systemPromptOptions.sections;
+      delete sections.pi_sandbox_environment;
+      if (state.executor !== undefined && state.config !== undefined && !state.stopped) {
+        const environment = toolEnvironmentPrompt({
+          home: state.executor.home,
+          cwd: dependencies.cwd,
+          backend: state.config.execution.backend,
+          filesystem: state.config.filesystem,
+          ...(dependencies.accountHome === undefined
+            ? {}
+            : { accountHome: dependencies.accountHome }),
+        });
+        if (environment !== undefined) sections.pi_sandbox_environment = environment;
+      }
       delete sections.pi_sandbox_tool_guidance;
       if (!active.has("codemode")) return;
       sections.pi_sandbox_tool_guidance =

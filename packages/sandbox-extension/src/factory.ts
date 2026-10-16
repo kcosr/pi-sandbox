@@ -11,12 +11,11 @@ import {
   type ExtensionFactory,
   type ExtensionContext,
   type ExtensionHandler,
-  type ToolRenderers,
   type UserBashEvent,
   type UserBashEventResult,
 } from "@earendil-works/pi-coding-agent";
-import { Text } from "@earendil-works/pi-tui";
 import { SandboxExecutionError, type SandboxExecutor } from "./runtime/index.js";
+import { pathToolCallRenderer, pathToolCallRenderers } from "./tool-renderers.js";
 import {
   prepareSandboxToolRequest,
   type SandboxToolRequest,
@@ -181,29 +180,16 @@ async function authorize<T extends JsonObject>(
   return request.arguments as T;
 }
 
-// Pi's stock edit call renderer reads the target file in this host process to preview a diff,
-// before approval and outside the sandbox. Draw every edit call with the path only, including
-// calls Pi renders while the edit tool is disabled and therefore unregistered.
-const renderEditCall: NonNullable<ToolRenderers["renderCall"]> = (args, theme, context) => {
-  const component =
-    context.lastComponent instanceof Text ? context.lastComponent : new Text("", 0, 0);
-  const path =
-    typeof args === "object" && args !== null && "path" in args && typeof args.path === "string"
-      ? args.path
-      : "[invalid path]";
-  component.setText(`${theme.fg("toolTitle", theme.bold("edit"))} ${theme.fg("accent", path)}`);
-  return component;
-};
-
 function registerTools(pi: ExtensionAPI, options: SandboxExtensionOptions): void {
   const cwd = options.cwd;
   const enabled = new Set(options.tools);
   const executionScope = options.executionScope ?? "inside the configured execution environment";
 
   if (enabled.has("read")) {
-    const base = withoutToolFields(createReadToolDefinition(cwd), "execute");
+    const base = withoutToolFields(createReadToolDefinition(cwd), "execute", "renderCall");
     pi.registerTool({
       ...base,
+      renderCall: pathToolCallRenderers.read,
       async execute(_id, params, signal, _onUpdate, ctx) {
         const executor = options.getExecutor();
         const cwd = executor.cwd;
@@ -219,9 +205,10 @@ function registerTools(pi: ExtensionAPI, options: SandboxExtensionOptions): void
     });
   }
   if (enabled.has("write")) {
-    const base = withoutToolFields(createWriteToolDefinition(cwd), "execute");
+    const base = withoutToolFields(createWriteToolDefinition(cwd), "execute", "renderCall");
     pi.registerTool({
       ...base,
+      renderCall: pathToolCallRenderers.write,
       async execute(_id, params, signal, _onUpdate, ctx) {
         const executor = options.getExecutor();
         const cwd = executor.cwd;
@@ -242,7 +229,7 @@ function registerTools(pi: ExtensionAPI, options: SandboxExtensionOptions): void
     const base = withoutToolFields(createEditToolDefinition(cwd), "execute", "renderCall");
     pi.registerTool({
       ...base,
-      renderCall: renderEditCall,
+      renderCall: pathToolCallRenderers.edit,
       async execute(_id, params, signal, _onUpdate, ctx) {
         const executor = options.getExecutor();
         const cwd = executor.cwd;
@@ -258,9 +245,10 @@ function registerTools(pi: ExtensionAPI, options: SandboxExtensionOptions): void
     });
   }
   if (enabled.has("ls")) {
-    const base = withoutToolFields(createLsToolDefinition(cwd), "execute");
+    const base = withoutToolFields(createLsToolDefinition(cwd), "execute", "renderCall");
     pi.registerTool({
       ...base,
+      renderCall: pathToolCallRenderers.ls,
       async execute(_id, params, signal, _onUpdate, ctx) {
         const executor = options.getExecutor();
         const cwd = executor.cwd;
@@ -276,9 +264,10 @@ function registerTools(pi: ExtensionAPI, options: SandboxExtensionOptions): void
     });
   }
   if (enabled.has("find")) {
-    const base = withoutToolFields(createFindToolDefinition(cwd), "execute");
+    const base = withoutToolFields(createFindToolDefinition(cwd), "execute", "renderCall");
     pi.registerTool({
       ...base,
+      renderCall: pathToolCallRenderers.find,
       description: `Search for files ${executionScope} using GNU find glob semantics: patterns without a slash match basenames (-name); patterns with a slash match paths relative to the search root (-path). Returns relative paths and skips .git and node_modules.`,
       promptSnippet: `Find files with GNU find glob patterns ${executionScope}`,
       async execute(_id, params, signal, _onUpdate, ctx) {
@@ -296,9 +285,10 @@ function registerTools(pi: ExtensionAPI, options: SandboxExtensionOptions): void
     });
   }
   if (enabled.has("grep")) {
-    const base = withoutToolFields(createGrepToolDefinition(cwd), "execute");
+    const base = withoutToolFields(createGrepToolDefinition(cwd), "execute", "renderCall");
     pi.registerTool({
       ...base,
+      renderCall: pathToolCallRenderers.grep,
       description: `Search file contents ${executionScope}. Returns matching lines with file paths and line numbers and skips .git directories.`,
       promptSnippet: `Search file contents ${executionScope}`,
       async execute(_id, params, signal, _onUpdate, ctx) {
@@ -437,10 +427,11 @@ export function createSandboxExtension(input: SandboxExtensionOptions): Extensio
   }
   const options = Object.freeze({ ...input, tools });
   return (pi) => {
-    // Even disabled edits can appear in historical sessions. Never use Pi's host-reading preview.
-    pi.registerToolRenderer((toolName, next) =>
-      toolName === "edit" ? { ...next(), renderCall: renderEditCall } : next(),
-    );
+    // Historical calls need the same truthful paths even when their tools are disabled.
+    pi.registerToolRenderer((toolName, next) => {
+      const renderCall = pathToolCallRenderer(toolName);
+      return renderCall === undefined ? next() : { ...next(), renderCall };
+    });
     registerTools(pi, options);
     const userBashHandler: ExtensionHandler<UserBashEvent, UserBashEventResult> = async (
       event,

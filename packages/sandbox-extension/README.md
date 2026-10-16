@@ -158,6 +158,13 @@ Built artifacts include declarations, the worker, license and provenance. Run
 tarball with stock Pi under Node/Bun, using Bubblewrap on Linux, Seatbelt on macOS, and direct execution.
 The package includes ordinary tool UI rendering, command output streaming and
 cancellation. It does not provide interactive terminal sessions or a VM controller.
+File-tool cards keep absolute paths intact. Explicit `~` and `~/...` arguments
+are labelled `tool home`, referring to the executor's home rather than the Pi
+process's home. They do not link to a host file or resolve against a different
+executor when displaying session history. Call rendering preserves read ranges,
+search options, and write previews without reading target files on the host.
+Existing links on explicit absolute paths remain host-file links; an external
+executor or private mount may expose different contents at that path.
 The default package is JavaScript-only; no compiler, Python or native runtime
 helper is required to use it. A build may select a pinned native macOS tool
 bundle with `node scripts/build-extensions.mjs --distribution FILE`. That
