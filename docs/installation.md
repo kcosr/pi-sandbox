@@ -31,9 +31,11 @@ dependency and is not a runtime bundle command.
 Configured home-directory expansion requires `/usr/bin/getent` on Linux or
 the system `/usr/bin/dscacheutil` on macOS. The runtime queries the effective
 user's OS account with a five-second deadline and a cleared environment; it
-does not use `HOME` as a fallback. This lookup runs only when a configured
-hidden/denied path or scoped environment value needs expansion. A missing command,
-missing account, invalid home, or lookup failure stops operational startup.
+does not use `HOME` as a fallback. Operational startup shares this lookup with
+the optional user-home prompt context. A missing command, missing account,
+invalid home, or lookup failure stops startup when configured account expansion
+requires it; otherwise the optional user-home hint is omitted. Installation
+validation performs no account lookup.
 
 Selected managed extensions add conditional absolute-executable requirements.
 The Git extension requires `/usr/bin/git`. Startup validates the requirements

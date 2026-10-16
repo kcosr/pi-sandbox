@@ -111,7 +111,7 @@ does not consult environment variables or a user-selected executable. Values
 overwritten during broker merging are not resolved. A referenced machine ID on
 an unsupported platform or an unavailable/invalid UUID fails effective policy
 startup. A failure used only by an MCP stdio `env` value instead marks that
-server `configuration-value-unavailable`. Unused macros trigger no lookup.
+server `configuration-value-unavailable`. An unused machine-ID macro triggers no hardware lookup.
 Installation validation leaves the macro symbolic and performs no hardware lookup.
 
 The UUID is the same across accounts on a physical Mac and normally survives
