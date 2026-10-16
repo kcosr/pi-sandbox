@@ -222,8 +222,10 @@ Expansion follows the broker merge and is independent of `$HOME` and CWD.
 Expanded values retain the existing environment bounds and filesystem checks.
 Installation validation checks syntax without expanding the installer's home.
 
-Managed system-prompt context distinguishes the executor's tool home from the
-invoking account's home. Optional account-home context uses the same trusted OS
+Managed Bubblewrap and Seatbelt system-prompt context distinguishes the executor's
+tool home from the invoking account's home. Direct execution adds no home note
+and does not request the optional account-home context. Optional account-home
+context uses the same trusted OS
 identity lookup before scoped environment changes and is qualified by the
 effective filesystem policy. Failure to obtain optional home context omits that
 hint; identity macros still retain their required-lookup failure behavior.

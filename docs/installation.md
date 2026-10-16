@@ -32,7 +32,8 @@ Configured home-directory expansion requires `/usr/bin/getent` on Linux or
 the system `/usr/bin/dscacheutil` on macOS. The runtime queries the effective
 user's OS account with a five-second deadline and a cleared environment; it
 does not use `HOME` as a fallback. Operational startup shares this lookup with
-the optional user-home prompt context. A missing command, missing account,
+the optional user-home prompt context in Bubblewrap and Seatbelt sessions. Direct
+execution does not request that optional context. A missing command, missing account,
 invalid home, or lookup failure stops startup when configured account expansion
 requires it; otherwise the optional user-home hint is omitted. Installation
 validation performs no account lookup.

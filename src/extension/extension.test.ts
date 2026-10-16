@@ -518,6 +518,34 @@ describe("managed initial tool activation", () => {
 });
 
 describe("managed environment prompt lifecycle", () => {
+  it("removes stale direct-mode context without reading executor home", async () => {
+    const pi = fakePi();
+    const executor = fakeExecutor();
+    const home = vi.fn((): never => {
+      throw new Error("direct-mode prompt must not inspect executor home");
+    });
+    Object.defineProperty(executor, "home", { get: home });
+    const cfg = {
+      ...config(),
+      execution: { backend: "direct" as const },
+      network: { mode: "host" as const },
+    };
+    await start(pi, executor, cfg);
+    const options = {
+      sections: { pi_sandbox_environment: "Stale sandbox context", unrelated: "Keep this" },
+      customPrompt: "Custom prompt",
+    };
+    await pi.handlers.get("before_agent_start")?.(
+      { systemPromptOptions: options } as never,
+      context(),
+    );
+    expect(options).toEqual({
+      sections: { unrelated: "Keep this" },
+      customPrompt: "Custom prompt",
+    });
+    expect(home).not.toHaveBeenCalled();
+  });
+
   it("uses initialized executor metadata without tool calls and removes stale shutdown context", async () => {
     const pi = fakePi();
     const executor = fakeExecutor();

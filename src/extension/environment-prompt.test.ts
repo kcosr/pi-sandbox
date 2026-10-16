@@ -28,11 +28,15 @@ describe("managed tool environment prompt", () => {
     expect(prompt).not.toMatch(/readable|writable/u);
   });
 
-  it("handles a shared home in direct execution without claiming two homes differ", () => {
-    const prompt = toolEnvironmentPrompt({ ...defaults, backend: "direct", home: "/home/alice" });
+  it("handles a shared home in confined execution without claiming two homes differ", () => {
+    const prompt = toolEnvironmentPrompt({ ...defaults, home: "/home/alice" });
     expect(prompt).toContain('OS account home: "/home/alice".');
     expect(prompt).not.toContain("different");
     expect(prompt).not.toContain("restricted");
+  });
+
+  it("omits environment guidance for direct execution", () => {
+    expect(toolEnvironmentPrompt({ ...defaults, backend: "direct" })).toBeUndefined();
   });
 
   it("does not invent a user home when optional managed metadata is absent", () => {

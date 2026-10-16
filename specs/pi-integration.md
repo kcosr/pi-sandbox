@@ -313,8 +313,10 @@ is busy; queued messages join that run, and cancellation during setup reaches
 the run. Preserve print mode's nonzero exit for a final answer truncated at the
 output-token limit. Test these upstream behaviors against the patched source.
 
-Managed environment guidance distinguishes the executor's actual tool home from
-the invoking OS account's home, without changing either environment. Keep the
+Managed Bubblewrap and Seatbelt environment guidance distinguishes the executor's
+actual tool home from the invoking OS account's home, without changing either
+environment. Direct execution adds no home note or optional account-home lookup.
+Keep the
 account-home hint optional, independent of ambient identity variables, and
 qualified by effective filesystem restrictions. Refresh the named prompt section
 without duplicating or replacing other system-prompt contributions. File-tool

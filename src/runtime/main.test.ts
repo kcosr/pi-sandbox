@@ -750,6 +750,41 @@ describe("administrative configuration", () => {
     expect(environment).toEqual({ HOME: "/spoofed/home", USER: "spoofed" });
   });
 
+  it.each([false, true])(
+    "skips optional home metadata in effective direct mode while preserving macros=%s",
+    async (macros) => {
+      const root = await createRoot();
+      const configPath = rooted(root, SYSTEM_CONFIG_PATH);
+      const source = await readFile(configPath, "utf8");
+      await writeFile(
+        configPath,
+        source
+          .replace('mode = "disabled"', 'mode = "broker"')
+          .replace(
+            "[environment.pi]",
+            macros ? '[environment.pi]\nCACHE = "~/cache"' : "[environment.pi]",
+          ),
+      );
+      await writeFile(rooted(root, "/etc/pi-sandbox/models.json"), '{"providers":{}}');
+      const getAccount = vi.fn(() => ({ username: "alice", uid: 1001, homeDirectory: root }));
+      const effective = await resolveEffectiveAdministrativeConfiguration(
+        root,
+        {},
+        () =>
+          Promise.resolve({
+            environment: { pi: {}, sandbox: {}, extensions: {} },
+            overrides: { execution: { backend: "direct" }, network: { mode: "host" }, tools: {} },
+          }),
+        SYSTEM_CONFIG_PATH,
+        getAccount,
+      );
+      expect(effective.config.execution.backend).toBe("direct");
+      expect(effective.accountHome).toBeUndefined();
+      expect(getAccount).toHaveBeenCalledTimes(macros ? 1 : 0);
+      expect(effective.identityEnvironment.pi.CACHE).toBe(macros ? join(root, "cache") : undefined);
+    },
+  );
+
   it("fails before applying environment when account lookup or expanded paths are invalid", async () => {
     const root = await createRoot();
     const configPath = rooted(root, SYSTEM_CONFIG_PATH);

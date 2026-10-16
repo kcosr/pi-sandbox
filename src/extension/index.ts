@@ -697,7 +697,12 @@ export function createPiSandboxExtension(dependencies: ExtensionDependencies): E
       const active = new Set(pi.getActiveTools());
       const sections = event.systemPromptOptions.sections;
       delete sections.pi_sandbox_environment;
-      if (state.executor !== undefined && state.config !== undefined && !state.stopped) {
+      if (
+        state.executor !== undefined &&
+        state.config !== undefined &&
+        state.config.execution.backend !== "direct" &&
+        !state.stopped
+      ) {
         const environment = toolEnvironmentPrompt({
           home: state.executor.home,
           cwd: dependencies.cwd,

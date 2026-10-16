@@ -220,7 +220,8 @@ export async function resolveEffectiveAdministrativeConfiguration(
     filesystem: expanded.filesystem,
     environment: effectiveEnvironment,
   });
-  const accountHome = await resolvePromptAccountHome(account);
+  const accountHome =
+    config.execution.backend === "direct" ? undefined : await resolvePromptAccountHome(account);
   const lease = applyManagedEnvironment(effectiveEnvironment.pi, environment);
   try {
     const modelsPath = await readAdministrativeModels(config, root);

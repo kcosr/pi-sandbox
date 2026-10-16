@@ -271,8 +271,9 @@ also active, the guidance reserves it for programs, builds, tests, and operation
 without a suitable dedicated tool. This is refreshed before each agent run and
 preserves user system-prompt replacements and additions.
 
-Managed runs also receive a short environment note identifying the tools' actual
-home directory. `$HOME` in Bash and leading `~` in file-tool arguments refer to
+Managed Bubblewrap and Seatbelt runs also receive a short environment note
+identifying the tools' actual home directory. Direct execution adds no home
+note. `$HOME` in Bash and leading `~` in file-tool arguments refer to
 that tool home, which can differ from the user's home. When available, the user's
 home comes from the effective OS account rather than ambient `HOME` or `USER`.
 The note distinguishes policy-restricted locations and the workspace; it does

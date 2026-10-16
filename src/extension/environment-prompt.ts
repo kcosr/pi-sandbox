@@ -30,7 +30,7 @@ export function toolEnvironmentPrompt(options: {
   readonly filesystem: FilesystemConfig;
   readonly accountHome?: string;
 }): string | undefined {
-  if (!safePath(options.home)) return undefined;
+  if (options.backend === "direct" || !safePath(options.home)) return undefined;
   const parts = [
     `Tool home: $HOME in Bash and ~ in tool paths resolve to ${quoted(options.home)}.`,
   ];
@@ -42,9 +42,7 @@ export function toolEnvironmentPrompt(options: {
   const exclusions =
     options.backend === "bubblewrap"
       ? [...options.filesystem.hiddenPaths, ...PRIVATE_SANDBOX_SYSTEM_PATHS, "/tmp"]
-      : options.backend === "seatbelt"
-        ? options.filesystem.deniedPaths
-        : [];
+      : options.filesystem.deniedPaths;
   const cwdKnown = safePath(options.cwd);
   const restricted = exclusions.some(
     (root) =>

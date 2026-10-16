@@ -12,7 +12,7 @@
 
 ### Added
 
-- Explain tool and user home directories in managed system-prompt context without changing execution environments or filesystem permissions.
+- Explain tool and user home directories in managed Bubblewrap and Seatbelt system-prompt context without changing execution environments or filesystem permissions.
 - Add an optional `[tools.bash.known_read_only]` policy, including broker rules and audit fields, so recognized read-only model Bash commands can use a more permissive approval policy than other Bash commands. Classification never changes execution. ([#34](https://github.com/kcosr/pi-sandbox/pull/34))
 - Support macOS `{{machine_id}}` in administrator environment values and Seatbelt denied paths, including provider API keys through configured Pi environment variables. Resolve the hardware UUID only when requested; no authentication or device-attestation guarantee is implied. ([#32](https://github.com/kcosr/pi-sandbox/pull/32))
 - Default macOS packages to Seatbelt execution with networking disabled, directory denials and read-only CWD support. Process cleanup is best effort; background survivors retain their original grants. ([#29](https://github.com/kcosr/pi-sandbox/pull/29))
