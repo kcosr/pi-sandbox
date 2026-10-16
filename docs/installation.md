@@ -160,12 +160,12 @@ ownership and permissions.
 ## Building a release
 
 The product version is independent of the pinned Pi version. A clean build at
-product tag `v0.7.0` displays `1.3.0+ps.0.7.0` in `pi-sandbox --version` and
+product tag `v0.8.0` displays `1.3.0+ps.0.8.0` in `pi-sandbox --version` and
 the TUI header. Untagged builds include a development suffix and Git revision;
 modified builds also include `.dirty`. Source execution and application builds
 without Git metadata use `.dev.source`; `npm run build:application` supports
 that case. The full release builder requires a Git checkout for source
-provenance. The release package retains product version `0.7.0`, and Pi's
+provenance. The release package retains product version `0.8.0`, and Pi's
 internal version stays `1.3.0`.
 
 GitHub releases publish source and release notes without uploaded binaries.

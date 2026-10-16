@@ -2,10 +2,12 @@
 
 ## Unreleased
 
+## 0.8.0 - 2026-10-16
+
 ### Breaking changes
 
+- Update managed configurations to version 13 and standalone sandbox configurations to version 6; remove obsolete process-lifetime settings. ([#30](https://github.com/kcosr/pi-sandbox/pull/30))
 - Reject `BASHOPTS`, `CDPATH`, `GLOBIGNORE` and `IFS` in `environment.sandbox` and the Bubblewrap executor environment, matching Seatbelt. ([#34](https://github.com/kcosr/pi-sandbox/pull/34))
-- Require managed configuration 13 and standalone sandbox configuration 6; reject obsolete process-lifetime settings. ([#30](https://github.com/kcosr/pi-sandbox/pull/30))
 - Require explicit `filesystem.denied_paths` in managed policy and strict standalone Seatbelt configuration. ([#29](https://github.com/kcosr/pi-sandbox/pull/29))
 - Remove smolvm execution, VM controllers and interactive VM terminals; managed Linux execution supports Bubblewrap or direct mode. ([#28](https://github.com/kcosr/pi-sandbox/pull/28))
 - Release reusable sandbox extension 0.8.0 with a backend-neutral executor interface and no VM/controller exports. Embedding applications own external execution and cleanup. ([#28](https://github.com/kcosr/pi-sandbox/pull/28))
