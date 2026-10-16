@@ -770,17 +770,20 @@ Pi Sandbox registers one read-only diagnostic command:
 `/sandbox` reports whether the selected backend is initialized, its process
 lifetime, execution backend, launch directory, selected configuration path,
 effective selected model file, identity mode, effective network mode, CWD access,
-user-state directory, code-mode enablement, and MCP server count. `/sandbox mounts` reports the semantic Bubblewrap mount
-policy or explicitly reports that direct mode has no mount boundary.
+user-state directory, code-mode enablement, and MCP server count. `/sandbox mounts`
+reports Bubblewrap's semantic mount policy, Seatbelt's filesystem policy, or the
+absence of filesystem containment in direct mode. Seatbelt output covers denied
+directories, workspace access, real host scratch and cleanup limitations; it does
+not describe directory denials as mount masks.
 `/sandbox policy` lists every configured model-tool
 mode, the fixed user-shell behavior, session-grant options, and current
 memory-only grants; an optional subject shows its scope in more detail. A Bash
 class policy adds its own row and detail; see
 [diagnostics](#known-read-only-diagnostics).
 
-The command uses the configuration already admitted at startup and the mount
-plan used to create Bubblewrap. It does not rerun a shell command, reread
-configuration, change policy, create grants, print model definitions, expand
+The command uses the configuration and backend policy already admitted at
+startup, including the mount plan when Bubblewrap is selected. It does not rerun
+a shell command, reread configuration, change policy, create grants, print model definitions, expand
 environment variables, or expose credentials. The diagnostic subject list is
 the exact configured model-tool set plus `user_shell`. Diagnostics distinguish
 sandbox, direct, and managed-host execution scopes and list the selected

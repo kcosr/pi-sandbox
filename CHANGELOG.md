@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+### Changed
+
+- Clarify cross-platform execution diagrams, backend guarantees, diagnostics and installation guidance for Bubblewrap, Seatbelt and direct execution.
+
 ## 0.8.0 - 2026-10-16
 
 ### Breaking changes
