@@ -4,7 +4,7 @@
 
 ### Changed
 
-- Clarify cross-platform execution diagrams, backend guarantees, diagnostics and installation guidance for Bubblewrap, Seatbelt and direct execution.
+- Clarify cross-platform execution diagrams, backend guarantees, diagnostics and installation guidance for Bubblewrap, Seatbelt and direct execution. ([#38](https://github.com/kcosr/pi-sandbox/pull/38))
 
 ## 0.8.0 - 2026-10-16
 
