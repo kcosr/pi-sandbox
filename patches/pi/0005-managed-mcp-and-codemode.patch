@@ -1,5 +1,5 @@
 diff --git a/packages/codemode/src/runtime/execution.ts b/packages/codemode/src/runtime/execution.ts
-index 4479e4b..46111ff 100644
+index 06199e9..e6f3f38 100644
 --- a/packages/codemode/src/runtime/execution.ts
 +++ b/packages/codemode/src/runtime/execution.ts
 @@ -47,6 +47,8 @@ import {
@@ -194,7 +194,7 @@ index 4479e4b..46111ff 100644
  		// Already cancelled by finish(): the record keeps "cancelled" and the
  		// VM is gone or going.
  		if (!this.pending.delete(id)) return;
-@@ -437,14 +509,12 @@ class Execution {
+@@ -437,14 +509,13 @@ class Execution {
  					storeWrites: writes ?? { set: {}, delete: [] },
  					...ended,
  				};
@@ -206,16 +206,17 @@ index 4479e4b..46111ff 100644
 -			.stop()
 -			.catch(() => undefined)
 -			.then(() => this.resolveResult(result));
-+		// A managed result includes nested transport/executor cleanup, even for
-+		// unawaited script promises or a VM that is still being launched.
-+		const cleanup = this.channel?.stop() ?? this.launching;
++		// Managed results include nested side-effect cleanup and a late launcher
++		// shutdown request. Ordinary results must not wait for delayed WASM loading.
++		// stop() requests worker termination; admission remains held until actual exit.
++		const cleanup = this.channel?.stop() ?? (this.awaitToolCleanup ? this.launching : undefined);
 +		void Promise.allSettled([...(this.awaitToolCleanup ? this.inFlight : []), cleanup]).then(() =>
 +			this.resolveResult(result),
 +		);
  	}
  }
  
-@@ -460,6 +530,10 @@ class Execution {
+@@ -460,6 +531,10 @@ class Execution {
  export class CodemodeSandboxBase {
  	private readonly toolsByName = new Map<string, CodemodeTool>();
  	private readonly globalsByName = new Map<string, CodemodeTool>();
@@ -226,7 +227,7 @@ index 4479e4b..46111ff 100644
  	private readonly timeoutMs: number;
  	private readonly memoryLimitBytes: number | undefined;
  	private readonly launch: VmLauncher;
-@@ -467,6 +541,7 @@ export class CodemodeSandboxBase {
+@@ -467,6 +542,7 @@ export class CodemodeSandboxBase {
  	private closed = false;
  
  	constructor(options: CodemodeSandboxBaseOptions, launch: VmLauncher) {
@@ -234,7 +235,7 @@ index 4479e4b..46111ff 100644
  		this.timeoutMs = options.timeoutMs ?? DEFAULT_TIMEOUT_MS;
  		this.memoryLimitBytes = options.memoryLimitBytes;
  		this.launch = launch;
-@@ -478,6 +553,12 @@ export class CodemodeSandboxBase {
+@@ -478,6 +554,12 @@ export class CodemodeSandboxBase {
  	/** Throws if a tool with the same name is already registered. */
  	registerTool(tool: CodemodeTool): void {
  		if (this.toolsByName.has(tool.name)) throw new Error(`Tool "${tool.name}" is already registered`);
@@ -247,7 +248,7 @@ index 4479e4b..46111ff 100644
  		this.toolsByName.set(tool.name, tool);
  	}
  
-@@ -502,6 +583,7 @@ export class CodemodeSandboxBase {
+@@ -502,6 +584,7 @@ export class CodemodeSandboxBase {
  		if (this.closed) return Promise.reject(new Error("Sandbox is closed"));
  		const tools = new Map(this.toolsByName);
  		const execution = new Execution({
@@ -255,7 +256,7 @@ index 4479e4b..46111ff 100644
  			code,
  			tools: [...tools.values()],
  			globals: [...this.globalsByName.values()],
-@@ -542,6 +624,7 @@ export class CodemodeSandboxBase {
+@@ -542,6 +625,7 @@ export class CodemodeSandboxBase {
  		const globals = options.globals ?? [];
  		checkGlobals(globals);
  		const execution = new Execution({
@@ -264,7 +265,7 @@ index 4479e4b..46111ff 100644
  			tools,
  			globals,
 diff --git a/packages/codemode/src/types.ts b/packages/codemode/src/types.ts
-index cb1f0e0..417e7ed 100644
+index e69cd29..5f46966 100644
 --- a/packages/codemode/src/types.ts
 +++ b/packages/codemode/src/types.ts
 @@ -110,6 +110,13 @@ export type CodemodeResult =
@@ -281,12 +282,27 @@ index cb1f0e0..417e7ed 100644
  	tools?: CodemodeTool[];
  	/**
  	 * Functions exposed as top-level identifiers instead of on `tools`, for host helpers such as
+diff --git a/packages/codemode/test/fixtures/worker-process-exit.ts b/packages/codemode/test/fixtures/worker-process-exit.ts
+index f411a9a..e6eae37 100644
+--- a/packages/codemode/test/fixtures/worker-process-exit.ts
++++ b/packages/codemode/test/fixtures/worker-process-exit.ts
+@@ -3,9 +3,6 @@ import { CodemodeSandbox } from "../../src/runtime/host.ts";
+ const how = process.argv[2];
+ if (how !== "abort" && how !== "timeout" && how !== "close") throw new Error(`Unknown stop mode: ${how}`);
+ const started = performance.now();
+-process.on("exit", () => {
+-	console.log(JSON.stringify({ type: "exit", elapsedMs: performance.now() - started }));
+-});
+ const controller = new AbortController();
+ let timer: ReturnType<typeof setTimeout> | undefined;
+ let workerExited = false;
 diff --git a/packages/codemode/test/managed-limits.test.ts b/packages/codemode/test/managed-limits.test.ts
 new file mode 100644
-index 0000000..e5d06a3
+index 0000000..8aa2fa7
 --- /dev/null
 +++ b/packages/codemode/test/managed-limits.test.ts
-@@ -0,0 +1,264 @@
+@@ -0,0 +1,364 @@
++import { Worker } from "node:worker_threads";
 +import { afterEach, describe, expect, it, vi } from "vitest";
 +import { CodemodeSandbox } from "../src/index.ts";
 +import { CodemodeSandboxBase, type VmChannel, type VmEvents } from "../src/runtime/execution.ts";
@@ -465,6 +481,105 @@ index 0000000..e5d06a3
 +});
 +
 +describe("shared execution lifecycle", () => {
++	it.each(["abort", "deadline"])("ordinary cancellation does not await delayed VM setup after %s", async (reason) => {
++		const controller = new AbortController();
++		const launching = Promise.withResolvers<VmChannel>();
++		let started = false;
++		const stopped = vi.fn(async () => {});
++		const sandbox = new CodemodeSandboxBase({ timeoutMs: reason === "deadline" ? 20 : 3000 }, () => {
++			started = true;
++			return launching.promise;
++		});
++		try {
++			const result = sandbox.execute("return 1", { signal: controller.signal });
++			await vi.waitFor(() => expect(started).toBe(true));
++			if (reason === "abort") controller.abort();
++			expect(await result).toMatchObject({ ok: false, error: { kind: reason === "abort" ? "aborted" : "timeout" } });
++			expect(stopped).not.toHaveBeenCalled();
++			launching.resolve({ post: () => {}, stop: stopped });
++			await vi.waitFor(() => expect(stopped).toHaveBeenCalledOnce());
++		} finally {
++			launching.resolve({ post: () => {}, stop: stopped });
++			await sandbox.close();
++		}
++	});
++
++	it.each(["abort", "deadline", "close"])(
++		"managed %s awaits host cleanup without awaiting worker exit",
++		async (reason) => {
++			if (reason === "deadline") vi.useFakeTimers();
++			const terminate = Worker.prototype.terminate;
++			const terminating = Promise.withResolvers<number>();
++			const called = Promise.withResolvers<void>();
++			const aborted = Promise.withResolvers<void>();
++			const cleanup = Promise.withResolvers<null>();
++			let worker: Worker | undefined;
++			let exited: Promise<void> | undefined;
++			let didExit = false;
++			const releaseWorker = vi.fn();
++			const terminateSpy = vi.spyOn(Worker.prototype, "terminate").mockImplementation(function (this: Worker) {
++				worker = this;
++				this.ref();
++				return terminating.promise;
++			});
++			const controller = new AbortController();
++			const sandbox = create({
++				awaitToolCleanup: true,
++				acquireWorker: () => releaseWorker,
++				onWorkerStarted: (promise) => {
++					exited = promise;
++					void promise.then(() => {
++						didExit = true;
++					});
++				},
++				tools: [
++					{
++						name: "wait",
++						execute: (_args, { signal }) => {
++							signal.addEventListener("abort", () => aborted.resolve(), { once: true });
++							called.resolve();
++							return cleanup.promise;
++						},
++					},
++				],
++			});
++			let settled = false;
++			const result = sandbox.execute("await tools.wait()", {
++				signal: controller.signal,
++				timeoutMs: reason === "deadline" ? 100 : 3000,
++			});
++			void result.then(() => {
++				settled = true;
++			});
++			try {
++				await called.promise;
++				if (reason === "abort") controller.abort();
++				if (reason === "close") void sandbox.close();
++				if (reason === "deadline") await vi.advanceTimersByTimeAsync(100);
++				await aborted.promise;
++				expect(settled).toBe(false);
++				expect(releaseWorker).not.toHaveBeenCalled();
++				cleanup.resolve(null);
++				expect(await result).toMatchObject({
++					ok: false,
++					error: { kind: reason === "deadline" ? "timeout" : "aborted" },
++				});
++				expect(terminateSpy).toHaveBeenCalledOnce();
++				expect(didExit).toBe(false);
++				expect(releaseWorker).not.toHaveBeenCalled();
++			} finally {
++				cleanup.resolve(null);
++				vi.useRealTimers();
++				terminateSpy.mockRestore();
++				if (worker) terminating.resolve(await terminate.call(worker));
++				await sandbox.close();
++			}
++			await exited;
++			expect(didExit).toBe(true);
++			expect(releaseWorker).toHaveBeenCalledOnce();
++		},
++	);
++
 +	it.each(["abort", "deadline"])("waits for delayed VM launch teardown after %s", async (reason) => {
 +		const controller = new AbortController();
 +		let start!: (channel: VmChannel) => void;
@@ -551,11 +666,37 @@ index 0000000..e5d06a3
 +		await sandbox.close();
 +	});
 +});
+diff --git a/packages/codemode/test/worker-lifetime.test.ts b/packages/codemode/test/worker-lifetime.test.ts
+index 67ac4b2..af9c2fb 100644
+--- a/packages/codemode/test/worker-lifetime.test.ts
++++ b/packages/codemode/test/worker-lifetime.test.ts
+@@ -214,15 +214,17 @@ describe.each(runtimes)("$name process lifetime", ({ name, command, available })
+ 		name === "Node" ? "exits promptly after %s with a real worker" : "settles %s promptly with a real worker",
+ 		async (how) => {
+ 			const fixture = fileURLToPath(new URL("./fixtures/worker-process-exit.ts", import.meta.url));
++			// Observe owner exit from the parent. Bun 1.3.14 can finish this worker
++			// process without invoking its process.on("exit") callback.
++			const started = performance.now();
+ 			const { stdout } = await promisify(execFile)(command, [fixture, how], { timeout: 20000 });
++			const elapsedMs = performance.now() - started;
+ 			const lines = stdout.trim().split(/\r?\n/);
+-			expect(lines).toHaveLength(2);
++			expect(lines).toHaveLength(1);
+ 			const result = JSON.parse(lines[0]) as { type: string; kind: string; elapsedMs: number };
+-			const exit = JSON.parse(lines[1]) as { type: string; elapsedMs: number };
+ 			expect(result).toMatchObject({ type: "result", kind: how === "timeout" ? "timeout" : "aborted" });
+-			expect(exit.type).toBe("exit");
+ 			expect(result.elapsedMs).toBeLessThan(1000);
+-			if (name === "Node") expect(exit.elapsedMs - result.elapsedMs).toBeLessThan(1000);
++			if (name === "Node") expect(elapsedMs - result.elapsedMs).toBeLessThan(1000);
+ 		},
+ 		25000,
+ 	);
 diff --git a/packages/coding-agent/src/extensions/codemode/execute.ts b/packages/coding-agent/src/extensions/codemode/execute.ts
-index fb0c67e..c953fb6 100644
+index 2d3bfbe..b78e0da 100644
 --- a/packages/coding-agent/src/extensions/codemode/execute.ts
 +++ b/packages/coding-agent/src/extensions/codemode/execute.ts
-@@ -394,6 +394,7 @@ async function saveImages(items: (TextContent | ImageContent)[]): Promise<(TextC
+@@ -397,6 +397,7 @@ async function saveImages(items: (TextContent | ImageContent)[]): Promise<(TextC
  async function truncateOutput(
  	items: (TextContent | ImageContent)[],
  	maxTokens: number,
@@ -563,7 +704,7 @@ index fb0c67e..c953fb6 100644
  ): Promise<{ items: (TextContent | ImageContent)[]; fullOutputPath?: string }> {
  	const texts = items.filter((item): item is TextContent => item.type === "text").map((item) => item.text);
  	const combined = texts.join("\n");
-@@ -405,7 +406,9 @@ async function truncateOutput(
+@@ -408,7 +409,9 @@ async function truncateOutput(
  	const head = combined.slice(0, headChars);
  	const tail = tailChars > 0 ? combined.slice(-tailChars) : "";
  	let text = `Warning: truncated output (original token count: ${Math.ceil(combined.length / CHARS_PER_TOKEN)})\nTotal output lines: ${combined.split("\n").length}\n\n${head}…${Math.ceil(removed / CHARS_PER_TOKEN)} tokens truncated…${tail}`;
@@ -574,7 +715,7 @@ index fb0c67e..c953fb6 100644
  	text +=
  		"path" in spilled
  			? `\n\n[Full output: ${spilled.path} (read with offset/limit)]`
-@@ -443,6 +446,9 @@ export async function executeCodemode(
+@@ -446,6 +449,9 @@ export async function executeCodemode(
  	options: CodemodeToolOptions = {},
  ): Promise<AgentToolResult<CodemodeToolDetails>> {
  	const startedAt = performance.now();
@@ -584,7 +725,7 @@ index fb0c67e..c953fb6 100644
  	const { code, options: sourceOptions } = parseCodemodeSource(input.code);
  	const calls: CodemodeNestedCall[] = [];
  	// Usage of the script's `models.*` calls. Nested tool calls report theirs through the session.
-@@ -504,7 +510,15 @@ export async function executeCodemode(
+@@ -507,7 +513,15 @@ export async function executeCodemode(
  				? createModelGlobals(ctx.modelRegistry, toolCallId, calls, publish, addModelUsage, addGeneratedImages)
  				: []),
  		],
@@ -601,7 +742,7 @@ index fb0c67e..c953fb6 100644
  		memoryLimitBytes: CODEMODE_MEMORY_LIMIT_BYTES,
  		wasm: loadQuickJSWasm(getQuickJSWasmPath()),
  		workerUrl: getCodemodeWorkerSpecifier(),
-@@ -543,13 +557,15 @@ export async function executeCodemode(
+@@ -557,13 +571,15 @@ export async function executeCodemode(
  	const truncated = await truncateOutput(
  		joinAdjacentText(items),
  		sourceOptions.maxOutputTokens ?? DEFAULT_MAX_OUTPUT_TOKENS,
@@ -2292,6 +2433,116 @@ index 0000000..48e8398
 +		]);
 +		expect(shown).not.toMatch(/SECRET|credential|unused\.invalid|secret|sign-in|\/mcp login/);
 +		expect(shown).toContain("MCP server unavailable");
++	});
++});
+diff --git a/packages/coding-agent/test/managed-worker-admission.test.ts b/packages/coding-agent/test/managed-worker-admission.test.ts
+new file mode 100644
+index 0000000..b99383f
+--- /dev/null
++++ b/packages/coding-agent/test/managed-worker-admission.test.ts
+@@ -0,0 +1,104 @@
++import { Worker } from "node:worker_threads";
++import * as codemode from "@earendil-works/pi-codemode";
++import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
++import { executeCodemode } from "../src/extensions/codemode/execute.ts";
++
++const terminate = Worker.prototype.terminate;
++const terminations = new Map<Worker, (code: number) => void>();
++
++beforeEach(() => {
++	vi.spyOn(Worker.prototype, "terminate").mockImplementation(function (this: Worker) {
++		this.ref();
++		return new Promise<number>((resolve) => terminations.set(this, resolve));
++	});
++});
++
++afterEach(async () => {
++	vi.restoreAllMocks();
++	await Promise.all([...terminations].map(async ([worker, resolve]) => resolve(await terminate.call(worker))));
++	terminations.clear();
++});
++
++const run = (code: string, signal?: AbortSignal) =>
++	executeCodemode("managed-worker-admission", { code }, signal, undefined, undefined, {
++		executionLimits: {
++			maxSourceBytes: 4096,
++			timeoutMs: 3000,
++			maxCalls: 16,
++			maxConcurrentCalls: 4,
++			maxOutputBytes: 4096,
++			inlineOnly: true,
++		},
++	});
++
++describe("managed worker admission", () => {
++	it.each(["timeout", "abort", "success"] as const)(
++		"holds capacity after %s until actual worker exit",
++		async (how) => {
++			const once = vi.spyOn(Worker.prototype, "once");
++			for (let i = 0; i < 2; i++) {
++				const controller = new AbortController();
++				const listeners = once.mock.calls.filter(([event]) => event === "exit").length;
++				const pending = run(
++					how === "timeout"
++						? '// @options: {"timeout_ms": 200}\nwhile (true) {}'
++						: how === "abort"
++							? "while (true) {}"
++							: "return 1",
++					controller.signal,
++				);
++				if (how === "abort") {
++					await vi.waitFor(() =>
++						expect(once.mock.calls.filter(([event]) => event === "exit").length).toBeGreaterThan(listeners),
++					);
++					controller.abort();
++				}
++				const result = await pending;
++				if (how === "success") expect(result.isError).toBeUndefined();
++				else
++					expect(result).toMatchObject({
++						isError: true,
++						details: { failureKind: how === "timeout" ? "timeout" : "aborted" },
++					});
++				expect(terminations.size).toBe(i + 1);
++			}
++			const blocked = await run("return 3");
++			expect(blocked).toMatchObject({ isError: true, details: { calls: [], failureKind: "sandbox" } });
++			expect(blocked.content).toContainEqual({
++				type: "text",
++				text: expect.stringContaining("Codemode worker limit reached"),
++			});
++			const [worker, resolve] = [...terminations][0];
++			resolve(await terminate.call(worker));
++			terminations.delete(worker);
++			expect((await run("return 42")).isError).toBeUndefined();
++			expect(terminations.size).toBe(2);
++		},
++	);
++
++	it("stops timed-out managed launches before results and retains capacity until exit", async () => {
++		const wasm = await codemode.loadQuickJSWasm();
++		const loading = Promise.withResolvers<codemode.CodemodeWasmModule>();
++		const load = vi.spyOn(codemode, "loadQuickJSWasm").mockReturnValue(loading.promise);
++		const results = Array.from({ length: 3 }, () => run('// @options: {"timeout_ms": 20}\nwhile (true) {}'));
++		let settled = 0;
++		for (const result of results) void result.then(() => settled++);
++		try {
++			await vi.waitFor(() => expect(load).toHaveBeenCalledTimes(3));
++			await new Promise((resolve) => setTimeout(resolve, 40));
++			expect(settled).toBe(0);
++			expect(terminations.size).toBe(0);
++			loading.resolve(wasm);
++			for (const result of await Promise.all(results))
++				expect(result).toMatchObject({ isError: true, details: { failureKind: "timeout" } });
++			expect(terminations.size).toBe(2);
++			expect((await run("return 1")).content).toContainEqual({
++				type: "text",
++				text: expect.stringContaining("Codemode worker limit reached"),
++			});
++		} finally {
++			loading.resolve(wasm);
++			await Promise.all(results);
++		}
 +	});
 +});
 diff --git a/packages/mcp/src/client.ts b/packages/mcp/src/client.ts

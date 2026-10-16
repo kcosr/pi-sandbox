@@ -24,7 +24,7 @@ npm run build:extensions
 npm pack ./packages/sandbox-extension
 ```
 
-Install the resulting tarball alongside ordinary Pi **1.2.0**. Its public Pi
+Install the resulting tarball alongside ordinary Pi **1.3.0**. Its public Pi
 peer dependencies must resolve to that version. No private repository, adjacent
 source checkout or second bundled Pi SDK is required.
 

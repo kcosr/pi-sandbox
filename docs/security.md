@@ -251,7 +251,7 @@ arbitrary existing-file overwrite capability; future fetch/pull tools require
 their own assessment.
 
 `git_clone` retains Pi's sequential-tool declaration. An ordinary Pi batch that
-includes it runs sequentially. Pi 1.2.0's nested Code Mode runner serializes it
+includes it runs sequentially. Pi 1.3.0's nested Code Mode runner serializes it
 against other sequential nested tools, but can overlap it with nested Bash or
 file tools. That existing scheduling behavior is unchanged; the declaration is
 not a global lock against all project writers.

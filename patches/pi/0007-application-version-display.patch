@@ -82,13 +82,13 @@ index 0000000..f85417c
 +	vi.unstubAllEnvs();
 +	rmSync(agentDir, { recursive: true, force: true });
 +});
-+test.each([undefined, "1.2.0+ps.0.6.0", "1.2.0+ps.0.6.0.dev.g1234567"])(
++test.each([undefined, "1.3.0+ps.0.6.0", "1.3.0+ps.0.6.0.dev.g1234567"])(
 +	"version output accepts a presentation override: %s", async (displayVersion) => {
 +		const log = vi.spyOn(console, "log").mockImplementation(() => {});
 +		const exit = new Error("version exit");
 +		vi.spyOn(process, "exit").mockImplementation(() => { throw exit; });
 +		await expect(main(["--version"], displayVersion === undefined ? {} : { displayVersion })).rejects.toBe(exit);
 +		expect(log).toHaveBeenCalledExactlyOnceWith(displayVersion ?? VERSION);
-+		expect(VERSION).toBe("1.2.0");
++		expect(VERSION).toBe("1.3.0");
 +	},
 +);

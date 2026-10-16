@@ -77,7 +77,7 @@ configuration path or `models_file`.
 Provider definitions and API-key resolution are documented separately in
 [Models and authentication](models.md).
 
-Pi 1.2.0 preserves ordinary user settings while validating custom themes at
+Pi 1.3.0 preserves ordinary user settings while validating custom themes at
 startup. Theme files must follow `https://pi.dev/schemas/theme.schema.json`;
 reusable colors belong in `vars`. For SSH or multiplexer clipboard support,
 set `PI_CLIPBOARD_OSC52 = "1"` in `environment.pi` to enable Pi's terminal
@@ -289,6 +289,12 @@ API; the configured tools define its external capabilities. Script output and
 return values share a 16 MiB byte budget. Each nested reply and store-write journal
 has its own 16 MiB limit; processing several bounded replies does not consume the
 script-output budget.
+
+Cancellation waits for nested tool cleanup, but a non-interruptible WASM worker
+may outlive the result while termination is pending. Pi allows at most two live
+Code Mode workers per application process and rejects another script until a
+worker actually exits. This does not cap ordinary parallel Bash or file-tool
+calls.
 
 The required `[mcp.servers]` table is empty by default. Only this main policy can
 configure servers; user/project MCP files cannot supply connections or permissions,

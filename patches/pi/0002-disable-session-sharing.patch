@@ -11,19 +11,19 @@ index 38d268a..6c2bfe2 100644
  ${chalk.bold("Built-in Tool Names:")}
    read       - Read file contents
 diff --git a/packages/coding-agent/src/core/slash-commands.ts b/packages/coding-agent/src/core/slash-commands.ts
-index 934de40..d5f2dc7 100644
+index dc98f1d..d5f2dc7 100644
 --- a/packages/coding-agent/src/core/slash-commands.ts
 +++ b/packages/coding-agent/src/core/slash-commands.ts
 @@ -24,7 +24,6 @@ export const BUILTIN_SLASH_COMMANDS: ReadonlyArray<BuiltinSlashCommand> = [
  	{ name: "scoped-models", description: "Enable/disable models for Ctrl+P cycling" },
  	{ name: "export", description: "Export session (HTML default, or specify path: .html/.jsonl)" },
  	{ name: "import", description: "Import and resume a session from a JSONL file" },
--	{ name: "share", description: "Share session as a secret GitHub gist" },
+-	{ name: "share", description: "Share session via a Radius artifact or a GitHub gist" },
  	{ name: "bug", description: "Report a bug to the Pi developers", argumentHint: "<description>" },
  	{ name: "copy", description: "Copy last agent message to clipboard" },
  	{ name: "name", description: "Set session display name" },
 diff --git a/packages/coding-agent/src/modes/interactive/interactive-mode.ts b/packages/coding-agent/src/modes/interactive/interactive-mode.ts
-index 55ea404..ddbcc5a 100644
+index ce23984..32af6b5 100644
 --- a/packages/coding-agent/src/modes/interactive/interactive-mode.ts
 +++ b/packages/coding-agent/src/modes/interactive/interactive-mode.ts
 @@ -185,7 +185,6 @@ import { editInExternalEditor } from "./external-editor.ts";
@@ -34,7 +34,7 @@ index 55ea404..ddbcc5a 100644
  import {
  	getAvailableThemes,
  	getAvailableThemesWithPaths,
-@@ -3234,7 +3233,7 @@ export class InteractiveMode {
+@@ -3236,7 +3235,7 @@ export class InteractiveMode {
  				this.editor.setText("");
  				return;
  			}
@@ -43,7 +43,7 @@ index 55ea404..ddbcc5a 100644
  				await this.handleShareCommand();
  				this.editor.setText("");
  				return;
-@@ -6609,14 +6608,7 @@ export class InteractiveMode {
+@@ -6627,14 +6626,7 @@ export class InteractiveMode {
  	}
  
  	private async handleShareCommand(): Promise<void> {
@@ -61,35 +61,67 @@ index 55ea404..ddbcc5a 100644
  	private async handleBugCommand(hint: string | undefined): Promise<void> {
 diff --git a/packages/coding-agent/test/managed-session-sharing.test.ts b/packages/coding-agent/test/managed-session-sharing.test.ts
 new file mode 100644
-index 0000000..df0afce
+index 0000000..4b1c1d8
 --- /dev/null
 +++ b/packages/coding-agent/test/managed-session-sharing.test.ts
-@@ -0,0 +1,28 @@
-+import { describe, expect, it, vi } from "vitest";
+@@ -0,0 +1,60 @@
++import { afterEach, describe, expect, it, vi } from "vitest";
 +import { BUILTIN_SLASH_COMMANDS } from "../src/core/slash-commands.ts";
 +import { InteractiveMode } from "../src/modes/interactive/interactive-mode.ts";
 +
 +describe("managed session sharing", () => {
++	afterEach(() => {
++		vi.restoreAllMocks();
++		vi.unstubAllEnvs();
++	});
++
 +	it("does not advertise sharing but retains local export", () => {
 +		expect(BUILTIN_SLASH_COMMANDS.some((command) => command.name === "share")).toBe(false);
 +		expect(BUILTIN_SLASH_COMMANDS.some((command) => command.name === "export")).toBe(true);
 +	});
 +
-+	it("rejects sharing without accessing the session or exporting content", async () => {
-+		const showError = vi.fn();
++	it.each(["auto", "gist", "radius"])(
++		"rejects %s sharing without accessing the session or exporting content",
++		async (destination) => {
++			const showError = vi.fn();
++			const context = new Proxy(
++				{ showError, settingsManager: { getSessionShareDestination: () => destination } },
++				{
++					get(target, property) {
++						if (property === "showError") return target.showError;
++						throw new Error(`Sharing must not access ${String(property)}`);
++					},
++				},
++			);
++			const handleShareCommand = Reflect.get(InteractiveMode.prototype, "handleShareCommand") as (
++				this: typeof context,
++			) => Promise<void>;
++			await handleShareCommand.call(context);
++			expect(showError).toHaveBeenCalledExactlyOnceWith("Session sharing is disabled in this distribution.");
++		},
++	);
++
++	it("offline mode blocks install telemetry and package checks before accessing session state", async () => {
++		vi.stubEnv("PI_OFFLINE", "1");
++		vi.stubEnv("PI_TELEMETRY", "1");
++		const fetch = vi.spyOn(globalThis, "fetch").mockRejectedValue(new Error("Unexpected external callback"));
 +		const context = new Proxy(
-+			{ showError },
++			{},
 +			{
-+				get(target, property) {
-+					if (property === "showError") return target.showError;
-+					throw new Error(`Sharing must not access ${String(property)}`);
++				get(_target, property) {
++					throw new Error(`Offline checks must not access ${String(property)}`);
 +				},
 +			},
 +		);
-+		const handleShareCommand = Reflect.get(InteractiveMode.prototype, "handleShareCommand") as (
++		const reportInstallTelemetry = Reflect.get(InteractiveMode.prototype, "reportInstallTelemetry") as (
 +			this: typeof context,
-+		) => Promise<void>;
-+		await handleShareCommand.call(context);
-+		expect(showError).toHaveBeenCalledExactlyOnceWith("Session sharing is disabled in this distribution.");
++			version: string,
++		) => void;
++		const checkForPackageUpdates = Reflect.get(InteractiveMode.prototype, "checkForPackageUpdates") as (
++			this: typeof context,
++		) => Promise<string[]>;
++		reportInstallTelemetry.call(context, "1.3.0");
++		await expect(checkForPackageUpdates.call(context)).resolves.toEqual([]);
++		expect(fetch).not.toHaveBeenCalled();
 +	});
 +});

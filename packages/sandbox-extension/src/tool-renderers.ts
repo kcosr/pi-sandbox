@@ -1,6 +1,7 @@
 import { isAbsolute } from "node:path";
 import { pathToFileURL } from "node:url";
 import {
+  formatReadLineRange,
   getLanguageFromPath,
   highlightCode,
   keyHint,
@@ -88,11 +89,7 @@ function createCallRenderer(tool: PathTool): CallRenderer {
     const title = theme.fg("toolTitle", theme.bold(tool));
     const path = renderPath(args.path, tool, theme);
     let text = `${title} ${path}`;
-    if (tool === "read" && (numberArgument(args.offset) || numberArgument(args.limit))) {
-      const start = numberArgument(args.offset) ? args.offset : 1;
-      const end = numberArgument(args.limit) ? `-${start + args.limit - 1}` : "";
-      text += theme.fg("warning", `:${start}${end}`);
-    }
+    if (tool === "read") text += theme.fg("warning", formatReadLineRange(args.offset, args.limit));
     if (tool === "find" || tool === "grep") {
       const pattern = stringArgument(args.pattern);
       const patternText =

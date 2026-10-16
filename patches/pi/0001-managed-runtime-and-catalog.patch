@@ -210,7 +210,7 @@ index f678ba4..5d2c421 100644
  		cacheWarmer,
  		initialActiveToolNames,
 diff --git a/packages/coding-agent/src/index.ts b/packages/coding-agent/src/index.ts
-index bd48684..fc3c188 100644
+index 0b8fb1d..6f99d32 100644
 --- a/packages/coding-agent/src/index.ts
 +++ b/packages/coding-agent/src/index.ts
 @@ -234,6 +234,7 @@ export {
@@ -222,7 +222,7 @@ index bd48684..fc3c188 100644
  export type {
  	PackageManager,
 diff --git a/packages/coding-agent/src/main.ts b/packages/coding-agent/src/main.ts
-index 0710ed9..189b150 100644
+index 51df447..87348a1 100644
 --- a/packages/coding-agent/src/main.ts
 +++ b/packages/coding-agent/src/main.ts
 @@ -5,6 +5,7 @@
@@ -272,7 +272,7 @@ index 0710ed9..189b150 100644
  			result = await checkProviderAuth(parsed, modelRuntime, { refresh: !command.noRefresh });
  			if (command.credentials && result.status === "ready") {
  				credential = await getProviderCredential(result.provider, modelRuntime, credentials, {
-@@ -568,6 +572,9 @@ async function promptForMissingSessionCwd(
+@@ -569,6 +573,9 @@ async function promptForMissingSessionCwd(
  
  export interface MainOptions {
  	extensionFactories?: InlineExtension[];
@@ -282,7 +282,7 @@ index 0710ed9..189b150 100644
  }
  
  export async function main(args: string[], options?: MainOptions) {
-@@ -581,7 +588,7 @@ export async function main(args: string[], options?: MainOptions) {
+@@ -582,7 +589,7 @@ export async function main(args: string[], options?: MainOptions) {
  		process.env.PI_SKIP_VERSION_CHECK = "1";
  	}
  
@@ -291,7 +291,7 @@ index 0710ed9..189b150 100644
  		return;
  	}
  
-@@ -748,10 +755,18 @@ export async function main(args: string[], options?: MainOptions) {
+@@ -749,10 +756,18 @@ export async function main(args: string[], options?: MainOptions) {
  				parsed.projectTrustOverride ??
  				(!hasTrustRequiringResources || trustStore.get(cwd) === true));
  		const runtimeSettingsManager = SettingsManager.create(cwd, agentDir, { projectTrusted });
@@ -310,7 +310,7 @@ index 0710ed9..189b150 100644
  			modelRuntimeSignal: AbortSignal.timeout(15_000),
  			extensionFlagValues: parsed.unknownFlags,
  			resourceLoaderReloadOptions: shouldResolveProjectTrust
-@@ -848,6 +863,7 @@ export async function main(args: string[], options?: MainOptions) {
+@@ -849,6 +864,7 @@ export async function main(args: string[], options?: MainOptions) {
  			tools: sessionOptions.tools,
  			excludeTools: sessionOptions.excludeTools,
  			noTools: sessionOptions.noTools,
@@ -485,16 +485,17 @@ index 0000000..04def0a
 +});
 diff --git a/packages/coding-agent/test/managed-model-runtime.test.ts b/packages/coding-agent/test/managed-model-runtime.test.ts
 new file mode 100644
-index 0000000..e9ec190
+index 0000000..cca89b3
 --- /dev/null
 +++ b/packages/coding-agent/test/managed-model-runtime.test.ts
-@@ -0,0 +1,232 @@
+@@ -0,0 +1,282 @@
 +import { mkdirSync, rmSync, writeFileSync } from "node:fs";
 +import { tmpdir } from "node:os";
 +import { join } from "node:path";
 +import { type AnyModel, InMemoryModelsStore } from "@earendil-works/pi-ai";
 +import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 +import { AuthStorage } from "../src/core/auth-storage.ts";
++import { resolveCliModel } from "../src/core/model-resolver.ts";
 +import { ModelRuntime } from "../src/core/model-runtime.ts";
 +
 +describe("configured-only model runtime", () => {
@@ -566,6 +567,55 @@ index 0000000..e9ec190
 +		expect(runtime.getError()).toContain('Provider "openai"');
 +		expect(runtime.getProvider("openai")).toBeUndefined();
 +		expect(runtime.getModels()).toEqual([]);
++	});
++
++	test("resolves duplicate configured IDs by credentials or explicit provider without reviving catalogs", async () => {
++		writeFileSync(
++			modelsPath,
++			JSON.stringify({
++				providers: Object.fromEntries(
++					["alpha", "beta"].map((provider) => [
++						provider,
++						{
++							api: "openai-completions",
++							baseUrl: `https://${provider}.invalid/v1`,
++							models: [{ id: "shared-model" }],
++						},
++					]),
++				),
++			}),
++		);
++		const credentials = AuthStorage.inMemory({ alpha: { type: "api_key", key: "alpha-key" } });
++		const fetch = vi.spyOn(globalThis, "fetch").mockRejectedValue(new Error("Unexpected catalog request"));
++		const runtime = await ModelRuntime.create({
++			credentials,
++			modelsPath,
++			modelsStore: new InMemoryModelsStore(),
++			includeBuiltinCatalog: false,
++			allowModelNetwork: false,
++			refreshOnCreate: false,
++		});
++		const select = (cliModel: string, options = {}) =>
++			resolveCliModel({ modelRuntime: runtime, cliModel, ...options });
++		expect(runtime.getError()).toBeUndefined();
++		await runtime.getAvailable();
++		expect(select("shared-model").model?.provider).toBe("alpha");
++		expect(select("shared-model", { inlineApiKey: true }).error).toContain("ambiguous");
++		expect(select("beta/shared-model").model?.provider).toBe("beta");
++		expect(select("shared-model", { cliProvider: "beta", inlineApiKey: true }).model?.provider).toBe("beta");
++		await runtime.setRuntimeApiKey("beta", "beta-key");
++		expect(select("shared-model").error).toContain("ambiguous");
++		expect(select("alpha/shared-model").model?.provider).toBe("alpha");
++		expect(select("shared-model", { cliProvider: "beta" }).model?.provider).toBe("beta");
++		await expect(runtime.getAuth("alpha")).resolves.toMatchObject({ auth: { apiKey: "alpha-key" } });
++		await expect(runtime.getAuth("beta")).resolves.toMatchObject({ auth: { apiKey: "beta-key" } });
++		expect(select("gpt-5.5", { cliProvider: "openai" }).error).toContain("Unknown provider");
++		await runtime.refresh({ allowNetwork: true, force: true });
++		expect(runtime.getModels().map((model) => `${model.provider}/${model.id}`)).toEqual([
++			"alpha/shared-model",
++			"beta/shared-model",
++		]);
++		expect(fetch).not.toHaveBeenCalled();
 +	});
 +
 +	test("does not restore builtin models from a persisted catalog or fetch a remote catalog", async () => {
@@ -723,10 +773,10 @@ index 0000000..e9ec190
 +});
 diff --git a/packages/coding-agent/test/managed-tools.test.ts b/packages/coding-agent/test/managed-tools.test.ts
 new file mode 100644
-index 0000000..836b751
+index 0000000..d05c6d6
 --- /dev/null
 +++ b/packages/coding-agent/test/managed-tools.test.ts
-@@ -0,0 +1,177 @@
+@@ -0,0 +1,244 @@
 +import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 +import { tmpdir } from "node:os";
 +import { join } from "node:path";
@@ -738,6 +788,7 @@ index 0000000..836b751
 +import type { ExtensionAPI, ToolDefinition } from "../src/core/extensions/types.ts";
 +import { ModelRuntime } from "../src/core/model-runtime.ts";
 +import { restoreStdout } from "../src/core/output-guard.ts";
++import type { CreateAgentSessionOptions } from "../src/core/sdk.ts";
 +import { SessionManager } from "../src/core/session-manager.ts";
 +import { main } from "../src/main.ts";
 +
@@ -790,6 +841,72 @@ index 0000000..836b751
 +		expect(api.getAllTools().every((tool) => tool.sourceInfo?.source !== "builtin")).toBe(true);
 +		for (const name of disabledTools) expect(api.getAllTools().map((tool) => tool.name)).not.toContain(name);
 +	};
++
++	test.each<{
++		label: string;
++		options: Pick<CreateAgentSessionOptions, "tools" | "excludeTools" | "noTools">;
++		expected: string[];
++	}>([
++		{ label: "recorded loadout", options: {}, expected: ["bash", "mcp__docs__enabled"] },
++		{ label: "managed builtin exclusion", options: { noTools: "builtin" }, expected: ["bash"] },
++		{ label: "explicit ceiling", options: { tools: ["mcp__docs__enabled"] }, expected: ["mcp__docs__enabled"] },
++		{ label: "disabled selection", options: { tools: ["powershell"] }, expected: [] },
++		{ label: "wildcard selection", options: { tools: ["*"] }, expected: ["bash", "mcp__docs__enabled"] },
++		{ label: "exclusion", options: { excludeTools: ["mcp__docs__enabled"] }, expected: ["bash"] },
++	])("keeps resume within current policy and $label", async ({ options, expected }) => {
++		const sessionManager = SessionManager.inMemory(root);
++		const recorded = ["bash", ...disabledTools, "mcp__docs__enabled", "mcp__docs__hidden", "mcp__docs__removed"];
++		sessionManager.appendMessage({
++			role: "system",
++			content: "",
++			toolsAdded: recorded.map((name) => ({ name, description: name, parameters: Type.Object({}) })),
++			timestamp: Date.now(),
++		});
++		const services = await createAgentSessionServices({
++			cwd: root,
++			agentDir,
++			modelRuntime,
++			resourceLoaderOptions: {
++				noExtensions: true,
++				noSkills: true,
++				noContextFiles: true,
++				extensionFactories: [
++					(pi) => {
++						factory(pi);
++						pi.registerTool({ ...definition("mcp__docs__enabled"), defaultActive: false });
++						pi.registerTool({ ...definition("mcp__docs__hidden"), exposure: "hidden" });
++					},
++				],
++			},
++		});
++		const { session } = await createAgentSessionFromServices({
++			services,
++			sessionManager,
++			includeBuiltinTools: false,
++			...options,
++		});
++		try {
++			await session.bindExtensions({});
++			expect(session.getActiveToolNames().sort()).toEqual(expected);
++			for (let generation = 0; generation < 2; generation++) {
++				api.registerTool({ ...definition("mcp__other__late"), defaultActive: false });
++				assertNoStock();
++				for (const name of [
++					...disabledTools,
++					...["bash", "mcp__docs__enabled"].filter((name) => !expected.includes(name)),
++					"mcp__docs__hidden",
++					"mcp__docs__removed",
++					...(options.tools?.includes("*") ? [] : ["mcp__other__late"]),
++				]) {
++					expect(session.getActiveToolNames()).not.toContain(name);
++					expect(session.getCallableToolNames()).not.toContain(name);
++				}
++				if (generation === 0) await session.reload();
++			}
++		} finally {
++			session.dispose();
++		}
++	});
 +
 +	test.each(selections)(
 +		"cannot restore stock tools selected with %j through refresh, reload or recreation",

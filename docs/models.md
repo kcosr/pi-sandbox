@@ -16,7 +16,7 @@ A build with `allow_config_override = true` permits an explicit leading
 option. Environment variables, Pi settings, and automatic project discovery
 cannot redirect either path. When broker mode is enabled,
 the root-managed drop-in for the calling UID may select another catalog.
-`--model` can select only a model from the effective catalog.
+`--model` resolves against the effective catalog and its configured providers.
 
 Files under the compiled `libexec_dir/defaults/` are installation templates,
 not runtime configuration. A normal upgrade preserves the active files under
@@ -69,7 +69,22 @@ For editor validation and completion, the top-level object may include
 `"$schema": "https://pi.dev/schemas/models.schema.json"`. This is an editor hint;
 startup still uses the pinned Pi validator and does not fetch the schema.
 OpenRouter's per-key remote or cached model lists do not add models to the
-managed catalog. Each admitted model must remain explicitly configured.
+managed catalog. Each catalog entry must remain explicitly configured.
+
+## Pi 1.3 model selection
+
+When several configured providers offer the same model ID, Pi prefers a provider
+with credentials and otherwise reports the ambiguity. Use `--model provider/model`
+to make the selection explicit. Pi also retains its custom model-ID behavior:
+an explicit unknown ID under a configured provider can use that provider's
+settings without adding a catalog entry. The catalog is not a strict model-ID
+execution allowlist; the provider service must enforce any model access limits.
+
+Pi 1.3 changes the built-in `kimi-coding` provider implementation to
+`openai-completions` at `https://api.kimi.com/coding/v1`. Administrators using
+that provider must review any explicit API and base URL overrides; a Chat
+Completions base URL must include `/v1`. Installation preserves existing model
+files and does not rewrite those overrides.
 
 ## API keys
 

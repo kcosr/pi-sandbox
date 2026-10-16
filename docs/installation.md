@@ -160,13 +160,13 @@ ownership and permissions.
 ## Building a release
 
 The product version is independent of the pinned Pi version. A clean build at
-product tag `v0.7.0` displays `1.2.0+ps.0.7.0` in `pi-sandbox --version` and
+product tag `v0.7.0` displays `1.3.0+ps.0.7.0` in `pi-sandbox --version` and
 the TUI header. Untagged builds include a development suffix and Git revision;
 modified builds also include `.dirty`. Source execution and application builds
 without Git metadata use `.dev.source`; `npm run build:application` supports
 that case. The full release builder requires a Git checkout for source
 provenance. The release package retains product version `0.7.0`, and Pi's
-internal version stays `1.2.0`.
+internal version stays `1.3.0`.
 
 GitHub releases publish source and release notes without uploaded binaries.
 The following commands build deployment archives locally. See
@@ -346,7 +346,7 @@ packaged default config must point `models_file` at that layout's
 
 The build produces a native archive for its current Linux or macOS architecture.
 It downloads, or accepts a locally supplied copy of, the official Pi
-1.2.0 source archive pinned in `pi-source.lock.json`. It verifies the recorded
+1.3.0 source archive pinned in `pi-source.lock.json`. It verifies the recorded
 SHA-256 digest, extracts the source into temporary or ignored build storage,
 applies the small patch series in `patches/pi`, compiles Pi plus the separate Pi
 Sandbox extension and selected modules into the Bun application, and
@@ -688,7 +688,7 @@ when using dependency scanners.
 
 The release build creates `kcosr-pi-sandbox-extension-0.8.0.tgz` and
 `kcosr-pi-git-extension-0.1.0.tgz`, each with a SHA256 sidecar. They are independent
-standard extensions for ordinary Pi 1.2.0. Sandbox includes its runtime and
+standard extensions for ordinary Pi 1.3.0. Sandbox includes its runtime and
 Bubblewrap worker; Git includes its bounded host runner. Neither needs a permissions
 package, the other extension package or an adjacent source checkout. See
 [sandbox configuration and usage](../packages/sandbox-extension/README.md) and

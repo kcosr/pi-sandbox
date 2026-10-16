@@ -4,7 +4,7 @@
 
 Shared package unit tests run with `npm run test:unit`. `npm run test:extension`
 builds and inspects both tarballs, checks their emitted JS/declaration imports,
-and starts stock Pi 1.2.0 against independently extracted artifacts. Sandbox is
+and starts stock Pi 1.3.0 against independently extracted artifacts. Sandbox is
 installed without Git or permissions; Git is installed alone and with sandbox.
 No workspace package links are admitted. Provenance includes Git's bundled runner.
 
@@ -50,7 +50,7 @@ env -u NODE_ENV npm run verify:release
 To use a previously downloaded pinned Pi source archive, pass it through:
 
 ```sh
-env -u NODE_ENV npm run verify:release -- --pi-source-archive /path/to/pi-1.2.0-source.tar.gz
+env -u NODE_ENV npm run verify:release -- --pi-source-archive /path/to/pi-1.3.0-source.tar.gz
 ```
 
 The verifier runs formatting, lint, type checking, Rust service checks, unit,
@@ -305,12 +305,17 @@ the absence of runtime extension loading, bundled Bubblewrap input digest,
 architecture, version, required options, license packaging, installer mode, and
 release-manifest consistency.
 They verify the `pi-source.lock.json` source-archive checksum, apply
-the patch series to a clean temporary Pi 1.2.0 tree, check production adapter types
+the patch series to a clean temporary Pi 1.3.0 tree, check production adapter types
 against the resulting declarations, and run relevant upstream Pi tests. The contract
 check verifies option keys and callback compatibility, including nested settings;
 negative controls remove or alter declarations in disposable copies to prove it
 fails on API drift. Behavioral guarantees remain covered by the Pi integration
-tests. Release checks also prove the configured-only catalog across model types
+tests. Pi 1.3 regressions cover late worker startup, cancellation with pending
+nested cleanup, worker-capacity recovery only after actual exit, resumed tool
+selection, ambiguous configured model IDs, raw read-range arguments, and disabled
+sharing for every destination. Real Node/Bun worker fixtures observe process exit
+from their parent because Bun may omit the child's exit callback.
+Release checks also prove the configured-only catalog across model types
 and refreshes, build and inspect the static
 Rust broker, and inspect the final Bun application and release archive. The
 packaged executable diagnostic also proves that only the administrative model

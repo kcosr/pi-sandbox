@@ -117,6 +117,27 @@ describe("sandbox tool call rendering", () => {
     expect(render("read", { path, offset: 3 }).text).toBe(`read ${path}:3`);
   });
 
+  it.each([
+    ["25", "13", ":25-37"],
+    [null, "13", ":1-13"],
+    ["25", null, ":25"],
+    [null, null, ""],
+    [undefined, undefined, ""],
+    ["abc", 13, ""],
+    [25, "", ""],
+    [25, "Infinity", ""],
+    [false, 13, ""],
+    [[], 13, ""],
+  ])("formats raw read range %j, %j without changing path identity", (offset, limit, range) => {
+    for (const path of [`${homedir()}/notes.txt`, "~/notes.txt"]) {
+      const args = Object.freeze({ path, offset, limit });
+      const label = path.startsWith("~/") ? " (tool home)" : "";
+      expect(render("read", args, { argsComplete: false }).text).toBe(
+        `read ${path}${label}${range}`,
+      );
+    }
+  });
+
   it("preserves complete code points when escaping supplementary Unicode controls", () => {
     expect(render("read", { path: "/tmp/a\u{e0001}.txt" }).text).toBe(
       'read "/tmp/a\\u{e0001}.txt"',

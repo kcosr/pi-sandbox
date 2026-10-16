@@ -53,7 +53,7 @@ export async function installExtensionArtifacts(
     execFileSync("tar", ["-xzf", archive, "--strip-components=1", "-C", directory]);
     const metadata = JSON.parse(await readFile(join(directory, "package.json"), "utf8"));
     assert.deepEqual(metadata.dependencies ?? {}, {}, "Extensions must install independently");
-    assert.equal(metadata.peerDependencies["@earendil-works/pi-coding-agent"], "1.2.0");
+    assert.equal(metadata.peerDependencies["@earendil-works/pi-coding-agent"], "1.3.0");
     for (const target of Object.values(metadata.exports)) {
       assert(entries.includes(`package/${target.replace(/^\.\//u, "")}`));
       await import(pathToFileURL(join(directory, target)).href);
@@ -149,7 +149,7 @@ export async function installExtensionArtifacts(
     }
     assert.equal(provenance.name, metadata.name);
     assert.equal(provenance.version, metadata.version);
-    assert.equal(provenance.piVersion, "1.2.0");
+    assert.equal(provenance.piVersion, "1.3.0");
     assert.equal(
       provenance.sourceCommit,
       execFileSync("git", ["rev-parse", "HEAD"], { cwd: root, encoding: "utf8" }).trim(),

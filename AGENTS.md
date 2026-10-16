@@ -62,7 +62,7 @@ reimplemented rather than mechanically reapplied.
 - Provide managed replacements for `read`, `grep`, `find`, `ls`, `write`, `edit`,
   and `bash`, and route user `!` shell commands through the selected execution
   backend. Exclude all stock built-in tool definitions from managed sessions,
-  including Pi 1.2.0's unsupported `powershell`. Tool selections, registry
+  including Pi 1.3.0's unsupported `powershell`. Tool selections, registry
   refreshes, and session recreation must not restore them. Review every upstream
   tool addition explicitly before admitting a managed implementation.
 - Never fall back to direct execution after a Bubblewrap, Seatbelt, approval,
