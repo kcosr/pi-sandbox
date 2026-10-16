@@ -57,7 +57,11 @@ import { assertExecutionPrerequisites } from "./prerequisites.js";
 import { createWorkspaceBoundary } from "./workspace.js";
 import { createManagedCleanup, createManagedExecutor } from "./managed-executor.js";
 import { createConfiguredBashAnalyzer } from "./bash-analysis.js";
-import { readAccountIdentity } from "./account-home.js";
+import {
+  createAccountIdentityResolver,
+  readAccountIdentity,
+  resolvePromptAccountHome,
+} from "./account-home.js";
 import { createMachineIdResolver, readMachineId } from "./machine-id.js";
 import type { SandboxArguments } from "./config-arguments.js";
 import {
@@ -190,6 +194,7 @@ export async function resolveEffectiveAdministrativeConfiguration(
   readonly config: SandboxConfig;
   readonly modelsPath: string;
   readonly identityEnvironment: ManagedEnvironment;
+  readonly accountHome?: string;
 }> {
   const baseConfig = await loadAdministrativeConfig(root, configPath);
   assertExecutionPlatform(baseConfig);
@@ -200,12 +205,13 @@ export async function resolveEffectiveAdministrativeConfiguration(
   );
   const overridden = applyIdentityOverrides(baseConfig, identity.overrides);
   assertExecutionPlatform(overridden);
+  const account = createAccountIdentityResolver(getAccountIdentity);
   // Resolve only effective configured values, before any managed HOME takes
   // effect. The account lookup must not trust the process's HOME value.
   const expanded = expandManagedHomePaths(
     overridden.filesystem,
     combinedEnvironment,
-    getAccountIdentity,
+    account,
     createMachineIdResolver(getMachineId),
   );
   const effectiveEnvironment = expanded.environment;
@@ -214,11 +220,18 @@ export async function resolveEffectiveAdministrativeConfiguration(
     filesystem: expanded.filesystem,
     environment: effectiveEnvironment,
   });
+  const accountHome =
+    config.execution.backend === "direct" ? undefined : await resolvePromptAccountHome(account);
   const lease = applyManagedEnvironment(effectiveEnvironment.pi, environment);
   try {
     const modelsPath = await readAdministrativeModels(config, root);
     await createConfiguredModelRuntime(modelsPath, { refreshOnCreate: false });
-    return { config, modelsPath, identityEnvironment: effectiveEnvironment };
+    return {
+      config,
+      modelsPath,
+      identityEnvironment: effectiveEnvironment,
+      ...(accountHome === undefined ? {} : { accountHome }),
+    };
   } finally {
     lease.restore();
   }
@@ -478,10 +491,9 @@ export async function runPiSandbox({ piArgs: args, configPath }: SandboxArgument
   }
 
   const ambientHostEnvironment = { ...process.env };
-  let accountIdentity: AccountIdentity | undefined;
-  const getAccountIdentity = () => (accountIdentity ??= readAccountIdentity());
+  const getAccountIdentity = createAccountIdentityResolver();
   const getMachineId = createMachineIdResolver();
-  const { config, modelsPath, identityEnvironment } =
+  const { config, modelsPath, identityEnvironment, accountHome } =
     await resolveEffectiveAdministrativeConfiguration(
       "/",
       process.env,
@@ -560,6 +572,7 @@ export async function runPiSandbox({ piArgs: args, configPath }: SandboxArgument
         toolArguments: args,
         loadConfig: () => Promise.resolve(config),
         executor,
+        ...(accountHome === undefined ? {} : { accountHome }),
         ...(bashAnalyzer === undefined ? {} : { bashAnalyzer }),
         ...(auditClient === undefined ? {} : { auditClient }),
         managedExtensions,

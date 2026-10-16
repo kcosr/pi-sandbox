@@ -1,4 +1,4 @@
-import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, realpath, rm, writeFile } from "node:fs/promises";
 import { tmpdir, userInfo } from "node:os";
 import { join } from "node:path";
 
@@ -493,6 +493,7 @@ describe("administrative configuration", () => {
       () => ({ username: account.username, uid: account.uid, homeDirectory: home }),
     );
     expect(effective.config.filesystem.hiddenPaths).toEqual([join(home, ".ssh")]);
+    expect(effective.accountHome).toBe(await realpath(home));
     expect(effective.identityEnvironment).toEqual({
       pi: { HOME: "/policy-home", PI_CODING_AGENT_DIR: join(home, "agent") },
       sandbox: { CACHE: join(home, "cache") },
@@ -561,7 +562,8 @@ describe("administrative configuration", () => {
       extensions: { service: { DEVICE: machineId } },
     });
     expect(getMachineId).toHaveBeenCalledOnce();
-    expect(getAccount).not.toHaveBeenCalled();
+    expect(getAccount).toHaveBeenCalledOnce();
+    expect(effective.accountHome).toBeUndefined();
     expect(environment).toEqual({
       PI_MACHINE_ID: "ambient",
       MACHINE_ID: "spoofed",
@@ -681,7 +683,7 @@ describe("administrative configuration", () => {
     expect(callerEnvironment).toEqual({ HOME: "/caller-home", INHERITED: "{{username}}/{{uid}}" });
   });
 
-  it("does not resolve account home when broker overrides remove the last expansion", async () => {
+  it("tolerates unavailable optional home context when broker overrides remove the last expansion", async () => {
     const root = await createRoot();
     const configPath = rooted(root, SYSTEM_CONFIG_PATH);
     const source = await readFile(configPath, "utf8");
@@ -707,8 +709,81 @@ describe("administrative configuration", () => {
       getHome,
     );
     expect(effective.identityEnvironment.pi.CACHE).toBe("/var/cache/shared");
-    expect(getHome).not.toHaveBeenCalled();
+    expect(getHome).toHaveBeenCalledOnce();
+    expect(effective.accountHome).toBeUndefined();
   });
+
+  it("resolves optional home context after broker merging and before scoped HOME applies", async () => {
+    const root = await createRoot();
+    const configPath = rooted(root, SYSTEM_CONFIG_PATH);
+    const source = await readFile(configPath, "utf8");
+    await writeFile(
+      configPath,
+      source
+        .replace('mode = "disabled"', 'mode = "broker"')
+        .replace("[environment.pi]", '[environment.pi]\nHOME = "/configured-home"'),
+    );
+    await writeFile(rooted(root, "/etc/pi-sandbox/models.json"), '{"providers":{}}');
+    const environment = { HOME: "/spoofed/home", USER: "spoofed" };
+    let merged = false;
+    const getAccount = vi.fn(() => {
+      expect(merged).toBe(true);
+      expect(environment.HOME).toBe("/spoofed/home");
+      return { username: "alice", uid: 1001, homeDirectory: root };
+    });
+    const effective = await resolveEffectiveAdministrativeConfiguration(
+      root,
+      environment,
+      () => {
+        merged = true;
+        return Promise.resolve({
+          environment: { pi: {}, sandbox: {}, extensions: {} },
+          overrides: { tools: {} },
+        });
+      },
+      SYSTEM_CONFIG_PATH,
+      getAccount,
+    );
+    expect(getAccount).toHaveBeenCalledOnce();
+    expect(effective.accountHome).toBe(await realpath(root));
+    expect(effective.identityEnvironment.pi.HOME).toBe("/configured-home");
+    expect(environment).toEqual({ HOME: "/spoofed/home", USER: "spoofed" });
+  });
+
+  it.each([false, true])(
+    "skips optional home metadata in effective direct mode while preserving macros=%s",
+    async (macros) => {
+      const root = await createRoot();
+      const configPath = rooted(root, SYSTEM_CONFIG_PATH);
+      const source = await readFile(configPath, "utf8");
+      await writeFile(
+        configPath,
+        source
+          .replace('mode = "disabled"', 'mode = "broker"')
+          .replace(
+            "[environment.pi]",
+            macros ? '[environment.pi]\nCACHE = "~/cache"' : "[environment.pi]",
+          ),
+      );
+      await writeFile(rooted(root, "/etc/pi-sandbox/models.json"), '{"providers":{}}');
+      const getAccount = vi.fn(() => ({ username: "alice", uid: 1001, homeDirectory: root }));
+      const effective = await resolveEffectiveAdministrativeConfiguration(
+        root,
+        {},
+        () =>
+          Promise.resolve({
+            environment: { pi: {}, sandbox: {}, extensions: {} },
+            overrides: { execution: { backend: "direct" }, network: { mode: "host" }, tools: {} },
+          }),
+        SYSTEM_CONFIG_PATH,
+        getAccount,
+      );
+      expect(effective.config.execution.backend).toBe("direct");
+      expect(effective.accountHome).toBeUndefined();
+      expect(getAccount).toHaveBeenCalledTimes(macros ? 1 : 0);
+      expect(effective.identityEnvironment.pi.CACHE).toBe(macros ? join(root, "cache") : undefined);
+    },
+  );
 
   it("fails before applying environment when account lookup or expanded paths are invalid", async () => {
     const root = await createRoot();

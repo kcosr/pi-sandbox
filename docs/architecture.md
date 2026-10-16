@@ -222,6 +222,17 @@ Expansion follows the broker merge and is independent of `$HOME` and CWD.
 Expanded values retain the existing environment bounds and filesystem checks.
 Installation validation checks syntax without expanding the installer's home.
 
+Managed Bubblewrap and Seatbelt system-prompt context distinguishes the executor's
+tool home from the invoking account's home. Direct execution adds no home note
+and does not request the optional account-home context. Optional account-home
+context uses the same trusted OS
+identity lookup before scoped environment changes and is qualified by the
+effective filesystem policy. Failure to obtain optional home context omits that
+hint; identity macros still retain their required-lookup failure behavior.
+Neither the prompt note nor tool-card presentation changes path execution or
+access. Reusable file-tool renderers preserve absolute paths and label explicit
+tool-home arguments without resolving them against the host or a later executor.
+
 The distribution manifest fixes the config directory, libexec directory,
 launcher path, identity and event-collector sockets, Linux systemd unit directory, and Linux
 Bubblewrap provider and optional macOS tool bundle at build time. A system provider names an unmanaged

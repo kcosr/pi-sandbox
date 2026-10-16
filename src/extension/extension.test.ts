@@ -491,6 +491,10 @@ describe("managed initial tool activation", () => {
         );
       await runHook();
       expect(sections.pi_sandbox_tool_guidance).toBeUndefined();
+      const environment = sections.pi_sandbox_environment;
+      expect(environment).toContain(
+        'Tool home: $HOME in Bash and ~ in tool paths resolve to "/run/pi-sandbox/home".',
+      );
       pi.api.setActiveTools(["read", "bash", "codemode"]);
       await runHook();
       const guidance = sections.pi_sandbox_tool_guidance;
@@ -505,12 +509,93 @@ describe("managed initial tool activation", () => {
       pi.api.setActiveTools(["read", "bash"]);
       await runHook();
       expect(options).toEqual({
-        sections: { custom_section: "Keep this section" },
+        sections: { custom_section: "Keep this section", pi_sandbox_environment: environment },
         customPrompt: "User replacement prompt",
         appendSystemPrompt: "User appended prompt",
       });
     },
   );
+});
+
+describe("managed environment prompt lifecycle", () => {
+  it("removes stale direct-mode context without reading executor home", async () => {
+    const pi = fakePi();
+    const executor = fakeExecutor();
+    const home = vi.fn((): never => {
+      throw new Error("direct-mode prompt must not inspect executor home");
+    });
+    Object.defineProperty(executor, "home", { get: home });
+    const cfg = {
+      ...config(),
+      execution: { backend: "direct" as const },
+      network: { mode: "host" as const },
+    };
+    await start(pi, executor, cfg);
+    const options = {
+      sections: { pi_sandbox_environment: "Stale sandbox context", unrelated: "Keep this" },
+      customPrompt: "Custom prompt",
+    };
+    await pi.handlers.get("before_agent_start")?.(
+      { systemPromptOptions: options } as never,
+      context(),
+    );
+    expect(options).toEqual({
+      sections: { unrelated: "Keep this" },
+      customPrompt: "Custom prompt",
+    });
+    expect(home).not.toHaveBeenCalled();
+  });
+
+  it("uses initialized executor metadata without tool calls and removes stale shutdown context", async () => {
+    const pi = fakePi();
+    const executor = fakeExecutor();
+    const execute = vi.spyOn(executor, "execute");
+    const probe = vi.spyOn(executor, "probe");
+    const hostExecute = vi.spyOn(pi.api, "exec");
+    let home = "/run/pi-sandbox/home";
+    Object.defineProperty(executor, "home", { get: () => home });
+    await createPiSandboxExtension({
+      cwd: "/work/project",
+      configPath: "/etc/pi-sandbox/config.toml",
+      userStateDir: "/unrelated/pi-state",
+      loadConfig: () => Promise.resolve(config()),
+      accountHome: "/home/alice",
+      executor,
+    })(pi.api);
+    const sections = {
+      pi_sandbox_environment: "Stale environment",
+      unrelated: "Keep this",
+    } as Record<string, string>;
+    const options = {
+      sections,
+      customPrompt: "Custom prompt",
+      appendSystemPrompt: "Appended prompt",
+    };
+    const run = () =>
+      pi.handlers.get("before_agent_start")?.({ systemPromptOptions: options } as never, context());
+    await run();
+    expect(sections.pi_sandbox_environment).toBeUndefined();
+    await pi.handlers.get("session_start")?.(undefined as never, context());
+    probe.mockClear();
+    await run();
+    expect(sections.pi_sandbox_environment).toContain('OS account home: "/home/alice".');
+    expect(sections.pi_sandbox_environment).not.toContain("/unrelated/pi-state");
+    home = "/different/tool/home";
+    await run();
+    expect(sections.pi_sandbox_environment).toContain('resolve to "/different/tool/home"');
+    expect(sections.pi_sandbox_environment).not.toContain("/run/pi-sandbox/home");
+    expect(probe).not.toHaveBeenCalled();
+    expect(execute).not.toHaveBeenCalled();
+    expect(hostExecute).not.toHaveBeenCalled();
+    expect(Object.keys(sections)).toEqual(["unrelated", "pi_sandbox_environment"]);
+    await pi.handlers.get("session_shutdown")?.(undefined as never, context());
+    await run();
+    expect(options).toEqual({
+      sections: { unrelated: "Keep this" },
+      customPrompt: "Custom prompt",
+      appendSystemPrompt: "Appended prompt",
+    });
+  });
 });
 
 describe("Pi Sandbox extension", () => {
@@ -966,8 +1051,10 @@ describe("Pi Sandbox extension", () => {
     );
     expect(component.render(80)[0]?.trimEnd()).toBe("edit missing.txt");
 
-    const read = { renderCall: vi.fn() };
-    expect(resolver("read", () => read)).toBe(read);
+    const read = { renderCall: vi.fn(), renderResult: vi.fn() };
+    const readRenderers = resolver("read", () => read);
+    expect(readRenderers?.renderCall).not.toBe(read.renderCall);
+    expect(readRenderers?.renderResult).toBe(read.renderResult);
   });
 
   it("routes all seven tools through the sandbox executor", async () => {

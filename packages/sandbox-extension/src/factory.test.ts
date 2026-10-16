@@ -3,18 +3,21 @@ import type {
   ExtensionContext,
   ExtensionToolContext,
   ToolDefinition,
+  ToolRendererResolver,
   UserBashEventResult,
 } from "@earendil-works/pi-coding-agent";
 import { describe, expect, it, vi } from "vitest";
 import { createSandboxExtension, type SandboxExtensionOptions } from "./factory.js";
 import type { SandboxToolRequest, BuiltInToolName } from "./invocation.js";
 import { LINUX_TOOL_COMMANDS, type SandboxExecutor } from "./runtime/index.js";
+import { pathToolCallRenderers } from "./tool-renderers.js";
 
 type Handler = (event: never, context: ExtensionContext) => unknown;
 
 function fixture() {
   const tools = new Map<string, ToolDefinition>();
   const handlers = new Map<string, Handler>();
+  const renderers: ToolRendererResolver[] = [];
   const execute = vi.fn<SandboxExecutor["execute"]>().mockResolvedValue({
     exitCode: 0,
     signal: null,
@@ -31,7 +34,7 @@ function fixture() {
   };
   const pi = {
     registerTool: (tool: ToolDefinition) => tools.set(tool.name, tool),
-    registerToolRenderer: vi.fn(),
+    registerToolRenderer: (resolver: ToolRendererResolver) => renderers.push(resolver),
     on: (event: string, handler: Handler) => handlers.set(event, handler),
   } as unknown as ExtensionAPI;
   const context = { hasUI: false } as ExtensionToolContext;
@@ -46,7 +49,7 @@ function fixture() {
     if (tool === undefined) throw new Error(`Missing tool ${name}`);
     return tool.execute("call", args, signal, undefined, context);
   };
-  return { tools, handlers, execute, executor, pi, context, options, invoke };
+  return { tools, handlers, renderers, execute, executor, pi, context, options, invoke };
 }
 
 describe("reusable sandbox factory", () => {
@@ -91,6 +94,47 @@ describe("reusable sandbox factory", () => {
     expect(getExecutor).not.toHaveBeenCalled();
     await expect(f.invoke("bash", { command: "true" })).rejects.toThrow("not started");
   });
+
+  it.each([true, false])(
+    "renders path tools safely with enabled=%s and no executor",
+    async (enabled) => {
+      const f = fixture();
+      const names = Object.keys(pathToolCallRenderers) as (keyof typeof pathToolCallRenderers)[];
+      const getExecutor = vi.fn(() => {
+        throw new Error("unavailable executor");
+      });
+      await createSandboxExtension({ ...f.options, getExecutor, tools: enabled ? names : [] })(
+        f.pi,
+      );
+      const resolver = f.renderers[0];
+      if (resolver === undefined) throw new Error("Missing renderer resolver");
+      const stock = { renderCall: vi.fn(), renderResult: vi.fn() };
+      for (const name of names) {
+        if (enabled) expect(f.tools.get(name)?.renderCall).toBe(pathToolCallRenderers[name]);
+        const resolved = resolver(name, () => stock);
+        expect(resolved?.renderResult).toBe(stock.renderResult);
+        const renderer = resolved?.renderCall;
+        if (renderer === undefined) throw new Error("Missing call renderer");
+        const result = renderer(
+          Object.freeze({ path: "~/old-session.txt" }),
+          {
+            fg: (_color: string, text: string) => text,
+            bold: (text: string) => text,
+          } as Parameters<typeof renderer>[1],
+          {
+            argsComplete: true,
+            lastComponent: undefined,
+          } as Parameters<typeof renderer>[2],
+        );
+        expect(result.render(120)[0]).toContain("~/old-session.txt (tool home)");
+      }
+      expect(resolver("bash", () => stock)).toBe(stock);
+      expect(resolver("other", () => stock)).toBe(stock);
+      expect(getExecutor).not.toHaveBeenCalled();
+      expect(stock.renderCall).not.toHaveBeenCalled();
+      expect(f.execute).not.toHaveBeenCalled();
+    },
+  );
 
   it("copies the registration ceiling and rejects duplicate or unknown tool names", async () => {
     const f = fixture();

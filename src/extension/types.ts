@@ -24,6 +24,8 @@ export interface ExtensionDependencies {
   readonly onProcessShutdown?: () => Promise<void>;
   /** Managed application metadata; not part of the reusable executor interface. */
   readonly executionBackend?: ExecutionBackend;
+  /** Canonical effective OS account home, supplied only by the managed application. */
+  readonly accountHome?: string;
   readonly executor: SandboxExecutor;
   /** Required exactly when the effective Bash policy has a command-class policy. */
   readonly bashAnalyzer?: BashCommandAnalyzer;
