@@ -125,6 +125,17 @@ export function parseCodeModeConfig(value: unknown): CodeModeConfig {
     timeoutMs: timeout(entry.timeout_ms, 300000, "config.codemode.timeout_ms"),
   });
 }
+
+/** Validate admission-dependent requirements after parsing and identity overrides. */
+export function assertMcpCodeModeExposure(
+  config: McpConfig,
+  codemode: CodeModeConfig | undefined,
+): void {
+  for (const server of Object.values(config.servers))
+    if (server.enabled && server.exposure === "codemode" && !codemode?.enabled)
+      throw new Error(`config.mcp.servers.${server.id}.exposure requires codemode.enabled`);
+}
+
 export function parseMcpConfig(value: unknown, codemode: CodeModeConfig | undefined): McpConfig {
   const entry = table(value, "config.mcp");
   keys(entry, ["servers"], [], "config.mcp");
@@ -159,8 +170,6 @@ export function parseMcpConfig(value: unknown, codemode: CodeModeConfig | undefi
     );
     const enabled = boolean(server.enabled, `${path}.enabled`);
     const exposure = choice(server.exposure, ["direct", "codemode"], `${path}.exposure`);
-    if (enabled && exposure === "codemode" && !codemode?.enabled)
-      throw new Error(`${path}.exposure requires codemode.enabled`);
     const defaultPolicy = policy(server.default_policy, `${path}.default_policy`);
     const rawRules = server.tool_rules ?? [];
     if (!Array.isArray(rawRules) || rawRules.length > 256)
@@ -250,5 +259,7 @@ export function parseMcpConfig(value: unknown, codemode: CodeModeConfig | undefi
       });
     }
   }
-  return Object.freeze({ servers: Object.freeze(result) });
+  const config = Object.freeze({ servers: Object.freeze(result) });
+  assertMcpCodeModeExposure(config, codemode);
+  return config;
 }

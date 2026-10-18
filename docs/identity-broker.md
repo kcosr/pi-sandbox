@@ -120,7 +120,7 @@ For example, with Bash disabled and read requiring approval in the main policy:
 `/etc/pi-sandbox/groups.d/admin.toml`:
 
 ```toml
-version = 8
+version = 9
 group = "admin"
 
 [overrides.tools.bash]
@@ -131,7 +131,7 @@ session_grant = "offer"
 `/etc/pi-sandbox/groups.d/log-readers.toml`:
 
 ```toml
-version = 8
+version = 9
 group = "log-readers"
 
 [overrides.tools.read]
@@ -146,7 +146,7 @@ can grant the same kind of exception:
 `/etc/pi-sandbox/users.d/alice.toml`:
 
 ```toml
-version = 8
+version = 9
 user = "alice"
 
 [overrides.tools.write]
@@ -172,11 +172,56 @@ file; `overrides.execution.backend` accepts `bubblewrap` or `direct`;
 carry the optional [known read-only class](#known-read-only-bash-class). Tool
 names must belong to the exact active base policy, including selected compiled
 tools.
-MCP server definitions, their per-server tool policies, and the code-mode switch
-are main-policy-only; neither rule files nor broker responses accept overrides
-for them. Per-user MCP credentials can use `environment.pi` values, explicitly
-referenced by an administrator's server mappings; these values do not select
-servers or grant tool calls.
+MCP server overrides may change only `enabled` for servers defined in the main
+policy. Connection definitions, credential mappings, exposure defaults,
+per-server tool policies, and the code-mode switch remain main-policy-only.
+Per-user MCP credential values can use `environment.pi`, explicitly referenced
+by an administrator's server mappings; these values do not select servers or
+grant tool calls.
+
+### MCP server enablement
+
+To admit a server for selected accounts or groups, keep its complete definition
+in the main `[mcp.servers]` table with `enabled = false`, then add a rule such as
+`groups.d/developers.toml`:
+
+```toml
+version = 9
+group = "developers"
+
+[overrides.mcp.servers.docs]
+enabled = true
+```
+
+The `docs` server must already exist in the main policy. An override cannot add
+a server or supply connection, credential, exposure, timeout, or tool-policy
+fields. Each server entry requires exactly one boolean, `enabled`. When present,
+`overrides.mcp` requires a nonempty `servers` map with at most 32 entries; the
+combined matching map has the same limit. IDs follow the main configuration's
+`[a-z][a-z0-9_]{0,31}` grammar. Empty, malformed, duplicate, and unknown fields
+are errors.
+
+The main `enabled` value is a default. A matching `true` can enable a server
+whose default is false, and a matching `false` can disable a server whose
+default is true. When multiple matching rules specify the same server, `true`
+wins over `false`; a user rule has no priority over a group rule. Thus a false
+override cannot revoke a true from another matching rule. If no matching rule
+mentions the server, its main-policy default is inherited.
+
+The application rejects unknown server IDs in the combined matching patch.
+The broker checks the structure of every rule, including unmatched rules, but
+does not read the main server inventory. A structurally valid unknown ID in an
+unmatched rule is checked against that inventory only if the rule later matches.
+Enabling a server with `exposure = "codemode"` also requires the main
+`codemode.enabled = true`; the application checks this again after merging.
+
+An effectively disabled server does not trigger its executable check, credential
+reference resolution, account or machine lookup, or transport startup. This
+does not remove independently configured `environment.pi` values from Pi's
+environment. Saved user preferences can keep an admitted server disabled, but
+a saved `enabled = true` cannot enable an administratively disabled server.
+Restart Pi after changing administrative rules or group membership. This
+feature uses the Linux broker; macOS continues to use only the main policy.
 
 ### Combining matching rules
 
@@ -190,6 +235,7 @@ not compete in this comparison, and user rules do not apply last.
 | Bash known read-only class      | Join of present class policies, kept only if strictly more permissive than the combined Bash policy             |
 | Network mode                    | Most permissive wins: `none` < `local` < `host`                                                                 |
 | CWD writable                    | `true` wins over `false`                                                                                        |
+| MCP server enabled              | `true` wins over `false` for each explicitly overridden server                                                  |
 | Execution backend or model file | Different explicit values are a configuration error                                                             |
 | Scoped environment variable     | Different values for the same scope, extension, and variable are a configuration error                          |
 | Omitted setting                 | Inherits from the main configuration if no matching rule specifies it                                           |
@@ -214,8 +260,10 @@ requires `network.mode = "host"`,
 user/group rules cannot replace or erase them.
 Unknown fields, invalid policy combinations, malformed environment names,
 reserved runtime-injection variables, exposed permissions, and symlinks are
-rejected. All `.toml` files are validated, including unmatched rules. The two
-directories together allow at most 256 rule files and 4 MiB of TOML, with at most
+rejected. All `.toml` files are structurally validated, including unmatched
+rules; the application checks matching tool and MCP server names against the
+active main policy. The two directories together allow at most 256 rule files
+and 4 MiB of TOML, with at most
 1 MiB per file. Combined environment values and responses also retain their
 size limits.
 
@@ -223,10 +271,10 @@ size limits.
 
 A rule may give its own Bash policy a
 [known read-only class policy](configuration.md#known-read-only-bash-commands).
-Rule files stay at `version = 8`:
+Rule files use `version = 9`:
 
 ```toml
-version = 8
+version = 9
 group = "developers"
 
 [overrides.tools.bash]
@@ -255,8 +303,8 @@ it is not strictly more permissive or the main policy is `disabled`.
 Normalization never rejects. For example, a rule with Bash `allow` and another
 with Bash `deny` plus class `allow` combine to Bash `allow` with no class policy.
 
-The broker response carries the class in the same Bash entry, still under
-protocol version 7, and omits it when absent:
+The broker response carries the class in the same Bash entry, under
+protocol version 8, and omits it when absent:
 
 ```json
 {
@@ -308,7 +356,7 @@ timeout fails startup rather than silently dropping group rules.
 
 The broker receives the compiled configuration directory as its executable
 argument and reads both protected rule directories for each connection. Its
-protocol is newline-delimited JSON version 7 with operation `resolve-identity`;
+protocol is newline-delimited JSON version 8 with operation `resolve-identity`;
 requests contain no claimed identity. It returns only the combined matching
 patch, not unrelated rule contents or annotations. Administrators can atomically
 replace files without restarting the socket.

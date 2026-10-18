@@ -114,6 +114,10 @@ dependency.
   validation, active-policy cross-checking, atomic
   per-user override merging, and the compiled Bun client's no-half-close request
   flow;
+- enabled-only MCP user/group overrides, explicit grant merging before main defaults,
+  unknown matching server rejection, effective code-mode dependency validation,
+  and disabled-server credential, executable and transport suppression despite
+  saved user enablement preferences;
 - direct-argv host execution, per-extension declared environment admission,
   cross-extension and Pi-variable isolation, inherited-variable removal and
   fixed overlays, bounds, process-group cleanup, and fixed launch CWD;

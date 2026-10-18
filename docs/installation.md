@@ -446,11 +446,16 @@ executor shutdown, with best-effort cleanup outside Linux's namespace boundary.
 No default command timeout is imposed. Set the optional base-policy
 `execution.max_command_timeout_seconds` when an administrator maximum is needed.
 
-Broker users must also update preserved `users.d` and `groups.d` files from
-`version = 7` to `version = 8`, remove `overrides.execution.process_lifetime`, and
-remove an empty `[overrides.execution]` table if no backend override remains.
-Upgrade the broker and application together for protocol 7. The installer does
-not rewrite these rule files, including with `--replace-config`.
+Broker users must update preserved `users.d` and `groups.d` files to
+`version = 9` and upgrade the broker and application together for protocol 8.
+Version-8 rules need only the version change; optional MCP overrides then use
+`overrides.mcp.servers.<id>.enabled` for servers defined in the main policy.
+Rules older than version 8 must also remove
+`overrides.execution.process_lifetime` and an empty `[overrides.execution]`
+table if no backend override remains. The installer does not rewrite these
+rule files, including with `--replace-config`. Main configuration schema 13 and
+audit wire version 2/record version 3 are unchanged. Restart Pi processes after
+updating administrative rules; an already running process retains its policy.
 
 The macOS packaged default selects Seatbelt with networking
 disabled, using `config/default/config.seatbelt.toml`. Ordinary upgrades preserve
@@ -470,7 +475,9 @@ Model and installation paths remain absolute.
 
 When the optional identity broker is enabled, `users.d/*.toml` and `groups.d/*.toml` may overlay
 scoped environment and supply model, execution, network, filesystem, and complete
-tool-policy overrides for the account and its primary/supplementary groups. Matching
+tool-policy overrides, plus per-server MCP enablement, for the account and its
+primary/supplementary groups. MCP definitions and invocation policies remain in
+the main configuration. Matching
 explicit permissions combine using least restrictive wins before overlaying defaults. Global/default values belong in the main
 `config.toml`; there is no separate defaults or aggregate users file. If no rules
 match, the main configuration remains unchanged. An

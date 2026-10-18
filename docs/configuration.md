@@ -38,7 +38,8 @@ extension-specific scoped environment. The required `identity` table either
 disables user resolution or selects the fixed administrator broker. Broker mode
 may overlay a combined patch from `config_dir/users.d/*.toml` and
 `config_dir/groups.d/*.toml` for the caller and its primary/supplementary groups, including scoped environment, selected model file, execution
-backend, network mode, CWD write access, and any subset of model-tool policies. If no rules match,
+backend, network mode, CWD write access, MCP server enablement, and any subset of
+model-tool policies. If no rules match,
 the main configuration remains unchanged. See
 [user and group environment and overrides](identity-broker.md).
 
@@ -297,11 +298,22 @@ worker actually exits. This does not cap ordinary parallel Bash or file-tool
 calls.
 
 The required `[mcp.servers]` table is empty by default. Only this main policy can
-configure servers; user/project MCP files cannot supply connections or permissions,
+define servers; user/project MCP files cannot supply connections or permissions,
 and the MCP management CLI is disabled. Server IDs match `[a-z][a-z0-9_]{0,31}`. Each server
 requires `enabled`, `transport`, `exposure`, and complete `default_policy`. Optional
 `timeout_ms` defaults to 60000 (range 1000–3600000). Disabled servers still validate
-structurally but do not resolve credentials, connect, or start a process.
+structurally but do not resolve their credential references or identity, check
+executables, connect, or start a process. Independently configured
+`environment.pi` values still apply to Pi.
+
+On Linux, administrator-owned [user/group rules](identity-broker.md#mcp-server-enablement)
+may override only a known server's `enabled` boolean. Matching explicit values
+combine with `true` winning, then replace the main-policy default; an omitted
+server inherits its default. A false rule can disable a true default but cannot
+revoke a true from another matching rule. Server definitions, credential mappings,
+exposure, timeouts, tool policies, and the code-mode switch stay in the main
+configuration. The effective enabled server must still satisfy the code-mode
+exposure dependency. Administrative changes take effect after restarting Pi.
 
 ```toml
 [mcp.servers.docs]
@@ -331,7 +343,9 @@ enable/disable, and `direct`, `hidden`, or available `codemode` exposure. It can
 add servers, edit connections, or sign in. Enabled/exposure choices are remembered
 across launches in the user agent directory's `mcp.json`, along with the stock
 `autoEnableCodemode` preference. Only these presentation fields are honored;
-connection fields, unknown servers, and project MCP files remain inert. Invalid or
+connection fields, unknown servers, and project MCP files remain inert. A saved
+false may narrow administrative admission; a saved true cannot enable a server
+disabled by the effective administrative policy. Invalid or
 oversized user preference files report a sanitized startup error. A saved
 code-mode exposure falls back to the administrative default when code mode is
 unavailable. Disabling or changing exposure revokes that server's pending approvals

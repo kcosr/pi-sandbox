@@ -188,10 +188,10 @@ per socket connection. It obtains UID from Linux `SO_PEERCRED` and invokes the
 fixed `/usr/bin/getent` host NSS resolver to identify the account and its primary
 and supplementary groups. The compiled configuration directory is its process
 argument. It reads optional protected `users.d/*.toml` and `groups.d/*.toml`
-rules, selecting exactly one `user`/`uid` or `group`/`gid` per file. Filenames are
+version-9 rules, selecting exactly one `user`/`uid` or `group`/`gid` per file. Filenames are
 labels. Names and numeric selectors have identical precedence.
 
-The protocol uses newline-delimited JSON version 7 and operation
+The protocol uses newline-delimited JSON version 8 and operation
 `resolve-identity`, with no caller-claimed identity. The client keeps its write
 side open; the broker responds after reading the newline. Successful responses
 contain only one combined matching environment/override patch. Missing rule
@@ -200,11 +200,28 @@ directories or no matching rules return an empty patch. The socket remains
 
 Combine matching explicit permissions before overlaying defaults. Complete tool
 pairs order as `disabled/never` < `deny/never` < `ask/never` < `ask/offer` <
-`allow/never`; `host` wins for networking and `true` for CWD writability.
+`allow/never`; `host` wins for networking and `true` for CWD writability and each
+explicit MCP server enablement override.
 Different explicit backend/model values or values of the same scoped environment
 key fail resolution. User rules have no extra precedence. Logging flags remain
 parent-only. Revalidate the complete effective configuration after the merge.
 Environment entries never select extensions, enable tools, or grant approval.
+
+The only MCP override shape is `overrides.mcp.servers.<id>.enabled`, a required
+boolean per server. Optional `mcp` requires a nonempty `servers` map; each file
+and the combined matching patch admit at most 32 IDs with the main server-ID
+grammar. Reject unknown fields, duplicate IDs, and invalid types. All rules,
+including unmatched ones, are structurally validated. The broker does not read
+the global server inventory; the application rejects unknown IDs in the matching
+patch. Preserve every global server field except enabled. Explicit booleans
+combine before overlaying the main default, so a false may replace a true
+default but cannot revoke another matching rule's true. Omission inherits.
+Revalidate enabled code-mode exposure against main-policy code-mode availability.
+Disabled servers skip their executable, identity, credential-reference, and
+transport work; independently configured scoped environment still applies.
+User saved preferences may narrow admission but cannot enable an effectively
+disabled server. Administrative changes require restart. Broker support remains
+Linux-only; main configuration schema 13 and audit wire 2/record 3 are unchanged.
 
 Host lookups are bounded to four seconds, the client deadline is ten seconds,
 and the service lifetime is fifteen seconds. Local accounts and SSSD via local
@@ -218,7 +235,7 @@ environment or overlaid on the inherited environment of direct built-in
 commands. Each `extensions.<id>` scope is admitted only for a selected
 compiled extension and names that extension declares; Pi-scoped and other
 extension-scoped values are excluded from its executor. Broker failures,
-invalid matching drop-ins, invalid responses or scoped environments, and
+structurally invalid drop-ins, invalid matching overrides, responses or scoped environments, and
 invalid effective catalogs abort startup. Missing drop-ins do not. Disabled
 broker mode skips user/group lookup but still applies the main configuration's
 global scoped environment.

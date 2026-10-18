@@ -8,6 +8,7 @@ import { pathToFileURL } from "node:url";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { IDENTITY_BROKER_SOCKET_PATH, type SandboxConfig } from "../domain/index.js";
+import { parseMcpConfig } from "../config/mcp.js";
 
 import {
   applyIdentityOverrides,
@@ -62,10 +63,80 @@ describe("managed identity", () => {
 });
 
 describe("broker response", () => {
+  it("preserves omitted MCP overrides and accepts only bounded enabled patches", () => {
+    const response = (overrides: unknown) =>
+      JSON.stringify({
+        version: 8,
+        status: "ok",
+        environment: { pi: {}, sandbox: {}, extensions: {} },
+        overrides,
+      });
+    const omitted = parseBrokerResponse(response({}));
+    expect(omitted).toMatchObject({ overrides: { tools: {} } });
+    if (omitted.status !== "ok") throw new Error("expected success");
+    expect(Object.hasOwn(omitted.overrides, "mcp")).toBe(false);
+    for (const enabled of [true, false]) {
+      const servers = Object.fromEntries(
+        Array.from({ length: 32 }, (_, index) => [`server${index}`, { enabled }]),
+      );
+      const parsed = parseBrokerResponse(response({ mcp: { servers } }));
+      expect(parsed).toMatchObject({ overrides: { mcp: { servers } } });
+      if (parsed.status !== "ok") throw new Error("expected success");
+      expect(Object.isFrozen(parsed.overrides.mcp)).toBe(true);
+      expect(Object.isFrozen(parsed.overrides.mcp!.servers)).toBe(true);
+      expect(Object.isFrozen(parsed.overrides.mcp!.servers.server0)).toBe(true);
+    }
+  });
+
+  it("rejects malformed MCP overrides and connection or invocation-policy changes", () => {
+    const server = { enabled: true };
+    for (const mcp of [
+      null,
+      false,
+      [],
+      {},
+      { servers: null },
+      { servers: [] },
+      { servers: {} },
+      { servers: { docs: server }, extra: true },
+      { servers: Object.fromEntries(Array.from({ length: 33 }, (_, i) => [`server${i}`, server])) },
+      ...["", "Docs", "a-b", "_docs", "a".repeat(33)].map((id) => ({ servers: { [id]: server } })),
+      ...[
+        null,
+        [],
+        false,
+        {},
+        { enabled: null },
+        { enabled: 0 },
+        { enabled: "false" },
+        { enabled: true, extra: true },
+        { enabled: true, url: "https://other.example/mcp" },
+        { enabled: true, exposure: "direct" },
+        { enabled: true, default_policy: { mode: "allow", session_grant: "never", audit: false } },
+      ].map((entry) => ({ servers: { docs: entry } })),
+    ]) {
+      expect(() =>
+        parseBrokerResponse(
+          JSON.stringify({
+            version: 8,
+            status: "ok",
+            environment: { pi: {}, sandbox: {}, extensions: {} },
+            overrides: { mcp },
+          }),
+        ),
+      ).toThrow("identity_broker_response_invalid");
+    }
+    expect(() =>
+      parseBrokerResponse(
+        '{"version":8,"status":"ok","environment":{"pi":{},"sandbox":{},"extensions":{}},"overrides":{"mcp":{"servers":{"docs":{"enabled":true,"enabled":false}}}}}',
+      ),
+    ).toThrow("identity_broker_response_invalid");
+  });
+
   it("accepts partial execution patches without defaulting omitted fields", () => {
     const response = (execution: unknown) =>
       JSON.stringify({
-        version: 7,
+        version: 8,
         status: "ok",
         environment: { pi: {}, sandbox: {}, extensions: {} },
         overrides: { execution, network: { mode: "local" } },
@@ -94,10 +165,10 @@ describe("broker response", () => {
   it("accepts strict success and error responses", () => {
     expect(
       parseBrokerResponse(
-        '{"version":7,"status":"ok","environment":{"pi":{"MODEL_TOKEN":"token"},"sandbox":{"PROJECT_ENV":"test"},"extensions":{"service-api":{"SERVICE_API_TOKEN":"service-token"}}},"overrides":{"models_file":"/etc/pi-sandbox/models/alice.json","execution":{"backend":"direct"},"network":{"mode":"host"},"tools":{"write":{"mode":"ask","session_grant":"offer"},"git_clone":{"mode":"deny","session_grant":"never"}}}}\n',
+        '{"version":8,"status":"ok","environment":{"pi":{"MODEL_TOKEN":"token"},"sandbox":{"PROJECT_ENV":"test"},"extensions":{"service-api":{"SERVICE_API_TOKEN":"service-token"}}},"overrides":{"models_file":"/etc/pi-sandbox/models/alice.json","execution":{"backend":"direct"},"network":{"mode":"host"},"tools":{"write":{"mode":"ask","session_grant":"offer"},"git_clone":{"mode":"deny","session_grant":"never"}}}}\n',
       ),
     ).toEqual({
-      version: 7,
+      version: 8,
       status: "ok",
       environment: {
         pi: { MODEL_TOKEN: "token" },
@@ -115,14 +186,14 @@ describe("broker response", () => {
       },
     });
     expect(
-      parseBrokerResponse('{"version":7,"status":"error","code":"identity_store_unavailable"}\n'),
-    ).toEqual({ version: 7, status: "error", code: "identity_store_unavailable" });
+      parseBrokerResponse('{"version":8,"status":"error","code":"identity_store_unavailable"}\n'),
+    ).toEqual({ version: 8, status: "error", code: "identity_store_unavailable" });
   });
 
   it("accepts complete filesystem overrides and rejects malformed ones", () => {
     const response = (filesystem: unknown) =>
       JSON.stringify({
-        version: 7,
+        version: 8,
         status: "ok",
         environment: { pi: {}, sandbox: {}, extensions: {} },
         overrides: { filesystem },
@@ -161,41 +232,42 @@ describe("broker response", () => {
   it("rejects malformed, unknown, and unsafe responses", () => {
     for (const response of [
       "not-json",
+      '{"version":7,"status":"ok","environment":{"pi":{},"sandbox":{},"extensions":{}},"overrides":{}}',
       '{"version":6,"status":"ok","environment":{"pi":{},"sandbox":{},"extensions":{}},"overrides":{}}',
-      '{"version":7,"status":"error","code":"user_not_found"}',
+      '{"version":8,"status":"error","code":"user_not_found"}',
       '{"version":2,"status":"ok","environment":{"pi":{},"sandbox":{},"extensions":{}},"overrides":{}}',
-      '{"version":7,"status":"ok","overrides":{}}',
-      '{"version":7,"status":"ok","environment":{"pi":{},"sandbox":{},"extensions":{}},"overrides":{},"extra":true}',
-      '{"version":7,"status":"ok","environment":{"pi":{},"sandbox":{}},"overrides":{}}',
-      '{"version":7,"status":"ok","environment":{"pi":{},"sandbox":{},"extensions":{},"extra":{}},"overrides":{}}',
-      '{"version":7,"status":"ok","environment":{"pi":[],"sandbox":{},"extensions":{}},"overrides":{}}',
-      '{"version":7,"status":"ok","environment":{"pi":{"BAD-NAME":"value"},"sandbox":{},"extensions":{}},"overrides":{}}',
-      '{"version":7,"status":"ok","environment":{"pi":{"NODE_OPTIONS":"--require=x"},"sandbox":{},"extensions":{}},"overrides":{}}',
-      '{"version":7,"status":"ok","environment":{"pi":{},"sandbox":{"BASH_ENV":"/tmp/inject"},"extensions":{}},"overrides":{}}',
-      '{"version":7,"status":"ok","environment":{"pi":{"PI_SANDBOX_INTERNAL_SECRET":"value"},"sandbox":{},"extensions":{}},"overrides":{}}',
-      '{"version":7,"status":"ok","environment":{"pi":{"TOKEN":1},"sandbox":{},"extensions":{}},"overrides":{}}',
-      '{"version":7,"status":"ok","environment":{"pi":{"TOKEN":"nul\\u0000value"},"sandbox":{},"extensions":{}},"overrides":{}}',
-      '{"version":7,"status":"ok","environment":{"pi":{},"sandbox":{"HOME":"/tmp"},"extensions":{}},"overrides":{}}',
-      '{"version":7,"status":"ok","environment":{"pi":{},"sandbox":{},"extensions":[]},"overrides":{}}',
-      '{"version":7,"status":"ok","environment":{"pi":{},"sandbox":{},"extensions":{"Bad_ID":{}}},"overrides":{}}',
-      '{"version":7,"status":"ok","environment":{"pi":{},"sandbox":{},"extensions":{"service-api":[]}},"overrides":{}}',
-      '{"version":7,"status":"ok","environment":{"pi":{},"pi":{},"sandbox":{},"extensions":{}},"overrides":{}}',
-      '{"version":7,"status":"ok","environment":{"pi":{"TOKEN":"one","T\\u004fKEN":"two"},"sandbox":{},"extensions":{}},"overrides":{}}',
-      '{"version":7,"status":"ok","environment":{"pi":{},"sandbox":{},"extensions":{}},"overrides":{"audit":{"enabled":false,"facility":"local0"}}}',
-      '{"version":7,"status":"ok","environment":{"pi":{},"sandbox":{},"extensions":{}},"overrides":{"sessions":{"retention_days":0}}}',
-      '{"version":7,"status":"ok","environment":{"pi":{},"sandbox":{},"extensions":{}},"overrides":{"tools":{"write":{"mode":"ask","session_grant":"never","audit":false}}}}',
-      '{"version":7,"status":"ok","environment":{"pi":{},"sandbox":{},"extensions":{}},"overrides":{"unknown":true}}',
-      '{"version":7,"status":"ok","environment":{"pi":{},"sandbox":{},"extensions":{}},"overrides":{"models_file":"relative.json"}}',
-      '{"version":7,"status":"ok","environment":{"pi":{},"sandbox":{},"extensions":{}},"overrides":{"execution":{"backend":"container"}}}',
-      '{"version":7,"status":"ok","environment":{"pi":{},"sandbox":{},"extensions":{}},"overrides":{"execution":{"backend":"direct","extra":true}}}',
-      '{"version":7,"status":"ok","environment":{"pi":{},"sandbox":{},"extensions":{}},"overrides":{"network":{"mode":"filtered"}}}',
-      '{"version":7,"status":"ok","environment":{"pi":{},"sandbox":{},"extensions":{}},"overrides":{"network":{"mode":"host","extra":true}}}',
-      '{"version":7,"status":"ok","environment":{"pi":{},"sandbox":{},"extensions":{}},"overrides":{"tools":{"Bad-Name":{"mode":"deny","session_grant":"never"}}}}',
-      '{"version":7,"status":"ok","environment":{"pi":{},"sandbox":{},"extensions":{}},"overrides":{"tools":{"write":{"mode":"allow","session_grant":"offer"}}}}',
-      '{"version":7,"status":"error","code":"unknown"}',
-      '{"version":7,"status":"error","code":["user_not_found"]}',
-      '{"version":7,"status":"error","code":"user_not_found","code":"protocol_error"}',
-      '{"version":7,"status":"ok","environment":{"pi":{},"sandbox":{},"extensions":{}},"overrides":{"tools":{},"t\\u006fools":{}}}',
+      '{"version":8,"status":"ok","overrides":{}}',
+      '{"version":8,"status":"ok","environment":{"pi":{},"sandbox":{},"extensions":{}},"overrides":{},"extra":true}',
+      '{"version":8,"status":"ok","environment":{"pi":{},"sandbox":{}},"overrides":{}}',
+      '{"version":8,"status":"ok","environment":{"pi":{},"sandbox":{},"extensions":{},"extra":{}},"overrides":{}}',
+      '{"version":8,"status":"ok","environment":{"pi":[],"sandbox":{},"extensions":{}},"overrides":{}}',
+      '{"version":8,"status":"ok","environment":{"pi":{"BAD-NAME":"value"},"sandbox":{},"extensions":{}},"overrides":{}}',
+      '{"version":8,"status":"ok","environment":{"pi":{"NODE_OPTIONS":"--require=x"},"sandbox":{},"extensions":{}},"overrides":{}}',
+      '{"version":8,"status":"ok","environment":{"pi":{},"sandbox":{"BASH_ENV":"/tmp/inject"},"extensions":{}},"overrides":{}}',
+      '{"version":8,"status":"ok","environment":{"pi":{"PI_SANDBOX_INTERNAL_SECRET":"value"},"sandbox":{},"extensions":{}},"overrides":{}}',
+      '{"version":8,"status":"ok","environment":{"pi":{"TOKEN":1},"sandbox":{},"extensions":{}},"overrides":{}}',
+      '{"version":8,"status":"ok","environment":{"pi":{"TOKEN":"nul\\u0000value"},"sandbox":{},"extensions":{}},"overrides":{}}',
+      '{"version":8,"status":"ok","environment":{"pi":{},"sandbox":{"HOME":"/tmp"},"extensions":{}},"overrides":{}}',
+      '{"version":8,"status":"ok","environment":{"pi":{},"sandbox":{},"extensions":[]},"overrides":{}}',
+      '{"version":8,"status":"ok","environment":{"pi":{},"sandbox":{},"extensions":{"Bad_ID":{}}},"overrides":{}}',
+      '{"version":8,"status":"ok","environment":{"pi":{},"sandbox":{},"extensions":{"service-api":[]}},"overrides":{}}',
+      '{"version":8,"status":"ok","environment":{"pi":{},"pi":{},"sandbox":{},"extensions":{}},"overrides":{}}',
+      '{"version":8,"status":"ok","environment":{"pi":{"TOKEN":"one","T\\u004fKEN":"two"},"sandbox":{},"extensions":{}},"overrides":{}}',
+      '{"version":8,"status":"ok","environment":{"pi":{},"sandbox":{},"extensions":{}},"overrides":{"audit":{"enabled":false,"facility":"local0"}}}',
+      '{"version":8,"status":"ok","environment":{"pi":{},"sandbox":{},"extensions":{}},"overrides":{"sessions":{"retention_days":0}}}',
+      '{"version":8,"status":"ok","environment":{"pi":{},"sandbox":{},"extensions":{}},"overrides":{"tools":{"write":{"mode":"ask","session_grant":"never","audit":false}}}}',
+      '{"version":8,"status":"ok","environment":{"pi":{},"sandbox":{},"extensions":{}},"overrides":{"unknown":true}}',
+      '{"version":8,"status":"ok","environment":{"pi":{},"sandbox":{},"extensions":{}},"overrides":{"models_file":"relative.json"}}',
+      '{"version":8,"status":"ok","environment":{"pi":{},"sandbox":{},"extensions":{}},"overrides":{"execution":{"backend":"container"}}}',
+      '{"version":8,"status":"ok","environment":{"pi":{},"sandbox":{},"extensions":{}},"overrides":{"execution":{"backend":"direct","extra":true}}}',
+      '{"version":8,"status":"ok","environment":{"pi":{},"sandbox":{},"extensions":{}},"overrides":{"network":{"mode":"filtered"}}}',
+      '{"version":8,"status":"ok","environment":{"pi":{},"sandbox":{},"extensions":{}},"overrides":{"network":{"mode":"host","extra":true}}}',
+      '{"version":8,"status":"ok","environment":{"pi":{},"sandbox":{},"extensions":{}},"overrides":{"tools":{"Bad-Name":{"mode":"deny","session_grant":"never"}}}}',
+      '{"version":8,"status":"ok","environment":{"pi":{},"sandbox":{},"extensions":{}},"overrides":{"tools":{"write":{"mode":"allow","session_grant":"offer"}}}}',
+      '{"version":8,"status":"error","code":"unknown"}',
+      '{"version":8,"status":"error","code":["user_not_found"]}',
+      '{"version":8,"status":"error","code":"user_not_found","code":"protocol_error"}',
+      '{"version":8,"status":"ok","environment":{"pi":{},"sandbox":{},"extensions":{}},"overrides":{"tools":{},"t\\u006fools":{}}}',
     ]) {
       expect(() => parseBrokerResponse(response)).toThrow("identity_broker_response_invalid");
     }
@@ -204,7 +276,7 @@ describe("broker response", () => {
   it("parses an optional normalized known read-only class policy for Bash only", () => {
     const response = (tools: unknown) =>
       JSON.stringify({
-        version: 7,
+        version: 8,
         status: "ok",
         environment: { pi: {}, sandbox: {}, extensions: {} },
         overrides: { tools },
@@ -348,7 +420,7 @@ describe("broker response", () => {
       },
     ]) {
       const response = JSON.stringify({
-        version: 7,
+        version: 8,
         status: "ok",
         environment,
         overrides: {},
@@ -364,9 +436,9 @@ describe("broker response", () => {
       socket.on("data", (chunk: string) => {
         request += chunk;
         if (!request.endsWith("\n")) return;
-        expect(JSON.parse(request)).toEqual({ version: 7, operation: "resolve-identity" });
+        expect(JSON.parse(request)).toEqual({ version: 8, operation: "resolve-identity" });
         socket.end(
-          '{"version":7,"status":"ok","environment":{"pi":{"MODEL_TOKEN":"from-broker"},"sandbox":{"PROJECT_ENV":"test"},"extensions":{"service-api":{"SERVICE_API_TOKEN":"service-token"}}},"overrides":{}}\n',
+          '{"version":8,"status":"ok","environment":{"pi":{"MODEL_TOKEN":"from-broker"},"sandbox":{"PROJECT_ENV":"test"},"extensions":{"service-api":{"SERVICE_API_TOKEN":"service-token"}}},"overrides":{}}\n',
         );
       });
     });
@@ -390,7 +462,7 @@ describe("broker response", () => {
         if (!request.endsWith("\n")) return;
         setTimeout(() => {
           socket.end(
-            '{"version":7,"status":"ok","environment":{"pi":{"MODEL_TOKEN":"bun-token"},"sandbox":{},"extensions":{}},"overrides":{}}\n',
+            '{"version":8,"status":"ok","environment":{"pi":{"MODEL_TOKEN":"bun-token"},"sandbox":{},"extensions":{}},"overrides":{}}\n',
           );
         }, 25);
       });
@@ -425,7 +497,7 @@ describe("broker response", () => {
     const rejected = expect(result).rejects.toThrow("identity broker timed out");
     const socket = await peer;
     await vi.advanceTimersByTimeAsync(IDENTITY_BROKER_TIMEOUT_MS - 1);
-    socket.write('{"version":7');
+    socket.write('{"version":8');
     await new Promise<void>((resolve) => setImmediate(resolve));
     await vi.advanceTimersByTimeAsync(1);
     await rejected;
@@ -435,7 +507,7 @@ describe("broker response", () => {
   it("fails closed on broker errors and truncated responses", async () => {
     const errorEndpoint = await listen((socket) => {
       socket.once("data", () =>
-        socket.end('{"version":7,"status":"error","code":"identity_store_unavailable"}\n'),
+        socket.end('{"version":8,"status":"error","code":"identity_store_unavailable"}\n'),
       );
     });
     servers.push(errorEndpoint.server);
@@ -444,7 +516,7 @@ describe("broker response", () => {
     );
 
     const truncatedEndpoint = await listen((socket) => {
-      socket.once("data", () => socket.end('{"version":7'));
+      socket.once("data", () => socket.end('{"version":8'));
     });
     servers.push(truncatedEndpoint.server);
     await expect(resolveBrokerIdentity(truncatedEndpoint.socketPath)).rejects.toThrow(
@@ -551,6 +623,105 @@ describe("identity overrides", () => {
         tools: { unknown_tool: { mode: "deny", sessionGrant: "never" } },
       }),
     ).toThrow("override for unavailable tool: unknown_tool");
+  });
+});
+
+describe("identity MCP overrides", () => {
+  const codemode = { enabled: false, timeoutMs: 300000 };
+  const policy = { mode: "ask", session_grant: "offer", audit: true };
+  const mcp = parseMcpConfig(
+    {
+      servers: {
+        docs: {
+          enabled: false,
+          transport: "http",
+          url: "https://docs.example/mcp",
+          bearer_token_from_env: "DOCS_TOKEN",
+          exposure: "direct",
+          default_policy: policy,
+          tool_rules: [{ match: "search_*", ...policy }],
+        },
+        local: {
+          enabled: true,
+          transport: "stdio",
+          command: "/opt/mcp/server",
+          args: ["--tools"],
+          env: { CACHE: "~/.cache/mcp" },
+          env_from_env: { TOKEN: "LOCAL_TOKEN" },
+          exposure: "direct",
+          default_policy: policy,
+        },
+      },
+    },
+    codemode,
+  );
+  const base: SandboxConfig = {
+    configVersion: 13,
+    codemode,
+    mcp,
+    sessions: { retentionDays: 365 },
+    filesystem: { cwdWritable: true, deniedPaths: [], hiddenPaths: [] },
+    audit: { enabled: false, facility: "local0" },
+    modelsFile: "/etc/pi-sandbox/models.json",
+    execution: { backend: "bubblewrap" },
+    identity: { mode: "broker" },
+    network: { mode: "none" },
+    environment: { pi: {}, sandbox: {}, extensions: {} },
+    extensions: {},
+    tools: {},
+  };
+
+  it("inherits omitted MCP admission and immutably overlays enabled flags only", () => {
+    expect(applyIdentityOverrides(base, { tools: {} }).mcp).toBe(mcp);
+    for (const [id, enabled] of [
+      ["docs", true],
+      ["local", false],
+    ] as const) {
+      const other = id === "docs" ? "local" : "docs";
+      const patch = Object.freeze({ enabled });
+      const effective = applyIdentityOverrides(base, {
+        mcp: { servers: { [id]: patch } },
+        tools: {},
+      });
+      expect(effective.mcp.servers[id]).toEqual({ ...mcp.servers[id], enabled });
+      expect(effective.mcp.servers[id]).not.toBe(mcp.servers[id]);
+      expect(effective.mcp.servers[id]!.defaultPolicy).toBe(mcp.servers[id]!.defaultPolicy);
+      expect(effective.mcp.servers[id]!.toolRules).toBe(mcp.servers[id]!.toolRules);
+      expect(effective.mcp.servers[other]).toBe(mcp.servers[other]);
+      expect(effective.codemode).toBe(base.codemode);
+      expect(Object.isFrozen(effective.mcp)).toBe(true);
+      expect(Object.isFrozen(effective.mcp.servers)).toBe(true);
+      expect(Object.isFrozen(effective.mcp.servers[id])).toBe(true);
+      expect(mcp.servers[id]!.enabled).toBe(!enabled);
+      expect(patch).toEqual({ enabled });
+    }
+  });
+
+  it.each(["missing", "constructor"])("rejects the undefined server %s", (id) => {
+    expect(() =>
+      applyIdentityOverrides(base, { mcp: { servers: { [id]: { enabled: false } } }, tools: {} }),
+    ).toThrow(`override for unavailable MCP server: ${id}`);
+  });
+
+  it("requires Code Mode when an override enables a dormant Code Mode exposure", () => {
+    const dormant: SandboxConfig = {
+      ...base,
+      mcp: {
+        servers: {
+          docs: { ...mcp.servers.docs!, enabled: false, exposure: "codemode" },
+        },
+      },
+    };
+    expect(applyIdentityOverrides(dormant, { tools: {} }).mcp).toBe(dormant.mcp);
+    expect(() =>
+      applyIdentityOverrides(dormant, { mcp: { servers: { docs: { enabled: true } } }, tools: {} }),
+    ).toThrow("config.mcp.servers.docs.exposure requires codemode.enabled");
+    const permitted = applyIdentityOverrides(
+      { ...dormant, codemode: { ...codemode, enabled: true } },
+      { mcp: { servers: { docs: { enabled: true } } }, tools: {} },
+    );
+    expect(permitted.mcp.servers.docs).toMatchObject({ enabled: true, exposure: "codemode" });
+    expect(dormant.mcp.servers.docs!.enabled).toBe(false);
   });
 });
 
