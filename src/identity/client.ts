@@ -1,4 +1,5 @@
 import { createConnection } from "node:net";
+import { assertMcpCodeModeExposure } from "../config/mcp.js";
 
 import {
   COMMAND_CLASS_MODES,
@@ -28,7 +29,7 @@ import {
   commandClassPreconditionIssues,
 } from "../permissions/command-classes.js";
 
-export const IDENTITY_BROKER_PROTOCOL_VERSION = 7;
+export const IDENTITY_BROKER_PROTOCOL_VERSION = 8;
 export const IDENTITY_BROKER_TIMEOUT_MS = 10_000;
 export const MAXIMUM_IDENTITY_RESPONSE_BYTES = 512 * 1024;
 
@@ -38,14 +39,14 @@ export interface BrokerIdentity {
 }
 
 interface BrokerSuccessResponse {
-  readonly version: 7;
+  readonly version: 8;
   readonly status: "ok";
   readonly environment: ManagedEnvironment;
   readonly overrides: IdentityOverrides;
 }
 
 interface BrokerErrorResponse {
-  readonly version: 7;
+  readonly version: 8;
   readonly status: "error";
   readonly code: "identity_store_unavailable" | "protocol_error";
 }
@@ -138,7 +139,7 @@ export function parseBrokerResponse(source: string): BrokerResponse {
       throw invalidResponse();
     }
     return Object.freeze({
-      version: 7,
+      version: 8,
       status: "ok",
       environment: parseBrokerEnvironment(value.environment),
       overrides: parseIdentityOverrides(value.overrides),
@@ -174,10 +175,12 @@ export function applyIdentityOverrides(
     ]),
   ) as Record<string, ToolPolicy>;
   assertEffectiveCommandClassPolicies(tools);
+  const mcp = applyMcpOverrides(base.mcp, overrides.mcp);
+  assertMcpCodeModeExposure(mcp, base.codemode);
   return Object.freeze({
     configVersion: 13,
     codemode: base.codemode,
-    mcp: base.mcp,
+    mcp,
     audit: base.audit,
     sessions: base.sessions,
     modelsFile: overrides.modelsFile ?? base.modelsFile,
@@ -189,6 +192,20 @@ export function applyIdentityOverrides(
     extensions: base.extensions,
     tools: Object.freeze(tools),
   });
+}
+
+function applyMcpOverrides(
+  base: SandboxConfig["mcp"],
+  overrides: IdentityOverrides["mcp"],
+): SandboxConfig["mcp"] {
+  if (overrides === undefined) return base;
+  const servers = { ...base.servers };
+  for (const [id, override] of Object.entries(overrides.servers)) {
+    if (!Object.hasOwn(base.servers, id))
+      throw new Error(`identity broker returned an override for unavailable MCP server: ${id}`);
+    servers[id] = Object.freeze({ ...base.servers[id]!, enabled: override.enabled });
+  }
+  return Object.freeze({ servers: Object.freeze(servers) });
 }
 
 /** A broker overlay can change read-tool policies without the bash table that relied on them. */
@@ -217,7 +234,7 @@ function applyExecutionOverride(
 function parseIdentityOverrides(value: unknown): IdentityOverrides {
   if (
     !isRecord(value) ||
-    !hasAllowedKeys(value, ["models_file", "execution", "network", "filesystem", "tools"])
+    !hasAllowedKeys(value, ["models_file", "execution", "network", "filesystem", "mcp", "tools"])
   ) {
     throw invalidResponse();
   }
@@ -262,6 +279,8 @@ function parseIdentityOverrides(value: unknown): IdentityOverrides {
     network = Object.freeze({ mode: value.network.mode as NetworkConfig["mode"] });
   }
 
+  const mcp = Object.hasOwn(value, "mcp") ? parseMcpOverrides(value.mcp) : undefined;
+
   const tools: Partial<Record<string, SubjectPolicy>> = {};
   if (Object.hasOwn(value, "tools")) {
     if (!isRecord(value.tools) || Object.keys(value.tools).length > 256) {
@@ -277,8 +296,29 @@ function parseIdentityOverrides(value: unknown): IdentityOverrides {
     ...(execution === undefined ? {} : { execution }),
     ...(network === undefined ? {} : { network }),
     ...(filesystem === undefined ? {} : { filesystem }),
+    ...(mcp === undefined ? {} : { mcp }),
     tools: Object.freeze(tools),
   });
+}
+
+function parseMcpOverrides(value: unknown): NonNullable<IdentityOverrides["mcp"]> {
+  if (!isRecord(value) || !hasExactKeys(value, ["servers"]) || !isRecord(value.servers))
+    throw invalidResponse();
+  const entries = Object.entries(value.servers);
+  if (entries.length === 0 || entries.length > 32) throw invalidResponse();
+  const servers = Object.fromEntries(
+    entries.map(([id, server]) => {
+      if (
+        !/^[a-z][a-z0-9_]{0,31}$/u.test(id) ||
+        !isRecord(server) ||
+        !hasExactKeys(server, ["enabled"]) ||
+        typeof server.enabled !== "boolean"
+      )
+        throw invalidResponse();
+      return [id, Object.freeze({ enabled: server.enabled })];
+    }),
+  );
+  return Object.freeze({ servers: Object.freeze(servers) });
 }
 
 function parseBrokerEnvironment(value: unknown): ManagedEnvironment {

@@ -628,7 +628,18 @@ text("MCP_REMOVAL_OK");`,
     config.tools.write = toolPolicy("disabled");
     for (const server of Object.values(config.mcp.servers)) server.enabled = false;
     config.mcp.servers.local.command = "/missing/disabled-mcp-server";
+    config.mcp.servers.local.env_from_env = { SERVICE_TOKEN: "MISSING_STDIO_TOKEN" };
+    config.mcp.servers.docs.headers_from_env = { Authorization: "MISSING_HTTP_TOKEN" };
     await writeFile(configPath, stringifyToml(config));
+    await writeFile(
+      join(userState, "mcp.json"),
+      JSON.stringify({
+        mcpServers: {
+          docs: { enabled: true, exposure: "direct" },
+          local: { enabled: true, exposure: "direct" },
+        },
+      }),
+    );
     await writeFile(
       join(userState, "settings.json"),
       JSON.stringify({ defaultTools: ["codemode"], codemode: { mode: "only" } }),

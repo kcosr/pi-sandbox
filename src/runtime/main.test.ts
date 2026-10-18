@@ -12,6 +12,8 @@ import { SandboxExecutionError } from "../../packages/sandbox-extension/src/runt
 
 import { IDENTITY_BROKER_SOCKET_PATH } from "../domain/index.js";
 import type { IdentityOverrides, SandboxConfig } from "../domain/index.js";
+import { parseBrokerResponse } from "../identity/client.js";
+import { resolveMcpServers } from "../mcp/resolve.js";
 import { createManagedExtensionCatalog } from "../managed-extensions/catalog.js";
 import {
   defineManagedHostEnvironment,
@@ -911,6 +913,100 @@ describe("administrative configuration", () => {
       extensions: {},
     });
     expect(environment).toEqual({ MODEL_TOKEN: "ambient", UNRELATED: "preserved" });
+  });
+
+  it("applies parsed broker MCP admission before resolving server credentials or executables", async () => {
+    const root = await createRoot();
+    const configPath = rooted(root, "/etc/pi-sandbox/config.toml");
+    const source = await readFile(configPath, "utf8");
+    await writeFile(rooted(root, "/etc/pi-sandbox/models.json"), JSON.stringify({ providers: {} }));
+    await writeFile(
+      configPath,
+      source.replace('mode = "disabled"', 'mode = "broker"').replace(
+        "[mcp.servers]",
+        `[mcp.servers.docs]
+enabled = false
+transport = "http"
+url = "https://docs.example/mcp"
+bearer_token_from_env = "DOCS_TOKEN"
+exposure = "direct"
+default_policy = { mode = "ask", session_grant = "never", audit = true }
+
+[mcp.servers.local]
+enabled = true
+transport = "stdio"
+command = "/missing/mcp-server"
+env_from_env = { TOKEN = "UNAVAILABLE_TOKEN" }
+env = { ACCOUNT = "{{username}}" }
+exposure = "direct"
+default_policy = { mode = "ask", session_grant = "never", audit = true }`,
+      ),
+    );
+    const broker = parseBrokerResponse(
+      JSON.stringify({
+        version: 8,
+        status: "ok",
+        environment: { pi: { DOCS_TOKEN: "scoped-token" }, sandbox: {}, extensions: {} },
+        overrides: { mcp: { servers: { docs: { enabled: true }, local: { enabled: false } } } },
+      }),
+    );
+    if (broker.status !== "ok") throw new Error("expected success");
+    const environment = { KEEP: "original" };
+    const effective = await resolveEffectiveAdministrativeConfiguration(root, environment, () =>
+      Promise.resolve(broker),
+    );
+    expect(environment).toEqual({ KEEP: "original" });
+    const unavailable = vi.fn(() => {
+      throw new Error("disabled MCP server must not resolve executable or account identity");
+    });
+    const resolved = await resolveMcpServers(
+      effective.config.mcp,
+      { ...environment, ...effective.identityEnvironment.pi },
+      unavailable,
+      unavailable,
+      unavailable,
+    );
+    expect(unavailable).not.toHaveBeenCalled();
+    expect(resolved).toMatchObject([
+      {
+        policy: { id: "docs", enabled: true },
+        status: "ready",
+        headers: { Authorization: "Bearer scoped-token" },
+      },
+      { policy: { id: "local", enabled: false }, status: "disabled" },
+    ]);
+    expect(resolved[1]).toEqual({ policy: effective.config.mcp.servers.local, status: "disabled" });
+  });
+
+  it.each([
+    ["docs", "config.mcp.servers.docs.exposure requires codemode.enabled"],
+    ["missing", "override for unavailable MCP server: missing"],
+  ])("rejects invalid effective MCP admission for %s before startup", async (id, message) => {
+    const root = await createRoot();
+    const configPath = rooted(root, "/etc/pi-sandbox/config.toml");
+    const source = await readFile(configPath, "utf8");
+    await writeFile(
+      configPath,
+      source.replace('mode = "disabled"', 'mode = "broker"').replace(
+        "[mcp.servers]",
+        `[mcp.servers.docs]
+enabled = false
+transport = "http"
+url = "https://docs.example/mcp"
+exposure = "codemode"
+default_policy = { mode = "ask", session_grant = "never", audit = true }`,
+      ),
+    );
+    const environment = { KEEP: "original" };
+    await expect(
+      resolveEffectiveAdministrativeConfiguration(root, environment, () =>
+        Promise.resolve({
+          environment: { pi: { DOCS_TOKEN: "scoped-token" }, sandbox: {}, extensions: {} },
+          overrides: { mcp: { servers: { [id]: { enabled: true } } }, tools: {} },
+        }),
+      ),
+    ).rejects.toThrow(message);
+    expect(environment).toEqual({ KEEP: "original" });
   });
 
   it("fails closed when an execution override produces an invalid backend and network pair", async () => {

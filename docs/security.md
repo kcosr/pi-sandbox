@@ -125,6 +125,15 @@ invoking account's authority, including startup and background activity before
 any tool approval. HTTP tools exercise the server's authority. Sandbox network
 and filesystem exclusion settings do not constrain either transport. Enabling a server
 authorizes connection and tool discovery even if every tool policy is disabled.
+On Linux, root-managed user/group rules may change only a globally defined
+server's enabled boolean. Matching explicit true wins over false before
+overlaying the main default; users and groups have equal precedence. A false
+rule cannot revoke another matching rule's true. Connections, credential
+mappings, exposure defaults, and invocation policies remain globally defined.
+The application rejects unknown matching server IDs and invalid effective
+code-mode exposure. An effectively disabled server performs no server-specific
+identity, executable, credential-reference, or transport work. Independently
+configured Pi environment values remain present.
 
 Code mode isolates model-authored JavaScript in the embedded QuickJS runtime,
 with bounded computation and selected bridges. It exposes no general host API;
@@ -135,7 +144,9 @@ or cancellation does not undo effects already completed.
 
 MCP connections and permissions come only from administrative policy. User MCP
 preferences can disable or change presentation for admitted servers, never add
-connections or alter permissions. Menu changes revoke affected approvals/grants.
+connections or alter permissions. Saved true cannot enable an administratively
+disabled server; saved false may keep an admitted server disabled. Administrative
+policy and membership changes require a process restart. Menu changes revoke affected approvals/grants.
 Code-mode availability is an administrator ceiling, not forced activation. Catalog
 metadata never grants authority. Original server/tool identities bind permission
 and grants; refreshed definitions invalidate stale approvals. HTTP redirects are
@@ -182,15 +193,19 @@ forcing staff to use administrator-selected permissions. The option cannot
 change the compiled extension catalog, root runtime check, or Bubblewrap binary.
 Service sockets and service-owned configuration remain build-selected. In broker mode, optional root-only rules in
 `config_dir/users.d/*.toml` and `config_dir/groups.d/*.toml` may provide matching account/group scoped-environment
-and administrator-selected model/execution/network/filesystem/tool patch. If no rules
+and administrator-selected model/execution/network/filesystem/tool patch, plus
+MCP server enablement. If no rules
 match, the main configuration remains unchanged. Pi's
 internal model catalog is disabled. `PI_CODING_AGENT_DIR` may
 redirect user state but cannot redirect these administrative inputs. Missing,
 unreadable, or invalid effective inputs abort operational startup. An exact
 `--version` is metadata-only and does not read those inputs. The broker requires the
-drop-in directory to be root-owned and not group/other writable, and matching
+drop-in directory to be root-owned and not group/other writable, and all
 files to be root-owned regular files with mode `0600`; ownership and
 permissions for the main TOML and model files remain deployment responsibilities.
+Every rule is structurally validated, including unmatched files. The broker does
+not read the main server inventory; the application checks server existence only
+for the combined matching patch.
 
 The base TOML remains the default tool policy. Matching user/group rules combine
 explicit permissions using least restrictive wins before replacing defaults.
@@ -206,7 +221,8 @@ host fallback:
 - the interactive application is launched with effective UID `0`;
 - administrative configuration or the selected model catalog is missing or
   invalid;
-- the broker is unavailable or the matching user/group drop-in is invalid;
+- the broker is unavailable, any user/group drop-in is structurally invalid, or
+  a matching override refers to an unavailable tool or unknown MCP server;
 - an unsafe managed-executable argument is supplied;
 - the selected command process cannot start or report a coherent result;
 - a required model-tool approval cannot be obtained;

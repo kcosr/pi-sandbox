@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+### Breaking changes
+
+- Require identity broker protocol 8 and user/group rule version 9; upgrade the application and broker together. Main configuration schema 13 is unchanged. ([#39](https://github.com/kcosr/pi-sandbox/pull/39))
+
+### Added
+
+- Allow administrator user/group rules to enable or disable globally defined MCP servers, combining matching grants with least restrictive wins. ([#39](https://github.com/kcosr/pi-sandbox/pull/39))
+
 ### Changed
 
 - Clarify cross-platform execution diagrams, backend guarantees, diagnostics and installation guidance for Bubblewrap, Seatbelt and direct execution. ([#38](https://github.com/kcosr/pi-sandbox/pull/38))

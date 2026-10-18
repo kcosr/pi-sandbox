@@ -88,13 +88,21 @@ selection control activation, including automatic activation from MCP exposure.
 
 MCP servers use Pi's existing Streamable HTTP and stdio transports on the host.
 The main TOML owns endpoints, commands, credential mappings, default exposure, and ordered
-per-server wildcard policies. The stock MCP menu can change enabled/exposure
+per-server wildcard policies. On Linux the identity broker can override only
+enabled booleans for globally defined servers: combine matching explicit values
+with true winning, then overlay the main-policy defaults. The application rejects
+unknown matching server IDs and rechecks the code-mode exposure dependency.
+The stock MCP menu can change enabled/exposure
 preferences for admitted servers, persisted in the user's `mcp.json`; arbitrary
 user/project server definitions, extension-registered servers, OAuth, resources
 and prompts are disabled. HTTP
 headers and stdio environment values are explicit projections of a startup
 snapshot; stdio does not inherit the complete host environment. Account macros
 can personalize configured paths and environment values. MCP URLs remain literal.
+An effectively disabled server skips its identity, credential-reference,
+executable, and transport work; independent Pi environment configuration still
+applies. Saved preferences cannot enable it. Administrative changes require a
+process restart, and macOS retains main-policy-only admission.
 
 Each logical session owns its MCP connections and admitted catalog. Whole-catalog
 validation precedes publication. Wrappers retain typed original server/tool
@@ -204,7 +212,7 @@ the host NSS resolver, and reads protected root-owned rules. It accepts one
 newline-delimited request without requiring a client half-close. Matching
 explicit permissions combine using least restrictive wins; conflicting backend,
 model, or scoped environment values fail. It returns the environment and optional model,
-execution, network, filesystem, and atomic tool-policy patch. If no rules match, the broker
+execution, network, filesystem, MCP enablement, and atomic tool-policy patch. If no rules match, the broker
 returns an empty patch. The Bun process validates the response independently,
 overlays it on the global policy and scoped environment from the main TOML, constructs one effective
 configuration, and loads only its selected model catalog. Pi-scoped values are

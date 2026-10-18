@@ -38,10 +38,11 @@ and implementation plan. The maintained subject documents and
    sampling, elicitation, MCP apps, and `tool_search` are not enabled. This avoids
    introducing ungoverned operations outside the requested tool-policy model.
    Embedded tool-result content is handled as data, not as a new capability.
-9. New feature/server policy is main-TOML-only in this implementation. Existing
-   broker overrides continue to govern built-ins and compiled extension tools,
-   including calls from code mode. New per-user/group MCP or code-mode policy
-   overrides are out of scope.
+9. Server definitions, credential mappings, exposure defaults, timeouts, ordered
+   tool policies, and code-mode availability belong to the main TOML. Linux
+   administrator user/group rules may override only enabled booleans for globally
+   defined MCP servers. Existing broker overrides also govern built-ins and
+   compiled extension tools, including calls from code mode.
 
 Non-goals include sandboxed local MCP, arbitrary JavaScript/Node execution on the
 host, new sandbox networking modes, runtime MCP package installation, user-added
@@ -166,7 +167,7 @@ references, not model-selected variable names.
 | `codemode.timeout_ms`   | Optional integer, default 300000, range 1000–3600000. Hard overall deadline, including nested approval waits.                                                                                                                                           |
 | `mcp.servers`           | Required table, empty is valid; at most 32 entries.                                                                                                                                                                                                     |
 | Server identifier       | Case-sensitive ASCII `[a-z][a-z0-9_]{0,31}`; stable administrative identity.                                                                                                                                                                            |
-| `enabled`               | Required boolean. Disabled means no connection, process, credential resolution, or exposed tools.                                                                                                                                                       |
+| `enabled`               | Required boolean default; Linux administrator user/group rules may override it. Effective disabled means no server-specific identity, executable, credential-reference, or transport work, and no exposed tools.                                        |
 | `transport`             | Required `http` or `stdio`; validate the selected shape and reject fields of the other shape.                                                                                                                                                           |
 | `exposure`              | Required `direct` or `codemode`; default presentation, not permission.                                                                                                                                                                                  |
 | `timeout_ms`            | Optional integer, default 60000, range 1000–3600000; absolute per-call deadline after approval, including reconnect/setup and result handling. Progress cannot extend it.                                                                               |
@@ -195,7 +196,7 @@ violations, use the server-only `credentials-unavailable` path below; structural
 and literal configuration violations abort startup.
 
 An enabled server with `exposure = "codemode"` requires `codemode.enabled = true`;
-otherwise startup fails. Disabled servers may retain that exposure. Missing
+otherwise startup fails, including when a broker override enables it. Disabled servers may retain that exposure. Missing
 required fields and malformed dormant configuration are still errors, but
 installation validation and disabled servers must not resolve per-user secrets
 or attempt connections.
@@ -247,10 +248,23 @@ Arguments may name administrator-installed launchers, but no `npx`/`uvx` setup i
 performed by this product.
 
 Existing broker `environment.pi` values can supply explicitly named credential
-references per account without adding a new broker scope. The new MCP settings,
-ordered policies, and code-mode switch are not accepted in broker override
-payloads or rule files. Keep audit selection parent-only and existing strict
-validation of known compiled tools in broker patches.
+references per account without adding a new broker scope. Disabling an MCP
+server does not remove independently configured values from Pi's environment.
+
+Broker protocol 8 and rule version 9 accept only the MCP override shape
+`overrides.mcp.servers.<id> = { enabled = <boolean> }`. Optional `mcp` requires a
+nonempty `servers` map, at most 32 entries per file and combined matching patch,
+using the main server-ID grammar. Every rule is structurally validated; server
+existence is checked against the loaded main policy only for matching overrides.
+The broker does not read the main inventory. Combine matching explicit booleans
+with true winning before overlaying defaults; user rules have no extra priority.
+A false replaces a true default only when no matching rule grants true.
+Definitions, credential mappings, exposure, timeouts, ordered tool policies,
+code-mode availability, and audit selection remain main-policy-only. Saved user
+preferences may disable an admitted server but cannot enable an effectively
+disabled server. Administrative changes require restart; macOS keeps main-policy-only
+admission. Main schema 13 and audit wire 2/record 3 are unchanged. See the
+[identity broker contract](../docs/identity-broker.md#mcp-server-enablement).
 
 ### Account macros
 
@@ -688,9 +702,9 @@ stock extension factories wholesale to obtain MCP.
 Pi Sandbox owns new domain/config models, strict validation, environment
 projection, wildcard resolution, dynamic permissions, auditing, runtime
 composition, diagnostics, and tests. Keep static-extension exact-registration
-checks and built-in command cleanup unchanged. The identity broker retains its
-current override grammar; update main-config recognition only where its code
-actually reads/validates the complete main schema.
+checks and built-in command cleanup unchanged. The identity broker admits only
+the narrow enabled-boolean MCP patch alongside its existing override fields;
+the application overlays and validates it against the loaded main server inventory.
 
 ## 10. Implementation sequence and acceptance criteria
 
@@ -722,7 +736,10 @@ Required offline verification:
   when normalized/generated names collide. New discovered tools inherit defaults.
 - HTTP/stdio shape errors; unknown fields; missing policy; invalid credentials;
   disabled-server no-lookup behavior; header collisions/injection; absence of
-  shell expansion; forged broker fields; code-mode/MCP override rejection.
+  shell expansion; forged broker fields; rejection of code-mode and MCP
+  definition/tool-policy overrides. Verify enabled-only overrides, omission,
+  true-wins merging independent of user/group ordering, unknown matching IDs,
+  unmatched structural validation, and effective code-mode exposure validation.
 - Accept HTTPS and literal-loopback HTTP for `localhost`, `127.0.0.1`, and
   `[::1]`; reject non-loopback cleartext HTTP, other schemes, userinfo, fragments,
   raw macro syntax, dot segments, and deceptive host spellings. Verify URL parsing

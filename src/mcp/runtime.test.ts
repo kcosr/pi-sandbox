@@ -375,6 +375,45 @@ function factoryOptions(runtime: ManagedMcpRuntime): ManagedMcpOptions {
   return options;
 }
 describe("MCP presentation preferences", () => {
+  it.each([true, false])(
+    "keeps administrator-disabled servers unavailable with saved enabled=%s",
+    async (enabled) => {
+      const preferences: ManagedMcpPreferences = {
+        autoEnableCodemode: true,
+        server: () => ({ enabled, exposure: "direct" }),
+        update: vi.fn(async () => {}),
+      };
+      const transportFactory = vi.fn();
+      const runtime = new ManagedMcpRuntime({
+        cwd: "/work",
+        servers: [{ policy: { ...config, enabled: false }, status: "disabled" }],
+        preferences,
+        selected: () => true,
+        autoEnableCodemode: true,
+        getPolicy: () => undefined,
+        getAuditor: () => undefined,
+        transportFactory,
+      });
+      const options = factoryOptions(runtime);
+      expect(options.loadConfig().servers).toEqual([]);
+      expect(() => options.createTransport({ name: "docs" })).toThrow("unavailable");
+      await expect(
+        options.management.updateConfig({ name: "docs" }, { enabled: true }),
+      ).rejects.toThrow("unavailable");
+      const connection = {
+        state: "connected",
+        getClient: vi.fn(() => Promise.resolve({})),
+        close: vi.fn(() => Promise.resolve()),
+      };
+      expect(() => runtime.adaptTools("docs", [item()], connection)).toThrow("unavailable");
+      expect(runtime.diagnostics("docs")).toContain("disabled by administrator");
+      expect(runtime.diagnostics("docs")).not.toContain("disabled by user");
+      expect(preferences.update).not.toHaveBeenCalled();
+      expect(transportFactory).not.toHaveBeenCalled();
+      await runtime.close();
+    },
+  );
+
   it("honors only enabled/exposure preferences while retaining managed connections", () => {
     const preferences: ManagedMcpPreferences = {
       autoEnableCodemode: false,

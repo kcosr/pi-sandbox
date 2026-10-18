@@ -1350,7 +1350,7 @@ git_clone = { mode = "ask", session_grant = "never", audit = true }
                 class="compact"
                 aria-label="Example group Pi Sandbox override"
               ><code># groups.d/admin.toml — optional
-version = 8
+version = 9
 group = "admin"
 
 [overrides.tools.git_clone]
@@ -1360,7 +1360,9 @@ session_grant = "never"</code></pre>
                 <strong>Effective policy</strong>
                 <span
                   >The main TOML supplies defaults. Matching user and group rules combine explicit
-                  permissions using least restrictive wins; omitted settings inherit defaults.</span
+                  permissions using least restrictive wins; omitted settings inherit defaults. Linux
+                  rules may also enable or disable globally defined MCP servers; true wins among
+                  matching rules.</span
                 >
               </div>
               <p

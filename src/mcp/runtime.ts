@@ -547,9 +547,13 @@ export class ManagedMcpRuntime {
     const lines = ["MCP servers (host execution)"];
     for (const [id, state] of this.servers) {
       if (serverId !== undefined && id !== serverId) continue;
-      lines.push(
-        `${id}: ${state.resolved.policy.transport}, ${state.exposure}, ${state.enabled ? state.status : "disabled by user"}`,
-      );
+      const status =
+        state.resolved.status === "disabled"
+          ? "disabled by administrator"
+          : state.enabled
+            ? state.status
+            : "disabled by user";
+      lines.push(`${id}: ${state.resolved.policy.transport}, ${state.exposure}, ${status}`);
       if (serverId !== undefined)
         for (const tool of this.admissions.values())
           if (tool.server === id && tool.live) {

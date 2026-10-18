@@ -19,7 +19,7 @@ export type {
   SessionGrantPolicy,
   SubjectPolicy,
 } from "../permissions/contracts.js";
-import type { CodeModeConfig, McpConfig } from "./mcp.js";
+import type { CodeModeConfig, McpConfig, McpServerConfig } from "./mcp.js";
 
 import { buildLayout } from "../build-layout/index.js";
 
@@ -97,6 +97,9 @@ export interface IdentityOverrides {
   readonly execution?: Pick<ExecutionConfig, "backend">;
   readonly network?: NetworkConfig;
   readonly filesystem?: Pick<FilesystemConfig, "cwdWritable">;
+  readonly mcp?: {
+    readonly servers: Readonly<Record<string, Pick<McpServerConfig, "enabled">>>;
+  };
   readonly tools: Readonly<Partial<Record<string, SubjectPolicy>>>;
 }
 
