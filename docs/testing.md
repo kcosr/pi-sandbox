@@ -59,6 +59,18 @@ packaged executable diagnostic checks as distinct observable steps. A supported 
 host must execute the Bubblewrap suites rather than accepting a skip caused by
 unavailable namespaces.
 
+`build:release` is the separate build/package/integrity entry point. It does
+not run behavioral tests. Both workflows check source pins, configuration,
+manifest/SBOM inventory, package layout and checksums. The verifier always
+supplies the builder's two verification checkpoints: patched-source API/negative
+controls plus upstream/theme suites, and the platform's packaged executable
+checks. No test list was removed or made opt-in by this separation.
+`scripts/test/release-workflow.mjs` checks import/CLI behavior, failure cleanup,
+verification environment propagation, platform selection and fixture isolation.
+Temporary packaged-smoke TOML disables both identity and audit dependencies
+while retaining their other fields; the shipped policy is untouched. Service
+protocol, fail-closed audit and broker behavior retain their dedicated suites.
+
 On macOS the verifier requires real Seatbelt controls and both Node/Bun runtime
 fixtures. It selects Bun from `PI_SANDBOX_TEST_BUN`, `PI_SANDBOX_BUN`, or the
 test host's `PATH`, in that order; use the verified release toolchain. Genuine
@@ -114,7 +126,10 @@ dependency.
   validation, active-policy cross-checking, atomic
   per-user override merging, and the compiled Bun client's no-half-close request
   flow;
-- enabled-only MCP user/group overrides, explicit grant merging before main defaults,
+- bounded MCP user/group approval layers and separate enabled flags, per-file
+  first-match/default resolution, complete-pair joins before main defaults,
+  Unicode pattern parity, canonical whole-layer deduplication, global audit
+  preservation, strict authored/wire versions and pre-write response bounds,
   unknown matching server rejection, effective code-mode dependency validation,
   and disabled-server credential, executable and transport suppression despite
   saved user enablement preferences;

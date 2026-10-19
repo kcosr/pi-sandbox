@@ -10,6 +10,10 @@ import {
   emptyManagedEnvironment,
   isNormalizedAbsoluteFilePath,
   parseManagedEnvironment,
+  isMcpToolPattern,
+  type McpApprovalPolicy,
+  type McpApprovalRule,
+  type McpPolicyLayer,
   type ExecutionConfig,
   type FilesystemConfig,
   type IdentityConfig,
@@ -29,7 +33,7 @@ import {
   commandClassPreconditionIssues,
 } from "../permissions/command-classes.js";
 
-export const IDENTITY_BROKER_PROTOCOL_VERSION = 8;
+export const IDENTITY_BROKER_PROTOCOL_VERSION = 9;
 export const IDENTITY_BROKER_TIMEOUT_MS = 10_000;
 export const MAXIMUM_IDENTITY_RESPONSE_BYTES = 512 * 1024;
 
@@ -39,14 +43,14 @@ export interface BrokerIdentity {
 }
 
 interface BrokerSuccessResponse {
-  readonly version: 8;
+  readonly version: 9;
   readonly status: "ok";
   readonly environment: ManagedEnvironment;
   readonly overrides: IdentityOverrides;
 }
 
 interface BrokerErrorResponse {
-  readonly version: 8;
+  readonly version: 9;
   readonly status: "error";
   readonly code: "identity_store_unavailable" | "protocol_error";
 }
@@ -124,6 +128,7 @@ export function resolveBrokerIdentity(socketPath: string): Promise<BrokerIdentit
 }
 
 export function parseBrokerResponse(source: string): BrokerResponse {
+  if (Buffer.byteLength(source) > MAXIMUM_IDENTITY_RESPONSE_BYTES) throw invalidResponse();
   let value: unknown;
   try {
     assertNoDuplicateObjectKeys(source);
@@ -139,7 +144,7 @@ export function parseBrokerResponse(source: string): BrokerResponse {
       throw invalidResponse();
     }
     return Object.freeze({
-      version: 8,
+      version: 9,
       status: "ok",
       environment: parseBrokerEnvironment(value.environment),
       overrides: parseIdentityOverrides(value.overrides),
@@ -203,7 +208,7 @@ function applyMcpOverrides(
   for (const [id, override] of Object.entries(overrides.servers)) {
     if (!Object.hasOwn(base.servers, id))
       throw new Error(`identity broker returned an override for unavailable MCP server: ${id}`);
-    servers[id] = Object.freeze({ ...base.servers[id]!, enabled: override.enabled });
+    servers[id] = Object.freeze({ ...base.servers[id]!, ...override });
   }
   return Object.freeze({ servers: Object.freeze(servers) });
 }
@@ -302,23 +307,102 @@ function parseIdentityOverrides(value: unknown): IdentityOverrides {
 }
 
 function parseMcpOverrides(value: unknown): NonNullable<IdentityOverrides["mcp"]> {
-  if (!isRecord(value) || !hasExactKeys(value, ["servers"]) || !isRecord(value.servers))
+  if (
+    !isRecord(value) ||
+    !hasExactKeys(value, ["servers"]) ||
+    !isRecord(value.servers) ||
+    Buffer.byteLength(JSON.stringify(value)) > 256 * 1024
+  )
     throw invalidResponse();
   const entries = Object.entries(value.servers);
   if (entries.length === 0 || entries.length > 32) throw invalidResponse();
+  let totalRules = 0;
   const servers = Object.fromEntries(
     entries.map(([id, server]) => {
       if (
         !/^[a-z][a-z0-9_]{0,31}$/u.test(id) ||
         !isRecord(server) ||
-        !hasExactKeys(server, ["enabled"]) ||
-        typeof server.enabled !== "boolean"
+        Object.keys(server).length === 0 ||
+        !hasAllowedKeys(server, ["enabled", "policy_layers"])
       )
         throw invalidResponse();
-      return [id, Object.freeze({ enabled: server.enabled })];
+      let enabled: boolean | undefined;
+      if (Object.hasOwn(server, "enabled")) {
+        if (typeof server.enabled !== "boolean") throw invalidResponse();
+        enabled = server.enabled;
+      }
+      let policyLayers: readonly McpPolicyLayer[] | undefined;
+      if (Object.hasOwn(server, "policy_layers")) {
+        const layers = server.policy_layers;
+        if (!Array.isArray(layers) || layers.length === 0 || layers.length > 256)
+          throw invalidResponse();
+        const seen = new Set<string>();
+        let serverRules = 0;
+        policyLayers = Object.freeze(
+          layers.map((value) => {
+            const layer = parseMcpPolicyLayer(value);
+            const key = JSON.stringify(layer);
+            // The broker emits normalized, deduplicated contributions.
+            if (seen.has(key)) throw invalidResponse();
+            seen.add(key);
+            serverRules += layer.toolRules.length;
+            if (serverRules > 256) throw invalidResponse();
+            return layer;
+          }),
+        );
+        totalRules += serverRules;
+        if (totalRules > 1024) throw invalidResponse();
+      }
+      return [
+        id,
+        Object.freeze({
+          ...(enabled === undefined ? {} : { enabled }),
+          ...(policyLayers === undefined ? {} : { policyLayers }),
+        }),
+      ];
     }),
   );
   return Object.freeze({ servers: Object.freeze(servers) });
+}
+
+function parseMcpPolicyLayer(value: unknown): McpPolicyLayer {
+  if (
+    !isRecord(value) ||
+    !hasAllowedKeys(value, ["default_policy", "tool_rules"]) ||
+    !Array.isArray(value.tool_rules) ||
+    value.tool_rules.length > 256
+  )
+    throw invalidResponse();
+  const defaultPolicy = Object.hasOwn(value, "default_policy")
+    ? parseMcpApprovalPolicy(value.default_policy)
+    : undefined;
+  if (defaultPolicy === undefined && value.tool_rules.length === 0) throw invalidResponse();
+  const patterns = new Set<string>();
+  const toolRules: readonly McpApprovalRule[] = Object.freeze(
+    value.tool_rules.map((rule: unknown) => {
+      if (
+        !isRecord(rule) ||
+        !hasExactKeys(rule, ["match", "mode", "session_grant"]) ||
+        !isMcpToolPattern(rule.match) ||
+        patterns.has(rule.match)
+      )
+        throw invalidResponse();
+      patterns.add(rule.match);
+      const policy = parseMcpApprovalPolicy({ mode: rule.mode, session_grant: rule.session_grant });
+      return Object.freeze({ match: rule.match, ...policy });
+    }),
+  );
+  return Object.freeze({
+    ...(defaultPolicy === undefined ? {} : { defaultPolicy }),
+    toolRules,
+  });
+}
+
+function parseMcpApprovalPolicy(value: unknown): McpApprovalPolicy {
+  if (!isRecord(value) || !hasExactKeys(value, ["mode", "session_grant"])) throw invalidResponse();
+  // This deliberately excludes the ordinary tool parser's Bash command-class fields.
+  const policy = parseSubjectPolicy(value, "mcp");
+  return Object.freeze({ mode: policy.mode, sessionGrant: policy.sessionGrant });
 }
 
 function parseBrokerEnvironment(value: unknown): ManagedEnvironment {

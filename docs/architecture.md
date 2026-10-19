@@ -88,9 +88,11 @@ selection control activation, including automatic activation from MCP exposure.
 
 MCP servers use Pi's existing Streamable HTTP and stdio transports on the host.
 The main TOML owns endpoints, commands, credential mappings, default exposure, and ordered
-per-server wildcard policies. On Linux the identity broker can override only
-enabled booleans for globally defined servers: combine matching explicit values
-with true winning, then overlay the main-policy defaults. The application rejects
+per-server wildcard policies. On Linux the identity broker combines explicit
+enabled flags with true winning and preserves each matching file as an approval
+policy layer. Resolve each layer’s first rule/default, join complete pairs with
+least restrictive wins, and overlay the global invocation policy. Global audit
+remains unchanged; a policy-only layer never implies enabled. The application rejects
 unknown matching server IDs and rechecks the code-mode exposure dependency.
 The stock MCP menu can change enabled/exposure
 preferences for admitted servers, persisted in the user's `mcp.json`; arbitrary
@@ -212,7 +214,7 @@ the host NSS resolver, and reads protected root-owned rules. It accepts one
 newline-delimited request without requiring a client half-close. Matching
 explicit permissions combine using least restrictive wins; conflicting backend,
 model, or scoped environment values fail. It returns the environment and optional model,
-execution, network, filesystem, MCP enablement, and atomic tool-policy patch. If no rules match, the broker
+execution, network, filesystem, MCP enablement/approval, and atomic tool-policy patch. If no rules match, the broker
 returns an empty patch. The Bun process validates the response independently,
 overlays it on the global policy and scoped environment from the main TOML, constructs one effective
 configuration, and loads only its selected model catalog. Pi-scoped values are

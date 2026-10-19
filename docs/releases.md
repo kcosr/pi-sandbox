@@ -67,3 +67,10 @@ omitting empty sections. Put required administrator actions first under
 those builds carry the `dev.source` display. The full `npm run build:release`
 builder requires a Git checkout to record source provenance. Use a clean
 checkout of the final tag for deployment archives and the release display.
+
+`build:release` compiles, packages, and verifies artifact integrity without test
+suites. `verify:release` performs those same steps with the complete behavioral
+qualification gates. Neither changes version stamping: a clean untagged commit
+has `.dev.g<sha>`, while local source modifications add `.dirty`. Building clean
+main does not make it a tagged release. Run the applicable verification before
+publishing; inspect final-tag artifacts before distribution.

@@ -109,7 +109,7 @@ flowchart LR
   catalog is disabled.
 - The main configuration defines the global scoped environment. On Linux, an optional
   root broker can combine named or numeric user/group rules into a patch for environment, model
-  catalog, execution backend, network mode, CWD write access, MCP server enablement,
+  catalog, execution backend, network mode, CWD write access, MCP server enablement and approval policies,
   and complete per-tool policy overrides without exposing other users' files.
   Pi, sandbox, and individual managed-extension variables remain isolated; the
   environment never enables a tool or grants approval.

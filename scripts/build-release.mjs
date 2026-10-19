@@ -52,7 +52,9 @@ const commonRequiredReleaseDirectories = Object.freeze([
 function usage(stream = process.stdout) {
   stream.write(`Usage: node scripts/build-release.mjs [options]
 
-Build a pinned, patched Pi Sandbox release for the current host architecture.
+Build and package pinned Pi Sandbox sources for the current host architecture.
+Always validate source pins, configuration, payload identity and archive integrity.
+Behavioral tests are run separately by npm run verify:release.
 
 Options:
   --pi-source-archive FILE  Use this source archive instead of downloading it
@@ -71,7 +73,9 @@ the repository.
 `);
 }
 
-function parseArguments(argv) {
+export class ReleaseArgumentError extends Error {}
+
+export function parseReleaseArguments(argv) {
   const options = {
     sourceArchive: undefined,
     out: join(repositoryRoot, "release"),
@@ -85,11 +89,11 @@ function parseArguments(argv) {
     if (
       !["--pi-source-archive", "--out", "--config", "--models", "--distribution"].includes(argument)
     ) {
-      throw new Error(`unknown option: ${argument}`);
+      throw new ReleaseArgumentError(`unknown option: ${argument}`);
     }
     const value = argv[index + 1];
     if (value === undefined || value.startsWith("--")) {
-      throw new Error(`${argument} requires a value`);
+      throw new ReleaseArgumentError(`${argument} requires a value`);
     }
     index += 1;
     if (argument === "--pi-source-archive") options.sourceArchive = resolve(value);
@@ -101,11 +105,17 @@ function parseArguments(argv) {
   return options;
 }
 
+function cleanBuildEnvironment(environment = process.env) {
+  const result = { ...environment };
+  delete result.NODE_ENV;
+  return result;
+}
+
 async function run(command, args, options = {}) {
   await new Promise((resolvePromise, reject) => {
     const child = spawn(command, args, {
       cwd: options.cwd ?? repositoryRoot,
-      env: options.env ?? process.env,
+      env: cleanBuildEnvironment(options.env),
       stdio: "inherit",
     });
     child.on("error", reject);
@@ -124,7 +134,7 @@ async function capture(command, args, options = {}) {
   await new Promise((resolvePromise, reject) => {
     const child = spawn(command, args, {
       cwd: options.cwd ?? repositoryRoot,
-      env: options.env ?? process.env,
+      env: cleanBuildEnvironment(options.env),
       stdio: ["ignore", "pipe", "pipe"],
     });
     let stdout = "";
@@ -485,16 +495,9 @@ async function inspectReleaseArchive(
   return extractedRoot;
 }
 
-async function main() {
-  let options;
-  try {
-    options = parseArguments(process.argv.slice(2));
-  } catch (error) {
-    console.error(`build-release: ${error.message}`);
-    usage(process.stderr);
-    process.exitCode = 2;
-    return;
-  }
+/** Build/package integrity is unconditional; only the verifier supplies test callbacks. */
+export async function buildRelease(argv, { verifyPatchedSource, verifyPackagedRelease } = {}) {
+  const options = parseReleaseArguments(argv);
   if (options.help) {
     usage();
     return;
@@ -546,8 +549,7 @@ async function main() {
     const sourceRoot = await extractSource(sourceArchive, sourceExtraction, lock);
     const patches = await applyPatches(sourceRoot);
     const { platform, bunTarget, os } = target;
-    const cleanEnvironment = { ...process.env };
-    delete cleanEnvironment.NODE_ENV;
+    const cleanEnvironment = cleanBuildEnvironment();
 
     process.stdout.write("Bundling the private Pi Sandbox application\n");
     await run(
@@ -609,65 +611,7 @@ async function main() {
       { cwd: sourceRoot, env: cleanEnvironment },
     );
 
-    process.stdout.write("Checking managed Pi API contracts against patched declarations\n");
-    await run(
-      process.execPath,
-      [join(repositoryRoot, "scripts/test/pi-contract.mjs"), sourceRoot],
-      { env: cleanEnvironment },
-    );
-
-    process.stdout.write("Testing the managed Pi integration seams\n");
-    await run(
-      "npm",
-      [
-        "exec",
-        "--",
-        "vitest",
-        "run",
-        "packages/coding-agent/test/auth-check.test.ts",
-        "packages/coding-agent/test/managed-model-runtime.test.ts",
-        "packages/coding-agent/test/managed-main.test.ts",
-        "packages/coding-agent/test/managed-tools.test.ts",
-        "packages/coding-agent/test/managed-version.test.ts",
-        "packages/coding-agent/test/managed-tool-paths.test.ts",
-        "packages/coding-agent/test/managed-extensions.test.ts",
-        "packages/coding-agent/test/managed-session-sharing.test.ts",
-        "packages/coding-agent/test/managed-session-cwd.test.ts",
-        "packages/coding-agent/test/managed-session-maintenance.test.ts",
-        "packages/coding-agent/test/managed-shutdown-status.test.ts",
-        "packages/coding-agent/test/managed-mcp-codemode.test.ts",
-        "packages/mcp/test/managed-transport.test.ts",
-        "packages/codemode/test/managed-limits.test.ts",
-        "packages/coding-agent/test/args.test.ts",
-        "packages/coding-agent/test/print-mode.test.ts",
-        "packages/coding-agent/test/compaction-serialization.test.ts",
-        "packages/coding-agent/test/suite/agent-session-prompt.test.ts",
-        "packages/coding-agent/test/mcp-extension.test.ts",
-        "packages/coding-agent/test/mcp-manager-view.test.ts",
-        "packages/coding-agent/test/suite/agent-session-codemode.test.ts",
-        "packages/coding-agent/test/suite/agent-session-mcp.test.ts",
-        "packages/coding-agent/test/suite/regressions/2835-tools-allowlist-filters-extension-tools.test.ts",
-        "packages/codemode/test/sandbox.test.ts",
-        "packages/codemode/test/worker-lifetime.test.ts",
-        "packages/coding-agent/test/codemode-worker-admission.test.ts",
-        "packages/coding-agent/test/managed-worker-admission.test.ts",
-        "packages/coding-agent/test/model-resolver.test.ts",
-        "packages/coding-agent/test/default-tools-setting.test.ts",
-        "packages/coding-agent/test/settings-selector.test.ts",
-        "packages/coding-agent/test/read-line-range-display.test.ts",
-        "packages/coding-agent/test/agent-session-retry.test.ts",
-        "packages/ai/test/json-parse.test.ts",
-        "packages/ai/test/validation.test.ts",
-        "packages/ai/test/transform-messages-cross-model-thinking.test.ts",
-      ],
-      { cwd: sourceRoot, env: { ...cleanEnvironment, PI_OFFLINE: "1" } },
-    );
-
-    // This upstream fixture resolves bundled themes from its package CWD.
-    await run("npm", ["exec", "--", "vitest", "run", "test/resource-loader-theme.test.ts"], {
-      cwd: join(sourceRoot, "packages/coding-agent"),
-      env: { ...cleanEnvironment, PI_OFFLINE: "1" },
-    });
+    await verifyPatchedSource?.({ repositoryRoot, sourceRoot });
 
     await copyPrivateEntrypoint(sourceRoot);
     const stagingDirectory = join(temporaryDirectory, "release-stage");
@@ -914,31 +858,13 @@ async function main() {
       },
       releaseRequirements(os, distribution.bubblewrap),
     );
-    if (os === "linux") {
-      process.stdout.write("Testing /sandbox through the packaged executable\n");
-      await run(
-        process.execPath,
-        [
-          join(repositoryRoot, "scripts/test/packaged-diagnostics-smoke.mjs"),
-          join(extractedRelease, "payload/pi-sandbox/pi-sandbox"),
-          join(extractedRelease, "payload/pi-sandbox/defaults"),
-        ],
-        { env: cleanEnvironment },
-      );
-    } else if (
-      packagedConfig.execution?.backend === "seatbelt" &&
-      distribution.layout.allowConfigOverride
-    ) {
-      process.stdout.write("Testing Seatbelt through the packaged review executable\n");
-      await run(
-        process.execPath,
-        [
-          join(repositoryRoot, "scripts/test/seatbelt-packaged-smoke.mjs"),
-          join(extractedRelease, "payload/pi-sandbox/pi-sandbox"),
-        ],
-        { env: cleanEnvironment },
-      );
-    }
+    await verifyPackagedRelease?.({
+      repositoryRoot,
+      extractedRelease,
+      os,
+      packagedConfig,
+      layout: distribution.layout,
+    });
     const archiveSha256 = await sha256(archive);
     await writeFile(join(options.out, "SHA256SUMS"), `${archiveSha256}  ${archiveName}\n`, {
       mode: 0o644,
@@ -959,9 +885,12 @@ async function main() {
   }
 }
 
-try {
-  await main();
-} catch (error) {
-  console.error(`build-release: ${error instanceof Error ? error.message : String(error)}`);
-  process.exitCode = 1;
+if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
+  try {
+    await buildRelease(process.argv.slice(2));
+  } catch (error) {
+    console.error(`build-release: ${error instanceof Error ? error.message : String(error)}`);
+    process.exitCode = error instanceof ReleaseArgumentError ? 2 : 1;
+    if (error instanceof ReleaseArgumentError) usage(process.stderr);
+  }
 }

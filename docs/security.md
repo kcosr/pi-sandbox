@@ -125,11 +125,16 @@ invoking account's authority, including startup and background activity before
 any tool approval. HTTP tools exercise the server's authority. Sandbox network
 and filesystem exclusion settings do not constrain either transport. Enabling a server
 authorizes connection and tool discovery even if every tool policy is disabled.
-On Linux, root-managed user/group rules may change only a globally defined
-server's enabled boolean. Matching explicit true wins over false before
-overlaying the main default; users and groups have equal precedence. A false
-rule cannot revoke another matching rule's true. Connections, credential
-mappings, exposure defaults, and invocation policies remain globally defined.
+On Linux, root-managed user/group rules may change a globally defined server's
+enabled flag and tool approval policies. Matching explicit true wins over false
+for admission. Each file's first matching tool rule or explicit default
+contributes a complete approval pair; the least restrictive pair replaces the
+global invocation policy. An explicit default can therefore broaden global
+restrictions for unmatched and newly discovered tools. A restrictive rule cannot
+revoke another matching rule's grant; users and groups have equal precedence.
+Policy-only overrides do not imply admission. Audit always follows the global
+first-match/default policy; connections, credential mappings, exposure and
+timeouts remain globally defined.
 The application rejects unknown matching server IDs and invalid effective
 code-mode exposure. An effectively disabled server performs no server-specific
 identity, executable, credential-reference, or transport work. Independently
@@ -194,7 +199,7 @@ change the compiled extension catalog, root runtime check, or Bubblewrap binary.
 Service sockets and service-owned configuration remain build-selected. In broker mode, optional root-only rules in
 `config_dir/users.d/*.toml` and `config_dir/groups.d/*.toml` may provide matching account/group scoped-environment
 and administrator-selected model/execution/network/filesystem/tool patch, plus
-MCP server enablement. If no rules
+MCP server enablement and tool approval policies. If no rules
 match, the main configuration remains unchanged. Pi's
 internal model catalog is disabled. `PI_CODING_AGENT_DIR` may
 redirect user state but cannot redirect these administrative inputs. Missing,

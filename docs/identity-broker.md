@@ -120,7 +120,7 @@ For example, with Bash disabled and read requiring approval in the main policy:
 `/etc/pi-sandbox/groups.d/admin.toml`:
 
 ```toml
-version = 9
+version = 10
 group = "admin"
 
 [overrides.tools.bash]
@@ -131,7 +131,7 @@ session_grant = "offer"
 `/etc/pi-sandbox/groups.d/log-readers.toml`:
 
 ```toml
-version = 9
+version = 10
 group = "log-readers"
 
 [overrides.tools.read]
@@ -146,7 +146,7 @@ can grant the same kind of exception:
 `/etc/pi-sandbox/users.d/alice.toml`:
 
 ```toml
-version = 9
+version = 10
 user = "alice"
 
 [overrides.tools.write]
@@ -172,9 +172,10 @@ file; `overrides.execution.backend` accepts `bubblewrap` or `direct`;
 carry the optional [known read-only class](#known-read-only-bash-class). Tool
 names must belong to the exact active base policy, including selected compiled
 tools.
-MCP server overrides may change only `enabled` for servers defined in the main
-policy. Connection definitions, credential mappings, exposure defaults,
-per-server tool policies, and the code-mode switch remain main-policy-only.
+MCP server overrides may change `enabled`, `default_policy`, and ordered
+`tool_rules` for servers defined in the main policy. Connection definitions,
+credential mappings, exposure, timeouts, audit, and the code-mode switch remain
+main-policy-only. MCP approval policies contain only `mode` and `session_grant`.
 Per-user MCP credential values can use `environment.pi`, explicitly referenced
 by an administrator's server mappings; these values do not select servers or
 grant tool calls.
@@ -186,7 +187,7 @@ in the main `[mcp.servers]` table with `enabled = false`, then add a rule such a
 `groups.d/developers.toml`:
 
 ```toml
-version = 9
+version = 10
 group = "developers"
 
 [overrides.mcp.servers.docs]
@@ -194,8 +195,9 @@ enabled = true
 ```
 
 The `docs` server must already exist in the main policy. An override cannot add
-a server or supply connection, credential, exposure, timeout, or tool-policy
-fields. Each server entry requires exactly one boolean, `enabled`. When present,
+a server or supply connection, credential, exposure, timeout, or audit fields.
+Each server entry must provide at least one of `enabled`, `default_policy`, or
+a nonempty `tool_rules` array; omitted fields inherit as described below. When present,
 `overrides.mcp` requires a nonempty `servers` map with at most 32 entries; the
 combined matching map has the same limit. IDs follow the main configuration's
 `[a-z][a-z0-9_]{0,31}` grammar. Empty, malformed, duplicate, and unknown fields
@@ -206,7 +208,8 @@ whose default is false, and a matching `false` can disable a server whose
 default is true. When multiple matching rules specify the same server, `true`
 wins over `false`; a user rule has no priority over a group rule. Thus a false
 override cannot revoke a true from another matching rule. If no matching rule
-mentions the server, its main-policy default is inherited.
+specifies `enabled`, its main-policy default is inherited. A policy-only override
+does not enable a server.
 
 The application rejects unknown server IDs in the combined matching patch.
 The broker checks the structure of every rule, including unmatched rules, but
@@ -223,6 +226,73 @@ a saved `enabled = true` cannot enable an administratively disabled server.
 Restart Pi after changing administrative rules or group membership. This
 feature uses the Linux broker; macOS continues to use only the main policy.
 
+### MCP tool approval policies
+
+Use the same server-local default and ordered rule structure as the main policy,
+with complete `mode`/`session_grant` pairs and no `audit` field:
+
+```toml
+version = 10
+group = "developers"
+
+[overrides.mcp.servers.docs]
+enabled = true
+
+[overrides.mcp.servers.docs.default_policy]
+mode = "ask"
+session_grant = "offer"
+
+[[overrides.mcp.servers.docs.tool_rules]]
+match = "search_*"
+mode = "allow"
+session_grant = "never"
+```
+
+Omit `default_policy` to override only the named patterns, or omit `tool_rules`
+to apply a default to all tools. `enabled` is independent and optional. A policy
+requires both fields; `offer` is valid only with `ask`. Bash command classes,
+connection fields, and user-authored `policy_layers` are rejected.
+
+For each original tool name, resolve every matching file separately: use its
+first matching rule, otherwise its explicit default, otherwise no contribution.
+Join the resulting complete pairs with the same least-restrictive order used
+for ordinary tools. If any file contributes, that pair replaces the global
+invocation policy; if none contributes, inherit the global first-match/default
+policy. User and group files have equal precedence. File names and order do not
+change the result, but order within each file's `tool_rules` matters.
+
+An override default is an explicit policy for every tool not matched in that
+file, including newly discovered tools. It can broaden a restrictive global
+rule. For example, a file with default `allow` and `secret_* = deny`, combined
+with another file with default `ask`, yields `ask` for `secret_*` and `allow`
+elsewhere. The first file's default does not compete with its own matching rule.
+A restrictive user rule cannot revoke a permissive matching group rule.
+
+Audit always comes from the main policy's first matching rule or default for
+the original tool name. Overrides cannot suppress or enable audit. Direct and
+Code Mode calls use the same effective approval policy; session grants remain
+scoped to the original server/tool and catalog revision. Diagnostics identify
+an identity override and its global audit rule without disclosing selectors,
+filenames, or other accounts' rules. Changing policy requires a new Pi process.
+
+Patterns use the main policy's case-sensitive literal/`*` grammar, are at most
+128 UTF-8 bytes, and cannot contain whitespace, control characters, `?`,
+brackets, braces, or backslashes. Patterns must be unique within one file's
+server entry. Each file permits at most 256 rules per server and 1,024 total MCP
+rules, within 256 KiB of serialized MCP configuration. Identical complete policy
+layers from matching files are deduplicated; rule order inside a layer is never
+changed. The aggregate permits at most 256 layers and 256 rules per server,
+1,024 rules total, 32 servers, and 256 KiB of MCP data. The complete response is
+limited to 512 KiB including its newline and is checked before any bytes are
+written. Oversized rules or aggregates fail resolution; they are not truncated.
+
+The wire representation is deliberately different from authored TOML:
+`policy_layers` retains each matching file's ordered rules and optional default,
+without its identity or filename. Only the broker emits that representation.
+Upgrade the application and broker together for protocol 9 and update all
+preserved rule files to version 10; older versions are rejected. Main schema 13
+is unchanged.
+
 ### Combining matching rules
 
 All matching user and group rules participate equally. Combine their explicit
@@ -235,6 +305,7 @@ not compete in this comparison, and user rules do not apply last.
 | Bash known read-only class      | Join of present class policies, kept only if strictly more permissive than the combined Bash policy             |
 | Network mode                    | Most permissive wins: `none` < `local` < `host`                                                                 |
 | CWD writable                    | `true` wins over `false`                                                                                        |
+| MCP tool invocation policy      | Resolve first match/default per file, then join complete pairs; global audit remains unchanged                  |
 | MCP server enabled              | `true` wins over `false` for each explicitly overridden server                                                  |
 | Execution backend or model file | Different explicit values are a configuration error                                                             |
 | Scoped environment variable     | Different values for the same scope, extension, and variable are a configuration error                          |
@@ -271,10 +342,10 @@ size limits.
 
 A rule may give its own Bash policy a
 [known read-only class policy](configuration.md#known-read-only-bash-commands).
-Rule files use `version = 9`:
+Rule files use `version = 10`:
 
 ```toml
-version = 9
+version = 10
 group = "developers"
 
 [overrides.tools.bash]
@@ -304,7 +375,7 @@ Normalization never rejects. For example, a rule with Bash `allow` and another
 with Bash `deny` plus class `allow` combine to Bash `allow` with no class policy.
 
 The broker response carries the class in the same Bash entry, under
-protocol version 8, and omits it when absent:
+protocol version 9, and omits it when absent:
 
 ```json
 {
@@ -356,7 +427,7 @@ timeout fails startup rather than silently dropping group rules.
 
 The broker receives the compiled configuration directory as its executable
 argument and reads both protected rule directories for each connection. Its
-protocol is newline-delimited JSON version 8 with operation `resolve-identity`;
+protocol is newline-delimited JSON version 9 with operation `resolve-identity`;
 requests contain no claimed identity. It returns only the combined matching
 patch, not unrelated rule contents or annotations. Administrators can atomically
 replace files without restarting the socket.

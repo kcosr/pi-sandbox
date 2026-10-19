@@ -366,6 +366,141 @@ describe("managed MCP admission", () => {
   });
 });
 
+describe("MCP identity approval layers", () => {
+  it.each(["direct", "codemode"] as const)(
+    "preserves approval, global audit and revision-scoped grants with %s exposure",
+    async (exposure) => {
+      const submit = vi.fn(() => Promise.resolve());
+      const auditor = new ToolAuditor(
+        { submit, close: () => Promise.resolve() },
+        "/work",
+        "/home/test",
+      );
+      const server: McpServerConfig = {
+        ...config,
+        exposure,
+        toolRules: [{ match: "mutate_*", ...allow, audit: true }],
+        policyLayers: [{ toolRules: [{ match: "mutate_*", mode: "ask", sessionGrant: "offer" }] }],
+      };
+      const [resolved] = await resolveMcpServers({ servers: { docs: server } }, {}, () => {
+        throw new Error("HTTP policy resolution must not need an account lookup");
+      });
+      expect(resolved!.status).toBe("ready");
+      expect(resolved!.policy.policyLayers).toBe(server.policyLayers);
+      const { runtime, connection, policy } = setup(
+        resolved!.policy,
+        () => true,
+        undefined,
+        true,
+        auditor,
+      );
+      const first = item("mutate_first");
+      const second = item("mutate_second");
+      const plain = item("read_plain");
+      try {
+        const tools = runtime.adaptTools("docs", [first, second, plain], connection);
+        expect(tools.map((tool) => tool.exposure)).toEqual(
+          Array.from({ length: 3 }, () => (exposure === "codemode" ? "deferred" : "direct")),
+        );
+        expect(runtime.resolveSubject(mcpSubject("docs", first.tool.name))?.policy).toEqual({
+          mode: "ask",
+          sessionGrant: "offer",
+          audit: true,
+        });
+        await expect(invoke(tools[0]!)).rejects.toThrow("no_ui");
+        expect(first.execute).not.toHaveBeenCalled();
+        const select = vi.fn(() => Promise.resolve("Allow for session"));
+        await invoke(tools[0]!, "first", select);
+        await invoke(tools[0]!, "next");
+        expect(select).toHaveBeenCalledOnce();
+        expect(policy.hasSessionGrant(mcpSubject("docs", first.tool.name))).toBe(true);
+        await expect(invoke(tools[1]!)).rejects.toThrow("no_ui");
+        expect(second.execute).not.toHaveBeenCalled();
+        expect(submit).toHaveBeenCalledWith(
+          expect.objectContaining({
+            event: "tool_completed",
+            mcp_server: "docs",
+            mcp_tool: first.tool.name,
+            outcome: "success",
+          }),
+        );
+        expect(runtime.diagnostics("docs")).toContain("identity override (global audit: mutate_*)");
+        submit.mockClear();
+        await invoke(tools[2]!);
+        expect(plain.execute).toHaveBeenCalledOnce();
+        expect(submit).not.toHaveBeenCalled();
+
+        const fresh = item("mutate_new");
+        const expanded = runtime.adaptTools("docs", [first, second, plain, fresh], connection);
+        expect(policy.hasSessionGrant(mcpSubject("docs", first.tool.name))).toBe(true);
+        await expect(invoke(expanded[3]!)).rejects.toThrow("no_ui");
+        expect(fresh.execute).not.toHaveBeenCalled();
+        const changed = { ...first, tool: { ...first.tool, description: "new catalog revision" } };
+        const revised = runtime.adaptTools("docs", [changed, second, plain, fresh], connection);
+        expect(policy.hasSessionGrant(mcpSubject("docs", first.tool.name))).toBe(false);
+        await expect(invoke(tools[0]!)).rejects.toThrow("changed or unavailable");
+        await expect(invoke(revised[0]!)).rejects.toThrow("no_ui");
+        expect(first.execute).toHaveBeenCalledTimes(2);
+        await invoke(revised[0]!, "fresh approval", () => Promise.resolve("Allow once"));
+        expect(first.execute).toHaveBeenCalledTimes(3);
+      } finally {
+        await runtime.close();
+      }
+    },
+  );
+
+  it.each(["direct", "codemode"] as const)(
+    "enforces joined allow/deny/disabled policies at %s admission and dispatch",
+    async (exposure) => {
+      const { runtime, connection } = setup(
+        {
+          exposure,
+          policyLayers: [
+            {
+              defaultPolicy: { mode: "disabled", sessionGrant: "never" },
+              toolRules: [{ match: "read_*", mode: "deny", sessionGrant: "never" }],
+            },
+            { toolRules: [{ match: "read_public", mode: "allow", sessionGrant: "never" }] },
+          ],
+        },
+        () => true,
+        undefined,
+        true,
+      );
+      const publicTool = item("read_public");
+      const privateTool = item("read_private");
+      const hiddenTool = item("secret");
+      try {
+        const tools = runtime.adaptTools("docs", [publicTool, privateTool, hiddenTool], connection);
+        const admittedExposure = exposure === "codemode" ? "deferred" : "direct";
+        expect(tools.map((tool) => tool.exposure)).toEqual([
+          admittedExposure,
+          admittedExposure,
+          "hidden",
+        ]);
+        await invoke(tools[0]!);
+        expect(publicTool.execute).toHaveBeenCalledOnce();
+        const select = vi.fn(() => Promise.resolve("Allow once"));
+        for (const tool of tools.slice(1))
+          await expect(invoke(tool, "blocked", select)).rejects.toThrow("denied");
+        expect(select).not.toHaveBeenCalled();
+        expect(privateTool.execute).not.toHaveBeenCalled();
+        expect(hiddenTool.execute).not.toHaveBeenCalled();
+        const added = item("read_added");
+        const refreshed = runtime.adaptTools(
+          "docs",
+          [publicTool, privateTool, hiddenTool, added],
+          connection,
+        );
+        await expect(invoke(refreshed[3]!)).rejects.toThrow("denied");
+        expect(added.execute).not.toHaveBeenCalled();
+      } finally {
+        await runtime.close();
+      }
+    },
+  );
+});
+
 function factoryOptions(runtime: ManagedMcpRuntime): ManagedMcpOptions {
   let options!: ManagedMcpOptions;
   runtime.extension((value) => {
@@ -384,9 +519,28 @@ describe("MCP presentation preferences", () => {
         update: vi.fn(async () => {}),
       };
       const transportFactory = vi.fn();
+      const servers = await resolveMcpServers(
+        {
+          servers: {
+            docs: {
+              ...config,
+              enabled: false,
+              bearerTokenFromEnv: "MISSING_DISABLED_CREDENTIAL",
+              policyLayers: [
+                { defaultPolicy: { mode: "allow", sessionGrant: "never" }, toolRules: [] },
+              ],
+            },
+          },
+        },
+        {},
+        () => {
+          throw new Error("disabled server must not resolve identity");
+        },
+      );
+      expect(servers[0]!.status).toBe("disabled");
       const runtime = new ManagedMcpRuntime({
         cwd: "/work",
-        servers: [{ policy: { ...config, enabled: false }, status: "disabled" }],
+        servers,
         preferences,
         selected: () => true,
         autoEnableCodemode: true,

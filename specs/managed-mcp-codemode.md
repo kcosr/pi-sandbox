@@ -40,8 +40,8 @@ and implementation plan. The maintained subject documents and
    Embedded tool-result content is handled as data, not as a new capability.
 9. Server definitions, credential mappings, exposure defaults, timeouts, ordered
    tool policies, and code-mode availability belong to the main TOML. Linux
-   administrator user/group rules may override only enabled booleans for globally
-   defined MCP servers. Existing broker overrides also govern built-ins and
+   administrator user/group rules may override enabled booleans and invocation
+   policies for globally defined MCP servers; audit stays global. Existing broker overrides also govern built-ins and
    compiled extension tools, including calls from code mode.
 
 Non-goals include sandboxed local MCP, arbitrary JavaScript/Node execution on the
@@ -251,20 +251,19 @@ Existing broker `environment.pi` values can supply explicitly named credential
 references per account without adding a new broker scope. Disabling an MCP
 server does not remove independently configured values from Pi's environment.
 
-Broker protocol 8 and rule version 9 accept only the MCP override shape
-`overrides.mcp.servers.<id> = { enabled = <boolean> }`. Optional `mcp` requires a
-nonempty `servers` map, at most 32 entries per file and combined matching patch,
-using the main server-ID grammar. Every rule is structurally validated; server
-existence is checked against the loaded main policy only for matching overrides.
-The broker does not read the main inventory. Combine matching explicit booleans
-with true winning before overlaying defaults; user rules have no extra priority.
-A false replaces a true default only when no matching rule grants true.
-Definitions, credential mappings, exposure, timeouts, ordered tool policies,
-code-mode availability, and audit selection remain main-policy-only. Saved user
-preferences may disable an admitted server but cannot enable an effectively
-disabled server. Administrative changes require restart; macOS keeps main-policy-only
-admission. Main schema 13 and audit wire 2/record 3 are unchanged. See the
-[identity broker contract](../docs/identity-broker.md#mcp-server-enablement).
+Broker protocol 9 and rule version 10 accept optional server-local `enabled`,
+`default_policy`, and nonempty ordered `tool_rules` for globally defined servers.
+Each file resolves first match/default independently; complete pairs combine with
+least restrictive wins before replacing the global invocation pair. Omission
+inherits. Explicit enabled flags use true-wins independently of policy. Audit,
+connections, credential mappings, exposure, timeouts, and Code Mode availability
+remain main-policy-only. All authored files are structurally validated, including
+unmatched ones; the application rejects unknown matching server IDs. The broker
+emits bounded, deduplicated `policy_layers` rather than flattening ordered rules.
+Saved user preferences cannot enable an effectively disabled server. Policies
+are startup snapshots and apply equally to direct and Code Mode calls. Main
+schema 13 and audit wire 2/record 3 are unchanged. See the complete
+[identity broker contract](../docs/identity-broker.md#mcp-tool-approval-policies).
 
 ### Account macros
 
@@ -737,7 +736,7 @@ Required offline verification:
 - HTTP/stdio shape errors; unknown fields; missing policy; invalid credentials;
   disabled-server no-lookup behavior; header collisions/injection; absence of
   shell expansion; forged broker fields; rejection of code-mode and MCP
-  definition/tool-policy overrides. Verify enabled-only overrides, omission,
+  definition/audit overrides. Verify bounded approval layers and enabled overrides, omission,
   true-wins merging independent of user/group ordering, unknown matching IDs,
   unmatched structural validation, and effective code-mode exposure validation.
 - Accept HTTPS and literal-loopback HTTP for `localhost`, `127.0.0.1`, and

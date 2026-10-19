@@ -188,10 +188,10 @@ per socket connection. It obtains UID from Linux `SO_PEERCRED` and invokes the
 fixed `/usr/bin/getent` host NSS resolver to identify the account and its primary
 and supplementary groups. The compiled configuration directory is its process
 argument. It reads optional protected `users.d/*.toml` and `groups.d/*.toml`
-version-9 rules, selecting exactly one `user`/`uid` or `group`/`gid` per file. Filenames are
+version-10 rules, selecting exactly one `user`/`uid` or `group`/`gid` per file. Filenames are
 labels. Names and numeric selectors have identical precedence.
 
-The protocol uses newline-delimited JSON version 8 and operation
+The protocol uses newline-delimited JSON version 9 and operation
 `resolve-identity`, with no caller-claimed identity. The client keeps its write
 side open; the broker responds after reading the newline. Successful responses
 contain only one combined matching environment/override patch. Missing rule
@@ -207,15 +207,23 @@ key fail resolution. User rules have no extra precedence. Logging flags remain
 parent-only. Revalidate the complete effective configuration after the merge.
 Environment entries never select extensions, enable tools, or grant approval.
 
-The only MCP override shape is `overrides.mcp.servers.<id>.enabled`, a required
-boolean per server. Optional `mcp` requires a nonempty `servers` map; each file
-and the combined matching patch admit at most 32 IDs with the main server-ID
-grammar. Reject unknown fields, duplicate IDs, and invalid types. All rules,
-including unmatched ones, are structurally validated. The broker does not read
-the global server inventory; the application rejects unknown IDs in the matching
-patch. Preserve every global server field except enabled. Explicit booleans
-combine before overlaying the main default, so a false may replace a true
-default but cannot revoke another matching rule's true. Omission inherits.
+MCP authored overrides are server-local optional `enabled`, `default_policy`,
+and nonempty `tool_rules`; require at least one meaningful field. Approval pairs
+contain only `mode` and `session_grant`. Resolve each matching file's first rule
+or explicit default independently, then join present complete pairs with the
+ordinary tool ordering. If no layer contributes, inherit global policy; an explicit
+contribution replaces it. Global first-match/default audit remains unchanged.
+Policy-only entries do not imply enabled. Explicit booleans combine with true
+winning before replacing main defaults. User/group order has no priority.
+The broker emits separate, canonical deduplicated `policy_layers`, retaining
+within-file rule order and omitting selectors/filenames. Authored files cannot
+use that wire shape. Validate every file even if unmatched; reject unknown
+matching server IDs in the application. Admit 32 servers, 256 layers/server,
+256 rules/server, 1,024 rules total and 256 KiB MCP data; validate the complete
+512 KiB response including newline before writing. Keep connection definitions,
+credential mappings, exposure, timeouts, and audit main-policy-only. See the
+[identity broker contract](../docs/identity-broker.md#mcp-tool-approval-policies)
+for grammar, limits, ordering examples and the strict version-10/protocol-9 cutover.
 Revalidate enabled code-mode exposure against main-policy code-mode availability.
 Disabled servers skip their executable, identity, credential-reference, and
 transport work; independently configured scoped environment still applies.

@@ -944,7 +944,7 @@ default_policy = { mode = "ask", session_grant = "never", audit = true }`,
     );
     const broker = parseBrokerResponse(
       JSON.stringify({
-        version: 8,
+        version: 9,
         status: "ok",
         environment: { pi: { DOCS_TOKEN: "scoped-token" }, sandbox: {}, extensions: {} },
         overrides: { mcp: { servers: { docs: { enabled: true }, local: { enabled: false } } } },

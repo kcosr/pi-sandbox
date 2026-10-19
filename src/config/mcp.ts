@@ -5,6 +5,7 @@ import {
   isManagedEnvironmentName,
   validateAccountTemplate,
   validateMcpUrl,
+  isMcpToolPattern,
   type CodeModeConfig,
   type McpConfig,
   type McpServerConfig,
@@ -179,13 +180,7 @@ export function parseMcpConfig(value: unknown, codemode: CodeModeConfig | undefi
       rawRules.map((rawRule, index) => {
         const rulePath = `${path}.tool_rules[${index}]`;
         const rule = table(rawRule, rulePath);
-        if (
-          typeof rule.match !== "string" ||
-          rule.match.length === 0 ||
-          Buffer.byteLength(rule.match) > 128 ||
-          /[\p{Cc}\s?[\]{}\\]/u.test(rule.match) ||
-          patterns.has(rule.match)
-        )
+        if (!isMcpToolPattern(rule.match) || patterns.has(rule.match))
           throw new Error(
             `${rulePath}.match must be a unique nonempty literal/* pattern of at most 128 bytes`,
           );
