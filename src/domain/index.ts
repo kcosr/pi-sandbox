@@ -63,11 +63,16 @@ export type {
   CodeModeConfig,
   McpExposure,
   McpToolRule,
+  McpApprovalPolicy,
+  McpApprovalRule,
+  McpPolicyLayer,
+  McpServerOverride,
   McpHttpServerConfig,
   McpStdioServerConfig,
   McpServerConfig,
   McpConfig,
 } from "./mcp.js";
+export { isMcpToolPattern } from "./mcp.js";
 export {
   expandAccountValue,
   validateAccountTemplate,

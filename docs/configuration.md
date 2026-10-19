@@ -38,7 +38,7 @@ extension-specific scoped environment. The required `identity` table either
 disables user resolution or selects the fixed administrator broker. Broker mode
 may overlay a combined patch from `config_dir/users.d/*.toml` and
 `config_dir/groups.d/*.toml` for the caller and its primary/supplementary groups, including scoped environment, selected model file, execution
-backend, network mode, CWD write access, MCP server enablement, and any subset of
+backend, network mode, CWD write access, MCP server enablement and approval policies, and any subset of
 model-tool policies. If no rules match,
 the main configuration remains unchanged. See
 [user and group environment and overrides](identity-broker.md).
@@ -306,14 +306,14 @@ structurally but do not resolve their credential references or identity, check
 executables, connect, or start a process. Independently configured
 `environment.pi` values still apply to Pi.
 
-On Linux, administrator-owned [user/group rules](identity-broker.md#mcp-server-enablement)
-may override only a known server's `enabled` boolean. Matching explicit values
-combine with `true` winning, then replace the main-policy default; an omitted
-server inherits its default. A false rule can disable a true default but cannot
-revoke a true from another matching rule. Server definitions, credential mappings,
-exposure, timeouts, tool policies, and the code-mode switch stay in the main
-configuration. The effective enabled server must still satisfy the code-mode
-exposure dependency. Administrative changes take effect after restarting Pi.
+On Linux, administrator-owned [user/group rules](identity-broker.md#mcp-tool-approval-policies)
+may override a known server's `enabled`, `default_policy`, and ordered
+`tool_rules`. Explicit enabled flags combine with true winning before replacing
+the main default. Each file contributes its first matching approval rule or its
+explicit default; the most permissive complete pair wins. If no layer contributes, inherit the global invocation policy. Policy-only entries do not enable servers.
+Audit stays with the global matching rule/default. Connections, credential
+mappings, exposure, timeouts, and Code Mode availability remain main-policy-only.
+Administrative changes take effect after restarting Pi.
 
 ```toml
 [mcp.servers.docs]

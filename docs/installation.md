@@ -179,14 +179,25 @@ vendored so the broker builds offline:
 
 ```sh
 env -u NODE_ENV npm ci
-env -u NODE_ENV npm run verify:release
+env -u NODE_ENV npm run build:release
 ```
+
+`build:release` compiles and packages without running test suites. It still
+verifies pinned source hashes, configuration and distribution inputs, package
+layout, SBOM, manifests, checksums, version and installation metadata. It does
+not start operational sessions or require a running broker/audit service.
+Use `verify:release` with the same arguments when qualification is wanted: it
+runs the full repository suites, patched-Pi API/integration/theme tests and
+packaged-runtime smoke checks as well as the same build/package/integrity path.
+There is no test-skipping flag and no need to edit source to package a build.
+For example, `--pi-source-archive /path/to/pi-1.3.0-source.tar.gz` supplies the
+same checksum-verified source to either command.
 
 One strict TOML distribution manifest selects all extension manifests and the
 platform installation layouts. For example:
 
 ```sh
-env -u NODE_ENV npm run verify:release -- \
+env -u NODE_ENV npm run build:release -- \
   --distribution /path/to/company/pi-sandbox-distribution.toml
 ```
 
@@ -447,9 +458,11 @@ No default command timeout is imposed. Set the optional base-policy
 `execution.max_command_timeout_seconds` when an administrator maximum is needed.
 
 Broker users must update preserved `users.d` and `groups.d` files to
-`version = 9` and upgrade the broker and application together for protocol 8.
-Version-8 rules need only the version change; optional MCP overrides then use
-`overrides.mcp.servers.<id>.enabled` for servers defined in the main policy.
+`version = 10` and upgrade the broker and application together for protocol 9.
+Version-8/9 rules need only the version change. Optional MCP overrides then use
+server-local `enabled`, `default_policy`, and ordered `tool_rules`; invocation
+pairs omit `audit`, which stays global. See the
+[rule contract](identity-broker.md#mcp-tool-approval-policies).
 Rules older than version 8 must also remove
 `overrides.execution.process_lifetime` and an empty `[overrides.execution]`
 table if no backend override remains. The installer does not rewrite these
@@ -475,9 +488,9 @@ Model and installation paths remain absolute.
 
 When the optional identity broker is enabled, `users.d/*.toml` and `groups.d/*.toml` may overlay
 scoped environment and supply model, execution, network, filesystem, and complete
-tool-policy overrides, plus per-server MCP enablement, for the account and its
-primary/supplementary groups. MCP definitions and invocation policies remain in
-the main configuration. Matching
+tool-policy overrides, plus per-server MCP enablement and approval policies, for
+the account and its primary/supplementary groups. MCP definitions, credential
+mappings, timeouts, exposure and audit remain in the main configuration. Matching
 explicit permissions combine using least restrictive wins before overlaying defaults. Global/default values belong in the main
 `config.toml`; there is no separate defaults or aggregate users file. If no rules
 match, the main configuration remains unchanged. An

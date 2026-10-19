@@ -16,14 +16,19 @@ use host_identity::{Account, HostIdentityResolver};
 use serde::de::{MapAccess, Visitor};
 use serde::{Deserialize, Deserializer, Serialize};
 
-const PROTOCOL_VERSION: u32 = 8;
-const OVERRIDE_VERSION: u32 = 9;
+const PROTOCOL_VERSION: u32 = 9;
+const OVERRIDE_VERSION: u32 = 10;
 const MAX_OVERRIDE_FILES: usize = 256;
 const MAX_STORE_BYTES: usize = 4 * 1024 * 1024;
 const MAX_REQUEST_BYTES: usize = 1024;
 const MAX_OVERRIDE_FILE_BYTES: u64 = 1024 * 1024;
 const MAX_TOOL_OVERRIDES: usize = 256;
 const MAX_MCP_SERVER_OVERRIDES: usize = 32;
+const MAX_MCP_POLICY_LAYERS: usize = 256;
+const MAX_MCP_RULES_PER_SERVER: usize = 256;
+const MAX_MCP_RULES_TOTAL: usize = 1024;
+const MAX_MCP_BYTES: usize = 256 * 1024;
+const MAX_RESPONSE_BYTES: usize = 512 * 1024;
 const MAX_ENVIRONMENT_VARIABLE_NAME_BYTES: usize = 128;
 const MAX_ENVIRONMENT_VALUE_BYTES: usize = 8192;
 const MAX_ENVIRONMENT_VARIABLES_PER_SCOPE: usize = 128;
@@ -50,7 +55,7 @@ struct SuccessResponse<'a> {
     version: u32,
     status: &'static str,
     environment: &'a IdentityEnvironment,
-    overrides: &'a IdentityOverrides,
+    overrides: &'a IdentityOverrides<ResolvedMcpOverrides>,
 }
 
 #[derive(Debug, Serialize)]
@@ -62,7 +67,7 @@ struct ErrorResponse {
 
 #[derive(Debug, Default, Deserialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
-struct IdentityRecord {
+struct IdentityRecord<M = McpOverrides> {
     version: u32,
     uid: Option<u32>,
     user: Option<String>,
@@ -72,7 +77,7 @@ struct IdentityRecord {
     environment: IdentityEnvironment,
     comment: Option<String>,
     #[serde(default)]
-    overrides: IdentityOverrides,
+    overrides: IdentityOverrides<M>,
 }
 
 #[derive(Clone, Copy)]
@@ -81,7 +86,7 @@ enum RecordKind {
     Group,
 }
 
-impl IdentityRecord {
+impl<M: Default> IdentityRecord<M> {
     fn empty() -> Self {
         Self {
             version: OVERRIDE_VERSION,
@@ -206,7 +211,7 @@ impl<'de> Deserialize<'de> for ExtensionEnvironments {
 
 #[derive(Debug, Default, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
-struct IdentityOverrides {
+struct IdentityOverrides<M = McpOverrides> {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     models_file: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -216,7 +221,7 @@ struct IdentityOverrides {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     filesystem: Option<FilesystemConfig>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    mcp: Option<McpOverrides>,
+    mcp: Option<M>,
     #[serde(default, skip_serializing_if = "ToolOverrides::is_empty")]
     tools: ToolOverrides,
 }
@@ -230,7 +235,55 @@ struct McpOverrides {
 #[derive(Debug, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
 struct McpServerOverride {
-    enabled: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    enabled: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    default_policy: Option<McpApprovalPolicy>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    tool_rules: Option<Vec<McpToolRule>>,
+}
+
+/// Only invocation approval can change; audit and Bash command classes stay out.
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq, PartialOrd, Ord)]
+#[serde(deny_unknown_fields)]
+struct McpApprovalPolicy {
+    mode: PolicyMode,
+    session_grant: SessionGrantPolicy,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq, PartialOrd, Ord)]
+#[serde(deny_unknown_fields)]
+struct McpToolRule {
+    #[serde(rename = "match")]
+    pattern: String,
+    mode: PolicyMode,
+    session_grant: SessionGrantPolicy,
+}
+
+/// A file's default remains attached to its ordered rules until tool discovery.
+#[derive(Debug, Serialize, PartialEq, Eq, PartialOrd, Ord)]
+struct McpPolicyLayer {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    default_policy: Option<McpApprovalPolicy>,
+    tool_rules: Vec<McpToolRule>,
+}
+
+/// Wire types deliberately cannot deserialize authored administrator files.
+#[derive(Debug, Default, Serialize, PartialEq, Eq)]
+struct ResolvedMcpOverrides {
+    servers: ResolvedMcpServers,
+}
+
+#[derive(Debug, Default, Serialize, PartialEq, Eq)]
+#[serde(transparent)]
+struct ResolvedMcpServers(BTreeMap<String, ResolvedMcpServerOverride>);
+
+#[derive(Debug, Default, Serialize, PartialEq, Eq)]
+struct ResolvedMcpServerOverride {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    enabled: Option<bool>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    policy_layers: Vec<McpPolicyLayer>,
 }
 
 #[derive(Debug, Default, Serialize, PartialEq, Eq)]
@@ -248,7 +301,7 @@ impl<'de> Deserialize<'de> for McpServerOverrides {
             type Value = McpServerOverrides;
 
             fn expecting(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-                formatter.write_str("a map of unique MCP server enablement overrides")
+                formatter.write_str("a map of unique MCP server overrides")
             }
 
             fn visit_map<A>(self, mut map: A) -> Result<Self::Value, A::Error>
@@ -375,7 +428,7 @@ struct SubjectPolicy {
     known_read_only: Option<ClassPolicy>,
 }
 
-#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq, PartialOrd, Ord)]
 #[serde(rename_all = "lowercase")]
 enum PolicyMode {
     Allow,
@@ -476,15 +529,7 @@ fn serve_one(
         &mut resolver,
         deadline,
     ) {
-        Ok(user) => write_json_line(
-            output,
-            &SuccessResponse {
-                version: PROTOCOL_VERSION,
-                status: "ok",
-                environment: &user.environment,
-                overrides: &user.overrides,
-            },
-        ),
+        Ok(user) => write_success(output, &user),
         Err(LookupError::InvalidFile | LookupError::Io) => {
             write_error(output, "identity_store_unavailable")
         }
@@ -523,10 +568,70 @@ fn write_error(writer: &mut impl Write, code: &'static str) -> io::Result<()> {
     )
 }
 
+/// Build the complete bounded response before writing, including its newline.
+fn write_success(
+    writer: &mut impl Write,
+    user: &IdentityRecord<ResolvedMcpOverrides>,
+) -> io::Result<()> {
+    let response = SuccessResponse {
+        version: PROTOCOL_VERSION,
+        status: "ok",
+        environment: &user.environment,
+        overrides: &user.overrides,
+    };
+    match encode_json_line(&response) {
+        Ok(bytes) => {
+            writer.write_all(&bytes)?;
+            writer.flush()
+        }
+        Err(_) => write_error(writer, "identity_store_unavailable"),
+    }
+}
+
 fn write_json_line(writer: &mut impl Write, value: &impl Serialize) -> io::Result<()> {
-    serde_json::to_writer(&mut *writer, value).map_err(io::Error::other)?;
-    writer.write_all(b"\n")?;
+    let bytes = encode_json_line(value)?;
+    writer.write_all(&bytes)?;
     writer.flush()
+}
+
+fn encode_json_line(value: &impl Serialize) -> io::Result<Vec<u8>> {
+    let mut output = BoundedWriter {
+        inner: Vec::new(),
+        remaining: MAX_RESPONSE_BYTES - 1,
+    };
+    serde_json::to_writer(&mut output, value).map_err(io::Error::other)?;
+    output.inner.push(b'\n');
+    Ok(output.inner)
+}
+
+/// Also used with io::sink to bound serialized MCP bytes without allocating them.
+struct BoundedWriter<W> {
+    inner: W,
+    remaining: usize,
+}
+impl<W: Write> Write for BoundedWriter<W> {
+    fn write(&mut self, bytes: &[u8]) -> io::Result<usize> {
+        if bytes.len() > self.remaining {
+            return Err(io::Error::other("serialized policy exceeds limit"));
+        }
+        let written = self.inner.write(bytes)?;
+        self.remaining -= written;
+        Ok(written)
+    }
+    fn flush(&mut self) -> io::Result<()> {
+        self.inner.flush()
+    }
+}
+
+fn bounded_json(value: &impl Serialize, maximum: usize) -> bool {
+    serde_json::to_writer(
+        BoundedWriter {
+            inner: io::sink(),
+            remaining: maximum,
+        },
+        value,
+    )
+    .is_ok()
 }
 
 fn peer_uid(fd: RawFd) -> io::Result<u32> {
@@ -597,7 +702,7 @@ fn lookup_identity(
     owner: u32,
     resolver: &mut impl IdentityResolver,
     deadline: Instant,
-) -> Result<IdentityRecord, LookupError> {
+) -> Result<IdentityRecord<ResolvedMcpOverrides>, LookupError> {
     use std::os::fd::AsRawFd;
     let config_dir = match OpenOptions::new()
         .read(true)
@@ -666,7 +771,7 @@ fn resolve_records(
     uid: u32,
     resolver: &mut impl IdentityResolver,
     deadline: Instant,
-) -> Result<IdentityRecord, LookupError> {
+) -> Result<IdentityRecord<ResolvedMcpOverrides>, LookupError> {
     let needs_account = records
         .iter()
         .any(|r| r.user.is_some() || r.group.is_some() || r.gid.is_some());
@@ -723,6 +828,16 @@ fn resolve_records(
         return Err(LookupError::Io);
     }
     normalize_class_policies(&mut result.overrides.tools);
+    // Joining an explicit true can shorten the encoding of false. Check this
+    // non-monotone byte limit only after all matching records have combined.
+    if result
+        .overrides
+        .mcp
+        .as_ref()
+        .is_some_and(|mcp| !bounded_json(mcp, MAX_MCP_BYTES))
+    {
+        return Err(LookupError::InvalidFile);
+    }
     Ok(result)
 }
 
@@ -811,7 +926,10 @@ fn normalize_class_policies(tools: &mut ToolOverrides) {
         }
     }
 }
-fn merge_record(target: &mut IdentityRecord, incoming: IdentityRecord) -> Result<(), LookupError> {
+fn merge_record(
+    target: &mut IdentityRecord<ResolvedMcpOverrides>,
+    incoming: IdentityRecord,
+) -> Result<(), LookupError> {
     merge_environment(&mut target.environment.pi, incoming.environment.pi)?;
     merge_environment(
         &mut target.environment.sandbox,
@@ -846,14 +964,22 @@ fn merge_record(target: &mut IdentityRecord, incoming: IdentityRecord) -> Result
         old.filesystem = Some(filesystem);
     }
     if let Some(mcp) = new.mcp {
-        let current = old.mcp.get_or_insert_with(McpOverrides::default);
+        let current = old.mcp.get_or_insert_with(ResolvedMcpOverrides::default);
         for (name, policy) in mcp.servers.0 {
-            current
-                .servers
-                .0
-                .entry(name)
-                .and_modify(|existing| existing.enabled |= policy.enabled)
-                .or_insert(policy);
+            let server = current.servers.0.entry(name).or_default();
+            if let Some(enabled) = policy.enabled {
+                server.enabled = Some(server.enabled.unwrap_or(false) || enabled);
+            }
+            if policy.default_policy.is_some() || policy.tool_rules.is_some() {
+                let layer = McpPolicyLayer {
+                    default_policy: policy.default_policy,
+                    tool_rules: policy.tool_rules.unwrap_or_default(),
+                };
+                // Whole-layer deduplication is safe; merging individual patterns is not.
+                if let Err(position) = server.policy_layers.binary_search(&layer) {
+                    server.policy_layers.insert(position, layer);
+                }
+            }
         }
     }
     for (name, policy) in new.tools.0 {
@@ -945,7 +1071,7 @@ fn record_class_policies_exceed_main(tools: &ToolOverrides) -> bool {
     })
 }
 
-fn valid_overrides(overrides: &IdentityOverrides) -> bool {
+fn valid_overrides<M: ValidMcpOverrides>(overrides: &IdentityOverrides<M>) -> bool {
     overrides
         .models_file
         .as_deref()
@@ -954,11 +1080,7 @@ fn valid_overrides(overrides: &IdentityOverrides) -> bool {
             .execution
             .as_ref()
             .is_none_or(|execution| execution.backend.is_some())
-        && overrides.mcp.as_ref().is_none_or(|mcp| {
-            !mcp.servers.0.is_empty()
-                && mcp.servers.0.len() <= MAX_MCP_SERVER_OVERRIDES
-                && mcp.servers.0.keys().all(|name| valid_mcp_server_id(name))
-        })
+        && overrides.mcp.as_ref().is_none_or(ValidMcpOverrides::valid)
         && overrides.tools.len() <= MAX_TOOL_OVERRIDES
         && overrides.tools.iter().all(|(name, policy)| {
             valid_tool_name(name)
@@ -969,6 +1091,85 @@ fn valid_overrides(overrides: &IdentityOverrides) -> bool {
                         && (class.session_grant == SessionGrantPolicy::Never
                             || class.mode == ClassMode::Ask)
                 })
+        })
+}
+
+trait ValidMcpOverrides {
+    fn valid(&self) -> bool;
+}
+
+impl ValidMcpOverrides for McpOverrides {
+    fn valid(&self) -> bool {
+        let mut rules_total = 0;
+        !self.servers.0.is_empty()
+            && self.servers.0.len() <= MAX_MCP_SERVER_OVERRIDES
+            && self.servers.0.iter().all(|(name, server)| {
+                valid_mcp_server_id(name)
+                    && (server.enabled.is_some()
+                        || server.default_policy.is_some()
+                        || server.tool_rules.is_some())
+                    && server.default_policy.as_ref().is_none_or(valid_mcp_pair)
+                    && server.tool_rules.as_ref().is_none_or(|rules| {
+                        rules_total += rules.len();
+                        !rules.is_empty() && valid_mcp_rules(rules)
+                    })
+            })
+            && rules_total <= MAX_MCP_RULES_TOTAL
+            && bounded_json(self, MAX_MCP_BYTES)
+    }
+}
+
+impl ValidMcpOverrides for ResolvedMcpOverrides {
+    fn valid(&self) -> bool {
+        let mut rules_total = 0;
+        !self.servers.0.is_empty()
+            && self.servers.0.len() <= MAX_MCP_SERVER_OVERRIDES
+            && self.servers.0.iter().all(|(name, server)| {
+                let rules_count = server
+                    .policy_layers
+                    .iter()
+                    .map(|layer| layer.tool_rules.len())
+                    .sum::<usize>();
+                rules_total += rules_count;
+                valid_mcp_server_id(name)
+                    && (server.enabled.is_some() || !server.policy_layers.is_empty())
+                    && server.policy_layers.len() <= MAX_MCP_POLICY_LAYERS
+                    && rules_count <= MAX_MCP_RULES_PER_SERVER
+                    && server
+                        .policy_layers
+                        .windows(2)
+                        .all(|layers| layers[0] < layers[1])
+                    && server.policy_layers.iter().all(|layer| {
+                        (layer.default_policy.is_some() || !layer.tool_rules.is_empty())
+                            && layer.default_policy.as_ref().is_none_or(valid_mcp_pair)
+                            && valid_mcp_rules(&layer.tool_rules)
+                    })
+            })
+            && rules_total <= MAX_MCP_RULES_TOTAL
+    }
+}
+
+fn valid_mcp_pair(policy: &McpApprovalPolicy) -> bool {
+    policy.session_grant != SessionGrantPolicy::Offer || policy.mode == PolicyMode::Ask
+}
+
+fn valid_mcp_rules(rules: &[McpToolRule]) -> bool {
+    let mut patterns = BTreeSet::new();
+    rules.len() <= MAX_MCP_RULES_PER_SERVER
+        && rules.iter().all(|rule| {
+            valid_mcp_pattern(&rule.pattern)
+                && patterns.insert(&rule.pattern)
+                && (rule.session_grant != SessionGrantPolicy::Offer || rule.mode == PolicyMode::Ask)
+        })
+}
+
+fn valid_mcp_pattern(value: &str) -> bool {
+    !value.is_empty()
+        && value.len() <= 128
+        && value.chars().all(|character| {
+            !character.is_control()
+                && !character.is_whitespace()
+                && !matches!(character, '\u{feff}' | '?' | '[' | ']' | '{' | '}' | '\\')
         })
 }
 
@@ -1164,7 +1365,7 @@ mod tests {
     #[test]
     fn parses_a_strict_per_uid_override() {
         let source = br#"
-version = 9
+version = 10
 uid = 1000
 
 comment = "development account"
@@ -1255,7 +1456,7 @@ session_grant = "offer"
                     (RecordKind::Group, "group = \"admin\""),
                 ] {
                     let source = format!(
-                        "version = 9\n{selector}\n{}",
+                        "version = 10\n{selector}\n{}",
                         bash_rule(*main, Some(*class))
                     );
                     let parsed = parse_record(source.as_bytes(), kind);
@@ -1282,7 +1483,7 @@ session_grant = "offer"
             }
         }
         let inline = parse_user_for_test(
-            b"version = 9\nuid = 7\n[overrides.tools.bash]\nmode = \"deny\"\nsession_grant = \"never\"\nknown_read_only = { mode = \"allow\", session_grant = \"never\" }\n",
+            b"version = 10\nuid = 7\n[overrides.tools.bash]\nmode = \"deny\"\nsession_grant = \"never\"\nknown_read_only = { mode = \"allow\", session_grant = \"never\" }\n",
             7,
         )
         .unwrap();
@@ -1292,7 +1493,7 @@ session_grant = "offer"
         );
         let without = parse_user_for_test(
             format!(
-                "version = 9\nuid = 7\n{}",
+                "version = 10\nuid = 7\n{}",
                 bash_rule(("deny", "never"), None)
             )
             .as_bytes(),
@@ -1311,7 +1512,7 @@ session_grant = "offer"
             "[overrides.tools.{tool}.known_read_only]\nmode = \"allow\"\nsession_grant = \"never\"";
         for tool in ["read", "write", "git_clone", "bash_extra"] {
             let source = format!(
-                "version = 9\nuid = 7\n[overrides.tools.{tool}]\nmode = \"deny\"\nsession_grant = \"never\"\n{}\n",
+                "version = 10\nuid = 7\n[overrides.tools.{tool}]\nmode = \"deny\"\nsession_grant = \"never\"\n{}\n",
                 class.replace("{tool}", tool)
             );
             assert_eq!(
@@ -1326,7 +1527,7 @@ session_grant = "offer"
             "overrides.tools.bash.known_read_only.nested",
         ] {
             let source = format!(
-                "version = 9\nuid = 7\n[overrides.tools.bash]\nmode = \"deny\"\nsession_grant = \"never\"\n[{table}]\nmode = \"allow\"\nsession_grant = \"never\"\n"
+                "version = 10\nuid = 7\n[overrides.tools.bash]\nmode = \"deny\"\nsession_grant = \"never\"\n[{table}]\nmode = \"allow\"\nsession_grant = \"never\"\n"
             );
             assert_eq!(
                 parse_user_for_test(source.as_bytes(), 7),
@@ -1347,7 +1548,7 @@ session_grant = "offer"
             "mode = \"allow\"\nsession_grant = \"never\"\nversion = 1",
         ] {
             let source = format!(
-                "version = 9\nuid = 7\n[overrides.tools.bash]\nmode = \"deny\"\nsession_grant = \"never\"\n[overrides.tools.bash.known_read_only]\n{fields}\n"
+                "version = 10\nuid = 7\n[overrides.tools.bash]\nmode = \"deny\"\nsession_grant = \"never\"\n[overrides.tools.bash.known_read_only]\n{fields}\n"
             );
             assert_eq!(
                 parse_user_for_test(source.as_bytes(), 7),
@@ -1357,7 +1558,7 @@ session_grant = "offer"
         }
         for value in ["\"allow\"", "true", "[]"] {
             let source = format!(
-                "version = 9\nuid = 7\n[overrides.tools.bash]\nmode = \"deny\"\nsession_grant = \"never\"\nknown_read_only = {value}\n"
+                "version = 10\nuid = 7\n[overrides.tools.bash]\nmode = \"deny\"\nsession_grant = \"never\"\nknown_read_only = {value}\n"
             );
             assert_eq!(
                 parse_user_for_test(source.as_bytes(), 7),
@@ -1565,7 +1766,7 @@ session_grant = "offer"
         fs::write(
             &file,
             format!(
-                "version = 9\nuid = {uid}\n{}",
+                "version = 10\nuid = {uid}\n{}",
                 bash_rule(("deny", "never"), Some(("ask", "offer")))
             ),
         )
@@ -1574,7 +1775,7 @@ session_grant = "offer"
         let (mut client, mut server_input) = UnixStream::pair().expect("socket pair");
         let mut server_output = server_input.try_clone().expect("clone server socket");
         client
-            .write_all(b"{\"version\":8,\"operation\":\"resolve-identity\"}\n")
+            .write_all(b"{\"version\":9,\"operation\":\"resolve-identity\"}\n")
             .expect("write request");
         let server_fd = server_input.as_raw_fd();
         serve_one(&root, &mut server_input, &mut server_output, server_fd, uid)
@@ -1587,7 +1788,7 @@ session_grant = "offer"
         fs::remove_dir_all(root).unwrap();
         assert_eq!(
             response,
-            "{\"version\":8,\"status\":\"ok\",\"environment\":{\"pi\":{},\"sandbox\":{},\"extensions\":{}},\"overrides\":{\"tools\":{\"bash\":{\"mode\":\"deny\",\"session_grant\":\"never\",\"known_read_only\":{\"mode\":\"ask\",\"session_grant\":\"offer\"}}}}}\n"
+            "{\"version\":9,\"status\":\"ok\",\"environment\":{\"pi\":{},\"sandbox\":{},\"extensions\":{}},\"overrides\":{\"tools\":{\"bash\":{\"mode\":\"deny\",\"session_grant\":\"never\",\"known_read_only\":{\"mode\":\"ask\",\"session_grant\":\"offer\"}}}}}\n"
         );
     }
 
@@ -1597,7 +1798,7 @@ session_grant = "offer"
             "[overrides.execution]\nbackend = \"smolvm\"",
             "[overrides.smolvm]\nimage = \"/tmp/tools.smolmachine\"",
         ] {
-            let value = format!("version = 9\nuid = 7\n{fields}\n");
+            let value = format!("version = 10\nuid = 7\n{fields}\n");
             assert!(parse_user_for_test(value.as_bytes(), 7).is_err());
         }
     }
@@ -1605,7 +1806,7 @@ session_grant = "offer"
     #[test]
     fn parses_complete_filesystem_overrides_and_rejects_invalid_shapes() {
         assert_eq!(
-            parse_user_for_test(b"version = 9\nuid = 7\n", 7)
+            parse_user_for_test(b"version = 10\nuid = 7\n", 7)
                 .unwrap()
                 .overrides
                 .filesystem,
@@ -1613,7 +1814,7 @@ session_grant = "offer"
         );
         for cwd_writable in [true, false] {
             let source = format!(
-                "version = 9\nuid = 7\n[overrides.filesystem]\ncwd_writable = {cwd_writable}\n"
+                "version = 10\nuid = 7\n[overrides.filesystem]\ncwd_writable = {cwd_writable}\n"
             );
             let user = parse_user_for_test(source.as_bytes(), 7).unwrap();
             assert_eq!(
@@ -1630,7 +1831,7 @@ session_grant = "offer"
             "cwd_writable = true\nextra = true",
             "cwdWritable = true",
         ] {
-            let source = format!("version = 9\nuid = 7\n[overrides.filesystem]\n{fields}\n");
+            let source = format!("version = 10\nuid = 7\n[overrides.filesystem]\n{fields}\n");
             assert_eq!(
                 parse_user_for_test(source.as_bytes(), 7),
                 Err(LookupError::InvalidFile)
@@ -1675,7 +1876,7 @@ session_grant = "offer"
         ] {
             assert!(
                 parse_user_for_test(
-                    format!("version = 9\nuid = 7\n[overrides.execution]\n{fields}\n").as_bytes(),
+                    format!("version = 10\nuid = 7\n[overrides.execution]\n{fields}\n").as_bytes(),
                     7
                 )
                 .is_err()
@@ -1689,11 +1890,11 @@ session_grant = "offer"
             b"version = 4\nuid = 7\n",
             b"version = 7\nuid = 7\n",
             b"version = 8\nuid = 7\n",
-            b"version = 9\nuid = 8\n",
-            b"version = 9\nuid = 7\nextra = true\n",
-            b"version = 9\nuid = 7\n[overrides.tools.write]\nmode = \"allow\"\nsession_grant = \"offer\"\n",
-            b"version = 9\nuid = 7\n[overrides.execution]\nbackend = \"container\"\n",
-            b"version = 9\nuid = 7\n[overrides.network]\nmode = \"filtered\"\n",
+            b"version = 10\nuid = 8\n",
+            b"version = 10\nuid = 7\nextra = true\n",
+            b"version = 10\nuid = 7\n[overrides.tools.write]\nmode = \"allow\"\nsession_grant = \"offer\"\n",
+            b"version = 10\nuid = 7\n[overrides.execution]\nbackend = \"container\"\n",
+            b"version = 10\nuid = 7\n[overrides.network]\nmode = \"filtered\"\n",
         ];
         for source in cases {
             assert_eq!(
@@ -1706,7 +1907,7 @@ session_grant = "offer"
             "[overrides.audit]\nenabled = false\nfacility = \"local0\"",
             "[audit]\nenabled = false\nfacility = \"local0\"",
         ] {
-            let source = format!("version = 9\nuid = 7\n{fields}\n");
+            let source = format!("version = 10\nuid = 7\n{fields}\n");
             assert_eq!(
                 parse_user_for_test(source.as_bytes(), 7),
                 Err(LookupError::InvalidFile)
@@ -1721,7 +1922,7 @@ session_grant = "offer"
             (RecordKind::Group, "gid = 7"),
         ] {
             for table in ["sessions", "overrides.sessions"] {
-                let source = format!("version = 9\n{selector}\n[{table}]\nretention_days = 0\n");
+                let source = format!("version = 10\n{selector}\n[{table}]\nretention_days = 0\n");
                 assert!(matches!(
                     parse_record(source.as_bytes(), kind),
                     Err(LookupError::InvalidFile)
@@ -1747,7 +1948,7 @@ session_grant = "offer"
             ] {
                 for scope in ["pi", "sandbox", "extensions.service"] {
                     let source = format!(
-                        "version = 9\n{selector}\n[environment.{scope}]\nACCOUNT = {value:?}\n"
+                        "version = 10\n{selector}\n[environment.{scope}]\nACCOUNT = {value:?}\n"
                     );
                     assert!(parse_record(source.as_bytes(), kind).is_ok());
                 }
@@ -1769,7 +1970,7 @@ session_grant = "offer"
             ] {
                 for scope in ["pi", "sandbox", "extensions.service"] {
                     let source = format!(
-                        "version = 9\n{selector}\n[environment.{scope}]\nACCOUNT = {value:?}\n"
+                        "version = 10\n{selector}\n[environment.{scope}]\nACCOUNT = {value:?}\n"
                     );
                     assert!(matches!(
                         parse_record(source.as_bytes(), kind),
@@ -1788,7 +1989,7 @@ session_grant = "offer"
                 (RecordKind::Group, "group = \"admin\""),
             ] {
                 let source = format!(
-                    "version = 9\n{selector}\n[overrides.mcp.servers.docs]\nenabled = {enabled}\n"
+                    "version = 10\n{selector}\n[overrides.mcp.servers.docs]\nenabled = {enabled}\n"
                 );
                 let record = parse_record(source.as_bytes(), kind).unwrap();
                 assert_eq!(
@@ -1803,7 +2004,7 @@ session_grant = "offer"
     }
 
     #[test]
-    fn rejects_malformed_mcp_overrides_and_fields_outside_enablement() {
+    fn rejects_malformed_mcp_overrides_and_fields_outside_approval() {
         for body in [
             "[overrides]\nmcp = false",
             "[overrides.mcp]",
@@ -1834,7 +2035,7 @@ session_grant = "offer"
                 (RecordKind::User, "uid = 7"),
                 (RecordKind::Group, "gid = 7"),
             ] {
-                let source = format!("version = 9\n{selector}\n{body}\n");
+                let source = format!("version = 10\n{selector}\n{body}\n");
                 assert_eq!(
                     parse_record(source.as_bytes(), kind),
                     Err(LookupError::InvalidFile),
@@ -1860,8 +2061,9 @@ session_grant = "offer"
             "é".into(),
             "a".repeat(33),
         ] {
-            let source =
-                format!("version = 9\nuid = 7\n[overrides.mcp.servers.{name:?}]\nenabled = true\n");
+            let source = format!(
+                "version = 10\nuid = 7\n[overrides.mcp.servers.{name:?}]\nenabled = true\n"
+            );
             assert_eq!(
                 parse_user_for_test(source.as_bytes(), 7),
                 Err(LookupError::InvalidFile),
@@ -1870,13 +2072,13 @@ session_grant = "offer"
         }
         for name in ["a".to_owned(), "docs_2".into(), "a".repeat(32)] {
             let source =
-                format!("version = 9\nuid = 7\n[overrides.mcp.servers.{name}]\nenabled = true\n");
+                format!("version = 10\nuid = 7\n[overrides.mcp.servers.{name}]\nenabled = true\n");
             assert!(parse_user_for_test(source.as_bytes(), 7).is_ok());
         }
         let body = (0..MAX_MCP_SERVER_OVERRIDES)
             .map(|i| format!("[overrides.mcp.servers.server_{i}]\nenabled = false\n"))
             .collect::<String>();
-        let source = format!("version = 9\nuid = 7\n{body}");
+        let source = format!("version = 10\nuid = 7\n{body}");
         assert!(parse_user_for_test(source.as_bytes(), 7).is_ok());
         let extra = "[overrides.mcp.servers.extra]\nenabled = true\n";
         assert_eq!(
@@ -1939,7 +2141,7 @@ session_grant = "offer"
     }
 
     #[test]
-    fn serves_mcp_enablement_from_protected_rules_with_the_new_protocol() {
+    fn serves_mcp_policy_layers_from_protected_rules_with_the_new_protocol() {
         use std::fs;
         use std::os::unix::fs::PermissionsExt;
         let root = temporary_path();
@@ -1953,12 +2155,12 @@ session_grant = "offer"
         fs::write(
             &file,
             format!(
-                "version = 9\nuid = {uid}\n[overrides.mcp.servers.docs]\nenabled = true\n[overrides.mcp.servers.local]\nenabled = false\n"
+                "version = 10\nuid = {uid}\n[overrides.mcp.servers.docs]\nenabled = true\ndefault_policy = {{ mode = 'ask', session_grant = 'offer' }}\ntool_rules = [{{ match = 'search_*', mode = 'allow', session_grant = 'never' }}]\n[overrides.mcp.servers.local]\nenabled = false\n"
             ),
         )
         .unwrap();
         fs::set_permissions(&file, fs::Permissions::from_mode(0o600)).unwrap();
-        for version in [7, 8] {
+        for version in [8, 9] {
             let (mut client, mut server_input) = UnixStream::pair().expect("socket pair");
             let mut server_output = server_input.try_clone().expect("clone server socket");
             writeln!(
@@ -1974,18 +2176,21 @@ session_grant = "offer"
                 .expect("finish response");
             let mut response = String::new();
             client.read_to_string(&mut response).expect("read response");
-            let expected = if version == 8 {
+            let expected = if version == 9 {
                 serde_json::json!({
-                    "version": 8,
+                    "version": 9,
                     "status": "ok",
                     "environment": { "pi": {}, "sandbox": {}, "extensions": {} },
                     "overrides": { "mcp": { "servers": {
-                        "docs": { "enabled": true },
+                        "docs": { "enabled": true, "policy_layers": [{
+                            "default_policy": { "mode": "ask", "session_grant": "offer" },
+                            "tool_rules": [{ "match": "search_*", "mode": "allow", "session_grant": "never" }]
+                        }] },
                         "local": { "enabled": false }
                     } } }
                 })
             } else {
-                serde_json::json!({ "version": 8, "status": "error", "code": "protocol_error" })
+                serde_json::json!({ "version": 9, "status": "error", "code": "protocol_error" })
             };
             assert_eq!(
                 serde_json::from_str::<serde_json::Value>(&response).unwrap(),
@@ -1995,14 +2200,430 @@ session_grant = "offer"
         fs::remove_dir_all(root).unwrap();
     }
 
+    fn mcp_rule_body(server: &str, count: usize, prefix: &str) -> String {
+        let mut body = format!("[overrides.mcp.servers.{server}]\n");
+        for index in 0..count {
+            body.push_str(&format!(
+                "[[overrides.mcp.servers.{server}.tool_rules]]\nmatch = \"{prefix}{index:04}*\"\nmode = \"ask\"\nsession_grant = \"offer\"\n"
+            ));
+        }
+        body
+    }
+
+    #[test]
+    fn accepts_complete_mcp_approval_pairs_without_implicit_enablement() {
+        for (mode, grant) in [
+            ("disabled", "never"),
+            ("deny", "never"),
+            ("ask", "never"),
+            ("ask", "offer"),
+            ("allow", "never"),
+        ] {
+            for (kind, selector) in [
+                (RecordKind::User, "uid = 1000"),
+                (RecordKind::Group, "gid = 20"),
+            ] {
+                for fields in [
+                    format!("default_policy = {{ mode = {mode:?}, session_grant = {grant:?} }}"),
+                    format!(
+                        "tool_rules = [{{ match = \"search_*\", mode = {mode:?}, session_grant = {grant:?} }}]"
+                    ),
+                ] {
+                    let source = format!(
+                        "version = 10\n{selector}\n[overrides.mcp.servers.docs]\n{fields}\n"
+                    );
+                    let authored = parse_record(source.as_bytes(), kind).unwrap();
+                    let resolved = resolve(vec![authored]).unwrap();
+                    let server = &resolved.overrides.mcp.as_ref().unwrap().servers.0["docs"];
+                    assert_eq!(server.enabled, None);
+                    assert_eq!(server.policy_layers.len(), 1);
+                    let wire = serde_json::to_value(&resolved.overrides).unwrap();
+                    assert!(wire["mcp"]["servers"]["docs"].get("enabled").is_none());
+                    assert!(
+                        wire["mcp"]["servers"]["docs"]["policy_layers"][0]["tool_rules"].is_array()
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn rejects_partial_mcp_pairs_private_fields_and_authored_wire_shapes() {
+        for fields in [
+            "default_policy = {}",
+            "default_policy = { mode = \"ask\" }",
+            "default_policy = { session_grant = \"never\" }",
+            "default_policy = { mode = \"allow\", session_grant = \"offer\" }",
+            "default_policy = { mode = \"deny\", session_grant = \"offer\" }",
+            "default_policy = { mode = \"disabled\", session_grant = \"offer\" }",
+            "default_policy = { mode = \"ask\", session_grant = \"always\" }",
+            "default_policy = { mode = \"ask\", session_grant = \"never\", audit = true }",
+            "default_policy = { mode = \"ask\", session_grant = \"never\", known_read_only = { mode = \"allow\", session_grant = \"never\" } }",
+            "policy_layers = [{ tool_rules = [], default_policy = { mode = \"ask\", session_grant = \"never\" } }]",
+            "tool_rules = []",
+            "tool_rules = {}",
+            "tool_rules = [{ match = \"search_*\", mode = \"ask\" }]",
+            "tool_rules = [{ match = \"search_*\", session_grant = \"never\" }]",
+            "tool_rules = [{ mode = \"ask\", session_grant = \"never\" }]",
+            "tool_rules = [{ match = \"search_*\", mode = \"deny\", session_grant = \"offer\" }]",
+            "tool_rules = [{ match = \"search_*\", mode = \"ask\", session_grant = \"never\", audit = false }]",
+            "tool_rules = [{ match = \"search_*\", mode = \"ask\", session_grant = \"never\", known_read_only = {} }]",
+            "tool_rules = [{ match = \"search_*\", mode = \"ask\", session_grant = \"never\", filename = \"private.toml\" }]",
+            "tool_rules = [{ match = \"same\", mode = \"ask\", session_grant = \"never\" }, { match = \"same\", mode = \"allow\", session_grant = \"never\" }]",
+            "enabled = false\ntool_rules = []",
+            "enabled = true\nbearer_token_from_env = \"SECRET\"",
+            "enabled = true\ntimeout_ms = 1000",
+        ] {
+            for (kind, selector) in [
+                (RecordKind::User, "uid = 1000"),
+                (RecordKind::Group, "gid = 20"),
+            ] {
+                let source =
+                    format!("version = 10\n{selector}\n[overrides.mcp.servers.docs]\n{fields}\n");
+                assert_eq!(
+                    parse_record(source.as_bytes(), kind),
+                    Err(LookupError::InvalidFile),
+                    "{fields}"
+                );
+            }
+        }
+        assert_eq!(
+            parse_record(b"version = 9\nuid = 1000\n", RecordKind::User),
+            Err(LookupError::InvalidFile)
+        );
+    }
+
+    #[test]
+    fn mcp_patterns_match_the_main_policy_unicode_and_literal_grammar() {
+        for pattern in [
+            "search_*",
+            "*",
+            "a**b",
+            "é*",
+            "literal.+()^$|",
+            "a\"b",
+            "\u{200b}",
+        ] {
+            assert!(valid_mcp_pattern(pattern), "{pattern:?}");
+        }
+        for pattern in [
+            "", "?", "a[b", "a]b", "{a", "a}", "a\\b", "a b", "a\tb", "a\nb", "\0", "\u{7f}",
+            "\u{85}", "\u{a0}", "\u{1680}", "\u{2028}", "\u{2029}", "\u{202f}", "\u{205f}",
+            "\u{3000}", "\u{feff}",
+        ] {
+            assert!(!valid_mcp_pattern(pattern), "{pattern:?}");
+        }
+        assert!(valid_mcp_pattern(&"a".repeat(128)));
+        assert!(!valid_mcp_pattern(&"a".repeat(129)));
+        assert!(valid_mcp_pattern(&"é".repeat(64)));
+        assert!(!valid_mcp_pattern(&"é".repeat(65)));
+        for character in ['\u{feff}', '?', '[', ']', '{', '}', '\\'] {
+            let source = format!(
+                "version = 10\nuid = 1000\n[overrides.mcp.servers.docs]\ntool_rules = [{{ match = '{}', mode = 'allow', session_grant = 'never' }}]",
+                character
+            );
+            assert_eq!(
+                parse_record(source.as_bytes(), RecordKind::User),
+                Err(LookupError::InvalidFile)
+            );
+        }
+    }
+
+    #[test]
+    fn mcp_layers_are_order_independent_but_keep_each_files_order_and_default() {
+        let broad = "[overrides.mcp.servers.docs]\ndefault_policy = { mode = 'allow', session_grant = 'never' }\ntool_rules = [{ match = 'secret_*', mode = 'deny', session_grant = 'never' }, { match = '*', mode = 'ask', session_grant = 'offer' }]";
+        let fallback = "[overrides.mcp.servers.docs]\ndefault_policy = { mode = 'ask', session_grant = 'never' }";
+        let only_rules = "[overrides.mcp.servers.docs]\ntool_rules = [{ match = 'search_*', mode = 'allow', session_grant = 'never' }]";
+        let layers = [broad, fallback, only_rules];
+        let mut expected = None;
+        for order in [
+            [0, 1, 2],
+            [0, 2, 1],
+            [1, 0, 2],
+            [1, 2, 0],
+            [2, 0, 1],
+            [2, 1, 0],
+        ] {
+            let mut records = order
+                .into_iter()
+                .map(|index| record("gid = 20", layers[index]))
+                .collect::<Vec<_>>();
+            records.push(record("uid = 1000", broad)); // exact duplicate from another selector
+            records.push(record(
+                "uid = 1000",
+                "[overrides.mcp.servers.docs]\nenabled = false",
+            ));
+            records.push(record(
+                "uid = 999",
+                "[overrides.mcp.servers.docs]\nenabled = true",
+            ));
+            let resolved = resolve(records).unwrap();
+            let server = &resolved.overrides.mcp.as_ref().unwrap().servers.0["docs"];
+            assert_eq!(server.enabled, Some(false));
+            assert_eq!(server.policy_layers.len(), 3);
+            let original = server
+                .policy_layers
+                .iter()
+                .find(|layer| layer.tool_rules.len() == 2)
+                .unwrap();
+            assert_eq!(original.tool_rules[0].pattern, "secret_*");
+            assert_eq!(original.tool_rules[1].pattern, "*");
+            assert_eq!(
+                original.default_policy.as_ref().unwrap().mode,
+                PolicyMode::Allow
+            );
+            let encoded = serde_json::to_string(&resolved.overrides).unwrap();
+            for private in ["uid", "gid", "user", "group", "comment", "filename", "path"] {
+                assert!(!encoded.contains(&format!("\"{private}\"")));
+            }
+            if let Some(expected) = &expected {
+                assert_eq!(&encoded, expected);
+            } else {
+                expected = Some(encoded);
+            }
+        }
+        // Reordering one file is semantically significant, so it must not deduplicate.
+        let reordered = broad.replace("{ match = 'secret_*', mode = 'deny', session_grant = 'never' }, { match = '*', mode = 'ask', session_grant = 'offer' }", "{ match = '*', mode = 'ask', session_grant = 'offer' }, { match = 'secret_*', mode = 'deny', session_grant = 'never' }");
+        let resolved = resolve(vec![
+            record("uid = 1000", broad),
+            record("gid = 20", &reordered),
+        ])
+        .unwrap();
+        assert_eq!(
+            resolved.overrides.mcp.unwrap().servers.0["docs"]
+                .policy_layers
+                .len(),
+            2
+        );
+    }
+
+    #[test]
+    fn mcp_limits_apply_per_file_and_after_whole_layer_deduplication() {
+        let full = mcp_rule_body("docs", MAX_MCP_RULES_PER_SERVER, "rule");
+        let source = format!(
+            "version = 10\nuid = 1000\n{}",
+            mcp_rule_body("docs", MAX_MCP_RULES_PER_SERVER + 1, "rule")
+        );
+        assert_eq!(
+            parse_record(source.as_bytes(), RecordKind::User),
+            Err(LookupError::InvalidFile)
+        );
+        let deduplicated =
+            resolve(vec![record("uid = 1000", &full), record("gid = 20", &full)]).unwrap();
+        assert_eq!(
+            deduplicated.overrides.mcp.unwrap().servers.0["docs"]
+                .policy_layers
+                .len(),
+            1
+        );
+        assert_eq!(
+            resolve(vec![
+                record("uid = 1000", &full),
+                record("gid = 20", &mcp_rule_body("docs", 1, "extra"))
+            ]),
+            Err(LookupError::InvalidFile)
+        );
+        let records = (0..MAX_MCP_RULES_PER_SERVER)
+            .map(|index| {
+                record(
+                    "uid = 1000",
+                    &mcp_rule_body("docs", 1, &format!("r{index}_")),
+                )
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(
+            resolve(records).unwrap().overrides.mcp.unwrap().servers.0["docs"]
+                .policy_layers
+                .len(),
+            MAX_MCP_POLICY_LAYERS
+        );
+        let all = (0..4)
+            .map(|index| mcp_rule_body(&format!("server{index}"), MAX_MCP_RULES_PER_SERVER, "rule"))
+            .collect::<String>();
+        assert!(resolve(vec![record("uid = 1000", &all)]).is_ok());
+        let extra = mcp_rule_body("extra", 1, "rule");
+        assert_eq!(
+            resolve(vec![record("uid = 1000", &all), record("gid = 20", &extra)]),
+            Err(LookupError::InvalidFile)
+        );
+        let source = format!("version = 10\nuid = 1000\n{all}{extra}");
+        assert_eq!(
+            parse_record(source.as_bytes(), RecordKind::User),
+            Err(LookupError::InvalidFile)
+        );
+    }
+
+    #[test]
+    fn mcp_json_budget_counts_escaping_instead_of_source_character_count() {
+        let mut servers = BTreeMap::new();
+        for server in 0..4 {
+            let rules = (0..256)
+                .map(|index| McpToolRule {
+                    pattern: format!("{index:04}{}", "\"".repeat(124)),
+                    mode: PolicyMode::Ask,
+                    session_grant: SessionGrantPolicy::Never,
+                })
+                .collect::<Vec<_>>();
+            assert!(valid_mcp_rules(&rules));
+            servers.insert(
+                format!("server{server}"),
+                McpServerOverride {
+                    enabled: None,
+                    default_policy: None,
+                    tool_rules: Some(rules),
+                },
+            );
+        }
+        let authored = McpOverrides {
+            servers: McpServerOverrides(servers),
+        };
+        assert!(serde_json::to_vec(&authored).unwrap().len() > MAX_MCP_BYTES);
+        assert!(!authored.valid());
+        let two_servers = authored.servers.0.into_iter().take(2).collect();
+        let authored = McpOverrides {
+            servers: McpServerOverrides(two_servers),
+        };
+        assert!(authored.valid());
+        let bytes = serde_json::to_vec(&authored).unwrap();
+        assert!(bounded_json(&authored, bytes.len()));
+        assert!(!bounded_json(&authored, bytes.len() - 1));
+    }
+
+    #[test]
+    fn final_mcp_byte_budget_does_not_make_boolean_join_order_dependent() {
+        let records = |mut quotes: usize| {
+            (0..4).map(|server| {
+                let mut source = format!("version = 10\nuid = 1000\n[overrides.mcp.servers.server{server}]\n");
+                if server == 0 {
+                    source.push_str("enabled = false\n");
+                }
+                for index in 0..256 {
+                    let count = quotes.min(123);
+                    quotes -= count;
+                    let pattern = serde_json::to_string(&format!("r{index:04}{}{}", "\"".repeat(count), "a".repeat(123-count))).unwrap();
+                    source.push_str(&format!("[[overrides.mcp.servers.server{server}.tool_rules]]\nmatch = {pattern}\nmode = 'ask'\nsession_grant = 'never'\n"));
+                }
+                parse_record(source.as_bytes(), RecordKind::User).unwrap()
+            }).collect::<Vec<_>>()
+        };
+        let baseline = resolve(records(0)).unwrap();
+        let size = serde_json::to_vec(baseline.overrides.mcp.as_ref().unwrap())
+            .unwrap()
+            .len();
+        let quote_count = MAX_MCP_BYTES + 1 - size;
+        assert_eq!(resolve(records(quote_count)), Err(LookupError::InvalidFile));
+        let mut expected = None;
+        for first in [false, true] {
+            let mut inputs = records(quote_count);
+            let enabled = record(
+                "gid = 20",
+                "[overrides.mcp.servers.server0]\nenabled = true",
+            );
+            inputs.insert(if first { 0 } else { inputs.len() }, enabled);
+            let result = resolve(inputs).unwrap();
+            let encoded = serde_json::to_vec(result.overrides.mcp.as_ref().unwrap()).unwrap();
+            assert_eq!(encoded.len(), MAX_MCP_BYTES);
+            if let Some(expected) = &expected {
+                assert_eq!(&encoded, expected);
+            } else {
+                expected = Some(encoded);
+            }
+        }
+    }
+
+    #[test]
+    fn response_limit_includes_newline_and_never_emits_partial_success() {
+        let exact = "x".repeat(MAX_RESPONSE_BYTES - 3); // quotes plus newline
+        assert_eq!(encode_json_line(&exact).unwrap().len(), MAX_RESPONSE_BYTES);
+        assert!(encode_json_line(&(exact + "x")).is_err());
+        let mut output = b"unchanged".to_vec();
+        assert!(write_json_line(&mut output, &"x".repeat(MAX_RESPONSE_BYTES)).is_err());
+        assert_eq!(output, b"unchanged");
+        let mut user = IdentityRecord::<ResolvedMcpOverrides>::empty();
+        user.environment
+            .pi
+            .0
+            .insert("LARGE".into(), "\u{1}".repeat(MAX_RESPONSE_BYTES / 6));
+        let mut output = Vec::new();
+        write_success(&mut output, &user).unwrap();
+        assert_eq!(
+            serde_json::from_slice::<serde_json::Value>(&output).unwrap(),
+            serde_json::json!({"version": 9, "status": "error", "code": "identity_store_unavailable"})
+        );
+        assert_eq!(output.last(), Some(&b'\n'));
+    }
+
+    #[test]
+    fn protected_rules_that_exceed_the_wire_budget_return_only_a_small_error() {
+        use std::fs;
+        use std::os::unix::fs::PermissionsExt;
+        let uid = unsafe { libc::geteuid() };
+        let mut source = format!("version = 10\nuid = {uid}\n[environment.pi]\n");
+        let escaped = serde_json::to_string(&"\u{1}".repeat(8180)).unwrap();
+        for index in 0..8 {
+            source.push_str(&format!("VALUE{index} = {escaped}\n"));
+        }
+        for server in 0..2 {
+            source.push_str(&format!("[overrides.mcp.servers.server{server}]\n"));
+            for index in 0..256 {
+                let pattern =
+                    serde_json::to_string(&format!("{index:04}{}", "\"".repeat(124))).unwrap();
+                source.push_str(&format!("[[overrides.mcp.servers.server{server}.tool_rules]]\nmatch = {pattern}\nmode = 'ask'\nsession_grant = 'never'\n"));
+            }
+        }
+        assert!(source.len() < MAX_OVERRIDE_FILE_BYTES as usize);
+        let record = parse_record(source.as_bytes(), RecordKind::User).unwrap();
+        assert!(valid_environment(&record.environment));
+        assert!(record.overrides.mcp.as_ref().unwrap().valid());
+        let resolved = resolve_records(
+            vec![record],
+            uid,
+            &mut FakeResolver::default(),
+            Instant::now() + Duration::from_secs(1),
+        )
+        .unwrap();
+        let bytes = serde_json::to_vec(&SuccessResponse {
+            version: PROTOCOL_VERSION,
+            status: "ok",
+            environment: &resolved.environment,
+            overrides: &resolved.overrides,
+        })
+        .unwrap();
+        assert!(bytes.len() + 1 > MAX_RESPONSE_BYTES);
+        let root = temporary_path();
+        let users = root.join("users.d");
+        fs::create_dir_all(&users).unwrap();
+        for directory in [&root, &users] {
+            fs::set_permissions(directory, fs::Permissions::from_mode(0o755)).unwrap();
+        }
+        let file = users.join("large.toml");
+        fs::write(&file, source).unwrap();
+        fs::set_permissions(&file, fs::Permissions::from_mode(0o600)).unwrap();
+        let (mut client, mut server_input) = UnixStream::pair().unwrap();
+        let mut server_output = server_input.try_clone().unwrap();
+        client
+            .write_all(b"{\"version\":9,\"operation\":\"resolve-identity\"}\n")
+            .unwrap();
+        let fd = server_input.as_raw_fd();
+        serve_one(&root, &mut server_input, &mut server_output, fd, uid).unwrap();
+        server_output.shutdown(Shutdown::Write).unwrap();
+        let mut response = String::new();
+        client.read_to_string(&mut response).unwrap();
+        assert_eq!(
+            response,
+            "{\"version\":9,\"status\":\"error\",\"code\":\"identity_store_unavailable\"}\n"
+        );
+        fs::remove_dir_all(root).unwrap();
+    }
+
     #[test]
     fn rejects_invalid_and_oversized_environment_values() {
         let cases: &[&[u8]] = &[
-            b"version = 9\nuid = 7\n[environment.pi]\nBad-Name = \"x\"\n",
-            b"version = 9\nuid = 7\n[environment.pi]\nPI_SANDBOX_SECRET = \"x\"\n",
-            b"version = 9\nuid = 7\n[environment.pi]\nLD_PRELOAD = \"x\"\n",
-            b"version = 9\nuid = 7\n[environment.sandbox]\nHOME = \"/tmp\"\n",
-            b"version = 9\nuid = 7\n[environment.extensions.Bad_ID]\nTOKEN = \"x\"\n",
+            b"version = 10\nuid = 7\n[environment.pi]\nBad-Name = \"x\"\n",
+            b"version = 10\nuid = 7\n[environment.pi]\nPI_SANDBOX_SECRET = \"x\"\n",
+            b"version = 10\nuid = 7\n[environment.pi]\nLD_PRELOAD = \"x\"\n",
+            b"version = 10\nuid = 7\n[environment.sandbox]\nHOME = \"/tmp\"\n",
+            b"version = 10\nuid = 7\n[environment.extensions.Bad_ID]\nTOKEN = \"x\"\n",
         ];
         for source in cases {
             assert_eq!(
@@ -2011,7 +2632,7 @@ session_grant = "offer"
             );
         }
 
-        let mut too_many = String::from("version = 9\nuid = 7\n[environment.pi]\n");
+        let mut too_many = String::from("version = 10\nuid = 7\n[environment.pi]\n");
         for index in 0..=MAX_ENVIRONMENT_VARIABLES_PER_SCOPE {
             too_many.push_str(&format!("VARIABLE_{index} = \"x\"\n"));
         }
@@ -2021,14 +2642,14 @@ session_grant = "offer"
         );
 
         let oversized_name = format!(
-            "version = 9\nuid = 7\n[environment.pi]\n{} = \"x\"\n",
+            "version = 10\nuid = 7\n[environment.pi]\n{} = \"x\"\n",
             format!("A{}", "A".repeat(MAX_ENVIRONMENT_VARIABLE_NAME_BYTES))
         );
         let oversized_value = format!(
-            "version = 9\nuid = 7\n[environment.pi]\nTOKEN = \"{}\"\n",
+            "version = 10\nuid = 7\n[environment.pi]\nTOKEN = \"{}\"\n",
             "x".repeat(MAX_ENVIRONMENT_VALUE_BYTES + 1)
         );
-        let mut too_many_extensions = String::from("version = 9\nuid = 7\n");
+        let mut too_many_extensions = String::from("version = 10\nuid = 7\n");
         for index in 0..=MAX_EXTENSION_ENVIRONMENTS {
             too_many_extensions.push_str(&format!(
                 "[environment.extensions.extension-{index}]\nTOKEN = \"x\"\n"
@@ -2050,7 +2671,7 @@ session_grant = "offer"
             "/etc/pi-sandbox//models.json",
             "/etc/pi-sandbox/models.json/",
         ] {
-            let source = format!("version = 9\nuid = 7\n[overrides]\nmodels_file = {path:?}\n");
+            let source = format!("version = 10\nuid = 7\n[overrides]\nmodels_file = {path:?}\n");
             assert_eq!(
                 parse_user_for_test(source.as_bytes(), 7),
                 Err(LookupError::InvalidFile)
@@ -2064,7 +2685,7 @@ session_grant = "offer"
         let (mut client, mut server_input) = UnixStream::pair().expect("socket pair");
         let mut server_output = server_input.try_clone().expect("clone server socket");
         client
-            .write_all(b"{\"version\":8,\"operation\":\"resolve-identity\"}\n")
+            .write_all(b"{\"version\":9,\"operation\":\"resolve-identity\"}\n")
             .expect("write request");
         let server_fd = server_input.as_raw_fd();
         serve_one(
@@ -2082,13 +2703,13 @@ session_grant = "offer"
         client.read_to_string(&mut response).expect("read response");
         assert_eq!(
             response,
-            "{\"version\":8,\"status\":\"ok\",\"environment\":{\"pi\":{},\"sandbox\":{},\"extensions\":{}},\"overrides\":{}}\n"
+            "{\"version\":9,\"status\":\"ok\",\"environment\":{\"pi\":{},\"sandbox\":{},\"extensions\":{}},\"overrides\":{}}\n"
         );
     }
 
     #[test]
     fn requires_a_bounded_newline_delimited_request() {
-        let request = b"{\"version\":8,\"operation\":\"resolve-identity\"}";
+        let request = b"{\"version\":9,\"operation\":\"resolve-identity\"}";
         assert!(read_request(&mut io::Cursor::new(request)).is_err());
         let mut oversized = vec![b' '; MAX_REQUEST_BYTES + 1];
         oversized.push(b'\n');
@@ -2140,9 +2761,11 @@ session_grant = "offer"
         } else {
             RecordKind::Group
         };
-        parse_record(format!("version = 9\n{selector}\n{body}").as_bytes(), kind).unwrap()
+        parse_record(format!("version = 10\n{selector}\n{body}").as_bytes(), kind).unwrap()
     }
-    fn resolve(records: Vec<IdentityRecord>) -> Result<IdentityRecord, LookupError> {
+    fn resolve(
+        records: Vec<IdentityRecord>,
+    ) -> Result<IdentityRecord<ResolvedMcpOverrides>, LookupError> {
         resolve_records(
             records,
             1000,
@@ -2163,14 +2786,14 @@ session_grant = "offer"
         ] {
             assert_eq!(
                 parse_record(
-                    format!("version = 9\n{selector}").as_bytes(),
+                    format!("version = 10\n{selector}").as_bytes(),
                     RecordKind::User
                 ),
                 Err(LookupError::InvalidFile)
             );
         }
-        assert!(parse_record(b"version = 9\ngroup = \"admin\"", RecordKind::Group).is_ok());
-        assert!(parse_record(b"version = 9\ngid = 20", RecordKind::Group).is_ok());
+        assert!(parse_record(b"version = 10\ngroup = \"admin\"", RecordKind::Group).is_ok());
+        assert!(parse_record(b"version = 10\ngid = 20", RecordKind::Group).is_ok());
     }
     #[test]
     fn matches_user_and_primary_and_supplementary_groups_additively() {
@@ -2335,7 +2958,7 @@ session_grant = "offer"
         let file = users.join("arbitrary-label.toml");
         fs::write(
             &file,
-            "version = 9\nuid = 1000\n[overrides.network]\nmode = \"host\"",
+            "version = 10\nuid = 1000\n[overrides.network]\nmode = \"host\"",
         )
         .unwrap();
         fs::set_permissions(&file, fs::Permissions::from_mode(0o600)).unwrap();
@@ -2359,17 +2982,23 @@ session_grant = "offer"
         symlink(&file, &link).unwrap();
         assert_eq!(lookup(), Err(LookupError::Io));
         fs::remove_file(&link).unwrap();
-        fs::write(&file, "version = 9\nuid = 999\nunknown = true").unwrap();
+        fs::write(&file, "version = 10\nuid = 999\nunknown = true").unwrap();
         assert_eq!(lookup(), Err(LookupError::InvalidFile));
         fs::write(
             &file,
-            "version = 9\nuid = 999\n[overrides.mcp.servers.docs]\nenabled = \"false\"",
+            "version = 10\nuid = 999\n[overrides.mcp.servers.docs]\nenabled = \"false\"",
         )
         .unwrap();
         assert_eq!(lookup(), Err(LookupError::InvalidFile));
         fs::write(
             &file,
-            "version = 9\nuid = 999\n[overrides.mcp.servers.unknown_to_base]\nenabled = false",
+            "version = 10\nuid = 999\n[overrides.mcp.servers.docs]\ndefault_policy = { mode = 'allow', session_grant = 'offer' }",
+        )
+        .unwrap();
+        assert!(lookup().is_err());
+        fs::write(
+            &file,
+            "version = 10\nuid = 999\n[overrides.mcp.servers.unknown_to_base]\nenabled = false",
         )
         .unwrap();
         assert!(lookup().unwrap().overrides.mcp.is_none());
@@ -2403,7 +3032,7 @@ session_grant = "offer"
         fs::set_permissions(&groups, fs::Permissions::from_mode(0o755)).unwrap();
         for i in 0..=MAX_OVERRIDE_FILES {
             let file = groups.join(format!("{i}.toml"));
-            fs::write(&file, "version = 9\ngid = 20").unwrap();
+            fs::write(&file, "version = 10\ngid = 20").unwrap();
             fs::set_permissions(&file, fs::Permissions::from_mode(0o600)).unwrap();
         }
         assert_eq!(lookup(), Err(LookupError::InvalidFile));
@@ -2414,7 +3043,7 @@ session_grant = "offer"
             fs::write(
                 &file,
                 format!(
-                    "version = 9\ngid = 20\n#{}",
+                    "version = 10\ngid = 20\n#{}",
                     "x".repeat(MAX_OVERRIDE_FILE_BYTES as usize - 30)
                 ),
             )

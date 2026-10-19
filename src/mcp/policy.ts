@@ -1,4 +1,4 @@
-import type { McpServerConfig, ToolPolicy } from "../domain/index.js";
+import type { McpApprovalPolicy, McpServerConfig, ToolPolicy } from "../domain/index.js";
 
 /** Linear-space whole-string '*' matching; no regular expression compilation. */
 export function matchesMcpPattern(pattern: string, value: string): boolean {
@@ -31,5 +31,36 @@ export function resolveMcpPolicy(
   rawName: string,
 ): { policy: ToolPolicy; rule: string } {
   const rule = server.toolRules.find((rule) => matchesMcpPattern(rule.match, rawName));
-  return { policy: rule ?? server.defaultPolicy, rule: rule?.match ?? "default" };
+  const global = rule ?? server.defaultPolicy;
+  const globalRule = rule?.match ?? "default";
+  let explicit: McpApprovalPolicy | undefined;
+  for (const layer of server.policyLayers ?? []) {
+    const contribution =
+      layer.toolRules.find((entry) => matchesMcpPattern(entry.match, rawName)) ??
+      layer.defaultPolicy;
+    if (contribution && (!explicit || approvalRank(contribution) > approvalRank(explicit)))
+      explicit = contribution;
+  }
+  if (!explicit) return { policy: global, rule: globalRule };
+  return {
+    policy: Object.freeze({
+      mode: explicit.mode,
+      sessionGrant: explicit.sessionGrant,
+      audit: global.audit,
+    }),
+    rule: `identity override (global audit: ${globalRule})`,
+  };
+}
+
+function approvalRank(policy: McpApprovalPolicy): number {
+  switch (policy.mode) {
+    case "disabled":
+      return 0;
+    case "deny":
+      return 1;
+    case "ask":
+      return policy.sessionGrant === "offer" ? 3 : 2;
+    case "allow":
+      return 4;
+  }
 }
