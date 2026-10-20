@@ -2,9 +2,11 @@
 
 ## Unreleased
 
+## 0.9.0 - 2026-10-19
+
 ### Breaking changes
 
-- Require identity broker protocol 9 and user/group rule version 10; upgrade the application and broker together. Main configuration schema 13 is unchanged. ([#39](https://github.com/kcosr/pi-sandbox/pull/39), [#40](https://github.com/kcosr/pi-sandbox/pull/40))
+- Require identity broker protocol 9 and user/group rule version 10; upgrade the application and broker together, and update user/group rule files to `version = 10`. Main configuration schema 13 is unchanged. ([#39](https://github.com/kcosr/pi-sandbox/pull/39), [#40](https://github.com/kcosr/pi-sandbox/pull/40))
 
 ### Added
 
