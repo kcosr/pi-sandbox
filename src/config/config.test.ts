@@ -4,7 +4,11 @@ import { join } from "node:path";
 
 import { afterEach, describe, expect, it } from "vitest";
 
-import { TOOL_NAMES, type SandboxConfig } from "../domain/index.js";
+import {
+  TOOL_NAMES,
+  type SandboxConfig,
+  type AuthoredPiEnvironmentValue,
+} from "../domain/index.js";
 import { ConfigError, loadConfig, parseConfig as parseConfigWithCatalog } from "./index.js";
 import {
   createManagedExtensionCatalog,
@@ -32,7 +36,7 @@ function parseConfig(
   sourceText: string,
   source = "<string>",
   catalog: ManagedExtensionCatalog = EMPTY_EXTENSION_CATALOG,
-): SandboxConfig {
+): SandboxConfig<AuthoredPiEnvironmentValue> {
   return parseConfigWithCatalog(sourceText, source, catalog);
 }
 
@@ -470,6 +474,33 @@ describe("parseConfig", () => {
         completeConfig().replace("[environment.sandbox]", '[environment.sandbox]\nHOME = "/tmp"'),
       ),
     ).toThrow("config.environment must contain only valid pi, sandbox, and extensions tables");
+  });
+
+  it("validates file references symbolically and only in the Pi scope", () => {
+    const parsed = parseConfig(
+      completeConfig().replace(
+        "[environment.pi]",
+        '[environment.pi]\nTOKEN = { file = "/missing/{{uid}}-secret" }',
+      ),
+    );
+    expect(parsed.environment.pi.TOKEN).toEqual({ file: "/missing/{{uid}}-secret" });
+    for (const entry of [
+      'TOKEN = { literal = "secret" }',
+      'TOKEN = { file = "/etc/secret", extra = true }',
+      'TOKEN = { file = "~/secret" }',
+    ]) {
+      expect(() =>
+        parseConfig(completeConfig().replace("[environment.pi]", `[environment.pi]\n${entry}`)),
+      ).toThrow("config.environment");
+    }
+    expect(() =>
+      parseConfig(
+        completeConfig().replace(
+          "[environment.sandbox]",
+          '[environment.sandbox]\nTOKEN = { file = "/etc/secret" }',
+        ),
+      ),
+    ).toThrow("config.environment");
   });
 
   it("rejects every missing tool policy", () => {

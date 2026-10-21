@@ -16,7 +16,7 @@ use host_identity::{Account, HostIdentityResolver};
 use serde::de::{MapAccess, Visitor};
 use serde::{Deserialize, Deserializer, Serialize};
 
-const PROTOCOL_VERSION: u32 = 9;
+const PROTOCOL_VERSION: u32 = 10;
 const OVERRIDE_VERSION: u32 = 10;
 const MAX_OVERRIDE_FILES: usize = 256;
 const MAX_STORE_BYTES: usize = 4 * 1024 * 1024;
@@ -31,6 +31,8 @@ const MAX_MCP_BYTES: usize = 256 * 1024;
 const MAX_RESPONSE_BYTES: usize = 512 * 1024;
 const MAX_ENVIRONMENT_VARIABLE_NAME_BYTES: usize = 128;
 const MAX_ENVIRONMENT_VALUE_BYTES: usize = 8192;
+const MAX_SECRET_PATH_BYTES: usize = 4096;
+const MAX_SECRET_FILE_BYTES: usize = MAX_ENVIRONMENT_VALUE_BYTES + 2;
 const MAX_ENVIRONMENT_VARIABLES_PER_SCOPE: usize = 128;
 const MAX_EXTENSION_ENVIRONMENTS: usize = 64;
 const MAX_ENVIRONMENT_VARIABLES_TOTAL: usize = 256;
@@ -99,41 +101,86 @@ impl<M: Default> IdentityRecord<M> {
 #[serde(deny_unknown_fields)]
 struct IdentityEnvironment {
     #[serde(default)]
-    pi: EnvironmentVariables,
+    pi: EnvironmentVariables<PiEnvironmentValue>,
     #[serde(default)]
     sandbox: EnvironmentVariables,
     #[serde(default)]
     extensions: ExtensionEnvironments,
 }
 
-#[derive(Clone, Debug, Default, Serialize, PartialEq, Eq)]
-#[serde(transparent)]
-struct EnvironmentVariables(BTreeMap<String, String>);
+/// The authored and wire object forms cannot cross their serialization boundary:
+/// references are input-only, and opaque resolved literals are output-only.
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(untagged)]
+enum PiEnvironmentValue {
+    Template(String),
+    #[serde(skip_serializing)]
+    File(SecretFileReference),
+    #[serde(skip_deserializing)]
+    Literal(ResolvedSecret),
+}
 
-impl EnvironmentVariables {
+impl PiEnvironmentValue {
+    fn as_str(&self) -> &str {
+        match self {
+            Self::Template(value) => value,
+            Self::File(reference) => &reference.file,
+            Self::Literal(value) => &value.literal,
+        }
+    }
+}
+
+impl From<String> for PiEnvironmentValue {
+    fn from(value: String) -> Self {
+        Self::Template(value)
+    }
+}
+
+#[derive(Clone, Debug, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+struct SecretFileReference {
+    file: String,
+}
+
+#[derive(Clone, Debug, Serialize, PartialEq, Eq)]
+struct ResolvedSecret {
+    literal: String,
+}
+
+#[derive(Clone, Debug, Serialize, PartialEq, Eq)]
+#[serde(transparent)]
+struct EnvironmentVariables<V = String>(BTreeMap<String, V>);
+
+impl<V> Default for EnvironmentVariables<V> {
+    fn default() -> Self {
+        Self(BTreeMap::new())
+    }
+}
+
+impl<V> EnvironmentVariables<V> {
     fn len(&self) -> usize {
         self.0.len()
     }
 
-    fn iter(&self) -> impl Iterator<Item = (&String, &String)> {
+    fn iter(&self) -> impl Iterator<Item = (&String, &V)> {
         self.0.iter()
     }
 
     #[cfg(test)]
-    fn get(&self, name: &str) -> Option<&String> {
+    fn get(&self, name: &str) -> Option<&V> {
         self.0.get(name)
     }
 }
 
-impl<'de> Deserialize<'de> for EnvironmentVariables {
+impl<'de, V: Deserialize<'de>> Deserialize<'de> for EnvironmentVariables<V> {
     fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
     where
         D: Deserializer<'de>,
     {
-        struct EnvironmentVariablesVisitor;
+        struct EnvironmentVariablesVisitor<V>(std::marker::PhantomData<V>);
 
-        impl<'de> Visitor<'de> for EnvironmentVariablesVisitor {
-            type Value = EnvironmentVariables;
+        impl<'de, V: Deserialize<'de>> Visitor<'de> for EnvironmentVariablesVisitor<V> {
+            type Value = EnvironmentVariables<V>;
 
             fn expecting(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
                 formatter.write_str("a map of unique environment variables")
@@ -144,7 +191,7 @@ impl<'de> Deserialize<'de> for EnvironmentVariables {
                 A: MapAccess<'de>,
             {
                 let mut values = BTreeMap::new();
-                while let Some((name, value)) = map.next_entry::<String, String>()? {
+                while let Some((name, value)) = map.next_entry::<String, V>()? {
                     if values.insert(name.clone(), value).is_some() {
                         return Err(serde::de::Error::custom(format!(
                             "duplicate environment variable: {name}"
@@ -155,7 +202,7 @@ impl<'de> Deserialize<'de> for EnvironmentVariables {
             }
         }
 
-        deserializer.deserialize_map(EnvironmentVariablesVisitor)
+        deserializer.deserialize_map(EnvironmentVariablesVisitor(std::marker::PhantomData))
     }
 }
 
@@ -772,6 +819,16 @@ fn resolve_records(
     resolver: &mut impl IdentityResolver,
     deadline: Instant,
 ) -> Result<IdentityRecord<ResolvedMcpOverrides>, LookupError> {
+    resolve_records_with_reader(records, uid, resolver, deadline, &mut read_secret_file)
+}
+
+fn resolve_records_with_reader(
+    records: Vec<IdentityRecord>,
+    uid: u32,
+    resolver: &mut impl IdentityResolver,
+    deadline: Instant,
+    reader: &mut impl FnMut(&str, Instant) -> Result<String, LookupError>,
+) -> Result<IdentityRecord<ResolvedMcpOverrides>, LookupError> {
     let needs_account = records
         .iter()
         .any(|r| r.user.is_some() || r.group.is_some() || r.gid.is_some());
@@ -838,7 +895,82 @@ fn resolve_records(
     {
         return Err(LookupError::InvalidFile);
     }
+    resolve_pi_environment(&mut result.environment, deadline, reader)?;
     Ok(result)
+}
+
+fn resolve_pi_environment(
+    environment: &mut IdentityEnvironment,
+    deadline: Instant,
+    reader: &mut impl FnMut(&str, Instant) -> Result<String, LookupError>,
+) -> Result<(), LookupError> {
+    let mut cache = BTreeMap::new();
+    for value in environment.pi.0.values_mut() {
+        if Instant::now() >= deadline {
+            return Err(LookupError::Io);
+        }
+        if let PiEnvironmentValue::File(reference) = value {
+            let literal = match cache.get(&reference.file) {
+                Some(value) => String::clone(value),
+                None => {
+                    let value = reader(&reference.file, deadline)?;
+                    cache.insert(reference.file.clone(), value.clone());
+                    value
+                }
+            };
+            *value = PiEnvironmentValue::Literal(ResolvedSecret { literal });
+        }
+    }
+    if Instant::now() >= deadline {
+        return Err(LookupError::Io);
+    }
+    if !valid_environment(environment) {
+        return Err(LookupError::InvalidFile);
+    }
+    Ok(())
+}
+
+/// Deployment controls access and path integrity. Ordinary symlinks are followed;
+/// O_NONBLOCK and the descriptor type check prevent reading a FIFO or device.
+fn read_secret_file(path: &str, deadline: Instant) -> Result<String, LookupError> {
+    if Instant::now() >= deadline {
+        return Err(LookupError::Io);
+    }
+    let mut file = OpenOptions::new()
+        .read(true)
+        .custom_flags(libc::O_CLOEXEC | libc::O_NONBLOCK)
+        .open(path)
+        .map_err(|_| LookupError::Io)?;
+    let metadata = file.metadata().map_err(|_| LookupError::Io)?;
+    if !metadata.file_type().is_file() || metadata.len() > MAX_SECRET_FILE_BYTES as u64 {
+        return Err(LookupError::InvalidFile);
+    }
+    let mut bytes = Vec::new();
+    Read::by_ref(&mut file)
+        .take(MAX_SECRET_FILE_BYTES as u64 + 1)
+        .read_to_end(&mut bytes)
+        .map_err(|_| LookupError::Io)?;
+    if Instant::now() >= deadline {
+        return Err(LookupError::Io);
+    }
+    if bytes.len() > MAX_SECRET_FILE_BYTES {
+        return Err(LookupError::InvalidFile);
+    }
+    let mut value = String::from_utf8(bytes).map_err(|_| LookupError::InvalidFile)?;
+    if value.ends_with('\n') {
+        value.pop();
+        if value.ends_with('\r') {
+            value.pop();
+        }
+    }
+    if !valid_secret_value(&value) {
+        return Err(LookupError::InvalidFile);
+    }
+    Ok(value)
+}
+
+fn valid_secret_value(value: &str) -> bool {
+    !value.is_empty() && value.len() <= MAX_ENVIRONMENT_VALUE_BYTES && !value.contains('\0')
 }
 
 fn merge_equal<T: PartialEq>(
@@ -853,9 +985,9 @@ fn merge_equal<T: PartialEq>(
     }
     Ok(())
 }
-fn merge_environment(
-    target: &mut EnvironmentVariables,
-    incoming: EnvironmentVariables,
+fn merge_environment<V: PartialEq>(
+    target: &mut EnvironmentVariables<V>,
+    incoming: EnvironmentVariables<V>,
 ) -> Result<(), LookupError> {
     for (name, value) in incoming.0 {
         if target.0.get(&name).is_some_and(|old| *old != value) {
@@ -1216,15 +1348,19 @@ fn valid_annotation(value: Option<&str>, maximum_bytes: usize) -> bool {
 
 fn valid_environment(environment: &IdentityEnvironment) -> bool {
     if environment.extensions.len() > MAX_EXTENSION_ENVIRONMENTS
-        || !valid_environment_scope(&environment.pi, EnvironmentScope::Pi)
+        || !valid_pi_environment(&environment.pi)
         || !valid_environment_scope(&environment.sandbox, EnvironmentScope::Sandbox)
     {
         return false;
     }
 
     let mut variable_count = environment.pi.len() + environment.sandbox.len();
-    let mut byte_count =
-        environment_bytes(&environment.pi) + environment_bytes(&environment.sandbox);
+    let mut byte_count = environment
+        .pi
+        .iter()
+        .map(|(name, value)| name.len() + value.as_str().len())
+        .sum::<usize>()
+        + environment_bytes(&environment.sandbox);
     for (extension_id, variables) in environment.extensions.iter() {
         if !valid_extension_id(extension_id)
             || !valid_environment_scope(variables, EnvironmentScope::Extension)
@@ -1239,9 +1375,28 @@ fn valid_environment(environment: &IdentityEnvironment) -> bool {
 
 #[derive(Clone, Copy)]
 enum EnvironmentScope {
-    Pi,
     Sandbox,
     Extension,
+}
+
+fn valid_pi_environment(variables: &EnvironmentVariables<PiEnvironmentValue>) -> bool {
+    variables.len() <= MAX_ENVIRONMENT_VARIABLES_PER_SCOPE
+        && variables.iter().all(|(name, value)| {
+            valid_environment_name(name)
+                && !reserved_environment_name(name)
+                && match value {
+                    PiEnvironmentValue::Template(value) => {
+                        value.len() <= MAX_ENVIRONMENT_VALUE_BYTES
+                            && !value.contains('\0')
+                            && valid_account_template(value)
+                    }
+                    PiEnvironmentValue::File(reference) => {
+                        reference.file.len() <= MAX_SECRET_PATH_BYTES
+                            && valid_models_file(&reference.file)
+                    }
+                    PiEnvironmentValue::Literal(value) => valid_secret_value(&value.literal),
+                }
+        })
 }
 
 fn valid_environment_scope(variables: &EnvironmentVariables, scope: EnvironmentScope) -> bool {
@@ -1395,7 +1550,10 @@ session_grant = "offer"
         let user = parse_user_for_test(source, 1000).expect("valid user override");
         assert_eq!(user.uid, Some(1000));
         assert_eq!(
-            user.environment.pi.get("MODEL_TOKEN").map(String::as_str),
+            user.environment
+                .pi
+                .get("MODEL_TOKEN")
+                .map(PiEnvironmentValue::as_str),
             Some("token-a")
         );
         assert_eq!(
@@ -1775,7 +1933,7 @@ session_grant = "offer"
         let (mut client, mut server_input) = UnixStream::pair().expect("socket pair");
         let mut server_output = server_input.try_clone().expect("clone server socket");
         client
-            .write_all(b"{\"version\":9,\"operation\":\"resolve-identity\"}\n")
+            .write_all(b"{\"version\":10,\"operation\":\"resolve-identity\"}\n")
             .expect("write request");
         let server_fd = server_input.as_raw_fd();
         serve_one(&root, &mut server_input, &mut server_output, server_fd, uid)
@@ -1788,7 +1946,7 @@ session_grant = "offer"
         fs::remove_dir_all(root).unwrap();
         assert_eq!(
             response,
-            "{\"version\":9,\"status\":\"ok\",\"environment\":{\"pi\":{},\"sandbox\":{},\"extensions\":{}},\"overrides\":{\"tools\":{\"bash\":{\"mode\":\"deny\",\"session_grant\":\"never\",\"known_read_only\":{\"mode\":\"ask\",\"session_grant\":\"offer\"}}}}}\n"
+            "{\"version\":10,\"status\":\"ok\",\"environment\":{\"pi\":{},\"sandbox\":{},\"extensions\":{}},\"overrides\":{\"tools\":{\"bash\":{\"mode\":\"deny\",\"session_grant\":\"never\",\"known_read_only\":{\"mode\":\"ask\",\"session_grant\":\"offer\"}}}}}\n"
         );
     }
 
@@ -2160,7 +2318,7 @@ session_grant = "offer"
         )
         .unwrap();
         fs::set_permissions(&file, fs::Permissions::from_mode(0o600)).unwrap();
-        for version in [8, 9] {
+        for version in [9, 10] {
             let (mut client, mut server_input) = UnixStream::pair().expect("socket pair");
             let mut server_output = server_input.try_clone().expect("clone server socket");
             writeln!(
@@ -2176,9 +2334,9 @@ session_grant = "offer"
                 .expect("finish response");
             let mut response = String::new();
             client.read_to_string(&mut response).expect("read response");
-            let expected = if version == 9 {
+            let expected = if version == 10 {
                 serde_json::json!({
-                    "version": 9,
+                    "version": 10,
                     "status": "ok",
                     "environment": { "pi": {}, "sandbox": {}, "extensions": {} },
                     "overrides": { "mcp": { "servers": {
@@ -2190,7 +2348,7 @@ session_grant = "offer"
                     } } }
                 })
             } else {
-                serde_json::json!({ "version": 9, "status": "error", "code": "protocol_error" })
+                serde_json::json!({ "version": 10, "status": "error", "code": "protocol_error" })
             };
             assert_eq!(
                 serde_json::from_str::<serde_json::Value>(&response).unwrap(),
@@ -2540,15 +2698,15 @@ session_grant = "offer"
         assert!(write_json_line(&mut output, &"x".repeat(MAX_RESPONSE_BYTES)).is_err());
         assert_eq!(output, b"unchanged");
         let mut user = IdentityRecord::<ResolvedMcpOverrides>::empty();
-        user.environment
-            .pi
-            .0
-            .insert("LARGE".into(), "\u{1}".repeat(MAX_RESPONSE_BYTES / 6));
+        user.environment.pi.0.insert(
+            "LARGE".into(),
+            "\u{1}".repeat(MAX_RESPONSE_BYTES / 6).into(),
+        );
         let mut output = Vec::new();
         write_success(&mut output, &user).unwrap();
         assert_eq!(
             serde_json::from_slice::<serde_json::Value>(&output).unwrap(),
-            serde_json::json!({"version": 9, "status": "error", "code": "identity_store_unavailable"})
+            serde_json::json!({"version": 10, "status": "error", "code": "identity_store_unavailable"})
         );
         assert_eq!(output.last(), Some(&b'\n'));
     }
@@ -2602,7 +2760,7 @@ session_grant = "offer"
         let (mut client, mut server_input) = UnixStream::pair().unwrap();
         let mut server_output = server_input.try_clone().unwrap();
         client
-            .write_all(b"{\"version\":9,\"operation\":\"resolve-identity\"}\n")
+            .write_all(b"{\"version\":10,\"operation\":\"resolve-identity\"}\n")
             .unwrap();
         let fd = server_input.as_raw_fd();
         serve_one(&root, &mut server_input, &mut server_output, fd, uid).unwrap();
@@ -2611,7 +2769,7 @@ session_grant = "offer"
         client.read_to_string(&mut response).unwrap();
         assert_eq!(
             response,
-            "{\"version\":9,\"status\":\"error\",\"code\":\"identity_store_unavailable\"}\n"
+            "{\"version\":10,\"status\":\"error\",\"code\":\"identity_store_unavailable\"}\n"
         );
         fs::remove_dir_all(root).unwrap();
     }
@@ -2685,7 +2843,7 @@ session_grant = "offer"
         let (mut client, mut server_input) = UnixStream::pair().expect("socket pair");
         let mut server_output = server_input.try_clone().expect("clone server socket");
         client
-            .write_all(b"{\"version\":9,\"operation\":\"resolve-identity\"}\n")
+            .write_all(b"{\"version\":10,\"operation\":\"resolve-identity\"}\n")
             .expect("write request");
         let server_fd = server_input.as_raw_fd();
         serve_one(
@@ -2703,13 +2861,13 @@ session_grant = "offer"
         client.read_to_string(&mut response).expect("read response");
         assert_eq!(
             response,
-            "{\"version\":9,\"status\":\"ok\",\"environment\":{\"pi\":{},\"sandbox\":{},\"extensions\":{}},\"overrides\":{}}\n"
+            "{\"version\":10,\"status\":\"ok\",\"environment\":{\"pi\":{},\"sandbox\":{},\"extensions\":{}},\"overrides\":{}}\n"
         );
     }
 
     #[test]
     fn requires_a_bounded_newline_delimited_request() {
-        let request = b"{\"version\":9,\"operation\":\"resolve-identity\"}";
+        let request = b"{\"version\":10,\"operation\":\"resolve-identity\"}";
         assert!(read_request(&mut io::Cursor::new(request)).is_err());
         let mut oversized = vec![b' '; MAX_REQUEST_BYTES + 1];
         oversized.push(b'\n');
@@ -2890,7 +3048,7 @@ session_grant = "offer"
             ),
         ])
         .unwrap();
-        assert_eq!(result.environment.pi.get("TOKEN").unwrap(), "a");
+        assert_eq!(result.environment.pi.get("TOKEN").unwrap().as_str(), "a");
         assert_eq!(result.environment.sandbox.get("TOKEN").unwrap(), "b");
         for (a, b) in [("none", "host"), ("host", "none")] {
             let result = resolve(vec![
@@ -2948,6 +3106,379 @@ session_grant = "offer"
             Err(LookupError::InvalidFile)
         );
     }
+
+    #[test]
+    fn secret_references_are_strict_pi_only_authored_inputs() {
+        let parsed = record(
+            "uid = 1000",
+            "[environment.pi]\nTOKEN = { file = '/secrets/token' }",
+        );
+        assert!(matches!(
+            parsed.environment.pi.get("TOKEN"),
+            Some(PiEnvironmentValue::File(_))
+        ));
+        assert!(serde_json::to_vec(&parsed.environment).is_err());
+        for value in [
+            "{ literal = 'secret' }",
+            "{ file = '/secrets/token', extra = true }",
+            "{ file = '/secrets/token', literal = 'secret' }",
+            "{ file = 42 }",
+            "{}",
+            "{ file = 'relative/token' }",
+            "{ file = '/' }",
+            "{ file = '/secrets//token' }",
+            "{ file = '/secrets/./token' }",
+            "{ file = '/secrets/../token' }",
+            "{ file = '/secrets/token/' }",
+            "{ file = \"/secrets/\\n\" }",
+        ] {
+            let source = format!("version = 10\nuid = 999\n[environment.pi]\nTOKEN = {value}");
+            assert_eq!(
+                parse_record(source.as_bytes(), RecordKind::User),
+                Err(LookupError::InvalidFile)
+            );
+        }
+        for scope in ["sandbox", "extensions.service-api"] {
+            let source = format!(
+                "version = 10\nuid = 1000\n[environment.{scope}]\nTOKEN = {{ file = '/secrets/token' }}"
+            );
+            assert_eq!(
+                parse_record(source.as_bytes(), RecordKind::User),
+                Err(LookupError::InvalidFile)
+            );
+        }
+        let oversized = format!(
+            "version = 10\nuid = 1000\n[environment.pi]\nTOKEN = {{ file = '/{}' }}",
+            "x".repeat(MAX_SECRET_PATH_BYTES)
+        );
+        assert_eq!(
+            parse_record(oversized.as_bytes(), RecordKind::User),
+            Err(LookupError::InvalidFile)
+        );
+    }
+
+    #[test]
+    fn secret_reads_follow_selection_and_complete_authored_conflict_checks() {
+        let mut calls = 0;
+        let mut reader = |_: &str, _: Instant| {
+            calls += 1;
+            Ok("secret".to_owned())
+        };
+        let mut run = |records| {
+            resolve_records_with_reader(
+                records,
+                1000,
+                &mut FakeResolver::default(),
+                Instant::now() + Duration::from_secs(1),
+                &mut reader,
+            )
+        };
+        let unmatched = record(
+            "uid = 999",
+            "[environment.pi]\nTOKEN = { file = '/missing' }",
+        );
+        assert!(run(vec![unmatched]).unwrap().environment.pi.0.is_empty());
+        for other in ["{ file = '/other' }", "'secret'"] {
+            assert_eq!(
+                run(vec![
+                    record(
+                        "uid = 1000",
+                        "[environment.pi]\nTOKEN = { file = '/missing' }"
+                    ),
+                    record("gid = 20", &format!("[environment.pi]\nTOKEN = {other}")),
+                ]),
+                Err(LookupError::InvalidFile)
+            );
+        }
+        assert_eq!(
+            run(vec![
+                record(
+                    "uid = 1000",
+                    "[environment.pi]\nTOKEN = { file = '/missing' }\n[overrides.execution]\nbackend = 'direct'"
+                ),
+                record("gid = 20", "[overrides.execution]\nbackend = 'bubblewrap'"),
+            ]),
+            Err(LookupError::InvalidFile)
+        );
+        assert_eq!(calls, 0);
+    }
+
+    #[test]
+    fn matching_user_and_group_secrets_share_one_snapshot_per_request() {
+        let mut calls = 0;
+        let mut reader = |path: &str, _: Instant| {
+            assert_eq!(path, "/secrets/token");
+            calls += 1;
+            Ok(format!("value-{calls}"))
+        };
+        for expected in ["value-1", "value-2"] {
+            let result = resolve_records_with_reader(
+                vec![
+                    record(
+                        "uid = 1000",
+                        "[environment.pi]\nFIRST = { file = '/secrets/token' }",
+                    ),
+                    record(
+                        "gid = 20",
+                        "[environment.pi]\nSECOND = { file = '/secrets/token' }",
+                    ),
+                    record(
+                        "user = 'alice'",
+                        "[environment.pi]\nFIRST = { file = '/secrets/token' }",
+                    ),
+                    record(
+                        "uid = 999",
+                        "[environment.pi]\nOTHER = { file = '/missing' }",
+                    ),
+                ],
+                1000,
+                &mut FakeResolver::default(),
+                Instant::now() + Duration::from_secs(1),
+                &mut reader,
+            )
+            .unwrap();
+            assert_eq!(result.environment.pi.len(), 2);
+            for name in ["FIRST", "SECOND"] {
+                assert_eq!(result.environment.pi.get(name).unwrap().as_str(), expected);
+            }
+        }
+        assert_eq!(calls, 2);
+    }
+
+    #[test]
+    fn secret_contents_serialize_as_opaque_literals_without_source_paths() {
+        let secret = "\u{feff}~/{{username}}/{{unknown}}/}}/$TOKEN \n";
+        let result = resolve_records_with_reader(
+            vec![record(
+                "uid = 1000",
+                "[environment.pi]\nTOKEN = { file = '/private/secret' }\nPLAIN = '{{username}}'",
+            )],
+            1000,
+            &mut FakeResolver::default(),
+            Instant::now() + Duration::from_secs(1),
+            &mut |_, _| Ok(secret.to_owned()),
+        )
+        .unwrap();
+        let mut output = Vec::new();
+        write_success(&mut output, &result).unwrap();
+        let wire: serde_json::Value = serde_json::from_slice(&output).unwrap();
+        assert_eq!(wire["version"], 10);
+        assert_eq!(
+            wire["environment"]["pi"]["TOKEN"],
+            serde_json::json!({"literal": secret})
+        );
+        assert_eq!(wire["environment"]["pi"]["PLAIN"], "{{username}}");
+        assert!(
+            !String::from_utf8(output)
+                .unwrap()
+                .contains("/private/secret")
+        );
+    }
+
+    #[test]
+    fn secret_reader_preserves_bytes_except_one_line_ending_and_enforces_bounds() {
+        use std::fs;
+        let root = temporary_path();
+        fs::create_dir(&root).unwrap();
+        let path = root.join("token");
+        let read = || {
+            read_secret_file(
+                path.to_str().unwrap(),
+                Instant::now() + Duration::from_secs(1),
+            )
+        };
+        for (bytes, expected) in [
+            ("token", "token"),
+            ("token\n", "token"),
+            ("token\r\n", "token"),
+            ("token\n\n", "token\n"),
+            ("token\r", "token\r"),
+            (" \t \n", " \t "),
+            ("\u{feff}{{username}}\n", "\u{feff}{{username}}"),
+        ] {
+            fs::write(&path, bytes).unwrap();
+            assert_eq!(read().unwrap(), expected);
+        }
+        for bytes in [
+            vec![],
+            b"\n".to_vec(),
+            b"\r\n".to_vec(),
+            b"x\0y".to_vec(),
+            vec![0xff],
+            vec![b'x'; MAX_SECRET_FILE_BYTES + 1],
+            vec![b'x'; MAX_ENVIRONMENT_VALUE_BYTES + 1],
+        ] {
+            fs::write(&path, bytes).unwrap();
+            assert_eq!(read(), Err(LookupError::InvalidFile));
+        }
+        let exact = "\u{e9}".repeat(MAX_ENVIRONMENT_VALUE_BYTES / 2);
+        fs::write(&path, format!("{exact}\r\n")).unwrap();
+        assert_eq!(read().unwrap(), exact);
+        fs::write(&path, format!("{exact}x\n")).unwrap();
+        assert_eq!(read(), Err(LookupError::InvalidFile));
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn secret_reader_uses_ordinary_permissions_symlinks_and_literal_paths() {
+        use std::fs;
+        use std::os::unix::fs::{PermissionsExt, symlink};
+        let root = temporary_path();
+        fs::create_dir(&root).unwrap();
+        let path = root.join("{{uid}}~");
+        fs::write(&path, "initial\n").unwrap();
+        fs::set_permissions(&path, fs::Permissions::from_mode(0o644)).unwrap();
+        let link = root.join("link");
+        symlink(&path, &link).unwrap();
+        let direct = record(
+            "uid = 1000",
+            &format!(
+                "[environment.pi]\nTOKEN = {{ file = {:?} }}",
+                path.to_str().unwrap()
+            ),
+        );
+        assert_eq!(
+            resolve(vec![direct])
+                .unwrap()
+                .environment
+                .pi
+                .get("TOKEN")
+                .unwrap()
+                .as_str(),
+            "initial"
+        );
+        let records = || {
+            vec![record(
+                "uid = 1000",
+                &format!(
+                    "[environment.pi]\nTOKEN = {{ file = {:?} }}",
+                    link.to_str().unwrap()
+                ),
+            )]
+        };
+        assert_eq!(
+            resolve(records())
+                .unwrap()
+                .environment
+                .pi
+                .get("TOKEN")
+                .unwrap()
+                .as_str(),
+            "initial"
+        );
+        fs::write(&path, "rotated\n").unwrap();
+        assert_eq!(
+            resolve(records())
+                .unwrap()
+                .environment
+                .pi
+                .get("TOKEN")
+                .unwrap()
+                .as_str(),
+            "rotated"
+        );
+        fs::set_permissions(&path, fs::Permissions::from_mode(0)).unwrap();
+        if unsafe { libc::geteuid() } != 0 {
+            assert_eq!(resolve(records()), Err(LookupError::Io));
+        }
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn secret_reader_rejects_nonregular_files_without_waiting_for_a_fifo_writer() {
+        use std::fs;
+        use std::os::unix::ffi::OsStrExt;
+        let root = temporary_path();
+        fs::create_dir(&root).unwrap();
+        let fifo = root.join("fifo");
+        let c_path = std::ffi::CString::new(fifo.as_os_str().as_bytes()).unwrap();
+        assert_eq!(unsafe { libc::mkfifo(c_path.as_ptr(), 0o600) }, 0);
+        let before = Instant::now();
+        for path in [fifo.as_path(), root.as_path(), Path::new("/dev/null")] {
+            assert_eq!(
+                read_secret_file(path.to_str().unwrap(), before + Duration::from_secs(1)),
+                Err(LookupError::InvalidFile)
+            );
+        }
+        assert!(before.elapsed() < Duration::from_secs(1));
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn resolved_secret_aggregate_limits_and_deadlines_fail_closed() {
+        let body = (0..8)
+            .map(|index| format!("TOKEN{index} = {{ file = '/secrets/token' }}\n"))
+            .collect::<String>();
+        let mut calls = 0;
+        let result = resolve_records_with_reader(
+            vec![record("uid = 1000", &format!("[environment.pi]\n{body}"))],
+            1000,
+            &mut FakeResolver::default(),
+            Instant::now() + Duration::from_secs(1),
+            &mut |_, _| {
+                calls += 1;
+                Ok("x".repeat(MAX_ENVIRONMENT_VALUE_BYTES))
+            },
+        );
+        assert_eq!(calls, 1);
+        assert_eq!(result, Err(LookupError::InvalidFile));
+        assert_eq!(
+            resolve_records_with_reader(
+                vec![record(
+                    "uid = 1000",
+                    "[environment.pi]\nTOKEN = { file = '/secrets/token' }"
+                )],
+                1000,
+                &mut FakeResolver::default(),
+                Instant::now(),
+                &mut |_, _| panic!("expired lookup read a file")
+            ),
+            Err(LookupError::Io)
+        );
+        assert_eq!(
+            read_secret_file("/never-open", Instant::now()),
+            Err(LookupError::Io)
+        );
+    }
+
+    #[test]
+    fn missing_selected_secret_returns_only_an_opaque_broker_error() {
+        use std::fs;
+        use std::os::unix::fs::PermissionsExt;
+        let uid = unsafe { libc::geteuid() };
+        let root = temporary_path();
+        let users = root.join("users.d");
+        fs::create_dir_all(&users).unwrap();
+        let missing = root.join("private-missing-token");
+        let readable = root.join("private-readable-token");
+        fs::write(&readable, "must-not-leak-before-later-failure").unwrap();
+        let rule = users.join("selected.toml");
+        fs::write(
+            &rule,
+            format!(
+                "version = 10\nuid = {uid}\n[environment.pi]\nA_TOKEN = {{ file = {:?} }}\nZ_MISSING = {{ file = {:?} }}",
+                readable.to_str().unwrap(), missing.to_str().unwrap()
+            ),
+        )
+        .unwrap();
+        fs::set_permissions(&rule, fs::Permissions::from_mode(0o600)).unwrap();
+        let (mut client, mut server_input) = UnixStream::pair().unwrap();
+        let mut server_output = server_input.try_clone().unwrap();
+        client
+            .write_all(b"{\"version\":10,\"operation\":\"resolve-identity\"}\n")
+            .unwrap();
+        let fd = server_input.as_raw_fd();
+        serve_one(&root, &mut server_input, &mut server_output, fd, uid).unwrap();
+        server_output.shutdown(Shutdown::Write).unwrap();
+        let mut response = String::new();
+        client.read_to_string(&mut response).unwrap();
+        assert_eq!(
+            response,
+            "{\"version\":10,\"status\":\"error\",\"code\":\"identity_store_unavailable\"}\n"
+        );
+        fs::remove_dir_all(root).unwrap();
+    }
+
     #[test]
     fn directory_scan_validates_all_files_and_rejects_symlinks_and_exposure() {
         use std::fs;

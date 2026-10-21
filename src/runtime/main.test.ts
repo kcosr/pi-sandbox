@@ -944,7 +944,7 @@ default_policy = { mode = "ask", session_grant = "never", audit = true }`,
     );
     const broker = parseBrokerResponse(
       JSON.stringify({
-        version: 9,
+        version: 10,
         status: "ok",
         environment: { pi: { DOCS_TOKEN: "scoped-token" }, sandbox: {}, extensions: {} },
         overrides: { mcp: { servers: { docs: { enabled: true }, local: { enabled: false } } } },
@@ -1242,5 +1242,169 @@ default_policy = { mode = "ask", session_grant = "never", audit = true }`,
       if (previous === undefined) delete process.env.MODEL_TOKEN;
       else process.env.MODEL_TOKEN = previous;
     }
+  });
+});
+
+describe("effective file-backed Pi environment", () => {
+  async function configWithFile(file: string, broker = false) {
+    const root = await createRoot();
+    const configPath = rooted(root, SYSTEM_CONFIG_PATH);
+    const source = await readFile(configPath, "utf8");
+    await writeFile(
+      configPath,
+      source
+        .replace('backend = "bubblewrap"', 'backend = "direct"')
+        .replace('mode = "none"', 'mode = "host"')
+        .replace('mode = "disabled"', broker ? 'mode = "broker"' : 'mode = "disabled"')
+        .replace(
+          "[environment.pi]",
+          `[environment.pi]\nTOKEN = { file = ${JSON.stringify(file)} }`,
+        ),
+    );
+    await writeFile(rooted(root, "/etc/pi-sandbox/models.json"), '{"providers":{}}');
+    return { root, configPath };
+  }
+
+  it("installation validation and backend queries leave missing external secrets symbolic", async () => {
+    const file = "/missing/admin-secret/{{uid}}";
+    const { root, configPath } = await configWithFile(file);
+    expect((await validateAdministrativeConfiguration(root)).environment.pi.TOKEN).toEqual({
+      file,
+    });
+    const output = vi.spyOn(process.stdout, "write").mockImplementation(() => true);
+    try {
+      await runPiSandbox({
+        piArgs: ["--print-execution-backend", "--root", root],
+        configPath: SYSTEM_CONFIG_PATH,
+      });
+      expect(output).toHaveBeenCalledWith("direct\n");
+    } finally {
+      output.mockRestore();
+    }
+    expect(await readFile(configPath, "utf8")).toContain(file);
+  });
+
+  it("broker opaque values override unreadable base references without identity expansion", async () => {
+    const { root } = await configWithFile("/missing/secret", true);
+    const literal = "~/{{unknown}}/{{machine_id}}";
+    const account = vi.fn((): never => {
+      throw new Error("must stay lazy");
+    });
+    const machine = vi.fn((): never => {
+      throw new Error("must stay lazy");
+    });
+    const caller = { TOKEN: "ambient", KEEP: "unchanged" };
+    const broker = parseBrokerResponse(
+      JSON.stringify({
+        version: 10,
+        status: "ok",
+        environment: { pi: { TOKEN: { literal } }, sandbox: {}, extensions: {} },
+        overrides: {},
+      }),
+    );
+    if (broker.status !== "ok") throw new Error("fixture must succeed");
+    const result = await resolveEffectiveAdministrativeConfiguration(
+      root,
+      caller,
+      () => Promise.resolve(broker),
+      SYSTEM_CONFIG_PATH,
+      account,
+      machine,
+    );
+    expect(result.identityEnvironment.pi.TOKEN).toBe(literal);
+    expect(result.identityEnvironment.sandbox).toEqual({});
+    expect(result.identityEnvironment.extensions).toEqual({});
+    expect(caller).toEqual({ TOKEN: "ambient", KEEP: "unchanged" });
+    expect(account).not.toHaveBeenCalled();
+    expect(machine).not.toHaveBeenCalled();
+  });
+
+  it("reads base files literally and passes contents only to explicitly mapped MCP fields", async () => {
+    const fileRoot = await mkdtemp(join(tmpdir(), "pi-secret-scopes-"));
+    temporaryDirectories.push(fileRoot);
+    const file = join(fileRoot, "{{uid}}-token");
+    const token = "opaque.{{machine_id}}~value";
+    await writeFile(file, `${token}\r\n`);
+    const { root, configPath } = await configWithFile(file);
+    const source = await readFile(configPath, "utf8");
+    await writeFile(
+      configPath,
+      source.replace(
+        "[mcp.servers]",
+        `[mcp.servers.mapped]
+enabled = true
+transport = "http"
+url = "https://example.com/mcp"
+bearer_token_from_env = "TOKEN"
+exposure = "direct"
+default_policy = { mode = "ask", session_grant = "never", audit = false }
+
+[mcp.servers.unmapped]
+enabled = true
+transport = "http"
+url = "https://example.com/other"
+exposure = "direct"
+default_policy = { mode = "ask", session_grant = "never", audit = false }`,
+      ),
+    );
+    const unavailable = vi.fn((): never => {
+      throw new Error("must stay lazy");
+    });
+    const caller = { KEEP: "original" };
+    const result = await resolveEffectiveAdministrativeConfiguration(
+      root,
+      caller,
+      undefined,
+      SYSTEM_CONFIG_PATH,
+      unavailable,
+      unavailable,
+    );
+    expect(result.identityEnvironment).toEqual({
+      pi: { TOKEN: token },
+      sandbox: {},
+      extensions: {},
+    });
+    expect(caller).toEqual({ KEEP: "original" });
+    const servers = await resolveMcpServers(
+      result.config.mcp,
+      { ...caller, ...result.identityEnvironment.pi },
+      unavailable,
+    );
+    expect(servers[0]).toMatchObject({
+      status: "ready",
+      headers: { Authorization: `Bearer ${token}` },
+    });
+    expect(servers[1]).toMatchObject({ status: "ready", headers: {} });
+    expect(unavailable).not.toHaveBeenCalled();
+
+    const extension = instantiateManagedExtension(
+      {
+        kind: "managed",
+        apiVersion: 3,
+        id: "unmapped-host",
+        version: "1.0.0",
+        hostEnvironment: defineManagedHostEnvironment({ variables: [] }),
+        parseConfig: () => freezeExtensionConfig({}),
+        requiredHostExecutables: () => [],
+        tools: [],
+      },
+      freezeExtensionConfig({}),
+    );
+    expect(
+      resolveManagedExtensionHostEnvironments(
+        { ...caller, ...result.identityEnvironment.pi },
+        result.identityEnvironment,
+        [extension],
+      ),
+    ).toEqual({ "unmapped-host": { KEEP: "original" } });
+  });
+
+  it("a failed base read leaves the caller environment unchanged", async () => {
+    const { root } = await configWithFile("/missing/secret");
+    const caller = { TOKEN: "ambient", KEEP: "unchanged" };
+    await expect(resolveEffectiveAdministrativeConfiguration(root, caller)).rejects.toThrow(
+      "Pi environment file could not be read or has invalid contents",
+    );
+    expect(caller).toEqual({ TOKEN: "ambient", KEEP: "unchanged" });
   });
 });

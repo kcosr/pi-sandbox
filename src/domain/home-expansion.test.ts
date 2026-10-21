@@ -4,6 +4,7 @@ import {
   emptyManagedEnvironment,
   MAXIMUM_ENVIRONMENT_VALUE_BYTES,
   parseManagedEnvironment,
+  parseBrokerManagedEnvironment,
 } from "./environment.js";
 import { expandManagedHomePaths } from "./home-expansion.js";
 import { MAXIMUM_ADMINISTRATIVE_PATH_BYTES } from "../../packages/sandbox-extension/src/runtime/paths.js";
@@ -285,4 +286,23 @@ describe("expandManagedHomePaths", () => {
       ),
     ).toThrow("managed_environment_invalid");
   });
+});
+
+it("treats file-derived Pi values as opaque, even with invalid template syntax", () => {
+  const identity = vi.fn((): never => {
+    throw new Error("identity must not resolve");
+  });
+  const machine = vi.fn((): never => {
+    throw new Error("machine must not resolve");
+  });
+  const literal = "~/{{unknown}}/{{machine_id}}/}}/$(command)";
+  const result = expandManagedHomePaths(
+    { cwdWritable: true, hiddenPaths: [], deniedPaths: [] },
+    parseBrokerManagedEnvironment({ pi: { TOKEN: { literal } }, sandbox: {}, extensions: {} }),
+    identity,
+    machine,
+  );
+  expect(result.environment.pi.TOKEN).toBe(literal);
+  expect(identity).not.toHaveBeenCalled();
+  expect(machine).not.toHaveBeenCalled();
 });
