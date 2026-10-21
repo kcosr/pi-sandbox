@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 0.10.0 - 2026-10-20
+
 ### Breaking changes
 
 - Upgrade the application and identity broker together for protocol 10. Main configuration schema 13 and user/group rule version 10 are unchanged. ([#41](https://github.com/kcosr/pi-sandbox/pull/41))

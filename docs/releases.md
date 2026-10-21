@@ -10,7 +10,7 @@ and the reusable extension packages:
 | Reusable sandbox extension | `packages/sandbox-extension/package.json`   |
 | Reusable Git extension     | `packages/git-extension/package.json`       |
 
-Product tags use `v<product-version>`, for example `v0.9.0`. During the `0.x`
+Product tags use `v<product-version>`, for example `v0.10.0`. During the `0.x`
 series, new features and breaking changes increment the minor version; fixes
 increment the patch version. Document configuration changes and required
 administrator action in `CHANGELOG.md`. An upstream upgrade does not make the
@@ -22,15 +22,15 @@ its published contents change.
 The managed application's `--version` output and TUI header combine the two
 application versions:
 
-| Build                                            | Example display                     |
-| ------------------------------------------------ | ----------------------------------- |
-| Clean checkout at the matching product tag       | `1.3.0+ps.0.9.0`                    |
-| Untagged Git checkout                            | `1.3.0+ps.0.9.0.dev.gabcdef0`       |
-| Modified Git checkout                            | `1.3.0+ps.0.9.0.dev.gabcdef0.dirty` |
-| Source execution or a build without Git metadata | `1.3.0+ps.0.9.0.dev.source`         |
+| Build                                            | Example display                      |
+| ------------------------------------------------ | ------------------------------------ |
+| Clean checkout at the matching product tag       | `1.3.0+ps.0.10.0`                    |
+| Untagged Git checkout                            | `1.3.0+ps.0.10.0.dev.gabcdef0`       |
+| Modified Git checkout                            | `1.3.0+ps.0.10.0.dev.gabcdef0.dirty` |
+| Source execution or a build without Git metadata | `1.3.0+ps.0.10.0.dev.source`         |
 
-Only a clean checkout at `v0.9.0` produces the release display for product
-version `0.9.0`. Build identity is embedded at build time; launching the
+Only a clean checkout at `v0.10.0` produces the release display for product
+version `0.10.0`. Build identity is embedded at build time; launching the
 application does not query Git. The combined value is a display identifier,
 not the product's release number. Use the product version and tag for release
 ordering; SemVer build metadata does not affect precedence.
