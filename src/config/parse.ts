@@ -15,6 +15,7 @@ import {
   type FilesystemConfig,
   type NetworkConfig,
   type SandboxConfig,
+  type AuthoredPiEnvironmentValue,
   type SessionsConfig,
   type CommandClassPolicies,
   type CommandClassPolicy,
@@ -25,7 +26,7 @@ import {
   isNormalizedAbsoluteFilePath,
   isNormalizedHiddenPath,
   isReservedHiddenDirectoryPath,
-  parseManagedEnvironment,
+  parseAuthoredManagedEnvironment,
   validateAccountTemplate,
 } from "../domain/index.js";
 import type { ManagedExtensionCatalog } from "../managed-extensions/catalog.js";
@@ -303,7 +304,7 @@ function parseExtensions(
 }
 
 function validateExtensionEnvironment(
-  environment: ReturnType<typeof parseManagedEnvironment> | undefined,
+  environment: ReturnType<typeof parseAuthoredManagedEnvironment> | undefined,
   extensions: Readonly<Record<string, ExtensionConfig>> | undefined,
   catalog: ManagedExtensionCatalog,
   issues: string[],
@@ -486,7 +487,7 @@ export function parseConfig(
   sourceText: string,
   source: string,
   catalog: ManagedExtensionCatalog,
-): SandboxConfig {
+): SandboxConfig<AuthoredPiEnvironmentValue> {
   let parsed: unknown;
   try {
     parsed = parseToml(sourceText);
@@ -532,13 +533,15 @@ export function parseConfig(
   const network = parseNetwork(own(parsed, "network"), issues);
   let environment;
   try {
-    environment = parseManagedEnvironment(own(parsed, "environment"));
+    environment = parseAuthoredManagedEnvironment(own(parsed, "environment"));
     for (const scope of [
       environment.pi,
       environment.sandbox,
       ...Object.values(environment.extensions),
     ]) {
-      Object.values(scope).forEach(validateAccountTemplate);
+      for (const value of Object.values(scope)) {
+        if (typeof value === "string") validateAccountTemplate(value);
+      }
     }
   } catch {
     issues.push("config.environment must contain only valid pi, sandbox, and extensions tables");

@@ -46,6 +46,9 @@ export async function testManagedMcpCodemode({
   uid,
 }) {
   const httpPath = "/mcp/shared%FF?tenant=shared%2Bteam&literal=a%2fb&tag=one&tag=two";
+  const httpToken = "Bearer http-specific-{{uid}}";
+  const stdioToken = "~/stdio-specific-{{machine_id}}-$TOKEN";
+  const providerToken = "provider-specific-{{username}}";
   const receivedHttp = [];
   const providerRequests = [];
   const prompts = [];
@@ -60,6 +63,7 @@ export async function testManagedMcpCodemode({
     try {
       const url = new URL(request.url, "http://localhost");
       if (url.pathname === "/v1/chat/completions") {
+        assert.equal(request.headers["x-environment-file"], providerToken);
         const body = await jsonBody(request);
         providerRequests.push(body);
         const lastUser = [...body.messages].reverse().find((message) => message.role === "user");
@@ -175,7 +179,7 @@ export async function testManagedMcpCodemode({
         httpPath,
         "literal query ordering, repeated parameters, and percent escapes must not be rewritten",
       );
-      assert.equal(request.headers.authorization, "Bearer http-specific");
+      assert.equal(request.headers.authorization, httpToken);
       if (request.method === "GET") {
         response.writeHead(405).end();
         return;
@@ -229,9 +233,17 @@ export async function testManagedMcpCodemode({
     config.tools.write = toolPolicy("ask");
     config.tools.bash = toolPolicy("ask");
     config.tools.read = toolPolicy("allow");
-    config.environment.pi.DOCS_AUTHORIZATION = "Bearer http-specific";
-    config.environment.pi.LOCAL_TOKEN = "stdio-specific";
-    config.environment.pi.PROVIDER_SECRET = "must-not-reach-stdio";
+    const environmentFiles = join(dirname(configPath), "environment-files");
+    await mkdir(environmentFiles);
+    for (const [name, contents] of Object.entries({
+      DOCS_AUTHORIZATION: `${httpToken}\r\n`,
+      LOCAL_TOKEN: `${stdioToken}\n`,
+      PROVIDER_SECRET: providerToken,
+    })) {
+      const file = join(environmentFiles, name);
+      await writeFile(file, contents, { mode: 0o600 });
+      config.environment.pi[name] = { file };
+    }
     config.mcp = {
       servers: {
         docs: {
@@ -270,6 +282,7 @@ export async function testManagedMcpCodemode({
             api: "openai-completions",
             apiKey: "offline-placeholder",
             authHeader: false,
+            headers: { "X-Environment-File": "$PROVIDER_SECRET" },
             compat: { supportsDeveloperRole: false, supportsReasoningEffort: false },
             models: [
               {
@@ -328,7 +341,7 @@ export async function testManagedMcpCodemode({
       "HTTP_search_allowed_OK",
       "HTTP_mutate_record_OK",
       "EXPECTED_POLICY_DENIAL",
-      "stdio-specific",
+      stdioToken,
       "STDIO_CREDENTIAL_BOUNDARY_OK",
       "FEATURE_SURFACE_OK",
       `${username}/${uid}`,

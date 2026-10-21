@@ -9,7 +9,9 @@ import {
   IDENTITY_BROKER_SOCKET_PATH,
   emptyManagedEnvironment,
   isNormalizedAbsoluteFilePath,
-  parseManagedEnvironment,
+  parseBrokerManagedEnvironment,
+  type AuthoredPiEnvironmentValue,
+  type ResolvedPiEnvironmentValue,
   isMcpToolPattern,
   type McpApprovalPolicy,
   type McpApprovalRule,
@@ -33,24 +35,24 @@ import {
   commandClassPreconditionIssues,
 } from "../permissions/command-classes.js";
 
-export const IDENTITY_BROKER_PROTOCOL_VERSION = 9;
+export const IDENTITY_BROKER_PROTOCOL_VERSION = 10;
 export const IDENTITY_BROKER_TIMEOUT_MS = 10_000;
 export const MAXIMUM_IDENTITY_RESPONSE_BYTES = 512 * 1024;
 
 export interface BrokerIdentity {
-  readonly environment: ManagedEnvironment;
+  readonly environment: ManagedEnvironment<ResolvedPiEnvironmentValue>;
   readonly overrides: IdentityOverrides;
 }
 
 interface BrokerSuccessResponse {
-  readonly version: 9;
+  readonly version: 10;
   readonly status: "ok";
-  readonly environment: ManagedEnvironment;
+  readonly environment: ManagedEnvironment<ResolvedPiEnvironmentValue>;
   readonly overrides: IdentityOverrides;
 }
 
 interface BrokerErrorResponse {
-  readonly version: 9;
+  readonly version: 10;
   readonly status: "error";
   readonly code: "identity_store_unavailable" | "protocol_error";
 }
@@ -144,7 +146,7 @@ export function parseBrokerResponse(source: string): BrokerResponse {
       throw invalidResponse();
     }
     return Object.freeze({
-      version: 9,
+      version: 10,
       status: "ok",
       environment: parseBrokerEnvironment(value.environment),
       overrides: parseIdentityOverrides(value.overrides),
@@ -161,10 +163,10 @@ export function parseBrokerResponse(source: string): BrokerResponse {
   return value as unknown as BrokerErrorResponse;
 }
 
-export function applyIdentityOverrides(
-  base: SandboxConfig,
+export function applyIdentityOverrides<PiValue extends AuthoredPiEnvironmentValue>(
+  base: SandboxConfig<PiValue>,
   overrides: IdentityOverrides,
-): SandboxConfig {
+): SandboxConfig<PiValue> {
   const availableTools = new Set(Object.keys(base.tools));
   for (const toolName of Object.keys(overrides.tools)) {
     if (!availableTools.has(toolName)) {
@@ -405,9 +407,9 @@ function parseMcpApprovalPolicy(value: unknown): McpApprovalPolicy {
   return Object.freeze({ mode: policy.mode, sessionGrant: policy.sessionGrant });
 }
 
-function parseBrokerEnvironment(value: unknown): ManagedEnvironment {
+function parseBrokerEnvironment(value: unknown): ManagedEnvironment<ResolvedPiEnvironmentValue> {
   try {
-    return parseManagedEnvironment(value);
+    return parseBrokerManagedEnvironment(value);
   } catch {
     throw invalidResponse();
   }

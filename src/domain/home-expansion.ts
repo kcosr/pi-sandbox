@@ -4,12 +4,17 @@ import {
   isNormalizedAbsoluteFilePath,
   isReservedHiddenDirectoryPath,
 } from "../../packages/sandbox-extension/src/runtime/paths.js";
-import type { EnvironmentVariables, FilesystemConfig, ManagedEnvironment } from "./policy.js";
+import type {
+  EnvironmentVariables,
+  FilesystemConfig,
+  ManagedEnvironment,
+  ResolvedPiEnvironmentValue,
+} from "./policy.js";
 
 /** Resolve the effective policy once, after broker overlays and before applying its environment. */
 export function expandManagedHomePaths(
   filesystem: FilesystemConfig,
-  environment: ManagedEnvironment,
+  environment: ManagedEnvironment<ResolvedPiEnvironmentValue>,
   getIdentity: () => AccountIdentity,
   getMachineId?: () => string,
 ): Readonly<{
@@ -54,7 +59,12 @@ export function expandManagedHomePaths(
   }
 
   const expandedEnvironment = parseManagedEnvironment({
-    pi: expandVariables(environment.pi),
+    pi: Object.fromEntries(
+      Object.entries(environment.pi).map(([name, value]) => [
+        name,
+        typeof value === "string" ? expand(value) : value.literal,
+      ]),
+    ),
     sandbox: expandVariables(environment.sandbox),
     extensions: Object.fromEntries(
       Object.entries(environment.extensions).map(([id, variables]) => [

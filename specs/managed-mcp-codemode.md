@@ -251,7 +251,7 @@ Existing broker `environment.pi` values can supply explicitly named credential
 references per account without adding a new broker scope. Disabling an MCP
 server does not remove independently configured values from Pi's environment.
 
-Broker protocol 9 and rule version 10 accept optional server-local `enabled`,
+Broker protocol 10 and rule version 10 accept optional server-local `enabled`,
 `default_policy`, and nonempty ordered `tool_rules` for globally defined servers.
 Each file resolves first match/default independently; complete pairs combine with
 least restrictive wins before replacing the global invocation pair. Omission
@@ -269,7 +269,7 @@ schema 13 and audit wire 2/record 3 are unchanged. See the complete
 
 In addition to existing bare `~` and leading `~/` expansion, support
 `{{username}}` and `{{uid}}` in configured hidden and denied paths, all configured scoped
-environment values, and explicit stdio `env` values. Resolve the effective UID
+environment string values, and explicit stdio `env` values. Resolve the effective UID
 and canonical username from the invoking account's OS database, using the same
 lookup as account-home expansion; never use ambient `USER`, `LOGNAME`, `HOME`,
 or `SUDO_USER`. UID is decimal text. Resolve once after broker merging and before
@@ -278,7 +278,7 @@ replacement text recursively. Unknown/malformed account macro syntax is rejected
 in these fields; `{{{{` and `}}}}` escape literal opening/closing double braces.
 Existing path/environment validation and size bounds apply after expansion.
 Installation validation checks syntax without resolving the installer's account.
-Inherited ambient values and values read through `*_from_env` are not templated.
+Inherited ambient values and values read through `*_from_env` are not templated. File-backed `environment.pi` contents are also opaque; MCP uses their resolved values only through explicit environment mappings.
 
 On macOS, denied paths, configured scoped environment values, and explicit stdio
 `env` values support `{{machine_id}}`. Hidden paths are available only with Linux

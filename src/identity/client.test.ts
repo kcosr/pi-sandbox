@@ -65,7 +65,7 @@ describe("managed identity", () => {
 
 function mcpResponse(servers: unknown): string {
   return JSON.stringify({
-    version: 9,
+    version: 10,
     status: "ok",
     environment: { pi: {}, sandbox: {}, extensions: {} },
     overrides: { mcp: { servers } },
@@ -73,10 +73,31 @@ function mcpResponse(servers: unknown): string {
 }
 
 describe("broker response", () => {
+  it("admits opaque broker literals but never caller-side file reads", () => {
+    const response = (entry: unknown, version = 10) =>
+      JSON.stringify({
+        version,
+        status: "ok",
+        environment: { pi: { TOKEN: entry }, sandbox: {}, extensions: {} },
+        overrides: {},
+      });
+    expect(parseBrokerResponse(response({ literal: "~/{{unknown}}" }))).toMatchObject({
+      environment: { pi: { TOKEN: { literal: "~/{{unknown}}" } } },
+    });
+    for (const entry of [
+      { file: "/etc/secret" },
+      { literal: "" },
+      { literal: "secret", file: "/etc/secret" },
+    ]) {
+      expect(() => parseBrokerResponse(response(entry))).toThrow();
+    }
+    expect(() => parseBrokerResponse(response("token", 9))).toThrow();
+  });
+
   it("preserves omitted MCP overrides and accepts bounded enabled patches", () => {
     const response = (overrides: unknown) =>
       JSON.stringify({
-        version: 9,
+        version: 10,
         status: "ok",
         environment: { pi: {}, sandbox: {}, extensions: {} },
         overrides,
@@ -128,7 +149,7 @@ describe("broker response", () => {
       expect(() =>
         parseBrokerResponse(
           JSON.stringify({
-            version: 9,
+            version: 10,
             status: "ok",
             environment: { pi: {}, sandbox: {}, extensions: {} },
             overrides: { mcp },
@@ -138,7 +159,7 @@ describe("broker response", () => {
     }
     expect(() =>
       parseBrokerResponse(
-        '{"version":9,"status":"ok","environment":{"pi":{},"sandbox":{},"extensions":{}},"overrides":{"mcp":{"servers":{"docs":{"enabled":true,"enabled":false}}}}}',
+        '{"version":10,"status":"ok","environment":{"pi":{},"sandbox":{},"extensions":{}},"overrides":{"mcp":{"servers":{"docs":{"enabled":true,"enabled":false}}}}}',
       ),
     ).toThrow("identity_broker_response_invalid");
   });
@@ -237,7 +258,7 @@ describe("broker response", () => {
       "identity_broker_response_invalid",
     );
     const empty = mcpResponse({ docs: { enabled: true } });
-    expect(() => parseBrokerResponse(empty.replace('"version":9', '"version":8'))).toThrow(
+    expect(() => parseBrokerResponse(empty.replace('"version":10', '"version":8'))).toThrow(
       "identity_broker_response_invalid",
     );
     const exact =
@@ -249,7 +270,7 @@ describe("broker response", () => {
   it("accepts partial execution patches without defaulting omitted fields", () => {
     const response = (execution: unknown) =>
       JSON.stringify({
-        version: 9,
+        version: 10,
         status: "ok",
         environment: { pi: {}, sandbox: {}, extensions: {} },
         overrides: { execution, network: { mode: "local" } },
@@ -278,10 +299,10 @@ describe("broker response", () => {
   it("accepts strict success and error responses", () => {
     expect(
       parseBrokerResponse(
-        '{"version":9,"status":"ok","environment":{"pi":{"MODEL_TOKEN":"token"},"sandbox":{"PROJECT_ENV":"test"},"extensions":{"service-api":{"SERVICE_API_TOKEN":"service-token"}}},"overrides":{"models_file":"/etc/pi-sandbox/models/alice.json","execution":{"backend":"direct"},"network":{"mode":"host"},"tools":{"write":{"mode":"ask","session_grant":"offer"},"git_clone":{"mode":"deny","session_grant":"never"}}}}\n',
+        '{"version":10,"status":"ok","environment":{"pi":{"MODEL_TOKEN":"token"},"sandbox":{"PROJECT_ENV":"test"},"extensions":{"service-api":{"SERVICE_API_TOKEN":"service-token"}}},"overrides":{"models_file":"/etc/pi-sandbox/models/alice.json","execution":{"backend":"direct"},"network":{"mode":"host"},"tools":{"write":{"mode":"ask","session_grant":"offer"},"git_clone":{"mode":"deny","session_grant":"never"}}}}\n',
       ),
     ).toEqual({
-      version: 9,
+      version: 10,
       status: "ok",
       environment: {
         pi: { MODEL_TOKEN: "token" },
@@ -299,14 +320,14 @@ describe("broker response", () => {
       },
     });
     expect(
-      parseBrokerResponse('{"version":9,"status":"error","code":"identity_store_unavailable"}\n'),
-    ).toEqual({ version: 9, status: "error", code: "identity_store_unavailable" });
+      parseBrokerResponse('{"version":10,"status":"error","code":"identity_store_unavailable"}\n'),
+    ).toEqual({ version: 10, status: "error", code: "identity_store_unavailable" });
   });
 
   it("accepts complete filesystem overrides and rejects malformed ones", () => {
     const response = (filesystem: unknown) =>
       JSON.stringify({
-        version: 9,
+        version: 10,
         status: "ok",
         environment: { pi: {}, sandbox: {}, extensions: {} },
         overrides: { filesystem },
@@ -347,40 +368,40 @@ describe("broker response", () => {
       "not-json",
       '{"version":7,"status":"ok","environment":{"pi":{},"sandbox":{},"extensions":{}},"overrides":{}}',
       '{"version":6,"status":"ok","environment":{"pi":{},"sandbox":{},"extensions":{}},"overrides":{}}',
-      '{"version":9,"status":"error","code":"user_not_found"}',
+      '{"version":10,"status":"error","code":"user_not_found"}',
       '{"version":2,"status":"ok","environment":{"pi":{},"sandbox":{},"extensions":{}},"overrides":{}}',
-      '{"version":9,"status":"ok","overrides":{}}',
-      '{"version":9,"status":"ok","environment":{"pi":{},"sandbox":{},"extensions":{}},"overrides":{},"extra":true}',
-      '{"version":9,"status":"ok","environment":{"pi":{},"sandbox":{}},"overrides":{}}',
-      '{"version":9,"status":"ok","environment":{"pi":{},"sandbox":{},"extensions":{},"extra":{}},"overrides":{}}',
-      '{"version":9,"status":"ok","environment":{"pi":[],"sandbox":{},"extensions":{}},"overrides":{}}',
-      '{"version":9,"status":"ok","environment":{"pi":{"BAD-NAME":"value"},"sandbox":{},"extensions":{}},"overrides":{}}',
-      '{"version":9,"status":"ok","environment":{"pi":{"NODE_OPTIONS":"--require=x"},"sandbox":{},"extensions":{}},"overrides":{}}',
-      '{"version":9,"status":"ok","environment":{"pi":{},"sandbox":{"BASH_ENV":"/tmp/inject"},"extensions":{}},"overrides":{}}',
-      '{"version":9,"status":"ok","environment":{"pi":{"PI_SANDBOX_INTERNAL_SECRET":"value"},"sandbox":{},"extensions":{}},"overrides":{}}',
-      '{"version":9,"status":"ok","environment":{"pi":{"TOKEN":1},"sandbox":{},"extensions":{}},"overrides":{}}',
-      '{"version":9,"status":"ok","environment":{"pi":{"TOKEN":"nul\\u0000value"},"sandbox":{},"extensions":{}},"overrides":{}}',
-      '{"version":9,"status":"ok","environment":{"pi":{},"sandbox":{"HOME":"/tmp"},"extensions":{}},"overrides":{}}',
-      '{"version":9,"status":"ok","environment":{"pi":{},"sandbox":{},"extensions":[]},"overrides":{}}',
-      '{"version":9,"status":"ok","environment":{"pi":{},"sandbox":{},"extensions":{"Bad_ID":{}}},"overrides":{}}',
-      '{"version":9,"status":"ok","environment":{"pi":{},"sandbox":{},"extensions":{"service-api":[]}},"overrides":{}}',
-      '{"version":9,"status":"ok","environment":{"pi":{},"pi":{},"sandbox":{},"extensions":{}},"overrides":{}}',
-      '{"version":9,"status":"ok","environment":{"pi":{"TOKEN":"one","T\\u004fKEN":"two"},"sandbox":{},"extensions":{}},"overrides":{}}',
-      '{"version":9,"status":"ok","environment":{"pi":{},"sandbox":{},"extensions":{}},"overrides":{"audit":{"enabled":false,"facility":"local0"}}}',
-      '{"version":9,"status":"ok","environment":{"pi":{},"sandbox":{},"extensions":{}},"overrides":{"sessions":{"retention_days":0}}}',
-      '{"version":9,"status":"ok","environment":{"pi":{},"sandbox":{},"extensions":{}},"overrides":{"tools":{"write":{"mode":"ask","session_grant":"never","audit":false}}}}',
-      '{"version":9,"status":"ok","environment":{"pi":{},"sandbox":{},"extensions":{}},"overrides":{"unknown":true}}',
-      '{"version":9,"status":"ok","environment":{"pi":{},"sandbox":{},"extensions":{}},"overrides":{"models_file":"relative.json"}}',
-      '{"version":9,"status":"ok","environment":{"pi":{},"sandbox":{},"extensions":{}},"overrides":{"execution":{"backend":"container"}}}',
-      '{"version":9,"status":"ok","environment":{"pi":{},"sandbox":{},"extensions":{}},"overrides":{"execution":{"backend":"direct","extra":true}}}',
-      '{"version":9,"status":"ok","environment":{"pi":{},"sandbox":{},"extensions":{}},"overrides":{"network":{"mode":"filtered"}}}',
-      '{"version":9,"status":"ok","environment":{"pi":{},"sandbox":{},"extensions":{}},"overrides":{"network":{"mode":"host","extra":true}}}',
-      '{"version":9,"status":"ok","environment":{"pi":{},"sandbox":{},"extensions":{}},"overrides":{"tools":{"Bad-Name":{"mode":"deny","session_grant":"never"}}}}',
-      '{"version":9,"status":"ok","environment":{"pi":{},"sandbox":{},"extensions":{}},"overrides":{"tools":{"write":{"mode":"allow","session_grant":"offer"}}}}',
-      '{"version":9,"status":"error","code":"unknown"}',
-      '{"version":9,"status":"error","code":["user_not_found"]}',
-      '{"version":9,"status":"error","code":"user_not_found","code":"protocol_error"}',
-      '{"version":9,"status":"ok","environment":{"pi":{},"sandbox":{},"extensions":{}},"overrides":{"tools":{},"t\\u006fools":{}}}',
+      '{"version":10,"status":"ok","overrides":{}}',
+      '{"version":10,"status":"ok","environment":{"pi":{},"sandbox":{},"extensions":{}},"overrides":{},"extra":true}',
+      '{"version":10,"status":"ok","environment":{"pi":{},"sandbox":{}},"overrides":{}}',
+      '{"version":10,"status":"ok","environment":{"pi":{},"sandbox":{},"extensions":{},"extra":{}},"overrides":{}}',
+      '{"version":10,"status":"ok","environment":{"pi":[],"sandbox":{},"extensions":{}},"overrides":{}}',
+      '{"version":10,"status":"ok","environment":{"pi":{"BAD-NAME":"value"},"sandbox":{},"extensions":{}},"overrides":{}}',
+      '{"version":10,"status":"ok","environment":{"pi":{"NODE_OPTIONS":"--require=x"},"sandbox":{},"extensions":{}},"overrides":{}}',
+      '{"version":10,"status":"ok","environment":{"pi":{},"sandbox":{"BASH_ENV":"/tmp/inject"},"extensions":{}},"overrides":{}}',
+      '{"version":10,"status":"ok","environment":{"pi":{"PI_SANDBOX_INTERNAL_SECRET":"value"},"sandbox":{},"extensions":{}},"overrides":{}}',
+      '{"version":10,"status":"ok","environment":{"pi":{"TOKEN":1},"sandbox":{},"extensions":{}},"overrides":{}}',
+      '{"version":10,"status":"ok","environment":{"pi":{"TOKEN":"nul\\u0000value"},"sandbox":{},"extensions":{}},"overrides":{}}',
+      '{"version":10,"status":"ok","environment":{"pi":{},"sandbox":{"HOME":"/tmp"},"extensions":{}},"overrides":{}}',
+      '{"version":10,"status":"ok","environment":{"pi":{},"sandbox":{},"extensions":[]},"overrides":{}}',
+      '{"version":10,"status":"ok","environment":{"pi":{},"sandbox":{},"extensions":{"Bad_ID":{}}},"overrides":{}}',
+      '{"version":10,"status":"ok","environment":{"pi":{},"sandbox":{},"extensions":{"service-api":[]}},"overrides":{}}',
+      '{"version":10,"status":"ok","environment":{"pi":{},"pi":{},"sandbox":{},"extensions":{}},"overrides":{}}',
+      '{"version":10,"status":"ok","environment":{"pi":{"TOKEN":"one","T\\u004fKEN":"two"},"sandbox":{},"extensions":{}},"overrides":{}}',
+      '{"version":10,"status":"ok","environment":{"pi":{},"sandbox":{},"extensions":{}},"overrides":{"audit":{"enabled":false,"facility":"local0"}}}',
+      '{"version":10,"status":"ok","environment":{"pi":{},"sandbox":{},"extensions":{}},"overrides":{"sessions":{"retention_days":0}}}',
+      '{"version":10,"status":"ok","environment":{"pi":{},"sandbox":{},"extensions":{}},"overrides":{"tools":{"write":{"mode":"ask","session_grant":"never","audit":false}}}}',
+      '{"version":10,"status":"ok","environment":{"pi":{},"sandbox":{},"extensions":{}},"overrides":{"unknown":true}}',
+      '{"version":10,"status":"ok","environment":{"pi":{},"sandbox":{},"extensions":{}},"overrides":{"models_file":"relative.json"}}',
+      '{"version":10,"status":"ok","environment":{"pi":{},"sandbox":{},"extensions":{}},"overrides":{"execution":{"backend":"container"}}}',
+      '{"version":10,"status":"ok","environment":{"pi":{},"sandbox":{},"extensions":{}},"overrides":{"execution":{"backend":"direct","extra":true}}}',
+      '{"version":10,"status":"ok","environment":{"pi":{},"sandbox":{},"extensions":{}},"overrides":{"network":{"mode":"filtered"}}}',
+      '{"version":10,"status":"ok","environment":{"pi":{},"sandbox":{},"extensions":{}},"overrides":{"network":{"mode":"host","extra":true}}}',
+      '{"version":10,"status":"ok","environment":{"pi":{},"sandbox":{},"extensions":{}},"overrides":{"tools":{"Bad-Name":{"mode":"deny","session_grant":"never"}}}}',
+      '{"version":10,"status":"ok","environment":{"pi":{},"sandbox":{},"extensions":{}},"overrides":{"tools":{"write":{"mode":"allow","session_grant":"offer"}}}}',
+      '{"version":10,"status":"error","code":"unknown"}',
+      '{"version":10,"status":"error","code":["user_not_found"]}',
+      '{"version":10,"status":"error","code":"user_not_found","code":"protocol_error"}',
+      '{"version":10,"status":"ok","environment":{"pi":{},"sandbox":{},"extensions":{}},"overrides":{"tools":{},"t\\u006fools":{}}}',
     ]) {
       expect(() => parseBrokerResponse(response)).toThrow("identity_broker_response_invalid");
     }
@@ -389,7 +410,7 @@ describe("broker response", () => {
   it("parses an optional normalized known read-only class policy for Bash only", () => {
     const response = (tools: unknown) =>
       JSON.stringify({
-        version: 9,
+        version: 10,
         status: "ok",
         environment: { pi: {}, sandbox: {}, extensions: {} },
         overrides: { tools },
@@ -533,7 +554,7 @@ describe("broker response", () => {
       },
     ]) {
       const response = JSON.stringify({
-        version: 9,
+        version: 10,
         status: "ok",
         environment,
         overrides: {},
@@ -549,9 +570,9 @@ describe("broker response", () => {
       socket.on("data", (chunk: string) => {
         request += chunk;
         if (!request.endsWith("\n")) return;
-        expect(JSON.parse(request)).toEqual({ version: 9, operation: "resolve-identity" });
+        expect(JSON.parse(request)).toEqual({ version: 10, operation: "resolve-identity" });
         socket.end(
-          '{"version":9,"status":"ok","environment":{"pi":{"MODEL_TOKEN":"from-broker"},"sandbox":{"PROJECT_ENV":"test"},"extensions":{"service-api":{"SERVICE_API_TOKEN":"service-token"}}},"overrides":{}}\n',
+          '{"version":10,"status":"ok","environment":{"pi":{"MODEL_TOKEN":"from-broker"},"sandbox":{"PROJECT_ENV":"test"},"extensions":{"service-api":{"SERVICE_API_TOKEN":"service-token"}}},"overrides":{}}\n',
         );
       });
     });
@@ -575,7 +596,7 @@ describe("broker response", () => {
         if (!request.endsWith("\n")) return;
         setTimeout(() => {
           socket.end(
-            '{"version":9,"status":"ok","environment":{"pi":{"MODEL_TOKEN":"bun-token"},"sandbox":{},"extensions":{}},"overrides":{}}\n',
+            '{"version":10,"status":"ok","environment":{"pi":{"MODEL_TOKEN":"bun-token"},"sandbox":{},"extensions":{}},"overrides":{}}\n',
           );
         }, 25);
       });
@@ -610,7 +631,7 @@ describe("broker response", () => {
     const rejected = expect(result).rejects.toThrow("identity broker timed out");
     const socket = await peer;
     await vi.advanceTimersByTimeAsync(IDENTITY_BROKER_TIMEOUT_MS - 1);
-    socket.write('{"version":9');
+    socket.write('{"version":10');
     await new Promise<void>((resolve) => setImmediate(resolve));
     await vi.advanceTimersByTimeAsync(1);
     await rejected;
@@ -620,7 +641,7 @@ describe("broker response", () => {
   it("fails closed on broker errors and truncated responses", async () => {
     const errorEndpoint = await listen((socket) => {
       socket.once("data", () =>
-        socket.end('{"version":9,"status":"error","code":"identity_store_unavailable"}\n'),
+        socket.end('{"version":10,"status":"error","code":"identity_store_unavailable"}\n'),
       );
     });
     servers.push(errorEndpoint.server);
@@ -629,7 +650,7 @@ describe("broker response", () => {
     );
 
     const truncatedEndpoint = await listen((socket) => {
-      socket.once("data", () => socket.end('{"version":9'));
+      socket.once("data", () => socket.end('{"version":10'));
     });
     servers.push(truncatedEndpoint.server);
     await expect(resolveBrokerIdentity(truncatedEndpoint.socketPath)).rejects.toThrow(

@@ -136,7 +136,7 @@ combined least-restrictive-wins:
 
 As today, a returned tool policy replaces the base tool policy wholesale. The
 returned bash patch therefore carries its own optional `known_read_only` (absent
-means the user has no class policy). The response uses protocol version 9 and
+means the user has no class policy). The response uses protocol version 10 and
 serializes the class as
 `{"mode":"ask","session_grant":"never","known_read_only":{"mode":"allow","session_grant":"never"}}`,
 omitting `known_read_only` when absent. The client accepts it only for `bash`

@@ -144,7 +144,7 @@ Interactive authentication and retained credentials therefore remain
 per-user, while the administrator controls the available model definitions.
 
 Schema 9 expands bare `~` and a leading `~/` in main-policy hidden paths and
-configured scoped environment values, including user/group values after the
+configured scoped environment string values, including user/group values after the
 broker merge. Resolve the invoking effective user's home from the OS account
 database once at operational startup, before applying any configured environment
 or constructing executors. Ambient or configured `HOME` and CWD must not affect
@@ -191,7 +191,7 @@ argument. It reads optional protected `users.d/*.toml` and `groups.d/*.toml`
 version-10 rules, selecting exactly one `user`/`uid` or `group`/`gid` per file. Filenames are
 labels. Names and numeric selectors have identical precedence.
 
-The protocol uses newline-delimited JSON version 9 and operation
+The protocol uses newline-delimited JSON version 10 and operation
 `resolve-identity`, with no caller-claimed identity. The client keeps its write
 side open; the broker responds after reading the newline. Successful responses
 contain only one combined matching environment/override patch. Missing rule
@@ -223,7 +223,7 @@ matching server IDs in the application. Admit 32 servers, 256 layers/server,
 512 KiB response including newline before writing. Keep connection definitions,
 credential mappings, exposure, timeouts, and audit main-policy-only. See the
 [identity broker contract](../docs/identity-broker.md#mcp-tool-approval-policies)
-for grammar, limits, ordering examples and the strict version-10/protocol-9 cutover.
+for grammar, limits, ordering examples and the strict version-10/protocol-10 cutover.
 Revalidate enabled code-mode exposure against main-policy code-mode availability.
 Disabled servers skip their executable, identity, credential-reference, and
 transport work; independently configured scoped environment still applies.
@@ -236,6 +236,23 @@ and the service lifetime is fifteen seconds. Local accounts and SSSD via local
 sockets are supported; direct network LDAP is outside the service network
 boundary. Membership is a startup snapshot subject to host account caching.
 Lookup failure must not silently omit membership or matching rules.
+
+Authored main/rule Pi environment entries accept a string or an exact
+`{ file = "/normalized/absolute/path" }` table. Other scopes remain string-only.
+Main references resolve after broker overlays as the invoking user; broker
+references resolve after matching and merging under its existing credentials.
+Conflicts compare authored declarations before reads; unmatched rules never open
+references, and an overridden main reference is not read. Each reader caches
+paths for one startup/request only. Ordinary filesystem permissions and symlink
+behavior apply; deployment protects broker targets from untrusted redirection.
+Readers require regular files, cap raw bytes at 8194 and resolved values at
+1–8192 UTF-8 bytes, preserve BOM and all other content except one terminal LF or
+CRLF, reject NUL/invalid UTF-8, and recheck aggregate limits. Failures are path-
+and content-free. Wire protocol 10 permits only strings or exact `{literal}`
+objects in Pi values. File-derived bytes bypass home/account/machine expansion;
+final runtime environments remain string maps. Config/rule versions remain
+13/10. Installation/backend validation and packaging are symbolic: no referenced
+secret file is read or copied. See the [file contract](../docs/configuration.md#file-backed-pi-environment-values).
 
 The effective model catalog is loaded with the `pi` scope applied to the
 trusted host process. The `sandbox` scope is added to Bubblewrap's cleared

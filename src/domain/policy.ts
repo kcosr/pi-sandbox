@@ -105,13 +105,26 @@ export interface IdentityOverrides {
 
 export type EnvironmentVariables = Readonly<Record<string, string>>;
 
-export interface ManagedEnvironment {
-  readonly pi: EnvironmentVariables;
+export interface EnvironmentFileReference {
+  readonly file: string;
+}
+
+/** File contents cross the broker boundary without becoming expandable templates. */
+export interface LiteralEnvironmentValue {
+  readonly literal: string;
+}
+
+export type AuthoredPiEnvironmentValue = string | EnvironmentFileReference;
+export type ResolvedPiEnvironmentValue = string | LiteralEnvironmentValue;
+export type PendingPiEnvironmentValue = AuthoredPiEnvironmentValue | LiteralEnvironmentValue;
+
+export interface ManagedEnvironment<PiValue = string> {
+  readonly pi: Readonly<Record<string, PiValue>>;
   readonly sandbox: EnvironmentVariables;
   readonly extensions: Readonly<Record<string, EnvironmentVariables>>;
 }
 
-export interface SandboxConfig {
+export interface SandboxConfig<PiValue = string> {
   readonly configVersion: 13;
   readonly codemode: CodeModeConfig;
   readonly mcp: McpConfig;
@@ -122,7 +135,7 @@ export interface SandboxConfig {
   readonly identity: IdentityConfig;
   readonly network: NetworkConfig;
   readonly filesystem: FilesystemConfig;
-  readonly environment: ManagedEnvironment;
+  readonly environment: ManagedEnvironment<PiValue>;
   readonly extensions: Readonly<Record<string, ExtensionConfig>>;
   readonly tools: ToolPolicies;
 }

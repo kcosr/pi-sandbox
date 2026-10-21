@@ -21,6 +21,11 @@ export type {
   CommandClassPolicy,
   DisabledIdentityConfig,
   EnvironmentVariables,
+  EnvironmentFileReference,
+  LiteralEnvironmentValue,
+  AuthoredPiEnvironmentValue,
+  ResolvedPiEnvironmentValue,
+  PendingPiEnvironmentValue,
   ExecutionBackend,
   ExecutionConfig,
   FilesystemConfig,
@@ -56,6 +61,8 @@ export {
   isManagedEnvironmentName,
   overlayManagedEnvironment,
   parseManagedEnvironment,
+  parseAuthoredManagedEnvironment,
+  parseBrokerManagedEnvironment,
 } from "./environment.js";
 export { expandManagedHomePaths } from "./home-expansion.js";
 

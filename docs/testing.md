@@ -143,6 +143,15 @@ dependency.
 - command/input/output/time limits and cancellation; and
 - exact dynamic tool-catalog construction.
 
+File-backed Pi environment tests cover strict authored `{file}` versus wire
+`{literal}` parsing, Pi-only admission, literal preservation including BOM and
+macro-looking bytes, LF/CRLF handling, empty/NUL/UTF-8 and byte limits, regular-file
+checks, ordinary symlink/permission behavior, and path-free failure messages.
+Runtime tests cover broker overlay before base reads, matching-only broker
+reads, conflict checks before I/O, per-request snapshots and fresh subsequent
+reads, post-resolution aggregate limits, symbolic installation validation,
+explicit MCP mapping and unchanged sandbox/extension environment isolation.
+
 ### Integration
 
 A deterministic fake Pi API loads the built extension without contacting a

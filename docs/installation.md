@@ -458,7 +458,8 @@ No default command timeout is imposed. Set the optional base-policy
 `execution.max_command_timeout_seconds` when an administrator maximum is needed.
 
 Broker users must update preserved `users.d` and `groups.d` files to
-`version = 10` and upgrade the broker and application together for protocol 9.
+`version = 10` and upgrade the broker and application together for protocol 10.
+Existing version-10 rules need no edits for file-backed values.
 Version-8/9 rules need only the version change. Optional MCP overrides then use
 server-local `enabled`, `default_policy`, and ordered `tool_rules`; invocation
 pairs omit `audit`, which stays global. See the

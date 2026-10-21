@@ -16,6 +16,7 @@ import { connectAuditClient, type AuditClient } from "../audit/client.js";
 import { loadConfig } from "../config/index.js";
 import type {
   AccountIdentity,
+  AuthoredPiEnvironmentValue,
   EnvironmentVariables,
   ManagedEnvironment,
   SandboxConfig,
@@ -53,6 +54,7 @@ import {
   isManagedToolSelected,
 } from "./arguments.js";
 import { applyManagedEnvironment } from "./environment.js";
+import { resolveEnvironmentFiles } from "./environment-files.js";
 import { assertExecutionPrerequisites } from "./prerequisites.js";
 import { createWorkspaceBoundary } from "./workspace.js";
 import { createManagedCleanup, createManagedExecutor } from "./managed-executor.js";
@@ -120,7 +122,10 @@ export function createManagedModelRuntimeFactory(modelsPath: string): ManagedMod
   return async (options = {}) => createConfiguredModelRuntime(modelsPath, options);
 }
 
-async function loadAdministrativeConfig(root: string, configPath: string): Promise<SandboxConfig> {
+async function loadAdministrativeConfig(
+  root: string,
+  configPath: string,
+): Promise<SandboxConfig<AuthoredPiEnvironmentValue>> {
   return loadConfig(pathUnderRoot(root, configPath), managedExtensionCatalog);
 }
 
@@ -166,7 +171,10 @@ function extensionNeedsHostExecutor(
   });
 }
 
-async function readAdministrativeModels(config: SandboxConfig, root = "/"): Promise<string> {
+async function readAdministrativeModels(
+  config: Pick<SandboxConfig, "modelsFile">,
+  root = "/",
+): Promise<string> {
   const modelsPath = pathUnderRoot(root, config.modelsFile);
   await readFile(modelsPath, "utf8");
   return modelsPath;
@@ -175,7 +183,7 @@ async function readAdministrativeModels(config: SandboxConfig, root = "/"): Prom
 export async function validateAdministrativeConfiguration(
   root = "/",
   configPath = SYSTEM_CONFIG_PATH,
-): Promise<SandboxConfig> {
+): Promise<SandboxConfig<AuthoredPiEnvironmentValue>> {
   const config = await loadAdministrativeConfig(root, configPath);
   assertExecutionPlatform(config);
   const modelsPath = await readAdministrativeModels(config, root);
@@ -210,7 +218,7 @@ export async function resolveEffectiveAdministrativeConfiguration(
   // effect. The account lookup must not trust the process's HOME value.
   const expanded = expandManagedHomePaths(
     overridden.filesystem,
-    combinedEnvironment,
+    await resolveEnvironmentFiles(combinedEnvironment),
     account,
     createMachineIdResolver(getMachineId),
   );
@@ -320,7 +328,7 @@ function executionStartupMessage(config: SandboxConfig): string {
 }
 
 export function assertExecutionPlatform(
-  config: SandboxConfig,
+  config: Pick<SandboxConfig, "execution" | "network" | "filesystem" | "identity" | "audit">,
   platform: NodeJS.Platform = process.platform,
 ): void {
   if (platform !== "linux" && platform !== "darwin") {

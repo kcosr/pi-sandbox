@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+### Breaking changes
+
+- Upgrade the application and identity broker together for protocol 10. Main configuration schema 13 and user/group rule version 10 are unchanged. ([#41](https://github.com/kcosr/pi-sandbox/pull/41))
+
+### Added
+
+- Load Pi-scoped environment values from separate files with `{ file = "/absolute/path" }` in main configuration and user/group rules, preserving file contents without macro expansion. ([#41](https://github.com/kcosr/pi-sandbox/pull/41))
+
 ## 0.9.0 - 2026-10-19
 
 ### Breaking changes

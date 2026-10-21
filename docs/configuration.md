@@ -85,10 +85,50 @@ set `PI_CLIPBOARD_OSC52 = "1"` in `environment.pi` to enable Pi's terminal
 clipboard escape sequence. This host-side setting does not require or grant
 sandbox networking.
 
+### File-backed Pi environment values
+
+Pi-scoped variables can read a value from a separate file instead of embedding
+it in TOML:
+
+```toml
+[environment.pi]
+SERVICE_TOKEN = { file = "/etc/pi-sandbox/secrets/service-token" }
+```
+
+The same syntax works in administrator user/group rules. Main-config references
+are read by the application as the invoking user; matching rule references are
+read by the [identity broker](identity-broker.md#file-backed-pi-values). Ordinary
+filesystem permissions and symlink resolution apply. Deployment owns file access
+and protection; an unreadable file fails startup. There are no additional
+secret-file ownership or permission-mode requirements.
+
+`file` must be the table's only key and contain a normalized absolute path of
+at most 4096 UTF-8 bytes. Paths are literal: no home, account, machine-ID,
+environment-variable, or shell expansion. This form is accepted only in
+`environment.pi`, not `sandbox`, `extensions`, or MCP-specific fields.
+
+The target must be a regular UTF-8 file containing at most 8194 bytes. Reads remove
+at most one trailing LF or CRLF, and require a nonempty result of at most 8192
+UTF-8 bytes without NUL. All other contents, including whitespace, a byte-order
+mark, and macro-looking text, are preserved. File contents never undergo the
+string expansion described below.
+
+Only effective references are read: a broker value replacing a main-config
+reference prevents that main file from being opened. Each reader takes one
+snapshot per distinct path during startup; subsequent launches read files again.
+Use atomic replacement for rotation. Existing processes retain their values.
+Installation validation and packaging check reference syntax without opening or
+copying the referenced files. Packaged configuration may contain the references,
+but no secret contents are embedded by this mechanism.
+
+Pi-scoped values retain their existing environment isolation. This does not hide
+the source file from filesystem tools: deployment must also restrict access or
+configure the appropriate filesystem exclusions where necessary.
+
 ### Home-directory and account expansion
 
 Schema 13 expands bare `~` and a leading `~/` in `filesystem.hidden_paths` and `filesystem.denied_paths`,
-every configured value under `environment.pi`, `environment.sandbox`, and
+every configured string value under `environment.pi`, `environment.sandbox`, and
 `environment.extensions.<id>`, and MCP stdio `env` values. These fields also
 accept `{{username}}` and `{{uid}}` anywhere in a string. For example,
 `/srv/accounts/{{username}}` becomes `/srv/accounts/alice`, and `~/cache/{{uid}}`

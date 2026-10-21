@@ -442,6 +442,23 @@ Provider calls made by the trusted host-side Pi process are unaffected.
 
 ## Environment and IPC
 
+Pi-scoped `{ file = "/absolute/path" }` references separate credentials from
+configuration; they do not add an access-control boundary. Main references are
+read with the invoking user's permissions. Broker references are read with the
+broker's privileges only after rule matching and merging. Deployment protects
+the files, containing directories and symlink targets, especially against
+untrusted redirection of a broker read. Existing broker rule-file protection is
+unchanged. Matching users can retrieve their own resolved patch through the
+broker socket, so granted values are not secrets from those users.
+
+Readers bound input, require regular UTF-8 files, reject NUL and empty values,
+and keep file contents out of account/machine expansion and error diagnostics.
+File-derived values enter only the Pi scope; MCP receives them only through
+explicit mappings. Source-file visibility is independent of environment scope:
+a user-readable secret may still be readable by tools unless deployment masks
+or denies its location. Installation validation and packaging do not read or
+copy referenced secret files.
+
 The Bubblewrap worker starts from a cleared environment and gives command
 children fixed values required for execution plus the effective configured
 `sandbox` scope. Sandbox-scoped values are deliberately model-visible and must

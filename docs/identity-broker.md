@@ -94,7 +94,7 @@ The three scopes are intentionally separate:
 Environment entries never select an extension, add or enable a tool, change a
 policy, or grant an invocation.
 
-Configured values equal to `~` or starting with `~/` expand to the invoking
+Configured string values equal to `~` or starting with `~/` expand to the invoking
 effective user's OS account home at application startup. This applies to all
 three scopes, including values overlaid from matching user/group rules. The
 broker returns unexpanded values; conflict checks compare the configured
@@ -110,6 +110,50 @@ macro on unsupported platforms fails effective policy resolution. It is a
 copyable machine identifier, not a credential or account-authentication claim.
 Unknown macro syntax is an error. Other values remain literal. See
 [home-directory and account expansion](configuration.md#home-directory-and-account-expansion).
+
+## File-backed Pi values
+
+User and group rules can reference a separate file for a Pi-scoped variable:
+
+```toml
+version = 10
+group = "developers"
+
+[environment.pi]
+SERVICE_TOKEN = { file = "/etc/pi-sandbox/secrets/service-token" }
+```
+
+The broker selects and merges matching rules, then reads their effective file
+references under its existing credentials and returns the values over the Unix
+socket. Unmatched references are validated structurally but never opened.
+An ordinary string still supports account expansion; file contents do not.
+See [file syntax and contents](configuration.md#file-backed-pi-environment-values)
+for path, UTF-8, newline and size rules.
+
+Conflicts compare declarations before any file reads: different file paths,
+or a string and a file reference, conflict even if their eventual contents would
+match. Repeated identical paths share one read within a broker request. Resolved
+values must still satisfy all environment and response bounds. A new connection
+reads fresh contents; no live reload or cross-request cache is added.
+
+Deployment must keep broker-referenced paths, their ancestors and symlink
+targets under administrative control. Otherwise an untrusted user could redirect
+a privileged read. The reader follows ordinary symlinks and adds no secret-file
+owner, mode, or ancestry checks. Existing root-owned `0600` rule-file checks and
+service confinement remain in force. The service's `ProtectHome` and `PrivateTmp`
+settings still apply; a directory such as `/etc/pi-sandbox/secrets` avoids those
+private or inaccessible locations.
+
+Main-config references are instead read by the invoking application user. A
+root-only file there fails naturally. Put shared root-only values in matching
+broker rules. Authorized users can obtain their own resolved values from the
+socket; storing a secret in a separate file does not hide it from its recipients.
+
+Protocol 10 distinguishes ordinary expandable strings from file-derived
+`{ "literal": "resolved value" }` values in the response's `environment.pi`.
+The latter is a wire-only shape: TOML accepts `{ file = "…" }`, not `literal`,
+and the application never accepts a file reference from the socket. Upgrade the
+application and broker together. Rule version 10 and main schema 13 are unchanged.
 
 ## User and group rules
 
@@ -289,7 +333,7 @@ written. Oversized rules or aggregates fail resolution; they are not truncated.
 The wire representation is deliberately different from authored TOML:
 `policy_layers` retains each matching file's ordered rules and optional default,
 without its identity or filename. Only the broker emits that representation.
-Upgrade the application and broker together for protocol 9 and update all
+Upgrade the application and broker together for protocol 10 and update all
 preserved rule files to version 10; older versions are rejected. Main schema 13
 is unchanged.
 
@@ -375,7 +419,7 @@ Normalization never rejects. For example, a rule with Bash `allow` and another
 with Bash `deny` plus class `allow` combine to Bash `allow` with no class policy.
 
 The broker response carries the class in the same Bash entry, under
-protocol version 9, and omits it when absent:
+protocol version 10, and omits it when absent:
 
 ```json
 {
@@ -427,7 +471,7 @@ timeout fails startup rather than silently dropping group rules.
 
 The broker receives the compiled configuration directory as its executable
 argument and reads both protected rule directories for each connection. Its
-protocol is newline-delimited JSON version 9 with operation `resolve-identity`;
+protocol is newline-delimited JSON version 10 with operation `resolve-identity`;
 requests contain no claimed identity. It returns only the combined matching
 patch, not unrelated rule contents or annotations. Administrators can atomically
 replace files without restarting the socket.
