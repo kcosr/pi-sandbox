@@ -514,3 +514,17 @@ marker in its own subshell, because Bash 3.2 `printf` otherwise keeps a failed
 broken-pipe write buffered and later flushes it to standard error. The
 Apple `cat` Unix-domain socket fallback is recorded as a residual risk in
 [security](security.md#parser-and-shell-differentials).
+
+## Workspace mode policies
+
+Verify schema-14 parsing of both sandbox branches and strict rejection of old
+flat sandbox policies; host/MCP policies stay flat. Cover independent broker
+rule joins, default conflicts, allowed-set union, branch replacement, disabled
+projection, and both-branch class prerequisites. CLI tests cover leading mode
+selection, option values and `--` data, duplicate/misplaced flags and maintenance
+commands. Runtime tests assert selection happens after identity overrides.
+Native Bubblewrap tests use one policy to check read-only host write denial,
+private scratch writes, and writable opt-in with a different approval policy.
+Collector tests require mode/source only on session starts at wire 3/schema 4.
+Qualify the same mode enforcement on supported available macOS hardware before
+claiming native Mac acceptance; Linux tests do not establish Seatbelt behavior.

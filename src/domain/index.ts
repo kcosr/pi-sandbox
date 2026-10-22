@@ -7,9 +7,18 @@ export {
   POLICY_MODES,
   SESSION_GRANT_POLICIES,
   TOOL_NAMES,
+  WORKSPACE_MODES,
   isToolName,
 } from "./policy.js";
 export type {
+  AdministrativeConfig,
+  AdministrativeFilesystemConfig,
+  AdministrativeToolPolicies,
+  WorkspaceMode,
+  WorkspaceSelection,
+  WorkspaceApprovalPolicy,
+  WorkspaceToolPolicy,
+  WorkspaceToolOverride,
   AuditConfig,
   AuditFacility,
   ToolPolicy,

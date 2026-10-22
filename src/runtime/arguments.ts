@@ -80,7 +80,7 @@ export function createManagedPiArguments(args: readonly string[]): string[] {
   return ["--offline", "--no-extensions", "--no-builtin-tools", ...args];
 }
 
-function* managedArguments(
+export function* managedArguments(
   args: readonly string[],
 ): Generator<readonly [string, string | undefined]> {
   for (let index = 0; index < args.length; index += 1) {

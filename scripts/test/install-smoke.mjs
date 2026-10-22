@@ -284,7 +284,7 @@ try {
   const groupsDirectory = path.join(etcDirectory, "groups.d");
   const groups = path.join(groupsDirectory, "admin.toml");
   const groupContents =
-    'version = 10\ngroup = "admin"\n[overrides.tools.bash]\nmode = "ask"\nsession_grant = "offer"\n';
+    'version = 11\ngroup = "admin"\n[overrides.tools.bash]\nenabled = true\nread_write = { mode = "ask", session_grant = "offer" }\n';
   await assertMissing(groupsDirectory);
   await mkdir(groupsDirectory, { mode: 0o755 });
   await writeFile(groups, groupContents, { mode: 0o600 });
@@ -293,7 +293,7 @@ try {
   await mkdir(usersDirectory, { mode: 0o755 });
   await writeFile(
     users,
-    'version = 10\nuid = 1000\n\n[overrides.execution]\nbackend = "direct"\n',
+    'version = 11\nuid = 1000\n\n[overrides.execution]\nbackend = "direct"\n',
     {
       mode: 0o600,
     },
@@ -315,7 +315,7 @@ try {
   assertEqual(await readFile(unrelated, "utf8"), "keep\n", "unrelated configuration");
   assertEqual(
     await readFile(users, "utf8"),
-    'version = 10\nuid = 1000\n\n[overrides.execution]\nbackend = "direct"\n',
+    'version = 11\nuid = 1000\n\n[overrides.execution]\nbackend = "direct"\n',
     "retained user override",
   );
   assertEqual(await readFile(groups, "utf8"), groupContents, "retained group override");

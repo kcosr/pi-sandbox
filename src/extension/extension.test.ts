@@ -93,7 +93,13 @@ function config(
   overrides: Partial<Record<ToolName, "allow" | "ask" | "deny" | "disabled">> = {},
 ): SandboxConfig {
   return {
-    configVersion: 13,
+    configVersion: 14,
+    workspace: {
+      mode: "read_write",
+      default: "read_write",
+      allowed: ["read_write"],
+      source: "default",
+    },
     codemode: { enabled: false, timeoutMs: 300000 },
     mcp: { servers: {} },
     sessions: { retentionDays: 0 },

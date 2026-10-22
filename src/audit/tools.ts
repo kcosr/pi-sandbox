@@ -1,5 +1,7 @@
 import { AsyncLocalStorage } from "node:async_hooks";
 
+import type { WorkspaceSelection } from "../domain/index.js";
+
 import type { ExtensionContext, ToolDefinition } from "@earendil-works/pi-coding-agent";
 
 import {
@@ -80,12 +82,16 @@ export class ToolAuditor {
   private failure: Error | undefined;
   private sessionId: string | undefined;
   private sessionQueue = Promise.resolve();
+  private readonly workspace: Pick<WorkspaceSelection, "mode" | "source">;
 
   public constructor(
     private readonly client: AuditClient,
     private readonly cwd: string,
     private readonly home: string,
-  ) {}
+    workspace: Pick<WorkspaceSelection, "mode" | "source">,
+  ) {
+    this.workspace = { mode: workspace.mode, source: workspace.source };
+  }
 
   private async submit(event: AuditEvent): Promise<void> {
     if (this.failure !== undefined) throw this.failure;
@@ -104,7 +110,13 @@ export class ToolAuditor {
     const transition = this.sessionQueue.then(async () => {
       if (this.sessionId === id) return;
       await this.endSession();
-      await this.submit({ event: "session_started", pi_session_id: id, cwd: this.cwd });
+      await this.submit({
+        event: "session_started",
+        pi_session_id: id,
+        cwd: this.cwd,
+        workspace_mode: this.workspace.mode,
+        workspace_mode_source: this.workspace.source,
+      });
       this.sessionId = id;
     });
     this.sessionQueue = transition.catch(() => undefined);

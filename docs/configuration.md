@@ -38,7 +38,7 @@ extension-specific scoped environment. The required `identity` table either
 disables user resolution or selects the fixed administrator broker. Broker mode
 may overlay a combined patch from `config_dir/users.d/*.toml` and
 `config_dir/groups.d/*.toml` for the caller and its primary/supplementary groups, including scoped environment, selected model file, execution
-backend, network mode, CWD write access, MCP server enablement and approval policies, and any subset of
+backend, network mode, CWD default/allowed modes, MCP server enablement and approval policies, and any subset of
 model-tool policies. If no rules match,
 the main configuration remains unchanged. See
 [user and group environment and overrides](identity-broker.md).
@@ -69,7 +69,7 @@ does not perform root-ownership or metadata checks on these files.
 
 In managed builds, project-local files are untrusted content and cannot broaden
 the installed policy. Configurable builds load a project policy only when the
-caller explicitly selects it with `--config`. The only merge combines administrator-owned user/group rules through the broker. Matching explicit permissions use least restrictive wins before overlaying defaults; user rules have no special precedence.
+caller explicitly selects it with `--config`. The only merge combines administrator-owned user/group rules through the broker. Matching explicit approval permissions use least restrictive wins before overlaying defaults; user rules have no special precedence. CWD defaults must agree, while contributed allowed-mode sets are unioned.
 
 `PI_CODING_AGENT_DIR` remains supported for user state such as credentials,
 sessions, settings, skills, themes, and logs. It never changes the administrative
@@ -127,7 +127,7 @@ configure the appropriate filesystem exclusions where necessary.
 
 ### Home-directory and account expansion
 
-Schema 13 expands bare `~` and a leading `~/` in `filesystem.hidden_paths` and `filesystem.denied_paths`,
+Schema 14 expands bare `~` and a leading `~/` in `filesystem.hidden_paths` and `filesystem.denied_paths`,
 every configured string value under `environment.pi`, `environment.sandbox`, and
 `environment.extensions.<id>`, and MCP stdio `env` values. These fields also
 accept `{{username}}` and `{{uid}}` anywhere in a string. For example,
@@ -180,7 +180,7 @@ targets to exist. Operational startup validates expanded paths before masking.
 ## Complete example
 
 ```toml
-config_version = 13
+config_version = 14
 models_file = "/etc/pi-sandbox/models.json"
 
 [codemode]
@@ -196,7 +196,8 @@ facility = "local0"
 retention_days = 365
 
 [filesystem]
-cwd_writable = true
+cwd_default = "read_write"
+cwd_allowed = ["read_write"]
 hidden_paths = []
 denied_paths = []
 
@@ -220,39 +221,46 @@ allowed_hosts = ["github.com", "git.example.com"]
 allowed_schemes = ["https", "ssh"]
 
 [tools.read]
-mode = "allow"
-session_grant = "never"
+enabled = true
 audit = false
+read_only = { mode = "allow", session_grant = "never" }
+read_write = { mode = "allow", session_grant = "never" }
 
 [tools.grep]
-mode = "allow"
-session_grant = "never"
+enabled = true
 audit = false
+read_only = { mode = "allow", session_grant = "never" }
+read_write = { mode = "allow", session_grant = "never" }
 
 [tools.find]
-mode = "allow"
-session_grant = "never"
+enabled = true
 audit = false
+read_only = { mode = "allow", session_grant = "never" }
+read_write = { mode = "allow", session_grant = "never" }
 
 [tools.ls]
-mode = "allow"
-session_grant = "never"
+enabled = true
 audit = false
+read_only = { mode = "allow", session_grant = "never" }
+read_write = { mode = "allow", session_grant = "never" }
 
 [tools.write]
-mode = "ask"
-session_grant = "never"
+enabled = true
 audit = true
+read_only = { mode = "ask", session_grant = "never" }
+read_write = { mode = "ask", session_grant = "never" }
 
 [tools.edit]
-mode = "ask"
-session_grant = "never"
+enabled = true
 audit = true
+read_only = { mode = "ask", session_grant = "never" }
+read_write = { mode = "ask", session_grant = "never" }
 
 [tools.bash]
-mode = "ask"
-session_grant = "never"
+enabled = true
 audit = true
+read_only = { mode = "ask", session_grant = "never" }
+read_write = { mode = "ask", session_grant = "never" }
 
 [tools.git_clone]
 mode = "ask"
@@ -265,13 +273,14 @@ All seven built-in `[tools.<name>]` sections are required, as is one section for
 every tool contributed by every selected extension. No policy may be present
 for an unselected extension tool. User `!` shell is not configurable: it always
 runs without an approval prompt through the selected backend. It is human-only
-and is never advertised to the model. Setting `[tools.bash]` to `disabled`
+and is never advertised to the model. Setting `tools.bash.enabled = false`
 therefore removes model Bash while preserving the user's `!` command.
 
 These TOML sections define built-in and compiled-extension tool policy. MCP tools
 use the separate per-server policy below. A broker user/group rule
-may override execution backend and network mode and may atomically
-replace individual complete policies, including setting
+may override execution backend and network mode, replace either sandbox-tool
+approval branch independently, or set its `enabled` flag. Host-tool policies
+remain complete single policies, including setting
 `git_clone` or another selected extension tool to `deny` or `disabled`. User/group environment values
 never select an extension, add a tool, change a policy, or authorize a call.
 
@@ -439,41 +448,51 @@ configuration. Unknown fields and malformed dormant configurations are errors.
 
 ## Launch directory access
 
-Configuration schema 13 requires all three keys in `[filesystem]`:
+Configuration schema 14 requires these fields:
 
 ```toml
 [filesystem]
-cwd_writable = true
+cwd_default = "read_only"
+cwd_allowed = ["read_only", "read_write"]
 hidden_paths = []
 denied_paths = []
 ```
 
-`true` is the packaged default and permits Bubblewrap operations to write in
-the launch directory. `false` keeps the launch directory visible at the same
-absolute path but mounts it read-only. This restriction applies to all built-in
-tools and human `!` commands, including an allowed model Bash command. Tool
-approval never makes a read-only mount writable. Private `/tmp` and `/run`
-storage remains writable, so Bash can prepare temporary files without modifying
-host directory contents.
+The administrator selects the default and permitted modes. A normal launch uses
+`cwd_default`; a leading `--writable-cwd` or `--read-only-cwd` selects the requested
+mode only if it is in the final `cwd_allowed` set after user/group overrides.
+The flags are mutually exclusive and cannot be repeated or changed during a
+process. With build-enabled config selection, the order is:
 
-Both settings create an explicit same-path CWD bind after the private mounts:
-`--bind` for writable access and `--ro-bind` for read-only access. Workspaces
-beneath `/tmp` therefore remain visible. CWD exactly `/tmp` is rejected when
-`cwd_writable = false`, because that bind would mask private writable `/tmp`.
-With `true`, the existing host-`/tmp` CWD behavior is retained. CWD `/` and paths
-overlapping `/proc`, `/sys`, `/dev`, or `/run` remain invalid.
+```sh
+pi-sandbox --config /path/to/config.toml --writable-cwd [Pi arguments]
+```
 
-Direct execution requires `cwd_writable = true`, `hidden_paths = []`, and `denied_paths = []`; it cannot enforce a read-only
-host CWD. Managed host tools remain outside this restriction and can still
-write according to their compiled operation and the invoking user's authority.
-`cwd_writable` changes write access only. Use `hidden_paths` to remove selected
-host file and directory contents from the sandboxed tools' filesystem view.
+Managed builds omit `--config`. Put the mode flag before Pi arguments; it is not
+forwarded to Pi. A flag-looking string supplied as a Pi option's value or after
+`--` remains data. Mode flags cannot accompany maintenance commands such as
+`--version`, `--validate-installation`, or `--print-execution-backend`.
 
-A root-managed user/group rule may override this setting with
-`[overrides.filesystem] cwd_writable = false`. Omission inherits the parent
-value. The final backend/filesystem combination is validated after overrides;
-switching a read-only base to direct execution also requires overriding
-`cwd_writable` to `true`.
+The selected mode controls both CWD write authority and the matching sandbox-tool
+approval branch. In `read_only`, visible host files remain readable, while private
+runtime/scratch storage remains writable. In `read_write`, the launch CWD also
+admits writes. Neither mode changes configured networking, hidden paths, denied
+paths, host Git tools, MCP tools, or user `!` shell approval. A read-only sandbox
+session is not an application-wide prohibition on external side effects.
+
+Bubblewrap rejects CWD exactly `/tmp` in `read_only` because binding it would
+mask its private writable `/tmp`. Direct execution requires
+`cwd_default = "read_write"`, `cwd_allowed = ["read_write"]`, and empty exclusion
+lists. It cannot enforce read-only host access. No failure falls back to a more
+permissive mode or backend.
+
+User/group rules can override the default and/or allowed set. Conflicting
+explicit defaults fail; contributed allowed sets are unioned. A field omitted by every matching rule inherits main. If rules contribute an
+allowed set, their union replaces the main allowed set. Granting an additional
+allowed mode does not implicitly select it. The final default must belong to the
+final nonempty, duplicate-free allowed set.
+An override switching to direct execution must also satisfy its filesystem and
+network requirements. See [merge rules](identity-broker.md#combining-matching-rules).
 
 ### Hidden files and directories (Bubblewrap)
 
@@ -497,7 +516,8 @@ For an evaluation worker launched in `/srv/evaluations/runs/run-a`:
 
 ```toml
 [filesystem]
-cwd_writable = true
+cwd_default = "read_write"
+cwd_allowed = ["read_write"]
 hidden_paths = ["/srv/evaluations/runs", "/srv/evaluations/transcripts"]
 denied_paths = []
 ```
@@ -520,7 +540,7 @@ the configured name from directory listings.
 Skipped paths are not monitored. If created on the host later, they may be visible
 to the running sandbox until restart unless another mask already hides them.
 
-The setting belongs only to the main TOML. User/group `cwd_writable` overrides
+The setting belongs only to the main TOML. User/group CWD mode overrides
 preserve it; rules cannot set or clear `hidden_paths`. A rule switching the
 backend to direct execution is rejected if hidden paths are configured.
 
@@ -550,7 +570,7 @@ hidden directory.
 ### Denied directories (Seatbelt)
 
 Seatbelt is the macOS packaged default. Start with
-`config/default/config.seatbelt.toml`, or use these fields in a complete schema-13
+`config/default/config.seatbelt.toml`, or use these fields in a complete schema-14
 configuration:
 
 ```toml
@@ -561,12 +581,13 @@ backend = "seatbelt"
 mode = "none"
 
 [filesystem]
-cwd_writable = false
+cwd_default = "read_only"
+cwd_allowed = ["read_only"]
 hidden_paths = []
 denied_paths = ["~/.ssh"]
 ```
 
-`denied_paths` is required in every schema-13 configuration and must be empty
+`denied_paths` is required in every schema-14 configuration and must be empty
 for Bubblewrap and direct execution. Seatbelt requires empty `hidden_paths`.
 It accepts up to 63 unique normalized directory paths, with the same account
 macros and home expansion as hidden paths. Every expanded target must exist and
@@ -577,7 +598,7 @@ rejected, as are paths that conflict with required runtime grants. Denials
 cannot be removed by a user/group override. Denial is an
 access error, not an empty filesystem mask; directory entries may remain visible.
 
-`cwd_writable = false` permits reads but denies ordinary writes under CWD.
+The `read_only` CWD mode permits reads but denies ordinary writes under CWD.
 Real host scratch storage remains writable and supplies HOME and TMPDIR; literal
 `/tmp` is not private. `network.mode = "none"` denies network operations through
 Seatbelt policy; `host` permits host networking subject to the remaining policy.
@@ -716,7 +737,7 @@ boundary; fatal worker/transport failure may abort the executor. Direct and
 Seatbelt cleanup is best effort. Seatbelt survivors retain their original grants
 after close or owner death; no watcher, helper or grant revocation is provided.
 
-The removed `process_lifetime` field is rejected by managed schema 13. There is
+The removed `process_lifetime` field is rejected by managed schema 14. There is
 one lifecycle contract rather than separate command and sandbox modes.
 
 ## Compiled extensions
@@ -724,7 +745,8 @@ one lifecycle contract rather than separate command and sandbox modes.
 Extension selection is an administrative runtime choice within the catalog
 fixed at build time. `[extensions]` is required even when empty. Selecting an
 extension enables its configuration and adds its tool names to the exact
-required policy set; `mode = "disabled"` hides a selected tool but does not
+required policy set. These host tools retain flat policies; `mode = "disabled"`
+hides a selected tool but does not
 remove the requirement to state its policy. User/group broker drop-ins can replace
 policies for selected tools, but cannot select extensions or change extension
 configuration.
@@ -773,16 +795,52 @@ host code and is not contained by the policy wrapper.
 
 ## Policy modes
 
-| Mode       | Model tool                                   |
-| ---------- | -------------------------------------------- |
-| `allow`    | Present and executed without a prompt        |
-| `ask`      | Present and requires interactive approval    |
-| `deny`     | Present as a fail-closed guard, but rejected |
-| `disabled` | Omitted from the model catalog               |
+The seven sandbox tools (`read`, `grep`, `find`, `ls`, `write`, `edit`, `bash`)
+have independent `enabled` and `audit` fields plus two required approval branches.
+The branch name describes **workspace access**, not whether the command writes:
 
-`deny` and `disabled` are intentionally distinct. Disabled model tools are not
-advertised to the model. A denied subject remains policy-addressable and rejects
-stale or forced calls.
+```toml
+[tools.bash]
+enabled = true
+audit = true
+read_only = { mode = "allow", session_grant = "never" }
+read_write = { mode = "ask", session_grant = "never", known_read_only = { mode = "allow", session_grant = "never" } }
+
+[tools.write]
+enabled = true
+audit = true
+read_only = { mode = "allow", session_grant = "never" }
+read_write = { mode = "ask", session_grant = "never" }
+
+[tools.edit]
+enabled = true
+audit = true
+read_only = { mode = "allow", session_grant = "never" }
+read_write = { mode = "ask", session_grant = "never" }
+```
+
+Combine this example with the read-only-default filesystem policy above and
+`network.mode = "none"` for unprompted sandbox work with writable scratch and
+explicit writable-CWD opt-in. The other four tools still require both branches;
+class `allow` requires them enabled with `allow` in the same branch. Packaged
+configs retain their previous writable-CWD defaults and approval behavior until
+an administrator chooses this setup.
+
+| Branch mode | Invocation behavior                                 |
+| ----------- | --------------------------------------------------- |
+| `allow`     | Execute without a prompt                            |
+| `ask`       | Require interactive approval                        |
+| `deny`      | Reject, while keeping a fail-closed tool definition |
+
+`enabled = false` removes the tool from the catalog for both modes. Branches do
+not enable a tool, and enablement does not approve an invocation. Both complete
+branches are validated even when the tool or mode is disabled. A disabled tool
+resolves to an internal classless disabled policy.
+
+Host extensions such as `git_clone` and MCP tools retain their existing flat
+`mode` / `session_grant` policies (`allow`, `ask`, `deny`, `disabled`). They reject
+workspace branches and are unaffected by CWD selection. Sandbox tools reject
+the obsolete flat shape. All audit choices remain main-policy-only.
 
 ## Session grants
 
@@ -821,9 +879,8 @@ Pi Sandbox registers one read-only diagnostic command:
 /sandbox mcp docs
 ```
 
-`/sandbox` reports whether the selected backend is initialized, its process
-lifetime, execution backend, launch directory, selected configuration path,
-effective selected model file, identity mode, effective network mode, CWD access,
+`/sandbox` reports whether the selected backend is initialized, execution backend, launch directory, selected configuration path,
+effective selected model file, identity mode, effective network mode, selected/default/allowed CWD modes and selection source,
 user-state directory, code-mode enablement, and MCP server count. `/sandbox mounts`
 reports Bubblewrap's semantic mount policy, Seatbelt's filesystem policy, or the
 absence of filesystem containment in direct mode. Seatbelt output covers denied
@@ -876,7 +933,7 @@ An approval-required operation is denied when:
 
 ## Bash scope
 
-Model Bash uses the configured `tools.bash` policy, refined by an optional
+Model Bash uses the selected `tools.bash.read_only` or `tools.bash.read_write` policy, refined by an optional
 [known read-only class policy](#known-read-only-bash-commands). Explicit user `!` shell is
 always allowed without a prompt because it is an action directly invoked by the
 user. Both use the configured backend. In direct mode they run as the current
@@ -893,7 +950,7 @@ to both model Bash and user `!` shell; user shell has no per-command override.
 
 In Bubblewrap, either kind of shell command can read the ordinary host
 filesystem and write private temporary state. It can write inside the launch
-CWD only when `filesystem.cwd_writable = true`; the rest of the ordinary host
+CWD only in the `read_write` CWD mode; the rest of the ordinary host
 filesystem remains read-only. Its network authority is the effective `network`
 mode. Structured-tool policies do not intercept file or network operations
 performed by Bash.
@@ -905,16 +962,13 @@ read-only use a more permissive policy than other Bash commands:
 
 ```toml
 [tools.bash]
-mode = "deny"
-session_grant = "never"
+enabled = true
 audit = true
-
-[tools.bash.known_read_only]
-mode = "allow"
-session_grant = "never"
+read_only = { mode = "allow", session_grant = "never" }
+read_write = { mode = "deny", session_grant = "never", known_read_only = { mode = "allow", session_grant = "never" } }
 ```
 
-`[tools.bash]` remains the main policy for every command the class does not
+The selected `[tools.bash.<workspace-mode>]` branch remains the main policy for every command the class does not
 cover. When the effective Bash policy has a class policy, Pi Sandbox analyzes
 the exact command text of each model `bash` call before preparing its approval
 request and classifies it as `known_read_only` or `unclassified`. Classification
@@ -931,48 +985,20 @@ command with an unlisted option, is unclassified and uses the main policy.
 
 ### Class policy validation
 
-The table is an additive optional field of configuration schema 13. It accepts
-exactly `mode` (`allow`, `ask` or `deny`) and `session_grant` (`never` or
-`offer`). Availability remains tool-level: `disabled` is not a class mode, and
-`audit` stays on `[tools.bash]`. Each violation is reported in the ordinary
-`Invalid pi-sandbox configuration in <path>:` list:
+`known_read_only` is optional inside either Bash branch. It contains exactly
+`mode` (`allow`, `ask`, `deny`) and `session_grant` (`never`, `offer`). It is
+rejected under other tools or outside a branch. `offer` requires `ask`.
+The class must be strictly more permissive than its own branch, using
+`deny < ask < allow` and `ask/never < ask/offer`. Availability and audit stay at
+tool level. A class granting `allow` requires `read`, `grep`, `find`, and `ls`
+to be enabled and have `allow` in that same workspace branch.
 
-1. The table is accepted only under `[tools.bash]`. Elsewhere it is
-   `config.tools.<tool>.known_read_only is not a recognized field`. A non-table
-   value is `config.tools.bash.known_read_only must be a table`.
-2. Missing or extra fields report
-   `config.tools.bash.known_read_only.<field> is required` or
-   `config.tools.bash.known_read_only.<field> is not a recognized field`.
-   Invalid values report
-   `config.tools.bash.known_read_only.mode must be one of: allow, ask, deny` or
-   `config.tools.bash.known_read_only.session_grant must be one of: never, offer`.
-3. `offer` requires `ask`:
-   `config.tools.bash.known_read_only.session_grant may be "offer" only when mode is "ask"`.
-4. The class policy must be strictly more permissive than the main policy:
-   `config.tools.bash.known_read_only must be strictly more permissive than config.tools.bash (mode deny < ask < allow, or ask with session_grant "offer" over "never"); otherwise it has no effect`.
-5. A class policy is not permitted under a disabled main policy:
-   `config.tools.bash.known_read_only is not permitted when config.tools.bash.mode is "disabled"; availability is tool-level only`.
-6. Class `allow` requires `read`, `grep`, `find` and `ls` to be `allow`, one
-   issue per tool:
-   `config.tools.bash.known_read_only.mode "allow" requires config.tools.<tool>.mode "allow" (it is "<mode>")`.
-
-Rule 4 exists because the model chooses the command text and can always move a
-command out of the class, for example by adding a variable or an unlisted
-option. A class policy stricter than the main policy would protect nothing, so
-it is rejected rather than silently ignored. Rule 6 makes skipping the prompt
-justified: the typed read and search tools can already observe the same data
-without a prompt.
-
-Broker rule files carry the same table with the same per-file rules. After user
-and group rules are applied, rule 6 is checked again on the effective policy and
-startup fails with:
-
-```text
-effective tool policy after identity overrides is invalid: tools.bash.known_read_only.mode "allow" requires tools.<tool>.mode "allow" (it is "<mode>"); allow read, grep, find, ls or use a stricter bash.known_read_only mode in the base configuration or identity broker rules
-```
-
-See [identity broker](identity-broker.md#known-read-only-bash-class) for
-merging and replacement.
+Validate these conditions for both branches in main and again after identity
+overrides, including dormant branches and disabled tools. A disabled read/search tool does
+not satisfy a class-`allow` prerequisite, even when Bash is also disabled. This catches invalid
+policies before a later rule enables a tool or mode. Remove an unnecessary
+class or use a stricter class mode to satisfy its prerequisites. Only the
+selected branch creates an analyzer or grants at runtime.
 
 ### Decisions
 
@@ -983,18 +1009,20 @@ join of both policies: the greater mode and the greater session option, keeping
 is strictly more permissive, the join equals the class policy. Every accepted
 combination:
 
-| `[tools.bash]` | `known_read_only` | Unclassified commands                | Known read-only commands                |
-| -------------- | ----------------- | ------------------------------------ | --------------------------------------- |
-| `deny`         | `ask`/`never`     | Denied with feedback                 | Prompted: **Allow once**, **Deny**      |
-| `deny`         | `ask`/`offer`     | Denied with feedback                 | Prompted, with the class session choice |
-| `deny`         | `allow`           | Denied with feedback                 | Run without a prompt                    |
-| `ask`/`never`  | `ask`/`offer`     | Prompted: **Allow once**, **Deny**   | Prompted, with the class session choice |
-| `ask`/`never`  | `allow`           | Prompted: **Allow once**, **Deny**   | Run without a prompt                    |
-| `ask`/`offer`  | `allow`           | Prompted, with **Allow for session** | Run without a prompt                    |
+| Selected Bash branch | Its `known_read_only` | Unclassified commands                | Known read-only commands                |
+| -------------------- | --------------------- | ------------------------------------ | --------------------------------------- |
+| `deny`               | `ask`/`never`         | Denied with feedback                 | Prompted: **Allow once**, **Deny**      |
+| `deny`               | `ask`/`offer`         | Denied with feedback                 | Prompted, with the class session choice |
+| `deny`               | `allow`               | Denied with feedback                 | Run without a prompt                    |
+| `ask`/`never`        | `ask`/`offer`         | Prompted: **Allow once**, **Deny**   | Prompted, with the class session choice |
+| `ask`/`never`        | `allow`               | Prompted: **Allow once**, **Deny**   | Run without a prompt                    |
+| `ask`/`offer`        | `allow`               | Prompted, with **Allow for session** | Run without a prompt                    |
 
-`deny` plus a class policy runs only known read-only commands. Every other
-combination, including any class policy under `allow` or `disabled`, is
-rejected. Prompted requests are denied as usual without an interactive UI.
+`deny` plus a class policy admits only known read-only commands, subject to the
+class approval. Every other combination, including any class policy under
+`allow`, is rejected. `disabled` is not a branch mode: use `enabled = false`
+to hide sandbox Bash, while retaining two valid branches. Prompted requests are
+denied as usual without an interactive UI.
 
 ### Prompts and scoped session grants
 
@@ -1222,9 +1250,10 @@ It does not change tool visibility, approval, or execution authority. Session
 lifecycle events are emitted whenever logging is enabled, independently of the
 individual tool selections. Human `!` commands are excluded.
 
-These settings belong exclusively to the parent configuration. user/group rules
+These settings belong exclusively to the parent configuration. User/group rules
 cannot contain `[audit]` or tool-level `audit` fields. A combined override replaces
-its tool's invocation permissions while retaining the parent's logging choice.
+a contributed invocation branch or host-tool policy while retaining the parent's
+logging choice.
 
 Logged fields identify the tool, execution boundary, permission decision,
 invocation, Pi session, and outcome. File tools include their resolved absolute
@@ -1234,7 +1263,9 @@ and an explicit truncation flag. Its command limit is 4096 bytes of JSON-escaped
 count toward that bound. Invalid target paths are omitted, and command capture
 stops before a NUL or an unpaired Unicode surrogate with the truncation flag set. Commands may themselves contain inline
 content or credentials; length limits do not redact them. Session events include
-the captured launch CWD. Records use JSON escaping to remain single-line.
+the captured launch CWD. `session_started` also records `workspace_mode`
+(`read_only` or `read_write`) and `workspace_mode_source` (`default` or `flag`).
+Records use JSON escaping to remain single-line.
 
 When the effective Bash policy has a `known_read_only` class policy, Bash
 `tool_execution_intent` and `tool_denied` records also carry `command_class`

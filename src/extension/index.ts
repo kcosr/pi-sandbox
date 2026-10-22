@@ -531,6 +531,7 @@ export function createPiSandboxExtension(dependencies: ExtensionDependencies): E
               modelsFile: config.modelsFile,
               execution: config.execution,
               filesystem: config.filesystem,
+              workspace: config.workspace,
               identity: config.identity,
               network: config.network,
               extensions: Object.keys(config.extensions),
@@ -604,6 +605,7 @@ export function createPiSandboxExtension(dependencies: ExtensionDependencies): E
             dependencies.auditClient,
             dependencies.cwd,
             dependencies.executor.home,
+            config.workspace,
           );
           await state.auditor.start(ctx);
         }

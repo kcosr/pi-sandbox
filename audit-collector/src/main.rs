@@ -33,6 +33,18 @@ struct Event {
     pi_session_id: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     cwd: Option<String>,
+    #[serde(
+        default,
+        deserialize_with = "present_string",
+        skip_serializing_if = "Option::is_none"
+    )]
+    workspace_mode: Option<String>,
+    #[serde(
+        default,
+        deserialize_with = "present_string",
+        skip_serializing_if = "Option::is_none"
+    )]
+    workspace_mode_source: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     invocation_id: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -71,6 +83,14 @@ struct Event {
     known_read_only_version: Option<u32>,
 }
 
+// A missing optional field differs from an explicitly supplied null: workspace
+// provenance is mandatory on start and forbidden on every other event.
+fn present_string<'de, D: serde::Deserializer<'de>>(
+    deserializer: D,
+) -> Result<Option<String>, D::Error> {
+    String::deserialize(deserializer).map(Some)
+}
+
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 struct AuditConfig {
@@ -99,7 +119,7 @@ fn facility(config: &str) -> io::Result<Option<u32>> {
     if value
         .get("config_version")
         .and_then(toml::Value::as_integer)
-        != Some(13)
+        != Some(14)
     {
         return Err(invalid());
     }
@@ -204,7 +224,7 @@ fn read_frame(reader: &mut impl BufRead) -> io::Result<Option<Request>> {
         }
     }
     let request: Request = serde_json::from_slice(&bytes).map_err(|_| invalid())?;
-    if request.version != 2 || !valid_event(&request.event) {
+    if request.version != 3 || !valid_event(&request.event) {
         return Err(invalid());
     }
     Ok(Some(request))
@@ -247,7 +267,16 @@ fn valid_event(e: &Event) -> bool {
     {
         return false;
     }
-    if e.event == "session_started" && e.cwd.is_none() {
+    if e.event == "session_started" {
+        if e.cwd.is_none()
+            || e.workspace_mode.is_none()
+            || e.workspace_mode_source.is_none()
+            || !one_of(&e.workspace_mode, &["read_only", "read_write"])
+            || !one_of(&e.workspace_mode_source, &["default", "flag"])
+        {
+            return false;
+        }
+    } else if e.workspace_mode.is_some() || e.workspace_mode_source.is_some() {
         return false;
     }
     if tool_event && (e.tool.is_none() || e.invocation_id.is_none()) {
@@ -362,7 +391,7 @@ fn serve(
             Err(_) => {
                 return reply(
                     output,
-                    serde_json::json!({"version":2,"ok":false,"code":"protocol_error"}),
+                    serde_json::json!({"version":3,"ok":false,"code":"protocol_error"}),
                 );
             }
         };
@@ -372,12 +401,12 @@ fn serve(
         {
             return reply(
                 output,
-                serde_json::json!({"version":2,"ok":false,"code":"protocol_error"}),
+                serde_json::json!({"version":3,"ok":false,"code":"protocol_error"}),
             );
         }
         sequence = sequence.checked_add(1).ok_or_else(invalid)?;
         let record = Record {
-            schema_version: 3,
+            schema_version: 4,
             principal_uid: credentials.uid,
             principal_user: principal_user.as_deref(),
             principal_pid: credentials.pid,
@@ -391,12 +420,12 @@ fn serve(
         if submit(&message).is_err() {
             return reply(
                 output,
-                serde_json::json!({"version":2,"ok":false,"code":"syslog_unavailable"}),
+                serde_json::json!({"version":3,"ok":false,"code":"syslog_unavailable"}),
             );
         }
         reply(
             output,
-            serde_json::json!({"version":2,"ok":true,"audit_session_id":session}),
+            serde_json::json!({"version":3,"ok":true,"audit_session_id":session}),
         )?;
         if request.event.event == "session_started" {
             active_session = Some(request.event.pi_session_id);
@@ -426,7 +455,7 @@ fn run() -> io::Result<()> {
     else {
         return reply(
             &mut io::stdout().lock(),
-            serde_json::json!({"version":2,"ok":false,"code":"audit_disabled"}),
+            serde_json::json!({"version":3,"ok":false,"code":"audit_disabled"}),
         );
     };
     let credentials = peer_credentials(0)?;
@@ -494,11 +523,85 @@ mod tests {
     use std::os::unix::net::UnixStream;
 
     fn start(id: &str) -> serde_json::Value {
-        serde_json::json!({"version":2,"event":{"event":"session_started","pi_session_id":id,"cwd":"/workspace"}})
+        serde_json::json!({"version":3,"event":{"event":"session_started","pi_session_id":id,"cwd":"/workspace","workspace_mode":"read_only","workspace_mode_source":"default"}})
     }
     fn tool() -> serde_json::Value {
-        serde_json::json!({"version":2,"event":{"event":"tool_execution_intent","pi_session_id":"pi-1","tool":"bash","invocation_id":"call-1","boundary":"bubblewrap","approval_source":"prompt","command":"printf 'hello\\n'","command_truncated":false}})
+        serde_json::json!({"version":3,"event":{"event":"tool_execution_intent","pi_session_id":"pi-1","tool":"bash","invocation_id":"call-1","boundary":"bubblewrap","approval_source":"prompt","command":"printf 'hello\\n'","command_truncated":false}})
     }
+    #[test]
+    fn session_start_requires_workspace_provenance_and_stores_both_fields() {
+        for mode in ["read_only", "read_write"] {
+            for source in ["default", "flag"] {
+                let mut request = start("pi-1");
+                request["event"]["workspace_mode"] = serde_json::json!(mode);
+                request["event"]["workspace_mode_source"] = serde_json::json!(source);
+                let mut records = Vec::new();
+                serve(
+                    &mut Cursor::new(lines(&[request])),
+                    &mut Vec::new(),
+                    credentials(),
+                    "a",
+                    16,
+                    |_| Ok(None),
+                    |message| {
+                        records.push(message.to_vec());
+                        Ok(())
+                    },
+                )
+                .unwrap();
+                let text = std::str::from_utf8(&records[0]).unwrap();
+                let saved: serde_json::Value =
+                    serde_json::from_str(text.split_once(": ").unwrap().1).unwrap();
+                assert_eq!(saved["schema_version"], 4);
+                assert_eq!(saved["workspace_mode"], mode);
+                assert_eq!(saved["workspace_mode_source"], source);
+            }
+        }
+        for key in ["workspace_mode", "workspace_mode_source"] {
+            let mut request = start("pi-1");
+            request["event"].as_object_mut().unwrap().remove(key);
+            assert!(read_frame(&mut Cursor::new(lines(&[request]))).is_err());
+            for value in [
+                serde_json::json!(true),
+                serde_json::json!(null),
+                serde_json::json!(""),
+                serde_json::json!("unknown"),
+                serde_json::json!(1),
+            ] {
+                let mut request = start("pi-1");
+                request["event"][key] = value;
+                assert!(read_frame(&mut Cursor::new(lines(&[request]))).is_err());
+            }
+        }
+        let mut old = start("pi-1");
+        old["version"] = serde_json::json!(2);
+        assert!(read_frame(&mut Cursor::new(lines(&[old]))).is_err());
+    }
+
+    #[test]
+    fn workspace_provenance_cannot_be_redefined_by_other_events() {
+        for request in [
+            tool(),
+            mcp("http"),
+            serde_json::json!({"version":3,"event":{"event":"session_ended","pi_session_id":"pi-1"}}),
+        ] {
+            for fields in [
+                serde_json::json!({"workspace_mode":"read_only"}),
+                serde_json::json!({"workspace_mode_source":"flag"}),
+                serde_json::json!({"workspace_mode":null}),
+                serde_json::json!({"workspace_mode_source":null}),
+                serde_json::json!({"workspace_mode":"read_write","workspace_mode_source":"default"}),
+            ] {
+                let mut altered = request.clone();
+                altered["event"]
+                    .as_object_mut()
+                    .unwrap()
+                    .extend(fields.as_object().unwrap().clone());
+                assert!(read_frame(&mut Cursor::new(lines(&[altered]))).is_err());
+            }
+        }
+    }
+
     #[test]
     fn rejects_removed_vm_boundary() {
         let mut request = tool();
@@ -510,7 +613,7 @@ mod tests {
     }
 
     fn mcp(transport: &str) -> serde_json::Value {
-        serde_json::json!({"version":2,"event":{
+        serde_json::json!({"version":3,"event":{
             "event":"tool_execution_intent","pi_session_id":"pi-1",
             "tool":"mcp__docs__search","invocation_id":"nested-1","boundary":"host",
             "mcp_server":"docs","mcp_tool":"search/raw","mcp_transport":transport,
@@ -556,7 +659,7 @@ mod tests {
         let record: serde_json::Value =
             serde_json::from_str(line.split_once(": ").unwrap().1).unwrap();
         assert_eq!(record["principal_uid"], 1001);
-        assert_eq!(record["schema_version"], 3);
+        assert_eq!(record["schema_version"], 4);
         assert_eq!(record["principal_user"], "alice");
         assert!(record.get("principal_gid").is_none());
         assert_eq!(record["principal_pid"], 42);
@@ -572,7 +675,7 @@ mod tests {
     }
 
     #[test]
-    fn preserves_typed_mcp_metadata_and_parent_in_schema_three_records() {
+    fn preserves_typed_mcp_metadata_and_parent_in_schema_four_records() {
         for transport in ["http", "stdio"] {
             let mut output = Vec::new();
             let mut messages = Vec::new();
@@ -593,7 +696,7 @@ mod tests {
             let line = std::str::from_utf8(&messages[1]).unwrap();
             let record: serde_json::Value =
                 serde_json::from_str(line.split_once(": ").unwrap().1).unwrap();
-            assert_eq!(record["schema_version"], 3);
+            assert_eq!(record["schema_version"], 4);
             assert_eq!(record["mcp_server"], "docs");
             assert_eq!(record["mcp_tool"], "search/raw");
             assert_eq!(record["mcp_transport"], transport);
@@ -601,7 +704,7 @@ mod tests {
             assert_eq!(record["principal_uid"], 1001);
             for ack in String::from_utf8(output).unwrap().lines() {
                 let ack: serde_json::Value = serde_json::from_str(ack).unwrap();
-                assert_eq!(ack["version"], 2);
+                assert_eq!(ack["version"], 3);
                 assert_eq!(ack["ok"], true);
             }
         }
@@ -848,7 +951,7 @@ mod tests {
         let mut completed = tool();
         completed["event"]["event"] = serde_json::json!("tool_completed");
         completed["event"]["outcome"] = serde_json::json!("success");
-        let ended = serde_json::json!({"version":2,"event":{"event":"session_ended","pi_session_id":"pi-1"}});
+        let ended = serde_json::json!({"version":3,"event":{"event":"session_ended","pi_session_id":"pi-1"}});
         for unclassified in [
             read,
             requested,
@@ -918,7 +1021,7 @@ mod tests {
 
     #[test]
     fn enforces_session_lifecycle_and_allows_switches() {
-        let end = serde_json::json!({"version":2,"event":{"event":"session_ended","pi_session_id":"pi-1"}});
+        let end = serde_json::json!({"version":3,"event":{"event":"session_ended","pi_session_id":"pi-1"}});
         let mut output = Vec::new();
         let mut count = 0;
         serve(
@@ -974,19 +1077,20 @@ mod tests {
     #[test]
     fn configuration_owns_facility_and_requires_current_schema() {
         assert_eq!(
-            facility("config_version=13\n[audit]\nenabled=true\nfacility='local7'").unwrap(),
+            facility("config_version=14\n[audit]\nenabled=true\nfacility='local7'").unwrap(),
             Some(23)
         );
         assert_eq!(
-            facility("config_version=13\n[audit]\nenabled=false\nfacility='local0'").unwrap(),
+            facility("config_version=14\n[audit]\nenabled=false\nfacility='local0'").unwrap(),
             None
         );
         for text in [
             "config_version=10\n[audit]\nenabled=true\nfacility='local0'",
             "config_version=11\n[audit]\nenabled=true\nfacility='local0'",
             "config_version=12\n[audit]\nenabled=true\nfacility='local0'",
-            "config_version=13\n[audit]\nenabled=true\nfacility='auth'",
-            "config_version=13\n[audit]\nenabled=true\nfacility='local0'\npath='/tmp/log'",
+            "config_version=13\n[audit]\nenabled=true\nfacility='local0'",
+            "config_version=14\n[audit]\nenabled=true\nfacility='auth'",
+            "config_version=14\n[audit]\nenabled=true\nfacility='local0'\npath='/tmp/log'",
         ] {
             assert!(facility(text).is_err());
         }

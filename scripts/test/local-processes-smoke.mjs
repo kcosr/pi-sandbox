@@ -12,7 +12,8 @@ export async function testLocalProcessLifetime({ launch, configPath, workspace }
   const config = parseToml(original);
   if (config.execution.backend !== "bubblewrap") return;
   config.network.mode = "local";
-  config.filesystem.cwd_writable = true;
+  config.filesystem.cwd_default = "read_write";
+  config.filesystem.cwd_allowed = ["read_write"];
   const scriptPath = join(workspace, "packaged-local-server.py");
   const portPath = join(workspace, "packaged-local-port");
   await writeFile(

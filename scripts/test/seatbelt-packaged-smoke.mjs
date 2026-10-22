@@ -37,7 +37,12 @@ try {
   config.models_file = modelsPath;
   config.execution = { backend: "seatbelt" };
   config.network = { mode: "none" };
-  config.filesystem = { cwd_writable: true, hidden_paths: [], denied_paths: [denied] };
+  config.filesystem = {
+    cwd_default: "read_write",
+    cwd_allowed: ["read_write"],
+    hidden_paths: [],
+    denied_paths: [denied],
+  };
   config.identity = { mode: "disabled" };
   config.audit.enabled = false;
   config.sessions.retention_days = 365;

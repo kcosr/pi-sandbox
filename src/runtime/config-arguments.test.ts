@@ -84,3 +84,57 @@ describe("build-controlled configuration arguments", () => {
     expect(() => assertRuntimeUser(interactive.piArgs, 0)).toThrow("refusing to run as root");
   });
 });
+
+describe("workspace mode arguments", () => {
+  it.each([
+    ["--writable-cwd", "read_write"],
+    ["--read-only-cwd", "read_only"],
+  ] as const)("consumes %s before passing arguments to Pi", (flag, mode) => {
+    expect(parseSandboxArguments([flag, "--model", "local/example"], managed)).toEqual({
+      configPath: managed.configPath,
+      workspaceMode: mode,
+      piArgs: ["--model", "local/example"],
+    });
+    expect(
+      parseSandboxArguments(["--config", "policy.toml", flag], configurable, "/srv/lab"),
+    ).toEqual({
+      configPath: "/srv/lab/policy.toml",
+      workspaceMode: mode,
+      piArgs: [],
+    });
+  });
+  it.each([
+    ["--writable-cwd", "--read-only-cwd"],
+    ["--read-only-cwd", "--read-only-cwd"],
+    ["--model", "local/example", "--writable-cwd"],
+    ["--writable-cwd=true"],
+  ])("rejects duplicate, conflicting or misplaced selection: %j", (...args) => {
+    expect(() => parseSandboxArguments(args, managed)).toThrow("CWD mode must appear once");
+  });
+  it.each(["--validate-installation", "--print-execution-backend", "--version", "-v"])(
+    "does not attach workspace selection to %s",
+    (command) => {
+      expect(() => parseSandboxArguments(["--read-only-cwd", command], managed)).toThrow(
+        "maintenance",
+      );
+    },
+  );
+  it("keeps option values and post-separator text as data", () => {
+    for (const flag of ["--writable-cwd", "--read-only-cwd", "--config=example"]) {
+      for (const args of [
+        ["--system-prompt", flag],
+        ["--", flag],
+      ]) {
+        expect(parseSandboxArguments(args, managed)).toEqual({
+          configPath: managed.configPath,
+          piArgs: args,
+        });
+      }
+    }
+  });
+  it("preserves managed restrictions after mode selection", () => {
+    expect(() =>
+      parseSandboxArguments(["--writable-cwd", "--extension", "unsafe.ts"], managed),
+    ).toThrow("does not permit");
+  });
+});

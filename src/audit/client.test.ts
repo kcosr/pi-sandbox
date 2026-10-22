@@ -12,8 +12,14 @@ vi.mock("node:fs/promises", async (original) => ({
 import { lstat } from "node:fs/promises";
 import { connectAuditClient, type AuditClient, type AuditEvent } from "./client.js";
 
-const event = { event: "session_started", pi_session_id: "pi-1", cwd: "/workspace" } as const;
-const acknowledgment = `${JSON.stringify({ version: 2, ok: true, audit_session_id: "audit-1" })}\n`;
+const event = {
+  event: "session_started",
+  pi_session_id: "pi-1",
+  cwd: "/workspace",
+  workspace_mode: "read_only",
+  workspace_mode_source: "default",
+} as const;
+const acknowledgment = `${JSON.stringify({ version: 3, ok: true, audit_session_id: "audit-1" })}\n`;
 let directory: string;
 let server: Server | undefined;
 let client: AuditClient | undefined;
@@ -79,7 +85,45 @@ describe("audit client", () => {
       }),
     ).rejects.toThrow("Invalid audit event");
     await client.submit(event);
-    expect(received).toEqual([{ version: 2, event }]);
+    expect(received).toEqual([{ version: 3, event }]);
+  });
+
+  it("requires workspace provenance at session start and nowhere else", async () => {
+    const requests: unknown[] = [];
+    const path = await listen((socket) =>
+      socket.on("data", (data) => {
+        requests.push(JSON.parse(data.toString()));
+        socket.write(acknowledgment);
+      }),
+    );
+    client = await connectAuditClient(path);
+    const invalid: unknown[] = [];
+    for (const key of ["workspace_mode", "workspace_mode_source"] as const) {
+      const missing = { ...event } as Partial<AuditEvent>;
+      delete missing[key];
+      invalid.push(missing);
+      for (const value of [true, null, "", "unknown", 1]) invalid.push({ ...event, [key]: value });
+      invalid.push({ event: "session_ended", pi_session_id: "pi-1", [key]: event[key] });
+      invalid.push({
+        event: "tool_requested",
+        pi_session_id: "pi-1",
+        tool: "bash",
+        invocation_id: "call-1",
+        [key]: event[key],
+      });
+    }
+    for (const bad of invalid)
+      await expect(client.submit(bad as AuditEvent)).rejects.toThrow("Invalid audit event");
+    for (const mode of ["read_only", "read_write"] as const) {
+      for (const source of ["default", "flag"] as const) {
+        await client.submit({ ...event, workspace_mode: mode, workspace_mode_source: source });
+      }
+    }
+    expect(requests).toHaveLength(4);
+    expect(requests).toContainEqual({
+      version: 3,
+      event: { ...event, workspace_mode: "read_write", workspace_mode_source: "flag" },
+    });
   });
 
   it("preserves Bubblewrap as the tool execution boundary", async () => {
@@ -99,11 +143,11 @@ describe("audit client", () => {
       boundary: "bubblewrap",
     };
     await client.submit(call);
-    expect(received).toEqual([{ version: 2, event: call }]);
+    expect(received).toEqual([{ version: 3, event: call }]);
   });
 
   it.each(["http", "stdio"] as const)(
-    "sends typed %s MCP metadata and trusted parent correlation on wire version 2",
+    "sends typed %s MCP metadata and trusted parent correlation on wire version 3",
     async (transport) => {
       const requests: unknown[] = [];
       const path = await listen((socket) =>
@@ -125,7 +169,7 @@ describe("audit client", () => {
         parent_invocation_id: "script-1",
       };
       await client.submit(call);
-      expect(requests).toEqual([{ version: 2, event: call }]);
+      expect(requests).toEqual([{ version: 3, event: call }]);
     },
   );
 
@@ -165,7 +209,7 @@ describe("audit client", () => {
       } as AuditEvent;
       await expect(client.submit(call)).rejects.toThrow("Invalid audit event");
       await client.submit(event);
-      expect(requests).toEqual([{ version: 2, event }]);
+      expect(requests).toEqual([{ version: 3, event }]);
     },
   );
 
@@ -196,7 +240,7 @@ describe("audit client", () => {
         known_read_only_version: version,
       };
       await client.submit(call);
-      expect(requests).toEqual([{ version: 2, event: call }]);
+      expect(requests).toEqual([{ version: 3, event: call }]);
     },
   );
 
@@ -239,7 +283,7 @@ describe("audit client", () => {
     } as AuditEvent;
     await expect(client.submit(call)).rejects.toThrow("Invalid audit event");
     await client.submit(event);
-    expect(requests).toEqual([{ version: 2, event }]);
+    expect(requests).toEqual([{ version: 3, event }]);
   });
 
   it("serializes submissions and waits for fragmented acknowledgments", async () => {
@@ -254,15 +298,16 @@ describe("audit client", () => {
     client = await connectAuditClient(path);
     await Promise.all([client.submit(event), client.submit(event)]);
     expect(requests).toEqual([
-      { version: 2, event },
-      { version: 2, event },
+      { version: 3, event },
+      { version: 3, event },
     ]);
   });
 
   it.each([
     '{"version":1,"ok":true,"audit_session_id":"a"}\n',
-    '{"version":2,"ok":false,"code":"syslog_unavailable"}\n',
-    '{"version":2,"ok":true,"audit_session_id":"a","extra":true}\n',
+    '{"version":2,"ok":true,"audit_session_id":"a"}\n',
+    '{"version":3,"ok":false,"code":"syslog_unavailable"}\n',
+    '{"version":3,"ok":true,"audit_session_id":"a","extra":true}\n',
     "not json\n",
     acknowledgment + acknowledgment,
     "x".repeat(4097),

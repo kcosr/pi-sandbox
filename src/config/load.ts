@@ -1,6 +1,6 @@
 import { readFile } from "node:fs/promises";
 
-import type { AuthoredPiEnvironmentValue, SandboxConfig } from "../domain/index.js";
+import type { AuthoredPiEnvironmentValue, AdministrativeConfig } from "../domain/index.js";
 import type { ManagedExtensionCatalog } from "../managed-extensions/catalog.js";
 import { ConfigError } from "./errors.js";
 import { parseConfig } from "./parse.js";
@@ -8,7 +8,7 @@ import { parseConfig } from "./parse.js";
 export async function loadConfig(
   path: string,
   catalog: ManagedExtensionCatalog,
-): Promise<SandboxConfig<AuthoredPiEnvironmentValue>> {
+): Promise<AdministrativeConfig<AuthoredPiEnvironmentValue>> {
   let sourceText: string;
   try {
     sourceText = await readFile(path, "utf8");

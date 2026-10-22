@@ -116,7 +116,7 @@ Unknown macro syntax is an error. Other values remain literal. See
 User and group rules can reference a separate file for a Pi-scoped variable:
 
 ```toml
-version = 10
+version = 11
 group = "developers"
 
 [environment.pi]
@@ -149,11 +149,11 @@ root-only file there fails naturally. Put shared root-only values in matching
 broker rules. Authorized users can obtain their own resolved values from the
 socket; storing a secret in a separate file does not hide it from its recipients.
 
-Protocol 10 distinguishes ordinary expandable strings from file-derived
+Protocol 11 distinguishes ordinary expandable strings from file-derived
 `{ "literal": "resolved value" }` values in the response's `environment.pi`.
 The latter is a wire-only shape: TOML accepts `{ file = "…" }`, not `literal`,
 and the application never accepts a file reference from the socket. Upgrade the
-application and broker together. Rule version 10 and main schema 13 are unchanged.
+application and broker together. Use rule version 11 and main schema 14.
 
 ## User and group rules
 
@@ -164,38 +164,38 @@ For example, with Bash disabled and read requiring approval in the main policy:
 `/etc/pi-sandbox/groups.d/admin.toml`:
 
 ```toml
-version = 10
+version = 11
 group = "admin"
 
 [overrides.tools.bash]
-mode = "ask"
-session_grant = "offer"
+enabled = true
+read_write = { mode = "ask", session_grant = "offer" }
 ```
 
 `/etc/pi-sandbox/groups.d/log-readers.toml`:
 
 ```toml
-version = 10
+version = 11
 group = "log-readers"
 
 [overrides.tools.read]
-mode = "allow"
-session_grant = "never"
+enabled = true
+read_write = { mode = "allow", session_grant = "never" }
 ```
 
-Someone in both groups receives both exceptions: Bash with approval and read
-without approval. Other tool policies remain at their defaults. A user rule
+Someone in both groups receives both exceptions in read-write mode: enabled Bash
+with approval and read without approval. Their read-only branches inherit main. Other tool policies remain at their defaults. A user rule
 can grant the same kind of exception:
 
 `/etc/pi-sandbox/users.d/alice.toml`:
 
 ```toml
-version = 10
+version = 11
 user = "alice"
 
 [overrides.tools.write]
-mode = "ask"
-session_grant = "never"
+enabled = true
+read_write = { mode = "ask", session_grant = "never" }
 ```
 
 Every file requires `version` and exactly one selector: `user` or `uid` in
@@ -211,11 +211,17 @@ host account service.
 the main configuration's structure. `overrides.models_file` selects a model
 file; `overrides.execution.backend` accepts `bubblewrap` or `direct`;
 `overrides.network.mode` accepts `none`, `local`, or `host`; and
-`overrides.filesystem.cwd_writable` is boolean. Each named entry in
-`overrides.tools` requires both `mode` and `session_grant`; `bash` may also
-carry the optional [known read-only class](#known-read-only-bash-class). Tool
-names must belong to the exact active base policy, including selected compiled
-tools.
+`overrides.filesystem` accepts independently optional `cwd_default` and
+`cwd_allowed`. An empty table is rejected. For the seven sandbox tools, each
+`overrides.tools.<name>` entry accepts optional `enabled`, `read_only`, and
+`read_write` fields and must contribute at least one. Each contributed branch
+requires the complete `mode` / `session_grant` pair; Bash branches may include
+`known_read_only`. A branch replaces its main counterpart, including an absent
+class policy; an unmentioned branch inherits main. Enablement is independent:
+a policy contribution never implicitly enables a disabled tool.
+Host extension tool entries keep the flat complete `mode` / `session_grant`
+shape. Tool names must belong to the active compiled inventory. Neither
+sandbox branches on host tools nor flat sandbox policies are accepted.
 MCP server overrides may change `enabled`, `default_policy`, and ordered
 `tool_rules` for servers defined in the main policy. Connection definitions,
 credential mappings, exposure, timeouts, audit, and the code-mode switch remain
@@ -231,7 +237,7 @@ in the main `[mcp.servers]` table with `enabled = false`, then add a rule such a
 `groups.d/developers.toml`:
 
 ```toml
-version = 10
+version = 11
 group = "developers"
 
 [overrides.mcp.servers.docs]
@@ -276,7 +282,7 @@ Use the same server-local default and ordered rule structure as the main policy,
 with complete `mode`/`session_grant` pairs and no `audit` field:
 
 ```toml
-version = 10
+version = 11
 group = "developers"
 
 [overrides.mcp.servers.docs]
@@ -333,9 +339,12 @@ written. Oversized rules or aggregates fail resolution; they are not truncated.
 The wire representation is deliberately different from authored TOML:
 `policy_layers` retains each matching file's ordered rules and optional default,
 without its identity or filename. Only the broker emits that representation.
-Upgrade the application and broker together for protocol 10 and update all
-preserved rule files to version 10; older versions are rejected. Main schema 13
-is unchanged.
+
+The current contract is main schema 14, rule version 11, and broker protocol 11.
+Older shapes and versions are rejected. Deploy the matching application, broker,
+and audit collector together; the installer preserves rule files, so deployment
+must update their versions and obsolete sandbox/filesystem shapes explicitly.
+See [upgrade instructions](installation.md#installing-and-upgrading).
 
 ### Combining matching rules
 
@@ -343,17 +352,19 @@ All matching user and group rules participate equally. Combine their explicit
 settings first, then overlay the result on the main configuration. Defaults do
 not compete in this comparison, and user rules do not apply last.
 
-| Setting                         | Combination                                                                                                     |
-| ------------------------------- | --------------------------------------------------------------------------------------------------------------- |
-| Tool invocation policy          | Most permissive complete pair wins: `disabled/never` < `deny/never` < `ask/never` < `ask/offer` < `allow/never` |
-| Bash known read-only class      | Join of present class policies, kept only if strictly more permissive than the combined Bash policy             |
-| Network mode                    | Most permissive wins: `none` < `local` < `host`                                                                 |
-| CWD writable                    | `true` wins over `false`                                                                                        |
-| MCP tool invocation policy      | Resolve first match/default per file, then join complete pairs; global audit remains unchanged                  |
-| MCP server enabled              | `true` wins over `false` for each explicitly overridden server                                                  |
-| Execution backend or model file | Different explicit values are a configuration error                                                             |
-| Scoped environment variable     | Different values for the same scope, extension, and variable are a configuration error                          |
-| Omitted setting                 | Inherits from the main configuration if no matching rule specifies it                                           |
+| Setting                         | Combination                                                                                                                                                                                |
+| ------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| Tool invocation policy          | Most permissive complete pair wins independently within each sandbox branch (`deny/never` < `ask/never` < `ask/offer` < `allow/never`); host policies additionally permit `disabled/never` |
+| Bash known read-only class      | Join of present class policies, kept only if strictly more permissive than the combined same-branch Bash policy                                                                            |
+| Network mode                    | Most permissive wins: `none` < `local` < `host`                                                                                                                                            |
+| CWD allowed modes               | Union of explicitly contributed nonempty sets; main only when no contribution                                                                                                              |
+| Default CWD mode                | Explicit values must agree; main only when no contribution                                                                                                                                 |
+| Sandbox tool enabled            | `true` wins over `false`, independently of branch approval                                                                                                                                 |
+| MCP tool invocation policy      | Resolve first match/default per file, then join complete pairs; global audit remains unchanged                                                                                             |
+| MCP server enabled              | `true` wins over `false` for each explicitly overridden server                                                                                                                             |
+| Execution backend or model file | Different explicit values are a configuration error                                                                                                                                        |
+| Scoped environment variable     | Different values for the same scope, extension, and variable are a configuration error                                                                                                     |
+| Omitted setting                 | Inherits from the main configuration if no matching rule specifies it                                                                                                                      |
 
 Rules can replace a default restriction, but cannot revoke permission granted
 by another matching rule. For a common staff/admin setup, keep staff access in
@@ -368,11 +379,13 @@ Rules cannot select extensions, change extension configuration, redirect the
 broker socket, change mount locations or host visibility, or change the fixed
 human-shell behavior. Environment values cannot enable tools or grant approval.
 
-The combined effective configuration is validated again: direct execution
-requires `network.mode = "host"`,
-`filesystem.cwd_writable = true`, and empty
-`filesystem.hidden_paths`. Hidden paths belong exclusively to the main configuration;
-user/group rules cannot replace or erase them.
+The combined effective configuration is validated again. The default must belong
+to the final allowed set, including when one field inherits main. Conflicts fail
+startup instead of silently selecting another mode. Direct execution requires
+`network.mode = "host"`, `cwd_default = "read_write"`,
+`cwd_allowed = ["read_write"]`, and empty filesystem exclusion arrays. Hidden
+and denied paths belong exclusively to the main configuration; user/group rules
+cannot replace or erase them.
 Unknown fields, invalid policy combinations, malformed environment names,
 reserved runtime-injection variables, exposed permissions, and symlinks are
 rejected. All `.toml` files are structurally validated, including unmatched
@@ -384,73 +397,50 @@ size limits.
 
 ### Known read-only Bash class
 
-A rule may give its own Bash policy a
-[known read-only class policy](configuration.md#known-read-only-bash-commands).
-Rule files use `version = 10`:
+A rule may refine either complete Bash branch:
 
 ```toml
-version = 10
+version = 11
 group = "developers"
 
 [overrides.tools.bash]
-mode = "deny"
-session_grant = "never"
-
-[overrides.tools.bash.known_read_only]
-mode = "allow"
-session_grant = "never"
+enabled = true
+read_write = { mode = "deny", session_grant = "never", known_read_only = { mode = "allow", session_grant = "never" } }
 ```
 
-An inline `known_read_only = { mode = "allow", session_grant = "never" }` is
-equivalent. Each file is validated on its own with the base-configuration rules:
-the table is accepted only under `overrides.tools.bash`, has exactly `mode`
-(`allow`, `ask` or `deny`) and `session_grant`, permits `offer` only with `ask`,
-and must be strictly more permissive than the same file's Bash policy, which
-therefore cannot be `disabled`. An invalid file stops startup like any other
-invalid rule, even when it does not match the caller.
+Each file validates the class against its own branch: exactly `mode` and
+`session_grant`, `offer` only with `ask`, and strictly more permissive than that
+branch. Invalid unmatched files also fail validation. Among matching files,
+join the branch pairs and class policies independently, then drop a class that
+is no longer more permissive than the combined branch. Normalization never
+adds permission beyond the contributing policies.
 
-Matching rules combine in two parts. The main Bash pair keeps the ordinary
-most-permissive selection. Class policies combine with the join: the greater
-mode and the greater session option, keeping `offer` only for `ask`. A rule
-without a class policy contributes nothing to the join. The combined class
-policy is then normalized against the combined main policy: it is dropped when
-it is not strictly more permissive or the main policy is `disabled`.
-Normalization never rejects. For example, a rule with Bash `allow` and another
-with Bash `deny` plus class `allow` combine to Bash `allow` with no class policy.
-
-The broker response carries the class in the same Bash entry, under
-protocol version 10, and omits it when absent:
+Protocol 11 preserves every contributed branch; the broker does not select the
+launch mode:
 
 ```json
 {
   "overrides": {
     "tools": {
       "bash": {
-        "mode": "ask",
-        "session_grant": "never",
-        "known_read_only": { "mode": "allow", "session_grant": "never" }
+        "enabled": true,
+        "read_write": {
+          "mode": "deny",
+          "session_grant": "never",
+          "known_read_only": { "mode": "allow", "session_grant": "never" }
+        }
       }
     }
   }
 }
 ```
 
-The client accepts `known_read_only` only for `bash`, with exactly `mode` and
-`session_grant`, and rejects a class policy that is not normalized as
-`identity_broker_response_invalid`. A returned Bash policy replaces the base
-Bash policy wholesale, including its class policy. When matching rules set Bash
-but none supplies `known_read_only`, or normalization drops it, the user has no
-class policy even if the base configuration has one. Repeat the class table in
-rules that should keep it.
-
-The effective policy is then validated again. Class `allow` still requires
-`read`, `grep`, `find` and `ls` to be `allow` after all overrides, so a rule that
-changes one of them can make the inherited base class policy invalid. Startup
-then fails with:
-
-```text
-effective tool policy after identity overrides is invalid: tools.bash.known_read_only.mode "allow" requires tools.<tool>.mode "allow" (it is "<mode>"); allow read, grep, find, ls or use a stricter bash.known_read_only mode in the base configuration or identity broker rules
-```
+A combined contributed branch replaces the corresponding main branch wholesale. Repeat
+its class policy in the rule if it should be retained. An omitted branch
+inherits main. The client validates both final branches: class `allow` requires
+`read`, `grep`, `find`, and `ls` enabled and `allow` in that same branch, even
+when Bash or the branch is dormant. An override that violates those requirements
+fails startup; it does not silently drop an inherited class or enable a tool.
 
 ### Account lookup and lifecycle
 
@@ -471,14 +461,18 @@ timeout fails startup rather than silently dropping group rules.
 
 The broker receives the compiled configuration directory as its executable
 argument and reads both protected rule directories for each connection. Its
-protocol is newline-delimited JSON version 10 with operation `resolve-identity`;
+protocol is newline-delimited JSON version 11 with operation `resolve-identity`;
 requests contain no claimed identity. It returns only the combined matching
 patch, not unrelated rule contents or annotations. Administrators can atomically
 replace files without restarting the socket.
 
 The Bun client independently validates the response, overlays the patch on the
-main configuration, expands configured home-relative values, and validates
-effective policy. It then applies the `pi`
+main configuration, expands configured home-relative values, and validates both
+effective tool-policy branches. It then selects the default or explicitly
+requested workspace mode within the final allowed set. The broker receives no
+requested mode and cannot resolve a different identity from CLI input. The same
+selected mode determines filesystem access, invocation policies, diagnostics,
+and session-start audit metadata for that process. The client applies the `pi`
 environment while loading models and validates extension environments before
 starting executors and Pi. Unavailable brokers, invalid rules or responses,
 conflicting matching values, and invalid effective models stop startup. Missing

@@ -5,7 +5,13 @@ import { formatSandboxMounts, formatSandboxPolicy, formatSandboxSummary } from "
 
 function diagnosticConfig(): SandboxConfig {
   return {
-    configVersion: 13,
+    configVersion: 14,
+    workspace: {
+      mode: "read_write",
+      default: "read_write",
+      allowed: ["read_write"],
+      source: "default",
+    },
     codemode: { enabled: false, timeoutMs: 300000 },
     mcp: { servers: {} },
     sessions: { retentionDays: 0 },
@@ -61,6 +67,7 @@ describe("sandbox diagnostics", () => {
         configPath: "/etc/pi-sandbox/config.toml",
         modelsFile: "/etc/pi-sandbox/models.json",
         filesystem: { cwdWritable: true, deniedPaths: [], hiddenPaths: [] },
+        workspace: diagnosticConfig().workspace,
         execution: { backend: "bubblewrap" },
         identity: { mode: "disabled" },
         network: { mode: "none" },
@@ -73,6 +80,9 @@ Launch CWD:    /work/project
 Hidden paths:  none
 Denied paths:  none
 CWD access:    read/write
+CWD mode:      read_write (default)
+CWD default:   read_write
+CWD allowed:   read_write
 Lifetime:      pi-sandbox process
 Timeout cap:   none
 Processes:     independent commands; background descendants remain until sandbox shutdown
@@ -96,6 +106,7 @@ Use /sandbox mounts or /sandbox policy for details.`);
       configPath: "/etc/pi-sandbox/config.toml",
       modelsFile: "/etc/pi-sandbox/models\u001b[31m.json",
       filesystem: { cwdWritable: true, deniedPaths: [], hiddenPaths: [] },
+      workspace: diagnosticConfig().workspace,
       execution: { backend: "bubblewrap" },
       identity: { mode: "broker" },
       network: { mode: "host" },
@@ -213,6 +224,7 @@ Use /sandbox mounts or /sandbox policy for details.`);
       modelsFile: config.modelsFile,
       execution: config.execution,
       filesystem: config.filesystem,
+      workspace: config.workspace,
       identity: config.identity,
       network: config.network,
       extensions: [],
@@ -240,6 +252,7 @@ Use /sandbox mounts or /sandbox policy for details.`);
       modelsFile: config.modelsFile,
       execution: config.execution,
       filesystem: config.filesystem,
+      workspace: config.workspace,
       identity: config.identity,
       network: config.network,
       extensions: [],
@@ -268,6 +281,7 @@ Use /sandbox mounts or /sandbox policy for details.`);
       modelsFile: config.modelsFile,
       execution: config.execution,
       filesystem: config.filesystem,
+      workspace: config.workspace,
       identity: config.identity,
       network: config.network,
       extensions: [],

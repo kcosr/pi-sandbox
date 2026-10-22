@@ -155,7 +155,7 @@ not the upstream Pi patch series; it does not extend to model/configuration/
 installation paths, arbitrary extension settings, inherited environment, or
 compiled fixed extension values.
 
-The main schema-10 configuration requires `[sessions].retention_days`, an integer
+The main configuration requires `[sessions].retention_days`, an integer
 from `0` through `36500`, defaulted to `365` in packaged TOML. User/group rules
 cannot override it. Zero disables both cleanup and last-use timestamp updates.
 Otherwise, use session-file modification time as the retention clock, refreshing
@@ -188,20 +188,27 @@ per socket connection. It obtains UID from Linux `SO_PEERCRED` and invokes the
 fixed `/usr/bin/getent` host NSS resolver to identify the account and its primary
 and supplementary groups. The compiled configuration directory is its process
 argument. It reads optional protected `users.d/*.toml` and `groups.d/*.toml`
-version-10 rules, selecting exactly one `user`/`uid` or `group`/`gid` per file. Filenames are
+version-11 rules, selecting exactly one `user`/`uid` or `group`/`gid` per file. Filenames are
 labels. Names and numeric selectors have identical precedence.
 
-The protocol uses newline-delimited JSON version 10 and operation
+The protocol uses newline-delimited JSON version 11 and operation
 `resolve-identity`, with no caller-claimed identity. The client keeps its write
 side open; the broker responds after reading the newline. Successful responses
 contain only one combined matching environment/override patch. Missing rule
 directories or no matching rules return an empty patch. The socket remains
 `/run/pi-sandbox-identity/broker.sock` and cannot be redirected by policy.
 
-Combine matching explicit permissions before overlaying defaults. Complete tool
-pairs order as `disabled/never` < `deny/never` < `ask/never` < `ask/offer` <
-`allow/never`; `host` wins for networking and `true` for CWD writability and each
-explicit MCP server enablement override.
+Combine matching explicit permissions before overlaying defaults. Sandbox tools
+have independent `enabled` flags and complete `read_only` / `read_write` policy
+pairs. Join contributed pairs separately per branch as `deny/never` <
+`ask/never` < `ask/offer` < `allow/never`, normalizing class policies per branch;
+each contributed branch replaces its main-policy branch wholesale. Unmentioned
+branches inherit main policy. Host tools and MCP retain their flat pairs with
+`disabled/never` below `deny/never`. Explicit `enabled` flags use true-wins,
+independently of branch policies, and `host` wins for networking.
+Filesystem `cwd_allowed` contributions union, while conflicting explicit
+`cwd_default` values fail. Each field inherits main policy only when no matching
+rule contributes it; the final default must belong to the final allowed set.
 Different explicit backend/model values or values of the same scoped environment
 key fail resolution. User rules have no extra precedence. Logging flags remain
 parent-only. Revalidate the complete effective configuration after the merge.
@@ -223,13 +230,14 @@ matching server IDs in the application. Admit 32 servers, 256 layers/server,
 512 KiB response including newline before writing. Keep connection definitions,
 credential mappings, exposure, timeouts, and audit main-policy-only. See the
 [identity broker contract](../docs/identity-broker.md#mcp-tool-approval-policies)
-for grammar, limits, ordering examples and the strict version-10/protocol-10 cutover.
+for grammar, limits, ordering examples and the strict version-11/protocol-11 cutover.
 Revalidate enabled code-mode exposure against main-policy code-mode availability.
 Disabled servers skip their executable, identity, credential-reference, and
 transport work; independently configured scoped environment still applies.
 User saved preferences may narrow admission but cannot enable an effectively
 disabled server. Administrative changes require restart. Broker support remains
-Linux-only; main configuration schema 13 and audit wire 2/record 3 are unchanged.
+Linux-only. Main configuration requires schema 14, with audit wire 3 and record
+schema 4; upgrade the application, broker, and collector together.
 
 Host lookups are bounded to four seconds, the client deadline is ten seconds,
 and the service lifetime is fifteen seconds. Local accounts and SSSD via local
@@ -248,10 +256,10 @@ behavior apply; deployment protects broker targets from untrusted redirection.
 Readers require regular files, cap raw bytes at 8194 and resolved values at
 1–8192 UTF-8 bytes, preserve BOM and all other content except one terminal LF or
 CRLF, reject NUL/invalid UTF-8, and recheck aggregate limits. Failures are path-
-and content-free. Wire protocol 10 permits only strings or exact `{literal}`
+and content-free. Wire protocol 11 permits only strings or exact `{literal}`
 objects in Pi values. File-derived bytes bypass home/account/machine expansion;
-final runtime environments remain string maps. Config/rule versions remain
-13/10. Installation/backend validation and packaging are symbolic: no referenced
+final runtime environments remain string maps. Config/rule versions are
+14/11. Installation/backend validation and packaging are symbolic: no referenced
 secret file is read or copied. See the [file contract](../docs/configuration.md#file-backed-pi-environment-values).
 
 The effective model catalog is loaded with the `pi` scope applied to the
@@ -471,14 +479,34 @@ survivors, final Linux teardown, unchanged approvals and same-file coordination.
 
 ## CWD filesystem access
 
-Administrative configuration requires `[filesystem].cwd_writable`, with `true`
-in packaged defaults. Root-managed user/group rules may replace that setting under
-`[overrides.filesystem]`. Effective direct execution requires `true`.
+Managed schema 14 requires `[filesystem].cwd_default` and nonempty, unique
+`cwd_allowed`, using `read_only` / `read_write`. Packaged defaults keep
+`cwd_default = "read_write"` and `cwd_allowed = ["read_write"]`. Root-managed
+user/group rules may contribute either field under `[overrides.filesystem]`.
+Direct execution admits only `["read_write"]` in base and effective policy.
+
+After identity overlays, validate both complete sandbox-tool policy branches,
+including dormant or disabled policies, and the effective default/allowed set.
+A leading `--read-only-cwd` or `--writable-cwd` selects an allowed mode; otherwise
+use the effective default. If permitted, `--config FILE` precedes the mode flag.
+Reject conflicting, duplicate, misplaced, maintenance-command, or prohibited
+mode selections without fallback; option values and arguments after `--` remain
+data. Project the selected branch and executor `cwdWritable` option together.
+The seven sandbox tools use independent `enabled` and `audit` fields plus
+complete `read_only` / `read_write` policies; disabled tools project to
+`disabled/never` without class policies. Host extension and MCP policies remain
+independent of workspace mode. No legacy `cwd_writable` or flat sandbox-tool
+policy is accepted.
+
+The mode is fixed for the process across session changes. Diagnostics report
+the selected mode, administrative default/allowed set, and selected tool policies.
+Audit session-start records carry the mode and whether it came from a flag or
+the default; those fields are invalid on other audit events.
 
 The Bubblewrap backend always creates an explicit same-path CWD bind after its
 private mounts: writable with `--bind`, read-only with `--ro-bind`. This preserves
 visibility for `/tmp`-based workspaces independently of write permission and does
-not by itself change host visibility. Schema 9 also requires
+not by itself change host visibility. Managed configuration also requires
 `[filesystem].hidden_paths` (empty by default), a main-policy-only list of paths to
 canonical directories or regular files. Directories use private read-only tmpfs
 masks; files use separate empty inputs to `--ro-bind-data`. Both retain the
@@ -489,7 +517,7 @@ another mask covers them. Reject permission errors, non-directory ancestors,
 special files, and symlink components, including dangling links and symlink
 ancestors of missing targets. Hidden ancestors precede
 the CWD restore; explicit hidden descendants follow it. Broker filesystem overrides
-change only `cwd_writable` and cannot clear these masks. Effective direct execution
+change only `cwd_default` / `cwd_allowed` and cannot clear these masks. Effective direct execution
 requires empty hidden paths. Host Pi context/session loading remains outside the
 tool namespace. Private temporary/runtime
 storage remains writable. Read-only CWD exactly `/tmp` is rejected because its
@@ -497,7 +525,7 @@ bind would mask private `/tmp`. Existing root and private-system-path overlap
 rejections remain enforced. The setting applies to built-ins and user shell;
 managed host tools retain their declared host authority.
 
-Managed schema 13 additionally requires `[filesystem].denied_paths`, empty for
+Managed configuration additionally requires `[filesystem].denied_paths`, empty for
 Bubblewrap/direct. macOS Seatbelt rejects hidden paths
 and local networking, and accepts canonical existing directory denials. A denied
 ancestor admits only CWD; explicit interior denials remain effective. Denials are

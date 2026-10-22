@@ -1,5 +1,6 @@
 import { createConnection } from "node:net";
 import { assertMcpCodeModeExposure } from "../config/mcp.js";
+import { administrativeConfigIssues } from "../config/workspace-mode.js";
 
 import {
   COMMAND_CLASS_MODES,
@@ -17,25 +18,24 @@ import {
   type McpApprovalRule,
   type McpPolicyLayer,
   type ExecutionConfig,
-  type FilesystemConfig,
+  TOOL_NAMES,
+  WORKSPACE_MODES,
+  type WorkspaceMode,
+  type WorkspaceToolPolicy,
+  type WorkspaceToolOverride,
+  type WorkspaceApprovalPolicy,
   type IdentityConfig,
   type ManagedEnvironment,
   type NetworkConfig,
-  type SandboxConfig,
+  type AdministrativeConfig,
   type CommandClassPolicy,
   type SubjectPolicy,
-  type ToolPolicy,
   type IdentityOverrides,
 } from "../domain/index.js";
 import { COMMAND_CLASSES, type CommandClass } from "../permissions/bash/contracts.js";
-import {
-  COMMAND_CLASS_TOOL,
-  commandClassAllowRequirements,
-  commandClassPolicyViolation,
-  commandClassPreconditionIssues,
-} from "../permissions/command-classes.js";
+import { COMMAND_CLASS_TOOL, commandClassPolicyViolation } from "../permissions/command-classes.js";
 
-export const IDENTITY_BROKER_PROTOCOL_VERSION = 10;
+export const IDENTITY_BROKER_PROTOCOL_VERSION = 11;
 export const IDENTITY_BROKER_TIMEOUT_MS = 10_000;
 export const MAXIMUM_IDENTITY_RESPONSE_BYTES = 512 * 1024;
 
@@ -45,14 +45,14 @@ export interface BrokerIdentity {
 }
 
 interface BrokerSuccessResponse {
-  readonly version: 10;
+  readonly version: 11;
   readonly status: "ok";
   readonly environment: ManagedEnvironment<ResolvedPiEnvironmentValue>;
   readonly overrides: IdentityOverrides;
 }
 
 interface BrokerErrorResponse {
-  readonly version: 10;
+  readonly version: 11;
   readonly status: "error";
   readonly code: "identity_store_unavailable" | "protocol_error";
 }
@@ -146,7 +146,7 @@ export function parseBrokerResponse(source: string): BrokerResponse {
       throw invalidResponse();
     }
     return Object.freeze({
-      version: 10,
+      version: 11,
       status: "ok",
       environment: parseBrokerEnvironment(value.environment),
       overrides: parseIdentityOverrides(value.overrides),
@@ -164,9 +164,9 @@ export function parseBrokerResponse(source: string): BrokerResponse {
 }
 
 export function applyIdentityOverrides<PiValue extends AuthoredPiEnvironmentValue>(
-  base: SandboxConfig<PiValue>,
+  base: AdministrativeConfig<PiValue>,
   overrides: IdentityOverrides,
-): SandboxConfig<PiValue> {
+): AdministrativeConfig<PiValue> {
   const availableTools = new Set(Object.keys(base.tools));
   for (const toolName of Object.keys(overrides.tools)) {
     if (!availableTools.has(toolName)) {
@@ -174,18 +174,30 @@ export function applyIdentityOverrides<PiValue extends AuthoredPiEnvironmentValu
     }
   }
   const tools = Object.fromEntries(
-    Object.keys(base.tools).map((toolName) => [
-      toolName,
-      overrides.tools[toolName] === undefined
-        ? base.tools[toolName]
-        : Object.freeze({ ...overrides.tools[toolName], audit: base.tools[toolName]!.audit }),
-    ]),
-  ) as Record<string, ToolPolicy>;
-  assertEffectiveCommandClassPolicies(tools);
+    Object.keys(base.tools).map((toolName) => {
+      const original = base.tools[toolName]!;
+      const override = overrides.tools[toolName];
+      if (override === undefined) return [toolName, original];
+      if ((TOOL_NAMES as readonly string[]).includes(toolName)) {
+        const workspace = original as WorkspaceToolPolicy;
+        const patch = override as WorkspaceToolOverride;
+        return [
+          toolName,
+          Object.freeze({
+            enabled: patch.enabled ?? workspace.enabled,
+            audit: workspace.audit,
+            readOnly: patch.readOnly ?? workspace.readOnly,
+            readWrite: patch.readWrite ?? workspace.readWrite,
+          }),
+        ];
+      }
+      return [toolName, Object.freeze({ ...(override as SubjectPolicy), audit: original.audit })];
+    }),
+  );
   const mcp = applyMcpOverrides(base.mcp, overrides.mcp);
   assertMcpCodeModeExposure(mcp, base.codemode);
-  return Object.freeze({
-    configVersion: 13,
+  const effective = Object.freeze({
+    configVersion: 14 as const,
     codemode: base.codemode,
     mcp,
     audit: base.audit,
@@ -199,12 +211,18 @@ export function applyIdentityOverrides<PiValue extends AuthoredPiEnvironmentValu
     extensions: base.extensions,
     tools: Object.freeze(tools),
   });
+  const issues = administrativeConfigIssues(effective);
+  if (issues.length > 0)
+    throw new Error(
+      `effective administrative policy after identity overrides is invalid: ${issues.join("; ")}; update the base configuration or identity broker rules`,
+    );
+  return effective;
 }
 
 function applyMcpOverrides(
-  base: SandboxConfig["mcp"],
+  base: AdministrativeConfig["mcp"],
   overrides: IdentityOverrides["mcp"],
-): SandboxConfig["mcp"] {
+): AdministrativeConfig["mcp"] {
   if (overrides === undefined) return base;
   const servers = { ...base.servers };
   for (const [id, override] of Object.entries(overrides.servers)) {
@@ -213,21 +231,6 @@ function applyMcpOverrides(
     servers[id] = Object.freeze({ ...base.servers[id]!, ...override });
   }
   return Object.freeze({ servers: Object.freeze(servers) });
-}
-
-/** A broker overlay can change read-tool policies without the bash table that relied on them. */
-function assertEffectiveCommandClassPolicies(tools: Readonly<Record<string, ToolPolicy>>): void {
-  const issues = commandClassPreconditionIssues(tools, "tools");
-  if (issues.length === 0) return;
-  const remedies = COMMAND_CLASSES.filter(
-    (commandClass) => tools[COMMAND_CLASS_TOOL]?.commandClasses?.[commandClass]?.mode === "allow",
-  ).map(
-    (commandClass) =>
-      `allow ${commandClassAllowRequirements(commandClass).join(", ")} or use a stricter ${COMMAND_CLASS_TOOL}.${commandClass} mode`,
-  );
-  throw new Error(
-    `effective tool policy after identity overrides is invalid: ${issues.join("; ")}; ${remedies.join("; ")} in the base configuration or identity broker rules`,
-  );
 }
 
 function applyExecutionOverride(
@@ -256,16 +259,40 @@ function parseIdentityOverrides(value: unknown): IdentityOverrides {
       throw invalidResponse();
     execution = Object.freeze({ backend: value.execution.backend });
   }
-  let filesystem: Pick<FilesystemConfig, "cwdWritable"> | undefined;
+  let filesystem: IdentityOverrides["filesystem"];
   if (Object.hasOwn(value, "filesystem")) {
     if (
       !isRecord(value.filesystem) ||
-      !hasExactKeys(value.filesystem, ["cwd_writable"]) ||
-      typeof value.filesystem.cwd_writable !== "boolean"
-    ) {
+      Object.keys(value.filesystem).length === 0 ||
+      !hasAllowedKeys(value.filesystem, ["cwd_default", "cwd_allowed"])
+    )
       throw invalidResponse();
+    let cwdDefault: WorkspaceMode | undefined;
+    let cwdAllowed: readonly WorkspaceMode[] | undefined;
+    if (Object.hasOwn(value.filesystem, "cwd_default")) {
+      const mode = value.filesystem.cwd_default;
+      if (typeof mode !== "string" || !(WORKSPACE_MODES as readonly string[]).includes(mode))
+        throw invalidResponse();
+      cwdDefault = mode as WorkspaceMode;
     }
-    filesystem = Object.freeze({ cwdWritable: value.filesystem.cwd_writable });
+    if (Object.hasOwn(value.filesystem, "cwd_allowed")) {
+      const modes = value.filesystem.cwd_allowed;
+      if (
+        !Array.isArray(modes) ||
+        modes.length === 0 ||
+        new Set(modes).size !== modes.length ||
+        !modes.every(
+          (mode) =>
+            typeof mode === "string" && (WORKSPACE_MODES as readonly string[]).includes(mode),
+        )
+      )
+        throw invalidResponse();
+      cwdAllowed = Object.freeze([...(modes as WorkspaceMode[])]);
+    }
+    filesystem = Object.freeze({
+      ...(cwdDefault === undefined ? {} : { cwdDefault }),
+      ...(cwdAllowed === undefined ? {} : { cwdAllowed }),
+    });
   }
   let modelsFile: string | undefined;
   if (Object.hasOwn(value, "models_file")) {
@@ -288,14 +315,16 @@ function parseIdentityOverrides(value: unknown): IdentityOverrides {
 
   const mcp = Object.hasOwn(value, "mcp") ? parseMcpOverrides(value.mcp) : undefined;
 
-  const tools: Partial<Record<string, SubjectPolicy>> = {};
+  const tools: Partial<Record<string, SubjectPolicy | WorkspaceToolOverride>> = {};
   if (Object.hasOwn(value, "tools")) {
     if (!isRecord(value.tools) || Object.keys(value.tools).length > 256) {
       throw invalidResponse();
     }
     for (const toolName of Object.keys(value.tools)) {
       if (!validToolName(toolName)) throw invalidResponse();
-      tools[toolName] = parseSubjectPolicy(value.tools[toolName], toolName);
+      tools[toolName] = (TOOL_NAMES as readonly string[]).includes(toolName)
+        ? parseWorkspaceToolOverride(value.tools[toolName], toolName)
+        : parseSubjectPolicy(value.tools[toolName], toolName);
     }
   }
   return Object.freeze({
@@ -417,6 +446,33 @@ function parseBrokerEnvironment(value: unknown): ManagedEnvironment<ResolvedPiEn
 
 function validToolName(value: string): boolean {
   return /^[a-z][a-z0-9_]{0,63}$/u.test(value);
+}
+
+function parseWorkspaceToolOverride(value: unknown, toolName: string): WorkspaceToolOverride {
+  if (
+    !isRecord(value) ||
+    Object.keys(value).length === 0 ||
+    !hasAllowedKeys(value, ["enabled", "read_only", "read_write"])
+  )
+    throw invalidResponse();
+  let enabled: boolean | undefined;
+  if (Object.hasOwn(value, "enabled")) {
+    if (typeof value.enabled !== "boolean") throw invalidResponse();
+    enabled = value.enabled;
+  }
+  const branch = (key: string): WorkspaceApprovalPolicy | undefined => {
+    if (!Object.hasOwn(value, key)) return undefined;
+    const policy = parseSubjectPolicy(value[key], toolName);
+    if (policy.mode === "disabled") throw invalidResponse();
+    return policy as WorkspaceApprovalPolicy;
+  };
+  const readOnly = branch("read_only");
+  const readWrite = branch("read_write");
+  return Object.freeze({
+    ...(enabled === undefined ? {} : { enabled }),
+    ...(readOnly === undefined ? {} : { readOnly }),
+    ...(readWrite === undefined ? {} : { readWrite }),
+  });
 }
 
 function parseSubjectPolicy(value: unknown, toolName: string): SubjectPolicy {

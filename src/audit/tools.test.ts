@@ -16,7 +16,10 @@ function fixture(submit?: (event: AuditEvent) => Promise<void>) {
     },
     close: () => Promise.resolve(),
   };
-  const auditor = new ToolAuditor(client, "/workspace", "/home/user");
+  const auditor = new ToolAuditor(client, "/workspace", "/home/user", {
+    mode: "read_only",
+    source: "default",
+  });
   const ctx = {
     sessionManager: { getSessionId: () => session },
     tools: [],
@@ -304,9 +307,21 @@ describe("ToolAuditor", () => {
     await f.auditor.start(f.ctx);
     await f.auditor.end();
     expect(f.events).toEqual([
-      { event: "session_started", pi_session_id: "pi-1", cwd: "/workspace" },
+      {
+        event: "session_started",
+        pi_session_id: "pi-1",
+        cwd: "/workspace",
+        workspace_mode: "read_only",
+        workspace_mode_source: "default",
+      },
       { event: "session_ended", pi_session_id: "pi-1" },
-      { event: "session_started", pi_session_id: "pi-2", cwd: "/workspace" },
+      {
+        event: "session_started",
+        pi_session_id: "pi-2",
+        cwd: "/workspace",
+        workspace_mode: "read_only",
+        workspace_mode_source: "default",
+      },
       { event: "session_ended", pi_session_id: "pi-2" },
     ]);
   });
@@ -538,4 +553,43 @@ describe("ToolAuditor", () => {
     ).rejects.toThrow("cancelled");
     expect(f.events.at(-1)?.outcome).toBe("cancelled");
   });
+});
+
+it("snapshots workspace provenance once across session replacement", async () => {
+  const events: AuditEvent[] = [];
+  const client: AuditClient = {
+    submit: (event) => {
+      events.push(event);
+      return Promise.resolve();
+    },
+    close: async () => {},
+  };
+  const workspace = { mode: "read_write", source: "flag" } as const;
+  const auditor = new ToolAuditor(client, "/workspace", "/home/user", workspace);
+  const f = fixture();
+  await auditor.start(f.ctx);
+  Object.assign(workspace, { mode: "read_only", source: "default" });
+  f.setSession("pi-2");
+  await auditor.start(f.ctx);
+  await auditor.end();
+  expect(events.filter((event) => event.event === "session_started")).toEqual([
+    {
+      event: "session_started",
+      pi_session_id: "pi-1",
+      cwd: "/workspace",
+      workspace_mode: "read_write",
+      workspace_mode_source: "flag",
+    },
+    {
+      event: "session_started",
+      pi_session_id: "pi-2",
+      cwd: "/workspace",
+      workspace_mode: "read_write",
+      workspace_mode_source: "flag",
+    },
+  ]);
+  for (const event of events.filter((event) => event.event !== "session_started")) {
+    expect(event).not.toHaveProperty("workspace_mode");
+    expect(event).not.toHaveProperty("workspace_mode_source");
+  }
 });

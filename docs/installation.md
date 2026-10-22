@@ -400,8 +400,9 @@ the effective configuration is admitted. Neither path installs operating-system
 packages; install those dependencies first. Staged `DESTDIR` installation
 skips host checks because dependency resolution belongs to the target image.
 
-The installer installs or upgrades both executables, packaged assets, and
-managed systemd unit symlinks. It does not enable or start the broker socket. On the
+The installer installs or upgrades the application, packaged assets, and, on
+Linux, both Rust services and their managed systemd unit symlinks. It does not
+enable or start the optional sockets. On the
 first installation it also copies the packaged defaults to
 `/etc/pi-sandbox/config.toml` and `/etc/pi-sandbox/models.json`. On an ordinary
 upgrade it preserves all existing files under `/etc/pi-sandbox` and validates
@@ -426,14 +427,14 @@ There is no implicit configuration replacement. This supports both complete
 archive deployments and systems where Salt or another configuration manager
 owns `/etc/pi-sandbox`.
 
-The installed configuration uses `config_version = 13` and must include the
+The installed configuration uses `config_version = 14` and must include the
 `[audit]`, `[sessions]`, `[codemode]`, `[mcp.servers]`, `[execution]`, `[filesystem]`, and `[extensions]` tables, an `audit` boolean on every
 base tool policy, explicit `filesystem.hidden_paths` and `filesystem.denied_paths` (both empty by default), and explicit `[environment.pi]`,
 `[environment.sandbox]`, and `[environment.extensions]` tables, even when the
 environment tables are empty. Set `execution.backend = "bubblewrap"` on Linux
 for containment, use `execution.backend = "seatbelt"` on macOS for the documented Seatbelt policy, or use `execution.backend = "direct"` on Linux/macOS for
 policy-gated execution in the user's host security context. Direct mode also
-requires `network.mode = "host"`, `filesystem.cwd_writable = true`, and
+requires `network.mode = "host"`, the `read_write` CWD mode, and
 empty `filesystem.hidden_paths` and `filesystem.denied_paths`; macOS
 requires disabled identity. If a
 preserved site configuration does not satisfy the current schema, update the
@@ -450,26 +451,39 @@ starting with `~/` before updating the version. Configurations older than
 schema 8 also need the required session policy. Alternatively, explicitly
 replace configuration with the packaged defaults.
 
-To migrate schema 11 or 12, remove `process_lifetime` from `[execution]` and set
-`config_version = 13`. Schema 11 also needs `denied_paths = []` in `[filesystem]`.
-Commands now complete independently; background descendants may survive until
-executor shutdown, with best-effort cleanup outside Linux's namespace boundary.
-No default command timeout is imposed. Set the optional base-policy
-`execution.max_command_timeout_seconds` when an administrator maximum is needed.
+To migrate schema 13 to 14, replace `cwd_writable` with `cwd_default` and
+`cwd_allowed`. Use `"read_write"` / `["read_write"]` for a previously writable
+CWD and `"read_only"` / `["read_only"]` for a previously read-only CWD. To offer
+both modes, explicitly allow both and choose the default. For each of the seven
+sandbox tools, move the old approval pair and any Bash class into both branches,
+add `enabled = true`, and retain `audit`. For a previously disabled tool, use
+`enabled = false` and `deny` / `never` in both branches. Host Git and MCP
+policies retain their shape. There are no legacy aliases or automatic parsers.
 
-Broker users must update preserved `users.d` and `groups.d` files to
-`version = 10` and upgrade the broker and application together for protocol 10.
-Existing version-10 rules need no edits for file-backed values.
-Version-8/9 rules need only the version change. Optional MCP overrides then use
-server-local `enabled`, `default_policy`, and ordered `tool_rules`; invocation
-pairs omit `audit`, which stays global. See the
-[rule contract](identity-broker.md#mcp-tool-approval-policies).
-Rules older than version 8 must also remove
-`overrides.execution.process_lifetime` and an empty `[overrides.execution]`
-table if no backend override remains. The installer does not rewrite these
-rule files, including with `--replace-config`. Main configuration schema 13 and
-audit wire version 2/record version 3 are unchanged. Restart Pi processes after
-updating administrative rules; an already running process retains its policy.
+Update all rule files to version 11. Sandbox-tool exceptions now use independent
+`enabled` and complete per-mode branches. Replace filesystem booleans with mode
+fields; contributed defaults must agree and the final default must be allowed.
+
+Deploy application, broker, and collector together: broker protocol 11, audit
+wire 3, and new audit record schema 4. Older binaries/configs fail closed. Old
+stored logs remain unchanged and retain their schema version.
+
+For configurations older than schema 13, also remove obsolete
+`execution.process_lifetime` fields and supply required exclusion arrays and
+session settings. Commands complete independently; background descendants may
+survive until executor shutdown, with best-effort cleanup outside Linux's
+namespace boundary. There is no default command timeout. Optional base-policy
+`execution.max_command_timeout_seconds` supplies an administrator maximum.
+
+Preserved rule files must satisfy the current [rule contract](identity-broker.md):
+version 11, explicit user/group selectors, and the new sandbox/filesystem shapes.
+Do not merely change the version on a file containing old fields. Remove an
+obsolete `overrides.execution.process_lifetime` and an empty execution table
+when no backend override remains. MCP definitions and flat host-tool policies
+are unchanged; MCP invocation pairs still omit `audit`, which remains global.
+The installer does not rewrite rule files, including with `--replace-config`.
+Restart Pi processes after updating administrative rules; an already running
+process retains its selected mode and policy.
 
 The macOS packaged default selects Seatbelt with networking
 disabled, using `config/default/config.seatbelt.toml`. Ordinary upgrades preserve
@@ -496,8 +510,9 @@ explicit permissions combine using least restrictive wins before overlaying defa
 `config.toml`; there is no separate defaults or aggregate users file. If no rules
 match, the main configuration remains unchanged. An
 execution override may select `bubblewrap` or `direct`; the final effective
-configuration must still pair `direct` with `network.mode = "host"` and
-`filesystem.cwd_writable = true` with empty `filesystem.hidden_paths`.
+configuration must still pair `direct` with `network.mode = "host"`,
+`cwd_default = "read_write"`, `cwd_allowed = ["read_write"]`, and empty
+filesystem exclusion arrays.
 
 See [Models and authentication](models.md) for the distinction between the
 active catalog and packaged defaults, API-key resolution, and model
@@ -565,6 +580,14 @@ cd /home/alice/worktrees/example
 pi-sandbox
 ```
 
+By default, startup selects the administrator's resolved `filesystem.cwd_default`.
+A leading `--writable-cwd` or `--read-only-cwd` requests one permitted mode; for
+example, `pi-sandbox --writable-cwd`. When a build permits `--config FILE`, that
+prefix comes first. The requested mode must belong to `cwd_allowed` after all
+user/group rules are resolved. The choice remains fixed for the process and its
+replacement/resumed Pi sessions. It controls the sandbox tools only; host Git
+and MCP tools retain their separate policies and authority.
+
 Before starting the interactive application, the executable validates the
 compiled extension catalog, loads the base policy, optionally resolves the
 calling account and groups, validates the selected extensions, effective model catalog, exact
@@ -618,10 +641,12 @@ prompt and therefore denies. Also confirm that the subject is not `deny` or
 
 ### A host path is read-only
 
-Check `/sandbox mounts` and the effective `filesystem.cwd_writable` setting.
-In Bubblewrap, the launch directory is persistently writable only when that
-setting is `true`; with `false`, even approved Bash/write/edit operations cannot
-modify it. Private temporary/runtime storage remains writable. Launch from the
+Check `/sandbox` for the selected workspace mode, its source, and the
+administrator's default and allowed modes; `/sandbox mounts` lists the actual
+filesystem grants. In Bubblewrap and Seatbelt, the
+launch directory is writable only in `read_write` mode. In `read_only` mode,
+even approved Bash/write/edit operations cannot modify it. Private
+Bubblewrap temporary/runtime storage and Seatbelt scratch storage remain writable. Launch from the
 intended workspace; changing directories inside Bash does not broaden access.
 A read-only launch from exactly `/tmp` is rejected. Use a workspace beneath
 `/tmp` or another directory to preserve private writable temporary storage.
@@ -673,9 +698,14 @@ not required. The host must provide its standard local syslog socket at
 uses host NSS and locally reachable account-service sockets; it has no direct
 network LDAP access. Name resolution runs once per connection with a four-second
 budget. The application allows ten seconds for connection/acknowledgment.
-Records use schema 2 and identify each submission with `principal_uid`,
-`principal_user` (null if the UID has no account), and `principal_pid`. No
-principal GID or group membership is included.
+The application and collector use audit wire version 3; records use schema 4.
+Each submission records `principal_uid`, `principal_user` (null if the UID has no
+account), and `principal_pid`. Session-start records additionally require
+`workspace_mode` (`read_only` or `read_write`) and `workspace_mode_source`
+(`default` or `flag`). Those fields are rejected on other event types; tool
+records correlate through the existing audit session and Pi session IDs. No
+principal GID or group membership is included. Existing stored logs retain
+their original schema and are not rewritten.
 
 The configuration file and every ancestor directory must be root-owned, must
 not be symlinks, and must not be group- or world-writable (normally `0644` for

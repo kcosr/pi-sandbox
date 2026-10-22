@@ -321,7 +321,7 @@ child name beneath the launch CWD from the repository basename, and executes:
 
 The model cannot select a target directory or Git options. After cloning,
 ordinary Git remains available to Bash. In Bubblewrap mode the host root is
-read-only and CWD access follows `filesystem.cwd_writable`; in direct mode Git
+read-only and CWD access follows the selected CWD mode; in direct mode Git
 has the current user's ordinary host authority. Bash can run repository-local
 commands through the selected backend, but commands that require host writes
 fail when the CWD is read-only. The managed `git_clone` tool itself remains a
@@ -380,8 +380,8 @@ bounded input/output, cancellation and output callbacks through the backend-neut
 executor. It uses the existing macOS GNU command profile or selected bundled commands. The host application,
 provider traffic, MCP and managed host tools remain outside this policy.
 
-Seatbelt shares host namespaces. Ordinary host files are readable and read-only;
-`cwd_writable` permits writes under the canonical launch directory. An executor-owned
+Seatbelt shares host namespaces. Ordinary host files are readable and read-only.
+The `read_write` CWD mode permits writes under the canonical launch directory. An executor-owned
 real host scratch directory supplies HOME, TMPDIR and runtime state. Literal `/tmp`
 is not private, and scratch writes are host writes. Main-policy `denied_paths`
 denies access to existing canonical directories; it does not mount empty replacements,
@@ -447,9 +447,9 @@ The exact-path mount contract means a launch from
 
 ## Bubblewrap filesystem authority
 
-With `filesystem.cwd_writable = true` (the packaged default), the captured
+With the `read_write` CWD mode (the packaged default), the captured
 launch CWD subtree is the maximum persistent host mutation authority for
-Bubblewrap operations. With `false`, the CWD remains readable but cannot be
+Bubblewrap operations. In `read_only`, the CWD remains readable but cannot be
 modified through the sandbox. In both cases the broader ordinary host tree is
 readable and read-only except for the main configuration's `hidden_paths`.
 
@@ -484,7 +484,7 @@ policy is immutable for the process and is not supplied by user/group overrides.
 Structured tools validate their inputs and report errors coherently, but the
 mount namespace enforces filesystem permissions. An approved Bash command can
 write private temporary state even when the CWD is read-only. Tool approval
-cannot broaden filesystem access. Direct mode requires `cwd_writable = true`
+cannot broaden filesystem access. Direct mode requires `cwd_allowed = ["read_write"]`
 and empty `hidden_paths`
 and does not provide a filesystem ceiling. Managed host tools retain their
 separate host authority.
@@ -561,3 +561,18 @@ structured records to local syslog and acknowledges successful submission.
 Server logging infrastructure owns persistence, rotation, retention, and
 forwarding. This service is independent of user/group configuration resolution;
 it is not an execution backend and does not run tool operations.
+
+### Startup workspace policy selection
+
+Managed schema 14 distinguishes authored policy from runtime policy. The main
+config and identity broker supply independent sandbox-tool enablement and
+`read_only` / `read_write` approval branches. After merging, validate both
+branches and the default/allowed mode set, then select a mode from a leading
+CLI flag or the administrative default. Project that branch into the existing
+flat approval policies and `cwdWritable` executor option together. Disabled
+tools project without class policies or grants. Host tools and MCP are not
+projected by workspace mode.
+
+The frozen runtime config retains a mode/default/allowed/source descriptor for
+diagnostics and audit. Session replacement keeps the launch mode and CWD and
+clears grants normally. No scheduling or backend lifecycle changes are needed.

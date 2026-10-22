@@ -7,7 +7,13 @@ import { pathToFileURL } from "node:url";
 
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-import { IDENTITY_BROKER_SOCKET_PATH, type SandboxConfig } from "../domain/index.js";
+import {
+  IDENTITY_BROKER_SOCKET_PATH,
+  type AdministrativeConfig,
+  type WorkspaceToolPolicy,
+  type WorkspaceApprovalPolicy,
+  TOOL_NAMES,
+} from "../domain/index.js";
 import { parseMcpConfig } from "../config/mcp.js";
 
 import {
@@ -65,7 +71,7 @@ describe("managed identity", () => {
 
 function mcpResponse(servers: unknown): string {
   return JSON.stringify({
-    version: 10,
+    version: 11,
     status: "ok",
     environment: { pi: {}, sandbox: {}, extensions: {} },
     overrides: { mcp: { servers } },
@@ -74,7 +80,7 @@ function mcpResponse(servers: unknown): string {
 
 describe("broker response", () => {
   it("admits opaque broker literals but never caller-side file reads", () => {
-    const response = (entry: unknown, version = 10) =>
+    const response = (entry: unknown, version = 11) =>
       JSON.stringify({
         version,
         status: "ok",
@@ -97,7 +103,7 @@ describe("broker response", () => {
   it("preserves omitted MCP overrides and accepts bounded enabled patches", () => {
     const response = (overrides: unknown) =>
       JSON.stringify({
-        version: 10,
+        version: 11,
         status: "ok",
         environment: { pi: {}, sandbox: {}, extensions: {} },
         overrides,
@@ -149,7 +155,7 @@ describe("broker response", () => {
       expect(() =>
         parseBrokerResponse(
           JSON.stringify({
-            version: 10,
+            version: 11,
             status: "ok",
             environment: { pi: {}, sandbox: {}, extensions: {} },
             overrides: { mcp },
@@ -159,7 +165,7 @@ describe("broker response", () => {
     }
     expect(() =>
       parseBrokerResponse(
-        '{"version":10,"status":"ok","environment":{"pi":{},"sandbox":{},"extensions":{}},"overrides":{"mcp":{"servers":{"docs":{"enabled":true,"enabled":false}}}}}',
+        '{"version":11,"status":"ok","environment":{"pi":{},"sandbox":{},"extensions":{}},"overrides":{"mcp":{"servers":{"docs":{"enabled":true,"enabled":false}}}}}',
       ),
     ).toThrow("identity_broker_response_invalid");
   });
@@ -258,7 +264,7 @@ describe("broker response", () => {
       "identity_broker_response_invalid",
     );
     const empty = mcpResponse({ docs: { enabled: true } });
-    expect(() => parseBrokerResponse(empty.replace('"version":10', '"version":8'))).toThrow(
+    expect(() => parseBrokerResponse(empty.replace('"version":11', '"version":8'))).toThrow(
       "identity_broker_response_invalid",
     );
     const exact =
@@ -270,7 +276,7 @@ describe("broker response", () => {
   it("accepts partial execution patches without defaulting omitted fields", () => {
     const response = (execution: unknown) =>
       JSON.stringify({
-        version: 10,
+        version: 11,
         status: "ok",
         environment: { pi: {}, sandbox: {}, extensions: {} },
         overrides: { execution, network: { mode: "local" } },
@@ -299,10 +305,10 @@ describe("broker response", () => {
   it("accepts strict success and error responses", () => {
     expect(
       parseBrokerResponse(
-        '{"version":10,"status":"ok","environment":{"pi":{"MODEL_TOKEN":"token"},"sandbox":{"PROJECT_ENV":"test"},"extensions":{"service-api":{"SERVICE_API_TOKEN":"service-token"}}},"overrides":{"models_file":"/etc/pi-sandbox/models/alice.json","execution":{"backend":"direct"},"network":{"mode":"host"},"tools":{"write":{"mode":"ask","session_grant":"offer"},"git_clone":{"mode":"deny","session_grant":"never"}}}}\n',
+        '{"version":11,"status":"ok","environment":{"pi":{"MODEL_TOKEN":"token"},"sandbox":{"PROJECT_ENV":"test"},"extensions":{"service-api":{"SERVICE_API_TOKEN":"service-token"}}},"overrides":{"models_file":"/etc/pi-sandbox/models/alice.json","execution":{"backend":"direct"},"network":{"mode":"host"},"tools":{"write":{"read_write":{"mode":"ask","session_grant":"offer"}},"git_clone":{"mode":"deny","session_grant":"never"}}}}\n',
       ),
     ).toEqual({
-      version: 10,
+      version: 11,
       status: "ok",
       environment: {
         pi: { MODEL_TOKEN: "token" },
@@ -314,27 +320,30 @@ describe("broker response", () => {
         execution: { backend: "direct" },
         network: { mode: "host" },
         tools: {
-          write: { mode: "ask", sessionGrant: "offer" },
+          write: { readWrite: { mode: "ask", sessionGrant: "offer" } },
           git_clone: { mode: "deny", sessionGrant: "never" },
         },
       },
     });
     expect(
-      parseBrokerResponse('{"version":10,"status":"error","code":"identity_store_unavailable"}\n'),
-    ).toEqual({ version: 10, status: "error", code: "identity_store_unavailable" });
+      parseBrokerResponse('{"version":11,"status":"error","code":"identity_store_unavailable"}\n'),
+    ).toEqual({ version: 11, status: "error", code: "identity_store_unavailable" });
   });
 
   it("accepts complete filesystem overrides and rejects malformed ones", () => {
     const response = (filesystem: unknown) =>
       JSON.stringify({
-        version: 10,
+        version: 11,
         status: "ok",
         environment: { pi: {}, sandbox: {}, extensions: {} },
         overrides: { filesystem },
       });
-    for (const cwdWritable of [true, false]) {
-      expect(parseBrokerResponse(response({ cwd_writable: cwdWritable }))).toMatchObject({
-        overrides: { filesystem: { cwdWritable } },
+    for (const cwdDefault of ["read_only", "read_write"]) {
+      expect(parseBrokerResponse(response({ cwd_default: cwdDefault }))).toMatchObject({
+        overrides: { filesystem: { cwdDefault } },
+      });
+      expect(parseBrokerResponse(response({ cwd_allowed: [cwdDefault] }))).toMatchObject({
+        overrides: { filesystem: { cwdAllowed: [cwdDefault] } },
       });
     }
     for (const filesystem of [
@@ -368,40 +377,40 @@ describe("broker response", () => {
       "not-json",
       '{"version":7,"status":"ok","environment":{"pi":{},"sandbox":{},"extensions":{}},"overrides":{}}',
       '{"version":6,"status":"ok","environment":{"pi":{},"sandbox":{},"extensions":{}},"overrides":{}}',
-      '{"version":10,"status":"error","code":"user_not_found"}',
+      '{"version":11,"status":"error","code":"user_not_found"}',
       '{"version":2,"status":"ok","environment":{"pi":{},"sandbox":{},"extensions":{}},"overrides":{}}',
-      '{"version":10,"status":"ok","overrides":{}}',
-      '{"version":10,"status":"ok","environment":{"pi":{},"sandbox":{},"extensions":{}},"overrides":{},"extra":true}',
-      '{"version":10,"status":"ok","environment":{"pi":{},"sandbox":{}},"overrides":{}}',
-      '{"version":10,"status":"ok","environment":{"pi":{},"sandbox":{},"extensions":{},"extra":{}},"overrides":{}}',
-      '{"version":10,"status":"ok","environment":{"pi":[],"sandbox":{},"extensions":{}},"overrides":{}}',
-      '{"version":10,"status":"ok","environment":{"pi":{"BAD-NAME":"value"},"sandbox":{},"extensions":{}},"overrides":{}}',
-      '{"version":10,"status":"ok","environment":{"pi":{"NODE_OPTIONS":"--require=x"},"sandbox":{},"extensions":{}},"overrides":{}}',
-      '{"version":10,"status":"ok","environment":{"pi":{},"sandbox":{"BASH_ENV":"/tmp/inject"},"extensions":{}},"overrides":{}}',
-      '{"version":10,"status":"ok","environment":{"pi":{"PI_SANDBOX_INTERNAL_SECRET":"value"},"sandbox":{},"extensions":{}},"overrides":{}}',
-      '{"version":10,"status":"ok","environment":{"pi":{"TOKEN":1},"sandbox":{},"extensions":{}},"overrides":{}}',
-      '{"version":10,"status":"ok","environment":{"pi":{"TOKEN":"nul\\u0000value"},"sandbox":{},"extensions":{}},"overrides":{}}',
-      '{"version":10,"status":"ok","environment":{"pi":{},"sandbox":{"HOME":"/tmp"},"extensions":{}},"overrides":{}}',
-      '{"version":10,"status":"ok","environment":{"pi":{},"sandbox":{},"extensions":[]},"overrides":{}}',
-      '{"version":10,"status":"ok","environment":{"pi":{},"sandbox":{},"extensions":{"Bad_ID":{}}},"overrides":{}}',
-      '{"version":10,"status":"ok","environment":{"pi":{},"sandbox":{},"extensions":{"service-api":[]}},"overrides":{}}',
-      '{"version":10,"status":"ok","environment":{"pi":{},"pi":{},"sandbox":{},"extensions":{}},"overrides":{}}',
-      '{"version":10,"status":"ok","environment":{"pi":{"TOKEN":"one","T\\u004fKEN":"two"},"sandbox":{},"extensions":{}},"overrides":{}}',
-      '{"version":10,"status":"ok","environment":{"pi":{},"sandbox":{},"extensions":{}},"overrides":{"audit":{"enabled":false,"facility":"local0"}}}',
-      '{"version":10,"status":"ok","environment":{"pi":{},"sandbox":{},"extensions":{}},"overrides":{"sessions":{"retention_days":0}}}',
-      '{"version":10,"status":"ok","environment":{"pi":{},"sandbox":{},"extensions":{}},"overrides":{"tools":{"write":{"mode":"ask","session_grant":"never","audit":false}}}}',
-      '{"version":10,"status":"ok","environment":{"pi":{},"sandbox":{},"extensions":{}},"overrides":{"unknown":true}}',
-      '{"version":10,"status":"ok","environment":{"pi":{},"sandbox":{},"extensions":{}},"overrides":{"models_file":"relative.json"}}',
-      '{"version":10,"status":"ok","environment":{"pi":{},"sandbox":{},"extensions":{}},"overrides":{"execution":{"backend":"container"}}}',
-      '{"version":10,"status":"ok","environment":{"pi":{},"sandbox":{},"extensions":{}},"overrides":{"execution":{"backend":"direct","extra":true}}}',
-      '{"version":10,"status":"ok","environment":{"pi":{},"sandbox":{},"extensions":{}},"overrides":{"network":{"mode":"filtered"}}}',
-      '{"version":10,"status":"ok","environment":{"pi":{},"sandbox":{},"extensions":{}},"overrides":{"network":{"mode":"host","extra":true}}}',
-      '{"version":10,"status":"ok","environment":{"pi":{},"sandbox":{},"extensions":{}},"overrides":{"tools":{"Bad-Name":{"mode":"deny","session_grant":"never"}}}}',
-      '{"version":10,"status":"ok","environment":{"pi":{},"sandbox":{},"extensions":{}},"overrides":{"tools":{"write":{"mode":"allow","session_grant":"offer"}}}}',
-      '{"version":10,"status":"error","code":"unknown"}',
-      '{"version":10,"status":"error","code":["user_not_found"]}',
-      '{"version":10,"status":"error","code":"user_not_found","code":"protocol_error"}',
-      '{"version":10,"status":"ok","environment":{"pi":{},"sandbox":{},"extensions":{}},"overrides":{"tools":{},"t\\u006fools":{}}}',
+      '{"version":11,"status":"ok","overrides":{}}',
+      '{"version":11,"status":"ok","environment":{"pi":{},"sandbox":{},"extensions":{}},"overrides":{},"extra":true}',
+      '{"version":11,"status":"ok","environment":{"pi":{},"sandbox":{}},"overrides":{}}',
+      '{"version":11,"status":"ok","environment":{"pi":{},"sandbox":{},"extensions":{},"extra":{}},"overrides":{}}',
+      '{"version":11,"status":"ok","environment":{"pi":[],"sandbox":{},"extensions":{}},"overrides":{}}',
+      '{"version":11,"status":"ok","environment":{"pi":{"BAD-NAME":"value"},"sandbox":{},"extensions":{}},"overrides":{}}',
+      '{"version":11,"status":"ok","environment":{"pi":{"NODE_OPTIONS":"--require=x"},"sandbox":{},"extensions":{}},"overrides":{}}',
+      '{"version":11,"status":"ok","environment":{"pi":{},"sandbox":{"BASH_ENV":"/tmp/inject"},"extensions":{}},"overrides":{}}',
+      '{"version":11,"status":"ok","environment":{"pi":{"PI_SANDBOX_INTERNAL_SECRET":"value"},"sandbox":{},"extensions":{}},"overrides":{}}',
+      '{"version":11,"status":"ok","environment":{"pi":{"TOKEN":1},"sandbox":{},"extensions":{}},"overrides":{}}',
+      '{"version":11,"status":"ok","environment":{"pi":{"TOKEN":"nul\\u0000value"},"sandbox":{},"extensions":{}},"overrides":{}}',
+      '{"version":11,"status":"ok","environment":{"pi":{},"sandbox":{"HOME":"/tmp"},"extensions":{}},"overrides":{}}',
+      '{"version":11,"status":"ok","environment":{"pi":{},"sandbox":{},"extensions":[]},"overrides":{}}',
+      '{"version":11,"status":"ok","environment":{"pi":{},"sandbox":{},"extensions":{"Bad_ID":{}}},"overrides":{}}',
+      '{"version":11,"status":"ok","environment":{"pi":{},"sandbox":{},"extensions":{"service-api":[]}},"overrides":{}}',
+      '{"version":11,"status":"ok","environment":{"pi":{},"pi":{},"sandbox":{},"extensions":{}},"overrides":{}}',
+      '{"version":11,"status":"ok","environment":{"pi":{"TOKEN":"one","T\\u004fKEN":"two"},"sandbox":{},"extensions":{}},"overrides":{}}',
+      '{"version":11,"status":"ok","environment":{"pi":{},"sandbox":{},"extensions":{}},"overrides":{"audit":{"enabled":false,"facility":"local0"}}}',
+      '{"version":11,"status":"ok","environment":{"pi":{},"sandbox":{},"extensions":{}},"overrides":{"sessions":{"retention_days":0}}}',
+      '{"version":11,"status":"ok","environment":{"pi":{},"sandbox":{},"extensions":{}},"overrides":{"tools":{"write":{"mode":"ask","session_grant":"never","audit":false}}}}',
+      '{"version":11,"status":"ok","environment":{"pi":{},"sandbox":{},"extensions":{}},"overrides":{"unknown":true}}',
+      '{"version":11,"status":"ok","environment":{"pi":{},"sandbox":{},"extensions":{}},"overrides":{"models_file":"relative.json"}}',
+      '{"version":11,"status":"ok","environment":{"pi":{},"sandbox":{},"extensions":{}},"overrides":{"execution":{"backend":"container"}}}',
+      '{"version":11,"status":"ok","environment":{"pi":{},"sandbox":{},"extensions":{}},"overrides":{"execution":{"backend":"direct","extra":true}}}',
+      '{"version":11,"status":"ok","environment":{"pi":{},"sandbox":{},"extensions":{}},"overrides":{"network":{"mode":"filtered"}}}',
+      '{"version":11,"status":"ok","environment":{"pi":{},"sandbox":{},"extensions":{}},"overrides":{"network":{"mode":"host","extra":true}}}',
+      '{"version":11,"status":"ok","environment":{"pi":{},"sandbox":{},"extensions":{}},"overrides":{"tools":{"Bad-Name":{"mode":"deny","session_grant":"never"}}}}',
+      '{"version":11,"status":"ok","environment":{"pi":{},"sandbox":{},"extensions":{}},"overrides":{"tools":{"write":{"mode":"allow","session_grant":"offer"}}}}',
+      '{"version":11,"status":"error","code":"unknown"}',
+      '{"version":11,"status":"error","code":["user_not_found"]}',
+      '{"version":11,"status":"error","code":"user_not_found","code":"protocol_error"}',
+      '{"version":11,"status":"ok","environment":{"pi":{},"sandbox":{},"extensions":{}},"overrides":{"tools":{},"t\\u006fools":{}}}',
     ]) {
       expect(() => parseBrokerResponse(response)).toThrow("identity_broker_response_invalid");
     }
@@ -410,10 +419,17 @@ describe("broker response", () => {
   it("parses an optional normalized known read-only class policy for Bash only", () => {
     const response = (tools: unknown) =>
       JSON.stringify({
-        version: 10,
+        version: 11,
         status: "ok",
         environment: { pi: {}, sandbox: {}, extensions: {} },
-        overrides: { tools },
+        overrides: {
+          tools: Object.fromEntries(
+            Object.entries(tools as Record<string, unknown>).map(([name, policy]) => [
+              name,
+              { read_write: policy },
+            ]),
+          ),
+        },
       });
     expect(
       parseBrokerResponse(
@@ -430,17 +446,19 @@ describe("broker response", () => {
       overrides: {
         tools: {
           bash: {
-            mode: "ask",
-            sessionGrant: "never",
-            commandClasses: { known_read_only: { mode: "allow", sessionGrant: "never" } },
+            readWrite: {
+              mode: "ask",
+              sessionGrant: "never",
+              commandClasses: { known_read_only: { mode: "allow", sessionGrant: "never" } },
+            },
           },
-          write: { mode: "deny", sessionGrant: "never" },
+          write: { readWrite: { mode: "deny", sessionGrant: "never" } },
         },
       },
     });
     expect(
       parseBrokerResponse(response({ bash: { mode: "ask", session_grant: "never" } })),
-    ).not.toHaveProperty("overrides.tools.bash.commandClasses");
+    ).not.toHaveProperty("overrides.tools.bash.readWrite.commandClasses");
     for (const [main, knownReadOnly] of [
       [
         { mode: "deny", session_grant: "never" },
@@ -457,7 +475,7 @@ describe("broker response", () => {
     ]) {
       expect(
         parseBrokerResponse(response({ bash: { ...main, known_read_only: knownReadOnly } })),
-      ).toHaveProperty("overrides.tools.bash.commandClasses.known_read_only");
+      ).toHaveProperty("overrides.tools.bash.readWrite.commandClasses.known_read_only");
     }
     for (const tools of [
       {
@@ -534,6 +552,61 @@ describe("broker response", () => {
     }
   });
 
+  it("admits only strict mode-branch patches for the seven sandbox tools", () => {
+    const response = (tools: unknown, filesystem?: unknown) =>
+      JSON.stringify({
+        version: 11,
+        status: "ok",
+        environment: { pi: {}, sandbox: {}, extensions: {} },
+        overrides: { tools, ...(filesystem === undefined ? {} : { filesystem }) },
+      });
+    const pair = { mode: "allow", session_grant: "never" };
+    for (const name of TOOL_NAMES) {
+      const result = parseBrokerResponse(
+        response({ [name]: { enabled: false, read_only: pair, read_write: pair } }),
+      );
+      expect(result).toMatchObject({
+        overrides: {
+          tools: { [name]: { enabled: false, readOnly: allowPair, readWrite: allowPair } },
+        },
+      });
+      for (const patch of [
+        {},
+        pair,
+        { enabled: "false" },
+        { audit: false },
+        { readOnly: pair },
+        { read_only: { ...pair, mode: "disabled" } },
+        { read_only: { ...pair, audit: false } },
+        { read_only: { ...pair, session_grant: "offer" } },
+        { enabled: true, read_only: {} },
+        { read_write: null },
+      ])
+        expect(() => parseBrokerResponse(response({ [name]: patch }))).toThrow(
+          "identity_broker_response_invalid",
+        );
+    }
+    expect(() => parseBrokerResponse(response({ git_clone: { read_only: pair } }))).toThrow();
+    expect(() =>
+      parseBrokerResponse(response({ git_clone: { ...pair, known_read_only: pair } })),
+    ).toThrow();
+    for (const filesystem of [
+      { cwd_default: "bad" },
+      { cwd_default: false },
+      { cwd_allowed: [] },
+      { cwd_allowed: ["read_only", "read_only"] },
+      { cwd_allowed: ["read_write", false] },
+      { cwd_allowed: ["read_write"], cwd_writable: true },
+    ])
+      expect(() => parseBrokerResponse(response({}, filesystem))).toThrow();
+    const good = response(
+      { bash: { enabled: false } },
+      { cwd_default: "read_only", cwd_allowed: ["read_only", "read_write"] },
+    );
+    expect(parseBrokerResponse(good).status).toBe("ok");
+    expect(() => parseBrokerResponse(good.replace('"version":11', '"version":10'))).toThrow();
+  });
+
   it("rejects environment responses that exceed bounded sizes", () => {
     const tooManyVariables = Object.fromEntries(
       Array.from({ length: 129 }, (_, index) => [`VARIABLE_${index}`, "value"]),
@@ -554,7 +627,7 @@ describe("broker response", () => {
       },
     ]) {
       const response = JSON.stringify({
-        version: 10,
+        version: 11,
         status: "ok",
         environment,
         overrides: {},
@@ -570,9 +643,9 @@ describe("broker response", () => {
       socket.on("data", (chunk: string) => {
         request += chunk;
         if (!request.endsWith("\n")) return;
-        expect(JSON.parse(request)).toEqual({ version: 10, operation: "resolve-identity" });
+        expect(JSON.parse(request)).toEqual({ version: 11, operation: "resolve-identity" });
         socket.end(
-          '{"version":10,"status":"ok","environment":{"pi":{"MODEL_TOKEN":"from-broker"},"sandbox":{"PROJECT_ENV":"test"},"extensions":{"service-api":{"SERVICE_API_TOKEN":"service-token"}}},"overrides":{}}\n',
+          '{"version":11,"status":"ok","environment":{"pi":{"MODEL_TOKEN":"from-broker"},"sandbox":{"PROJECT_ENV":"test"},"extensions":{"service-api":{"SERVICE_API_TOKEN":"service-token"}}},"overrides":{}}\n',
         );
       });
     });
@@ -596,7 +669,7 @@ describe("broker response", () => {
         if (!request.endsWith("\n")) return;
         setTimeout(() => {
           socket.end(
-            '{"version":10,"status":"ok","environment":{"pi":{"MODEL_TOKEN":"bun-token"},"sandbox":{},"extensions":{}},"overrides":{}}\n',
+            '{"version":11,"status":"ok","environment":{"pi":{"MODEL_TOKEN":"bun-token"},"sandbox":{},"extensions":{}},"overrides":{}}\n',
           );
         }, 25);
       });
@@ -631,7 +704,7 @@ describe("broker response", () => {
     const rejected = expect(result).rejects.toThrow("identity broker timed out");
     const socket = await peer;
     await vi.advanceTimersByTimeAsync(IDENTITY_BROKER_TIMEOUT_MS - 1);
-    socket.write('{"version":10');
+    socket.write('{"version":11');
     await new Promise<void>((resolve) => setImmediate(resolve));
     await vi.advanceTimersByTimeAsync(1);
     await rejected;
@@ -641,7 +714,7 @@ describe("broker response", () => {
   it("fails closed on broker errors and truncated responses", async () => {
     const errorEndpoint = await listen((socket) => {
       socket.once("data", () =>
-        socket.end('{"version":10,"status":"error","code":"identity_store_unavailable"}\n'),
+        socket.end('{"version":11,"status":"error","code":"identity_store_unavailable"}\n'),
       );
     });
     servers.push(errorEndpoint.server);
@@ -650,7 +723,7 @@ describe("broker response", () => {
     );
 
     const truncatedEndpoint = await listen((socket) => {
-      socket.once("data", () => socket.end('{"version":10'));
+      socket.once("data", () => socket.end('{"version":11'));
     });
     servers.push(truncatedEndpoint.server);
     await expect(resolveBrokerIdentity(truncatedEndpoint.socketPath)).rejects.toThrow(
@@ -659,104 +732,106 @@ describe("broker response", () => {
   });
 });
 
+const allowPair: WorkspaceApprovalPolicy = Object.freeze({ mode: "allow", sessionGrant: "never" });
+function workspacePolicy(pair: WorkspaceApprovalPolicy = allowPair): WorkspaceToolPolicy {
+  return { enabled: true, audit: true, readOnly: pair, readWrite: pair };
+}
+function baseAdministrative(): AdministrativeConfig {
+  return {
+    configVersion: 14,
+    codemode: { enabled: false, timeoutMs: 300000 },
+    mcp: { servers: {} },
+    sessions: { retentionDays: 365 },
+    filesystem: {
+      cwdDefault: "read_write",
+      cwdAllowed: ["read_only", "read_write"],
+      hiddenPaths: [],
+      deniedPaths: [],
+    },
+    audit: { enabled: false, facility: "local0" },
+    modelsFile: "/etc/pi-sandbox/models.json",
+    execution: { backend: "bubblewrap" },
+    identity: { mode: "broker" },
+    network: { mode: "none" },
+    environment: { pi: {}, sandbox: {}, extensions: {} },
+    extensions: {},
+    tools: Object.fromEntries(TOOL_NAMES.map((name) => [name, workspacePolicy()])),
+  };
+}
+
 describe("identity overrides", () => {
-  it("atomically replaces selected tools and inherits all omitted values", () => {
-    const basePolicy = { audit: true, mode: "allow", sessionGrant: "never" } as const;
-    const base = {
-      configVersion: 13,
-      codemode: { enabled: false, timeoutMs: 300000 },
-      mcp: { servers: {} },
-      sessions: { retentionDays: 365 },
-      filesystem: { cwdWritable: true, deniedPaths: [], hiddenPaths: ["/srv/runs"] },
-      audit: { enabled: false, facility: "local0" },
-      modelsFile: "/etc/pi-sandbox/models.json",
-      execution: { backend: "bubblewrap" },
-      identity: { mode: "broker" },
-      network: { mode: "none" },
-      environment: { pi: {}, sandbox: {}, extensions: {} },
-      extensions: {
-        git: { id: "git", settings: {}, toolNames: ["git_clone"] },
-        "service-api": {
-          id: "service-api",
-          settings: {},
-          toolNames: ["service_api"],
-        },
-      },
-      tools: Object.fromEntries(
-        ["read", "grep", "find", "ls", "write", "edit", "bash", "git_clone", "service_api"].map(
-          (name) => [name, basePolicy],
-        ),
-      ) as SandboxConfig["tools"],
-    } satisfies SandboxConfig;
-    const effective = applyIdentityOverrides(base, {
-      modelsFile: "/etc/pi-sandbox/models/alice.json",
-      execution: { backend: "direct" },
-      network: { mode: "host" },
+  it("overlays independent workspace fields and host tools, preserving global audit", () => {
+    const base = baseAdministrative();
+    const withHost = {
+      ...base,
       tools: {
-        write: { mode: "disabled", sessionGrant: "never" },
-        git_clone: { mode: "disabled", sessionGrant: "never" },
-        service_api: { mode: "deny", sessionGrant: "never" },
+        ...base.tools,
+        git_clone: { mode: "ask", sessionGrant: "never", audit: true } as const,
       },
+    };
+    const effective = applyIdentityOverrides(withHost, {
+      modelsFile: "/etc/pi-sandbox/models/alice.json",
+      filesystem: { cwdDefault: "read_only" },
+      tools: { write: { enabled: false }, git_clone: { mode: "deny", sessionGrant: "never" } },
     });
     expect(effective.modelsFile).toBe("/etc/pi-sandbox/models/alice.json");
-    expect(effective.execution).toEqual({ backend: "direct" });
-    expect(effective.network).toEqual({ mode: "host" });
-    expect(effective.tools.write).toEqual({ mode: "disabled", sessionGrant: "never", audit: true });
-    expect(effective.tools.git_clone).toEqual({
-      mode: "disabled",
-      sessionGrant: "never",
-      audit: true,
-    });
-    expect(effective.tools.service_api).toEqual({
-      mode: "deny",
-      sessionGrant: "never",
-      audit: true,
-    });
-    expect(effective.tools.read).toBe(basePolicy);
+    expect(effective.filesystem).toEqual({ ...base.filesystem, cwdDefault: "read_only" });
+    expect(effective.tools.write).toEqual({ ...base.tools.write, enabled: false });
+    expect(effective.tools.read).toBe(base.tools.read);
+    expect(effective.tools.git_clone).toEqual({ mode: "deny", sessionGrant: "never", audit: true });
     expect(effective.audit).toBe(base.audit);
     expect(effective.sessions).toBe(base.sessions);
-    expect(effective.filesystem).toEqual(base.filesystem);
-    const deniedBase = {
-      ...base,
-      filesystem: { ...base.filesystem, deniedPaths: ["/Users/alice/private"] },
-    };
-    expect(
-      applyIdentityOverrides(deniedBase, { filesystem: { cwdWritable: false }, tools: {} })
-        .filesystem.deniedPaths,
-    ).toBe(deniedBase.filesystem.deniedPaths);
-    const restricted = applyIdentityOverrides(base, {
-      filesystem: { cwdWritable: false },
-      tools: {},
-    });
-    expect(restricted.filesystem).toEqual({
-      cwdWritable: false,
-      deniedPaths: [],
-      hiddenPaths: ["/srv/runs"],
-    });
-    expect(restricted.execution).toEqual(base.execution);
-    const capped = { ...base, execution: { ...base.execution, maximumTimeoutMs: 3_600_000 } };
-    expect(
-      applyIdentityOverrides(capped, { execution: { backend: "direct" }, tools: {} }).execution,
-    ).toEqual({ backend: "direct", maximumTimeoutMs: 3_600_000 });
-    const direct = applyIdentityOverrides(restricted, {
-      execution: { backend: "direct" },
-      network: { mode: "host" },
-      filesystem: { cwdWritable: true },
-      tools: {},
-    });
-    expect(direct.filesystem).toEqual({
-      cwdWritable: true,
-      deniedPaths: [],
-      hiddenPaths: ["/srv/runs"],
-    });
-    expect(direct.execution).toEqual({ backend: "direct" });
-    expect(effective.identity).toBe(base.identity);
+    expect(effective.environment).toBe(base.environment);
     expect(effective.extensions).toBe(base.extensions);
     expect(() =>
       applyIdentityOverrides(base, {
         tools: { unknown_tool: { mode: "deny", sessionGrant: "never" } },
       }),
-    ).toThrow("override for unavailable tool: unknown_tool");
+    ).toThrow("override for unavailable tool");
+  });
+
+  it("keeps masks/denials main-only and validates effective direct permissions", () => {
+    const base = baseAdministrative();
+    const masked = { ...base, filesystem: { ...base.filesystem, hiddenPaths: ["/srv/private"] } };
+    expect(
+      applyIdentityOverrides(masked, { filesystem: { cwdDefault: "read_only" }, tools: {} })
+        .filesystem.hiddenPaths,
+    ).toBe(masked.filesystem.hiddenPaths);
+    expect(() =>
+      applyIdentityOverrides(masked, {
+        execution: { backend: "direct" },
+        network: { mode: "host" },
+        filesystem: { cwdAllowed: ["read_write"] },
+        tools: {},
+      }),
+    ).toThrow("hidden_paths");
+    const denied = {
+      ...base,
+      execution: { backend: "seatbelt" as const },
+      filesystem: { ...base.filesystem, deniedPaths: ["/Users/alice/private"] },
+    };
+    expect(
+      applyIdentityOverrides(denied, { filesystem: { cwdDefault: "read_only" }, tools: {} })
+        .filesystem.deniedPaths,
+    ).toBe(denied.filesystem.deniedPaths);
+    expect(() =>
+      applyIdentityOverrides(base, {
+        execution: { backend: "direct" },
+        network: { mode: "host" },
+        tools: {},
+      }),
+    ).toThrow("cwd_allowed");
+    const capped = { ...base, execution: { ...base.execution, maximumTimeoutMs: 3600000 } };
+    const direct = applyIdentityOverrides(capped, {
+      execution: { backend: "direct" },
+      network: { mode: "host" },
+      filesystem: { cwdAllowed: ["read_write"] },
+      tools: {},
+    });
+    expect(direct.execution).toEqual({ backend: "direct", maximumTimeoutMs: 3600000 });
+    expect(() =>
+      applyIdentityOverrides(base, { filesystem: { cwdAllowed: ["read_only"] }, tools: {} }),
+    ).toThrow("cwd_default");
   });
 });
 
@@ -789,12 +864,17 @@ describe("identity MCP overrides", () => {
     },
     codemode,
   );
-  const base: SandboxConfig = {
-    configVersion: 13,
+  const base: AdministrativeConfig = {
+    configVersion: 14,
     codemode,
     mcp,
     sessions: { retentionDays: 365 },
-    filesystem: { cwdWritable: true, deniedPaths: [], hiddenPaths: [] },
+    filesystem: {
+      cwdDefault: "read_write",
+      cwdAllowed: ["read_write"],
+      deniedPaths: [],
+      hiddenPaths: [],
+    },
     audit: { enabled: false, facility: "local0" },
     modelsFile: "/etc/pi-sandbox/models.json",
     execution: { backend: "bubblewrap" },
@@ -864,7 +944,7 @@ describe("identity MCP overrides", () => {
   });
 
   it("requires Code Mode when an override enables a dormant Code Mode exposure", () => {
-    const dormant: SandboxConfig = {
+    const dormant: AdministrativeConfig = {
       ...base,
       mcp: {
         servers: {
@@ -886,94 +966,64 @@ describe("identity MCP overrides", () => {
 });
 
 describe("identity command-class overrides", () => {
-  const allow = { audit: true, mode: "allow", sessionGrant: "never" } as const;
-  const base = {
-    configVersion: 13,
-    codemode: { enabled: false, timeoutMs: 300000 },
-    mcp: { servers: {} },
-    sessions: { retentionDays: 365 },
-    filesystem: { cwdWritable: true, deniedPaths: [], hiddenPaths: [] },
-    audit: { enabled: false, facility: "local0" },
-    modelsFile: "/etc/pi-sandbox/models.json",
-    execution: { backend: "bubblewrap" },
-    identity: { mode: "broker" },
-    network: { mode: "none" },
-    environment: { pi: {}, sandbox: {}, extensions: {} },
-    extensions: {},
-    tools: {
-      read: allow,
-      grep: allow,
-      find: allow,
-      ls: allow,
-      write: allow,
-      edit: allow,
-      bash: {
-        audit: true,
-        mode: "deny",
-        sessionGrant: "never",
-        commandClasses: { known_read_only: { mode: "allow", sessionGrant: "never" } },
-      },
-    },
-  } satisfies SandboxConfig;
+  const refined: WorkspaceApprovalPolicy = {
+    mode: "deny",
+    sessionGrant: "never",
+    commandClasses: { known_read_only: allowPair },
+  };
+  const initial = baseAdministrative();
+  const base = { ...initial, tools: { ...initial.tools, bash: workspacePolicy(refined) } };
 
-  it("replaces the whole Bash policy, including an absent class policy", () => {
-    expect(applyIdentityOverrides(base, { tools: {} }).tools.bash).toBe(base.tools.bash);
-    const withoutClass = applyIdentityOverrides(base, {
-      tools: { bash: { mode: "ask", sessionGrant: "never" } },
+  it("replaces each contributed branch wholesale while inheriting its peer and availability", () => {
+    const changed = applyIdentityOverrides(base, {
+      tools: { bash: { readWrite: { mode: "ask", sessionGrant: "never" } } },
     });
-    expect(withoutClass.tools.bash).toEqual({ mode: "ask", sessionGrant: "never", audit: true });
-    const withClass = applyIdentityOverrides(base, {
-      tools: {
-        bash: {
-          mode: "ask",
-          sessionGrant: "never",
-          commandClasses: { known_read_only: { mode: "ask", sessionGrant: "offer" } },
-        },
-      },
-    });
-    expect(withClass.tools.bash).toEqual({
-      mode: "ask",
-      sessionGrant: "never",
+    expect(changed.tools.bash).toEqual({
+      enabled: true,
       audit: true,
-      commandClasses: { known_read_only: { mode: "ask", sessionGrant: "offer" } },
+      readOnly: refined,
+      readWrite: { mode: "ask", sessionGrant: "never" },
     });
+    const disabled = applyIdentityOverrides(base, { tools: { bash: { enabled: false } } });
+    const edited = applyIdentityOverrides(disabled, { tools: { bash: { readOnly: allowPair } } });
+    expect((edited.tools.bash as WorkspaceToolPolicy).enabled).toBe(false);
+    expect((edited.tools.bash as WorkspaceToolPolicy).readWrite).toBe(refined);
   });
 
-  it("fails closed when overlays leave a class allow without allowed read tools", () => {
-    expect(() =>
-      applyIdentityOverrides(base, {
-        tools: { grep: { mode: "ask", sessionGrant: "never" } },
-      }),
-    ).toThrow(
-      'effective tool policy after identity overrides is invalid: tools.bash.known_read_only.mode "allow" requires tools.grep.mode "allow" (it is "ask"); allow read, grep, find, ls or use a stricter bash.known_read_only mode in the base configuration or identity broker rules',
-    );
-    expect(() =>
-      applyIdentityOverrides(
-        { ...base, tools: { ...base.tools, bash: { ...allow, mode: "deny" } } },
-        {
+  it("validates both effective branches, including disabled tools and unselected modes", () => {
+    for (const branch of ["readOnly", "readWrite"] as const) {
+      expect(() =>
+        applyIdentityOverrides(base, {
+          tools: { grep: { [branch]: { mode: "ask", sessionGrant: "never" } } },
+        }),
+      ).toThrow("requires");
+      expect(() => applyIdentityOverrides(base, { tools: { grep: { enabled: false } } })).toThrow(
+        "requires",
+      );
+      expect(() =>
+        applyIdentityOverrides(base, {
           tools: {
-            read: { mode: "deny", sessionGrant: "never" },
-            bash: {
+            grep: { [branch]: { mode: "deny", sessionGrant: "never" } },
+            bash: { enabled: false },
+          },
+        }),
+      ).toThrow("requires");
+      const repaired = applyIdentityOverrides(base, {
+        tools: {
+          grep: { [branch]: { mode: "ask", sessionGrant: "never" } },
+          bash: {
+            [branch]: {
               mode: "deny",
               sessionGrant: "never",
-              commandClasses: { known_read_only: { mode: "allow", sessionGrant: "never" } },
+              commandClasses: { known_read_only: { mode: "ask", sessionGrant: "offer" } },
             },
           },
         },
-      ),
-    ).toThrow('requires tools.read.mode "allow" (it is "deny")');
-    expect(
-      applyIdentityOverrides(base, {
-        tools: {
-          grep: { mode: "ask", sessionGrant: "never" },
-          bash: {
-            mode: "deny",
-            sessionGrant: "never",
-            commandClasses: { known_read_only: { mode: "ask", sessionGrant: "never" } },
-          },
-        },
-      }).tools.bash?.commandClasses,
-    ).toEqual({ known_read_only: { mode: "ask", sessionGrant: "never" } });
+      });
+      expect(
+        (repaired.tools.bash as WorkspaceToolPolicy)[branch].commandClasses?.known_read_only?.mode,
+      ).toBe("ask");
+    }
   });
 });
 

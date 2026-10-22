@@ -102,6 +102,7 @@ describe("managed MCP admission", () => {
       { submit, close: () => Promise.resolve() },
       "/work",
       "/home/test",
+      { mode: "read_write", source: "default" },
     );
     const { runtime, connection } = setup(
       { exposure: "codemode", defaultPolicy: { ...allow, mode: "ask", audit: true } },
@@ -375,6 +376,7 @@ describe("MCP identity approval layers", () => {
         { submit, close: () => Promise.resolve() },
         "/work",
         "/home/test",
+        { mode: "read_write", source: "default" },
       );
       const server: McpServerConfig = {
         ...config,

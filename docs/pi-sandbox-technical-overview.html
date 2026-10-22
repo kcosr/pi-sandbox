@@ -1316,15 +1316,21 @@
               class="compact"
               aria-label="Example global Pi Sandbox configuration"
             ><code># /etc/pi-sandbox/config.toml — excerpt
-config_version = 13
+config_version = 14
 models_file = "/etc/pi-sandbox/models.json"
 
 [codemode]
 enabled = false
 
 [mcp.servers]
-audit = { enabled = false, facility = "local0" }
-filesystem = { cwd_writable = true, hidden_paths = [], denied_paths = [] }
+[audit]
+enabled = false
+facility = "local0"
+[filesystem]
+cwd_default = "read_only"
+cwd_allowed = ["read_only", "read_write"]
+hidden_paths = []
+denied_paths = []
 [sessions]
 retention_days = 365
 [execution]
@@ -1340,9 +1346,9 @@ mode = "none"
 allowed_hosts = ["github.com", "git.example.com"]
 allowed_schemes = ["https", "ssh"]
 [tools]
-read = { mode = "allow", session_grant = "never", audit = false }
-write = { mode = "ask", session_grant = "offer", audit = true }
-bash = { mode = "disabled", session_grant = "never", audit = true }
+read = { enabled = true, audit = false, read_only = { mode = "allow", session_grant = "never" }, read_write = { mode = "allow", session_grant = "never" } }
+write = { enabled = true, audit = true, read_only = { mode = "allow", session_grant = "never" }, read_write = { mode = "ask", session_grant = "offer" } }
+bash = { enabled = false, audit = true, read_only = { mode = "deny", session_grant = "never" }, read_write = { mode = "deny", session_grant = "never" } }
 git_clone = { mode = "ask", session_grant = "never", audit = true }
 # A complete file also declares grep, find, ls, and edit.</code></pre>
             <div>
@@ -1350,7 +1356,7 @@ git_clone = { mode = "ask", session_grant = "never", audit = true }
                 class="compact"
                 aria-label="Example group Pi Sandbox override"
               ><code># groups.d/admin.toml — optional
-version = 10
+version = 11
 group = "admin"
 
 [overrides.tools.git_clone]

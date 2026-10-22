@@ -7,6 +7,9 @@ import type {
   UserBashEvent,
 } from "@earendil-works/pi-coding-agent";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { createManagedExtensionCatalog } from "../../src/managed-extensions/catalog.js";
+import { parseConfig, projectWorkspaceMode } from "../../src/config/index.js";
+import { parseSandboxArguments } from "../../src/runtime/config-arguments.js";
 import type { SandboxConfig } from "../../src/domain/index.js";
 import { createPiSandboxExtension } from "../../src/extension/index.js";
 import { createConfiguredBashAnalyzer } from "../../src/runtime/bash-analysis.js";
@@ -517,7 +520,13 @@ function nonInteractiveContext(): ExtensionContext {
 function allowAllConfig(): SandboxConfig {
   const allow = { audit: false, mode: "allow", sessionGrant: "never" } as const;
   return {
-    configVersion: 13,
+    configVersion: 14,
+    workspace: {
+      mode: "read_write",
+      default: "read_write",
+      allowed: ["read_write"],
+      source: "default",
+    },
     codemode: { enabled: false, timeoutMs: 300000 },
     mcp: { servers: {} },
     sessions: { retentionDays: 0 },
@@ -540,3 +549,97 @@ function allowAllConfig(): SandboxConfig {
     },
   };
 }
+
+describe.skipIf(!REAL_BWRAP_AVAILABLE)("one policy with startup-selected workspace modes", () => {
+  it.each([undefined, "--read-only-cwd", "--writable-cwd"])(
+    "enforces the matching filesystem and approval policy for %s",
+    async (flag) => {
+      const workspace = await realpath(await mkdtemp("/var/tmp/pi-workspace-modes-"));
+      let executor: SandboxExecutor | undefined;
+      let fakePi: FakePi | undefined;
+      try {
+        await writeFile(path.join(workspace, "input.txt"), "original");
+        let source = await readFile("tests/fixtures/config.toml", "utf8");
+        source = source
+          .replace('cwd_default = "read_write"', 'cwd_default = "read_only"')
+          .replace('cwd_allowed = ["read_write"]', 'cwd_allowed = ["read_only", "read_write"]')
+          .replaceAll(
+            'read_only = { mode = "ask", session_grant = "never" }',
+            'read_only = { mode = "allow", session_grant = "never" }',
+          );
+        const args = parseSandboxArguments(flag === undefined ? [] : [flag]);
+        const config = {
+          ...projectWorkspaceMode(
+            parseConfig(source, "mode-fixture", createManagedExtensionCatalog([])),
+            args.workspaceMode,
+          ),
+          environment: { pi: {}, sandbox: {}, extensions: {} },
+        };
+        const writable = flag === "--writable-cwd";
+        expect(config.workspace.mode).toBe(writable ? "read_write" : "read_only");
+        expect(config.tools.bash!.mode).toBe(writable ? "ask" : "allow");
+        executor = await createBubblewrapExecutor({
+          cwd: workspace,
+          cwdWritable: config.filesystem.cwdWritable,
+          bubblewrapPath: BWRAP_PATH,
+          workerCommand: testSandboxWorkerCommand(),
+        });
+        fakePi = new FakePi();
+        await createPiSandboxExtension({
+          cwd: workspace,
+          configPath: "/etc/pi-sandbox/config.toml",
+          userStateDir: "/home/test/.pi/agent",
+          loadConfig: () => Promise.resolve(config),
+          executor,
+        })(fakePi.api);
+        await fakePi.emit("session_start", {}, nonInteractiveContext());
+        const prompts: string[] = [];
+        const interactive = {
+          hasUI: true,
+          ui: {
+            select: (title: string) => {
+              prompts.push(title);
+              return Promise.resolve("Allow once");
+            },
+          },
+        } as unknown as ExtensionContext;
+        if (writable) {
+          await expect(
+            invoke(fakePi, "bash", { command: "printf no > forbidden.txt" }),
+          ).rejects.toThrow("no_ui");
+          await invokeWith(fakePi, "bash", { command: "printf changed > input.txt" }, interactive);
+          await invokeWith(fakePi, "write", { path: "typed.txt", content: "written" }, interactive);
+          expect(await readFile(path.join(workspace, "input.txt"), "utf8")).toBe("changed");
+          expect(await readFile(path.join(workspace, "typed.txt"), "utf8")).toBe("written");
+          expect(prompts).toHaveLength(2);
+        } else {
+          await invokeWith(
+            fakePi,
+            "bash",
+            { command: "printf scratch > /tmp/mode-scratch; cat /tmp/mode-scratch" },
+            interactive,
+          );
+          await expect(
+            invokeWith(fakePi, "bash", { command: "printf changed > input.txt" }, interactive),
+          ).rejects.toThrow(/Read-only file system/i);
+          await expect(
+            invokeWith(fakePi, "write", { path: "typed.txt", content: "written" }, interactive),
+          ).rejects.toThrow();
+          expect(await readFile(path.join(workspace, "input.txt"), "utf8")).toBe("original");
+          expect(prompts).toEqual([]);
+        }
+        expect(existsSync(path.join(workspace, "forbidden.txt"))).toBe(false);
+        const summaries: string[] = [];
+        await fakePi.commands
+          .get("sandbox")!
+          .handler("", { ui: { notify: (text: string) => summaries.push(text) } } as never);
+        expect(summaries.join("\n")).toContain(config.workspace.mode);
+      } finally {
+        await fakePi?.emit("session_shutdown", {}, nonInteractiveContext());
+        await executor?.close();
+        await rm(workspace, { recursive: true, force: true });
+      }
+    },
+    30000,
+  );
+});

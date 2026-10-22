@@ -13,13 +13,15 @@ import {
 import { buildLayout } from "../build-layout/index.js";
 import { DISPLAY_VERSION } from "../version.js";
 import { connectAuditClient, type AuditClient } from "../audit/client.js";
-import { loadConfig } from "../config/index.js";
+import { loadConfig, projectWorkspaceMode } from "../config/index.js";
 import type {
   AccountIdentity,
   AuthoredPiEnvironmentValue,
   EnvironmentVariables,
   ManagedEnvironment,
   SandboxConfig,
+  AdministrativeConfig,
+  WorkspaceMode,
 } from "../domain/index.js";
 import { expandManagedHomePaths, overlayManagedEnvironment } from "../domain/index.js";
 import { createPiSandboxExtension } from "../extension/index.js";
@@ -125,7 +127,7 @@ export function createManagedModelRuntimeFactory(modelsPath: string): ManagedMod
 async function loadAdministrativeConfig(
   root: string,
   configPath: string,
-): Promise<SandboxConfig<AuthoredPiEnvironmentValue>> {
+): Promise<AdministrativeConfig<AuthoredPiEnvironmentValue>> {
   return loadConfig(pathUnderRoot(root, configPath), managedExtensionCatalog);
 }
 
@@ -183,7 +185,7 @@ async function readAdministrativeModels(
 export async function validateAdministrativeConfiguration(
   root = "/",
   configPath = SYSTEM_CONFIG_PATH,
-): Promise<SandboxConfig<AuthoredPiEnvironmentValue>> {
+): Promise<AdministrativeConfig<AuthoredPiEnvironmentValue>> {
   const config = await loadAdministrativeConfig(root, configPath);
   assertExecutionPlatform(config);
   const modelsPath = await readAdministrativeModels(config, root);
@@ -198,6 +200,7 @@ export async function resolveEffectiveAdministrativeConfiguration(
   configPath = SYSTEM_CONFIG_PATH,
   getAccountIdentity: () => AccountIdentity = readAccountIdentity,
   getMachineId: () => string = readMachineId,
+  requestedWorkspaceMode?: WorkspaceMode,
 ): Promise<{
   readonly config: SandboxConfig;
   readonly modelsPath: string;
@@ -213,18 +216,19 @@ export async function resolveEffectiveAdministrativeConfiguration(
   );
   const overridden = applyIdentityOverrides(baseConfig, identity.overrides);
   assertExecutionPlatform(overridden);
+  const projected = projectWorkspaceMode(overridden, requestedWorkspaceMode);
   const account = createAccountIdentityResolver(getAccountIdentity);
   // Resolve only effective configured values, before any managed HOME takes
   // effect. The account lookup must not trust the process's HOME value.
   const expanded = expandManagedHomePaths(
-    overridden.filesystem,
+    projected.filesystem,
     await resolveEnvironmentFiles(combinedEnvironment),
     account,
     createMachineIdResolver(getMachineId),
   );
   const effectiveEnvironment = expanded.environment;
   const config = Object.freeze({
-    ...overridden,
+    ...projected,
     filesystem: expanded.filesystem,
     environment: effectiveEnvironment,
   });
@@ -328,7 +332,9 @@ function executionStartupMessage(config: SandboxConfig): string {
 }
 
 export function assertExecutionPlatform(
-  config: Pick<SandboxConfig, "execution" | "network" | "filesystem" | "identity" | "audit">,
+  config: Pick<SandboxConfig, "execution" | "network" | "identity" | "audit"> & {
+    readonly filesystem: SandboxConfig["filesystem"] | AdministrativeConfig["filesystem"];
+  },
   platform: NodeJS.Platform = process.platform,
 ): void {
   if (platform !== "linux" && platform !== "darwin") {
@@ -349,8 +355,14 @@ export function assertExecutionPlatform(
   if (config.execution.backend === "direct" && config.network.mode !== "host") {
     throw new Error("Direct execution requires network.mode = host");
   }
-  if (config.execution.backend === "direct" && !config.filesystem.cwdWritable) {
-    throw new Error("Direct execution requires filesystem.cwd_writable = true");
+  if (
+    config.execution.backend === "direct" &&
+    ("cwdWritable" in config.filesystem
+      ? !config.filesystem.cwdWritable
+      : config.filesystem.cwdAllowed.length !== 1 ||
+        config.filesystem.cwdAllowed[0] !== "read_write")
+  ) {
+    throw new Error('Direct execution requires filesystem.cwd_allowed = ["read_write"]');
   }
   if (config.execution.backend === "direct" && config.filesystem.hiddenPaths.length > 0) {
     throw new Error("Direct execution requires filesystem.hidden_paths = []");
@@ -480,9 +492,13 @@ function parseBackendQueryRoot(args: readonly string[]): string | undefined {
   throw new Error("usage: pi-sandbox --print-execution-backend [--root DESTDIR]");
 }
 
-export async function runPiSandbox({ piArgs: args, configPath }: SandboxArguments): Promise<void> {
+export async function runPiSandbox({
+  piArgs: args,
+  configPath,
+  workspaceMode,
+}: SandboxArguments): Promise<void> {
   // Supervisors probe the worker before selecting its workspace. Metadata needs no authority.
-  if (args.length === 1 && args[0] === "--version") {
+  if (args.length === 1 && (args[0] === "--version" || args[0] === "-v")) {
     process.stdout.write(`${DISPLAY_VERSION}\n`);
     return;
   }
@@ -509,6 +525,7 @@ export async function runPiSandbox({ piArgs: args, configPath }: SandboxArgument
       configPath,
       getAccountIdentity,
       getMachineId,
+      workspaceMode,
     );
   const { cwd, validateSessionCwd } = createWorkspaceBoundary(process.cwd());
   const managedExtensions = instantiateConfiguredManagedExtensions(config);
@@ -588,9 +605,13 @@ export async function runPiSandbox({ piArgs: args, configPath }: SandboxArgument
         hostExecutors: Object.freeze(hostExecutors),
       });
       const managedMain = piMain as unknown as ManagedMain;
-      if (buildLayout.allowConfigOverride && (args[0] === "--help" || args[0] === "-h")) {
+      if (args[0] === "--help" || args[0] === "-h") {
         process.stdout.write(
-          "Pi Sandbox: --config FILE selects a TOML policy before Pi arguments.\n\n",
+          "Pi Sandbox: --writable-cwd or --read-only-cwd selects an administrator-permitted CWD mode before Pi arguments.\n" +
+            (buildLayout.allowConfigOverride
+              ? "--config FILE selects a TOML policy before the mode flag.\n"
+              : "") +
+            "\n",
         );
       }
       await managedMain(createManagedPiArguments(args), {

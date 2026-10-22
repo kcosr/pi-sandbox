@@ -9,7 +9,12 @@ import {
   type SandboxConfig,
   type AuthoredPiEnvironmentValue,
 } from "../domain/index.js";
-import { ConfigError, loadConfig, parseConfig as parseConfigWithCatalog } from "./index.js";
+import {
+  ConfigError,
+  loadConfig,
+  projectWorkspaceMode,
+  parseConfig as parseConfigWithCatalog,
+} from "./index.js";
 import {
   createManagedExtensionCatalog,
   type ManagedExtensionCatalog,
@@ -22,14 +27,17 @@ afterEach(async () => {
   await Promise.all(temporaryDirectories.splice(0).map((path) => rm(path, { recursive: true })));
 });
 
+function toolSection(name: string, pair = 'mode = "allow"\nsession_grant = "never"'): string {
+  const enabled = !pair.includes('mode = "disabled"');
+  const branch = pair.replace('mode = "disabled"', 'mode = "deny"');
+  return `[tools.${name}]\nenabled = ${enabled}\naudit = false\n[tools.${name}.read_only]\n${branch}\n[tools.${name}.read_write]\n${branch}`;
+}
+
 function completeConfig(
   overrides: Partial<Record<(typeof TOOL_NAMES)[number], string>> = {},
 ): string {
-  const sections = TOOL_NAMES.map(
-    (toolName) =>
-      `[tools.${toolName}]\naudit = false\n${overrides[toolName] ?? 'mode = "allow"\nsession_grant = "never"'}`,
-  );
-  return `config_version = 13\nmodels_file = "/etc/pi-sandbox/models.json"\n\n[codemode]\nenabled = false\n\n[mcp.servers]\n\n[sessions]\nretention_days = 0\n\n[audit]\nenabled = false\nfacility = "local0"\n\n[filesystem]\ncwd_writable = true\nhidden_paths = []\ndenied_paths = []\n\n[execution]\nbackend = "bubblewrap"\n\n[identity]\nmode = "disabled"\n\n[network]\nmode = "none"\n\n[environment.pi]\n\n[environment.sandbox]\n\n[environment.extensions]\n\n[extensions]\n\n${sections.join("\n\n")}\n`;
+  const sections = TOOL_NAMES.map((name) => toolSection(name, overrides[name]));
+  return `config_version = 14\nmodels_file = "/etc/pi-sandbox/models.json"\n\n[codemode]\nenabled = false\n\n[mcp.servers]\n\n[sessions]\nretention_days = 0\n\n[audit]\nenabled = false\nfacility = "local0"\n\n[filesystem]\ncwd_default = "read_write"\ncwd_allowed = ["read_write"]\nhidden_paths = []\ndenied_paths = []\n\n[execution]\nbackend = "bubblewrap"\n\n[identity]\nmode = "disabled"\n\n[network]\nmode = "none"\n\n[environment.pi]\n\n[environment.sandbox]\n\n[environment.extensions]\n\n[extensions]\n\n${sections.join("\n\n")}\n`;
 }
 
 function parseConfig(
@@ -37,7 +45,7 @@ function parseConfig(
   source = "<string>",
   catalog: ManagedExtensionCatalog = EMPTY_EXTENSION_CATALOG,
 ): SandboxConfig<AuthoredPiEnvironmentValue> {
-  return parseConfigWithCatalog(sourceText, source, catalog);
+  return projectWorkspaceMode(parseConfigWithCatalog(sourceText, source, catalog));
 }
 
 describe("parseConfig", () => {
@@ -67,7 +75,7 @@ describe("parseConfig", () => {
         "denied_paths = []",
         `denied_paths = ${JSON.stringify(Array.from({ length: 64 }, (_, i) => `/private/${i}`))}`,
       ),
-      seatbelt.replace("config_version = 13", "config_version = 11"),
+      seatbelt.replace("config_version = 14", "config_version = 11"),
       completeConfig().replace("denied_paths = []", 'denied_paths = ["/Users/private"]'),
     ])
       expect(() => parseConfig(source)).toThrow();
@@ -86,7 +94,13 @@ describe("parseConfig", () => {
     );
 
     expect(config).toEqual({
-      configVersion: 13,
+      configVersion: 14,
+      workspace: {
+        mode: "read_write",
+        default: "read_write",
+        allowed: ["read_write"],
+        source: "default",
+      },
       codemode: { enabled: false, timeoutMs: 300000 },
       mcp: { servers: {} },
       sessions: { retentionDays: 0 },
@@ -143,7 +157,10 @@ describe("parseConfig", () => {
 
   it("requires a strict filesystem policy and rejects unenforceable direct access", () => {
     const source = completeConfig();
-    const readonly = source.replace("cwd_writable = true", "cwd_writable = false");
+    const readonly = source.replace(
+      'cwd_default = "read_write"\ncwd_allowed = ["read_write"]',
+      'cwd_default = "read_only"\ncwd_allowed = ["read_only"]',
+    );
     expect(parseConfig(readonly).filesystem).toEqual({
       cwdWritable: false,
       deniedPaths: [],
@@ -152,13 +169,22 @@ describe("parseConfig", () => {
     expect(Object.isFrozen(parseConfig(readonly).filesystem)).toBe(true);
     for (const invalid of [
       source.replace(
-        "[filesystem]\ncwd_writable = true\nhidden_paths = []\ndenied_paths = []\n\n",
+        '[filesystem]\ncwd_default = "read_write"\ncwd_allowed = ["read_write"]\nhidden_paths = []\ndenied_paths = []\n\n',
         "",
       ),
-      source.replace("cwd_writable = true", ""),
-      source.replace("cwd_writable = true", 'cwd_writable = "false"'),
-      source.replace("cwd_writable = true", "cwd_writable = 0"),
-      source.replace("cwd_writable = true", "cwd_writable = true\nextra = true"),
+      source.replace('cwd_default = "read_write"\ncwd_allowed = ["read_write"]', ""),
+      source.replace(
+        'cwd_default = "read_write"\ncwd_allowed = ["read_write"]',
+        'cwd_writable = "false"',
+      ),
+      source.replace(
+        'cwd_default = "read_write"\ncwd_allowed = ["read_write"]',
+        "cwd_writable = 0",
+      ),
+      source.replace(
+        'cwd_default = "read_write"\ncwd_allowed = ["read_write"]',
+        'cwd_default = "read_write"\ncwd_allowed = ["read_write"]\nextra = true',
+      ),
     ])
       expect(() => parseConfig(invalid)).toThrow(ConfigError);
     expect(() =>
@@ -167,7 +193,7 @@ describe("parseConfig", () => {
           .replace('backend = "bubblewrap"', 'backend = "direct"')
           .replace('mode = "none"', 'mode = "host"'),
       ),
-    ).toThrow("config.filesystem.cwd_writable must be true");
+    ).toThrow("config.filesystem.cwd_allowed must be");
   });
 
   it("requires strict global and per-tool audit settings", () => {
@@ -245,8 +271,8 @@ describe("parseConfig", () => {
           .replace('mode = "none"', 'mode = "host"'),
       ),
     ).toThrow("config.filesystem.hidden_paths must be empty");
-    expect(() => parseConfig(source.replace("config_version = 13", "config_version = 8"))).toThrow(
-      "integer 13",
+    expect(() => parseConfig(source.replace("config_version = 14", "config_version = 8"))).toThrow(
+      "integer 14",
     );
   });
 
@@ -311,11 +337,11 @@ describe("parseConfig", () => {
 
   it("rejects unsupported config versions and types", () => {
     expect(() =>
-      parseConfig(completeConfig().replace("config_version = 13", 'config_version = "9"')),
-    ).toThrow("config.config_version must be the integer 13");
+      parseConfig(completeConfig().replace("config_version = 14", 'config_version = "9"')),
+    ).toThrow("config.config_version must be the integer 14");
     expect(() =>
-      parseConfig(completeConfig().replace("config_version = 13", "config_version = 4")),
-    ).toThrow("config.config_version must be the integer 13");
+      parseConfig(completeConfig().replace("config_version = 14", "config_version = 4")),
+    ).toThrow("config.config_version must be the integer 14");
   });
 
   it("requires models_file to be a normalized absolute file path", () => {
@@ -348,7 +374,7 @@ describe("parseConfig", () => {
   it("rejects unknown fields at every schema level", () => {
     expect(() =>
       parseConfig(
-        completeConfig().replace("config_version = 13", "config_version = 13\nunexpected = true"),
+        completeConfig().replace("config_version = 14", "config_version = 14\nunexpected = true"),
       ),
     ).toThrow("config.unexpected is not a recognized field");
     expect(() =>
@@ -505,7 +531,7 @@ describe("parseConfig", () => {
 
   it("rejects every missing tool policy", () => {
     for (const toolName of TOOL_NAMES) {
-      const section = `[tools.${toolName}]\naudit = false\nmode = "allow"\nsession_grant = "never"`;
+      const section = toolSection(toolName);
       expect(() => parseConfig(completeConfig().replace(section, ""))).toThrow(
         `config.tools.${toolName} is required`,
       );
@@ -513,21 +539,16 @@ describe("parseConfig", () => {
   });
 
   it("rejects missing root fields and tables with the wrong shape", () => {
-    expect(() => parseConfig(completeConfig().replace("config_version = 13\n", ""))).toThrow(
+    expect(() => parseConfig(completeConfig().replace("config_version = 14\n", ""))).toThrow(
       "config.config_version is required",
     );
     expect(() =>
       parseConfig(
-        'config_version = 13\nmodels_file = "/etc/pi-sandbox/models.json"\nexecution = "direct"\nidentity = "disabled"\nnetwork = "none"\nextensions = "none"\ntools = "all"\n',
+        'config_version = 14\nmodels_file = "/etc/pi-sandbox/models.json"\nexecution = "direct"\nidentity = "disabled"\nnetwork = "none"\nextensions = "none"\ntools = "all"\n',
       ),
     ).toThrow("config.tools must be a table");
     expect(() =>
-      parseConfig(
-        completeConfig().replace(
-          '[tools.read]\naudit = false\nmode = "allow"\nsession_grant = "never"',
-          'tools.read = "allow"',
-        ),
-      ),
+      parseConfig(completeConfig().replace(toolSection("read"), 'tools.read = "allow"')),
     ).toThrow("config.tools.read must be a table");
   });
 
@@ -556,7 +577,7 @@ describe("parseConfig", () => {
     expect(() =>
       parseConfig(
         completeConfig().replace(
-          '[audit]\nenabled = false\nfacility = "local0"\n\n[filesystem]\ncwd_writable = true\nhidden_paths = []\ndenied_paths = []\n\n[execution]\nbackend = "bubblewrap"\n\n',
+          '[audit]\nenabled = false\nfacility = "local0"\n\n[filesystem]\ncwd_default = "read_write"\ncwd_allowed = ["read_write"]\nhidden_paths = []\ndenied_paths = []\n\n[execution]\nbackend = "bubblewrap"\n\n',
           "",
         ),
       ),
@@ -603,8 +624,8 @@ describe("parseConfig", () => {
       ).toThrow("process_lifetime is not a recognized field");
     }
     expect(() =>
-      parseConfig(completeConfig().replace("config_version = 13", "config_version = 12")),
-    ).toThrow("must be the integer 13");
+      parseConfig(completeConfig().replace("config_version = 14", "config_version = 12")),
+    ).toThrow("must be the integer 14");
   });
 
   it("rejects incomplete or ambiguous identity configuration", () => {
@@ -656,19 +677,19 @@ describe("parseConfig", () => {
   it("rejects invalid mode and session-grant values", () => {
     expect(() =>
       parseConfig(completeConfig({ bash: 'mode = "sometimes"\nsession_grant = "never"' })),
-    ).toThrow("config.tools.bash.mode must be one of: allow, ask, deny, disabled");
+    ).toThrow("config.tools.bash.read_only.mode must be one of: allow, ask, deny");
     expect(() =>
       parseConfig(completeConfig({ write: 'mode = "ask"\nsession_grant = "always"' })),
-    ).toThrow("config.tools.write.session_grant must be one of: never, offer");
+    ).toThrow("config.tools.write.read_only.session_grant must be one of: never, offer");
   });
 
   describe("known read-only class policy", () => {
-    const BASH = '[tools.bash]\naudit = false\nmode = "allow"\nsession_grant = "never"';
+    const BASH = toolSection("bash");
 
     function withClass(main: string, table: string, extra = ""): string {
       return completeConfig().replace(
         BASH,
-        `[tools.bash]\naudit = false\n${main}\n\n[tools.bash.known_read_only]\n${table}${extra}`,
+        `[tools.bash]\nenabled = true\naudit = false\n[tools.bash.read_only]\nmode = "allow"\nsession_grant = "never"\n[tools.bash.read_write]\n${main}\n\n[tools.bash.read_write.known_read_only]\n${table}${extra}`,
       );
     }
 
@@ -711,27 +732,27 @@ describe("parseConfig", () => {
     });
 
     it.each([
-      ['mode = "allow"', "config.tools.bash.known_read_only.session_grant is required"],
-      ['session_grant = "never"', "config.tools.bash.known_read_only.mode is required"],
+      ['mode = "allow"', "config.tools.bash.read_write.known_read_only.session_grant is required"],
+      ['session_grant = "never"', "config.tools.bash.read_write.known_read_only.mode is required"],
       [
         'mode = "allow"\nsession_grant = "never"\naudit = true',
-        "config.tools.bash.known_read_only.audit is not a recognized field",
+        "config.tools.bash.read_write.known_read_only.audit is not a recognized field",
       ],
       [
         'mode = "disabled"\nsession_grant = "never"',
-        "config.tools.bash.known_read_only.mode must be one of: allow, ask, deny",
+        "config.tools.bash.read_write.known_read_only.mode must be one of: allow, ask, deny",
       ],
       [
         'mode = "allow"\nsession_grant = "always"',
-        "config.tools.bash.known_read_only.session_grant must be one of: never, offer",
+        "config.tools.bash.read_write.known_read_only.session_grant must be one of: never, offer",
       ],
       [
         'mode = "allow"\nsession_grant = "offer"',
-        'config.tools.bash.known_read_only.session_grant may be "offer" only when mode is "ask"',
+        'config.tools.bash.read_write.known_read_only.session_grant may be "offer" only when mode is "ask"',
       ],
       [
         'mode = "deny"\nsession_grant = "offer"',
-        'config.tools.bash.known_read_only.session_grant may be "offer" only when mode is "ask"',
+        'config.tools.bash.read_write.known_read_only.session_grant may be "offer" only when mode is "ask"',
       ],
     ])("rejects malformed class table %j (rules 2 and 3)", (table, issue) => {
       expect(() => parseConfig(withClass('mode = "deny"\nsession_grant = "never"', table))).toThrow(
@@ -744,10 +765,13 @@ describe("parseConfig", () => {
         parseConfig(
           completeConfig().replace(
             BASH,
-            '[tools.bash]\naudit = false\nmode = "deny"\nsession_grant = "never"\nknown_read_only = "allow"',
+            toolSection(
+              "bash",
+              'mode = "deny"\nsession_grant = "never"\nknown_read_only = "allow"',
+            ),
           ),
         ),
-      ).toThrow("config.tools.bash.known_read_only must be a table");
+      ).toThrow("config.tools.bash.read_only.known_read_only must be a table");
     });
 
     it.each([
@@ -760,7 +784,7 @@ describe("parseConfig", () => {
       ['mode = "deny"\nsession_grant = "never"', 'mode = "deny"\nsession_grant = "never"'],
     ])("rejects main %j with no-effect class %j (rule 4)", (main, table) => {
       expect(() => parseConfig(withClass(main, table))).toThrow(
-        "config.tools.bash.known_read_only must be strictly more permissive than config.tools.bash",
+        "config.tools.bash.read_write.known_read_only must be strictly more permissive than config.tools.bash.read_write",
       );
     });
 
@@ -772,9 +796,7 @@ describe("parseConfig", () => {
             'mode = "allow"\nsession_grant = "never"',
           ),
         ),
-      ).toThrow(
-        'config.tools.bash.known_read_only is not permitted when config.tools.bash.mode is "disabled"',
-      );
+      ).toThrow("config.tools.bash.read_write.mode must be one of: allow, ask, deny");
     });
 
     it("requires read, grep, find and ls to allow when the class allows (rule 6)", () => {
@@ -784,17 +806,17 @@ describe("parseConfig", () => {
             'mode = "ask"\nsession_grant = "never"',
             'mode = "allow"\nsession_grant = "never"',
           ).replace(
-            `[tools.${tool}]\naudit = false\nmode = "allow"`,
-            `[tools.${tool}]\naudit = false\nmode = "${mode}"`,
+            toolSection(tool),
+            toolSection(tool, `mode = "${mode}"\nsession_grant = "never"`),
           );
           expect(() => parseConfig(source)).toThrow(
-            `config.tools.bash.known_read_only.mode "allow" requires config.tools.${tool}.mode "allow" (it is "${mode}")`,
+            `config.tools[read_write].bash.known_read_only.mode "allow" requires config.tools[read_write].${tool}.mode "allow" (it is "${mode}")`,
           );
           expect(
             parseConfig(
               source.replace(
-                '[tools.bash.known_read_only]\nmode = "allow"\nsession_grant = "never"',
-                '[tools.bash.known_read_only]\nmode = "ask"\nsession_grant = "offer"',
+                '[tools.bash.read_write.known_read_only]\nmode = "allow"\nsession_grant = "never"',
+                '[tools.bash.read_write.known_read_only]\nmode = "ask"\nsession_grant = "offer"',
               ),
             ).tools.bash?.commandClasses?.known_read_only,
           ).toEqual({ mode: "ask", sessionGrant: "offer" });
@@ -807,7 +829,7 @@ describe("parseConfig", () => {
     for (const mode of ["allow", "deny", "disabled"]) {
       expect(() =>
         parseConfig(completeConfig({ read: `mode = "${mode}"\nsession_grant = "offer"` })),
-      ).toThrow('config.tools.read.session_grant may be "offer" only when mode is "ask"');
+      ).toThrow('config.tools.read.read_only.session_grant may be "offer" only when mode is "ask"');
     }
   });
 });
@@ -820,11 +842,16 @@ describe("loadConfig", () => {
     await writeFile(path, completeConfig(), "utf8");
 
     await expect(loadConfig(path, EMPTY_EXTENSION_CATALOG)).resolves.toMatchObject({
-      configVersion: 13,
+      configVersion: 14,
       codemode: { enabled: false, timeoutMs: 300000 },
       mcp: { servers: {} },
       sessions: { retentionDays: 0 },
-      filesystem: { cwdWritable: true, deniedPaths: [], hiddenPaths: [] },
+      filesystem: {
+        cwdDefault: "read_write",
+        cwdAllowed: ["read_write"],
+        deniedPaths: [],
+        hiddenPaths: [],
+      },
       audit: { enabled: false, facility: "local0" },
     });
   });

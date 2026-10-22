@@ -29,7 +29,13 @@ function runtime(
   };
   return {
     config: {
-      configVersion: 13,
+      configVersion: 14,
+      workspace: {
+        mode: "read_write",
+        default: "read_write",
+        allowed: ["read_write"],
+        source: "default",
+      },
       codemode: { enabled: false, timeoutMs: 300000 },
       mcp: { servers: {} },
       sessions: { retentionDays: 0 },
