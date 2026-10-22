@@ -90,7 +90,7 @@ flowchart LR
 - Bubblewrap and Seatbelt preserve ordinary host absolute paths, with configured
   exclusions and read-only access outside writable workspace/runtime locations.
   The launch directory remains the working directory for all seven tools and
-  shell commands. `filesystem.cwd_writable` controls writes there for both
+  shell commands. The selected CWD mode controls writes there for both
   confined backends; direct mode uses ordinary host permissions.
 - Administrator policy determines whether model tools capable of modifying
   files in the launch directory are available and whether they require user

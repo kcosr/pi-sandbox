@@ -11,6 +11,12 @@ import { parse as parseToml, stringify as stringifyToml } from "@iarna/toml";
 import { testParallelTools } from "./parallel-tools-smoke.mjs";
 
 const toolPolicy = (mode) => ({ mode, session_grant: "never", audit: false });
+const sandboxToolPolicy = (mode) => ({
+  enabled: mode !== "disabled",
+  audit: false,
+  read_only: { mode: mode === "disabled" ? "deny" : mode, session_grant: "never" },
+  read_write: { mode: mode === "disabled" ? "deny" : mode, session_grant: "never" },
+});
 const schema = { type: "object", properties: {}, additionalProperties: true };
 const httpTools = ["search_allowed", "mutate_record", "delete_record", "hidden_secret"].map(
   (name) => ({
@@ -230,9 +236,9 @@ export async function testManagedMcpCodemode({
     config.audit.enabled = false;
     config.sessions.retention_days = 0;
     config.codemode = { enabled: true, timeout_ms: 30000 };
-    config.tools.write = toolPolicy("ask");
-    config.tools.bash = toolPolicy("ask");
-    config.tools.read = toolPolicy("allow");
+    config.tools.write = sandboxToolPolicy("ask");
+    config.tools.bash = sandboxToolPolicy("ask");
+    config.tools.read = sandboxToolPolicy("allow");
     const environmentFiles = join(dirname(configPath), "environment-files");
     await mkdir(environmentFiles);
     for (const [name, contents] of Object.entries({
@@ -538,7 +544,7 @@ text("MCP_REMOVAL_OK");`,
       },
     ];
     for (const scenario of preferenceCases) {
-      config.tools.write = toolPolicy(scenario.disableWrite ? "disabled" : "ask");
+      config.tools.write = sandboxToolPolicy(scenario.disableWrite ? "disabled" : "ask");
       for (const server of Object.values(config.mcp.servers)) server.enabled = scenario.mcp;
       config.mcp.servers.docs.exposure = scenario.adminExposure ?? "direct";
       await writeFile(configPath, stringifyToml(config));
@@ -624,10 +630,11 @@ text("MCP_REMOVAL_OK");`,
 
     if (["bubblewrap", "seatbelt"].includes(config.execution.backend)) {
       const parallelConfig = JSON.parse(JSON.stringify(config));
-      parallelConfig.filesystem.cwd_writable = true;
+      parallelConfig.filesystem.cwd_default = "read_write";
+      parallelConfig.filesystem.cwd_allowed = ["read_write"];
       parallelConfig.mcp = { servers: {} };
       for (const name of ["read", "write", "edit", "bash"])
-        parallelConfig.tools[name] = toolPolicy("allow");
+        parallelConfig.tools[name] = sandboxToolPolicy("allow");
       await writeFile(configPath, stringifyToml(parallelConfig));
       await writeFile(join(userState, "settings.json"), "{}");
       await testParallelTools({
@@ -638,7 +645,7 @@ text("MCP_REMOVAL_OK");`,
     }
 
     config.codemode.enabled = false;
-    config.tools.write = toolPolicy("disabled");
+    config.tools.write = sandboxToolPolicy("disabled");
     for (const server of Object.values(config.mcp.servers)) server.enabled = false;
     config.mcp.servers.local.command = "/missing/disabled-mcp-server";
     config.mcp.servers.local.env_from_env = { SERVICE_TOKEN: "MISSING_STDIO_TOKEN" };

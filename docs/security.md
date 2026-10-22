@@ -17,7 +17,7 @@ The default Linux Bubblewrap ceiling is:
 
 - ordinary host filesystem readable except configured `filesystem.hidden_paths`;
 - only the captured launch CWD persistently writable by default; setting
-  `filesystem.cwd_writable = false` also makes that host directory read-only;
+  the `read_only` CWD mode also makes that host directory read-only;
 - private temporary/runtime storage writable, except when host `/tmp` itself is
   deliberately selected as the writable launch CWD;
 - no network access by default; administrators may allow private loopback with
@@ -45,7 +45,7 @@ Seatbelt is the macOS packaged policy backend using the trusted system
 `/usr/bin/sandbox-exec`. It constrains tool
 children, not Pi or managed host tools. Ordinary host paths stay readable, while
 ordinary file writes are limited to the allowed CWD and executor-owned real host
-scratch directories. `cwd_writable = false` removes CWD write authority.
+scratch directories. The `read_only` CWD mode removes CWD write authority.
 Apple marks `sandbox-exec` deprecated. Treat continued availability and policy
 behavior as macOS qualification requirements; an unavailable launcher or failed
 enforcement probe aborts startup rather than selecting direct execution.
@@ -287,7 +287,7 @@ required guarantee.
 
 The host root is mounted read-only at `/`, preserving absolute paths. The
 captured launch CWD is explicitly mounted over its identical path, read/write
-when `filesystem.cwd_writable = true` and read-only when it is `false`. This
+when the selected mode is `read_write` and read-only in `read_only`. This
 bind is created after private mounts, preserving CWD visibility beneath `/tmp`.
 Read-only access does not hide host contents. CWD exactly `/tmp` is rejected in
 read-only mode so the CWD bind cannot mask writable private temporary storage.
@@ -355,8 +355,8 @@ in Bubblewrap; Seatbelt uses writable real host scratch directories.
 
 ## Audit correlation
 
-The application and collector use strict audit wire version 2; the collector emits
-record schema version 3 and requires configuration version 13. They must be
+The application and collector use strict audit wire version 3; the collector emits
+record schema version 4 and requires configuration version 14. They must be
 installed from the same release. MCP records carry the configured server ID,
 original tool name, and `http` or `stdio` transport. Nested audited calls carry
 `parent_invocation_id` from trusted execution context, never from script arguments.
@@ -431,7 +431,7 @@ there is no socket or destination filtering.
 
 Seccomp denies `link` and `linkat`, so sandboxed tools cannot create new hard
 links. Pi Sandbox does not traverse the launch CWD looking for pre-existing hard
-links. With `cwd_writable = true`, a pre-existing writable hard link beneath the CWD can mutate
+links. With the `read_write` CWD mode, a pre-existing writable hard link beneath the CWD can mutate
 the same inode through a pathname outside the writable mount. This is an
 accepted residual risk: this boundary protects against accidental writes beyond
 the directory the user believes they selected, not deliberate filesystem
@@ -496,7 +496,7 @@ approved Bash command may observe ambient user credentials.
 
 ## Known read-only Bash commands
 
-The optional `[tools.bash.known_read_only]` class policy is an approval-policy
+The optional `tools.bash.<workspace-mode>.known_read_only` class policy is an approval-policy
 input, not a boundary. Classification never changes execution: the frozen
 approval request is still the exact command the selected executor runs as
 `bash -c <command>`, with the backend's ordinary filesystem, network and
@@ -709,7 +709,7 @@ local IPC.
 - Bubblewrap shares the host kernel; it is not a virtual-machine boundary.
 - Direct mode provides policy gating and bounded process lifecycle, but no OS
   containment.
-- Commands can damage or delete the project when `cwd_writable = true`.
+- Commands can damage or delete the project when the selected mode is `read_write`.
 - An approved Bash command has all authority exposed by the sandbox mounts and
   effective network mode.
 - Read-only visibility may expose sensitive contents to a model through an
@@ -754,3 +754,22 @@ under their own UID.
 Records exclude file contents, edit diffs, and tool output. Target paths, the
 launch CWD, and bounded Bash commands are intentional identifying fields and
 may contain sensitive information. Bash commands are truncated, not redacted.
+
+## Workspace mode and approval selection
+
+A launch selects an administrator-permitted `read_only` or `read_write` CWD
+mode after identity resolution. The same immutable selection chooses the tool
+approval branch and executor filesystem authority. Session changes cannot switch
+modes; a new process is required. Audit session-start records identify the mode
+and whether a flag selected it.
+
+Allowing arbitrary Bash in read-only mode still allows reading visible files,
+computation, processes, and the configured network. It is not the known-read-only
+command classifier and supplies no CPU, memory, or storage quota. Pair it with
+`network.mode = "none"` when network access is not needed. Host networking may
+allow indirect writes through services. Host Git and MCP permissions are
+independent and may permit effects outside the sandbox's filesystem boundary.
+
+Mac background survivors retain the grants of their original process. Starting
+a later read-only session does not revoke a prior writable session's grants.
+No new monitoring or stronger cleanup guarantee accompanies mode selection.

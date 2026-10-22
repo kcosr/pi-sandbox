@@ -30,6 +30,7 @@ interface SandboxSummaryInput {
   readonly configPath: string;
   readonly modelsFile: string;
   readonly filesystem: SandboxConfig["filesystem"];
+  readonly workspace: SandboxConfig["workspace"];
   readonly execution: ExecutionConfig;
   readonly identity: IdentityConfig;
   readonly network: NetworkConfig;
@@ -94,6 +95,9 @@ export function formatSandboxSummary(input: SandboxSummaryInput): string {
           ? "read/write"
           : "read-only",
     ],
+    ["CWD mode", `${input.workspace.mode} (${input.workspace.source})`],
+    ["CWD default", input.workspace.default],
+    ["CWD allowed", input.workspace.allowed.join(", ")],
     ["Lifetime", "pi-sandbox process"],
     [
       "Timeout cap",

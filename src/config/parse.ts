@@ -12,9 +12,14 @@ import {
   type IdentityConfig,
   type ExtensionConfig,
   type ExecutionConfig,
-  type FilesystemConfig,
+  type AdministrativeFilesystemConfig,
+  type AdministrativeToolPolicies,
+  type WorkspaceToolPolicy,
+  type WorkspaceApprovalPolicy,
+  WORKSPACE_MODES,
+  type WorkspaceMode,
   type NetworkConfig,
-  type SandboxConfig,
+  type AdministrativeConfig,
   type AuthoredPiEnvironmentValue,
   type SessionsConfig,
   type CommandClassPolicies,
@@ -22,7 +27,6 @@ import {
   type PolicyMode,
   type SessionGrantPolicy,
   type ToolPolicy,
-  type ToolPolicies,
   isNormalizedAbsoluteFilePath,
   isNormalizedHiddenPath,
   isReservedHiddenDirectoryPath,
@@ -31,13 +35,10 @@ import {
 } from "../domain/index.js";
 import type { ManagedExtensionCatalog } from "../managed-extensions/catalog.js";
 import { COMMAND_CLASSES } from "../permissions/bash/contracts.js";
-import {
-  COMMAND_CLASS_TOOL,
-  commandClassPolicyViolation,
-  commandClassPreconditionIssues,
-} from "../permissions/command-classes.js";
+import { COMMAND_CLASS_TOOL, commandClassPolicyViolation } from "../permissions/command-classes.js";
 import { parseCodeModeConfig, parseMcpConfig } from "./mcp.js";
 import { ConfigError } from "./errors.js";
+import { administrativeToolPolicyIssues } from "./workspace-mode.js";
 
 type UnknownRecord = Record<string, unknown>;
 
@@ -223,36 +224,101 @@ function parseCommandClassPolicies(
   return Object.keys(policies).length === 0 ? undefined : Object.freeze(policies);
 }
 
+function parseWorkspaceApprovalPolicy(
+  value: unknown,
+  path: string,
+  toolName: string,
+  issues: string[],
+): WorkspaceApprovalPolicy | undefined {
+  if (!isRecord(value)) {
+    issues.push(`${path} must be a table`);
+    return undefined;
+  }
+  inspectKeys(
+    value,
+    ["mode", "session_grant"],
+    path,
+    issues,
+    toolName === COMMAND_CLASS_TOOL ? COMMAND_CLASSES : [],
+  );
+  const mode = enumValue(own(value, "mode"), COMMAND_CLASS_MODES, `${path}.mode`, issues);
+  const sessionGrant = enumValue(
+    own(value, "session_grant"),
+    SESSION_GRANT_POLICIES,
+    `${path}.session_grant`,
+    issues,
+  );
+  if (mode !== "ask" && sessionGrant === "offer")
+    issues.push(`${path}.session_grant may be "offer" only when mode is "ask"`);
+  const commandClasses =
+    toolName === COMMAND_CLASS_TOOL
+      ? parseCommandClassPolicies(value, path, mode, sessionGrant, issues)
+      : undefined;
+  if (mode === undefined || sessionGrant === undefined) return undefined;
+  return Object.freeze({
+    mode,
+    sessionGrant,
+    ...(commandClasses === undefined ? {} : { commandClasses }),
+  });
+}
+
+function parseWorkspaceToolPolicy(
+  value: unknown,
+  path: string,
+  toolName: string,
+  issues: string[],
+): WorkspaceToolPolicy | undefined {
+  if (!isRecord(value)) {
+    issues.push(`${path} must be a table`);
+    return undefined;
+  }
+  inspectKeys(value, ["enabled", "audit", "read_only", "read_write"], path, issues);
+  const enabled = own(value, "enabled");
+  const audit = own(value, "audit");
+  if (typeof enabled !== "boolean") issues.push(`${path}.enabled must be a boolean`);
+  if (typeof audit !== "boolean") issues.push(`${path}.audit must be a boolean`);
+  const readOnly = parseWorkspaceApprovalPolicy(
+    own(value, "read_only"),
+    `${path}.read_only`,
+    toolName,
+    issues,
+  );
+  const readWrite = parseWorkspaceApprovalPolicy(
+    own(value, "read_write"),
+    `${path}.read_write`,
+    toolName,
+    issues,
+  );
+  if (
+    typeof enabled !== "boolean" ||
+    typeof audit !== "boolean" ||
+    readOnly === undefined ||
+    readWrite === undefined
+  )
+    return undefined;
+  return Object.freeze({ enabled, audit, readOnly, readWrite });
+}
+
 function parseToolPolicies(
   value: unknown,
   toolNames: readonly string[],
   issues: string[],
-): ToolPolicies | undefined {
+): AdministrativeToolPolicies | undefined {
   if (!isRecord(value)) {
     issues.push("config.tools must be a table");
     return undefined;
   }
-
   inspectKeys(value, toolNames, "config.tools", issues);
-  const entries: Record<string, ToolPolicy> = {};
-
+  const entries: Record<string, WorkspaceToolPolicy | ToolPolicy> = {};
   for (const toolName of toolNames) {
-    const policy = parseSubjectPolicy(
-      own(value, toolName),
-      `config.tools.${toolName}`,
-      toolName,
-      issues,
-    );
-    if (policy !== undefined) {
-      entries[toolName] = policy;
-    }
+    const parse = (TOOL_NAMES as readonly string[]).includes(toolName)
+      ? parseWorkspaceToolPolicy
+      : parseSubjectPolicy;
+    const policy = parse(own(value, toolName), `config.tools.${toolName}`, toolName, issues);
+    if (policy !== undefined) entries[toolName] = policy;
   }
-
-  if (toolNames.some((toolName) => entries[toolName] === undefined)) {
-    return undefined;
-  }
-  issues.push(...commandClassPreconditionIssues(entries, "config.tools"));
-
+  if (toolNames.some((toolName) => entries[toolName] === undefined)) return undefined;
+  issues.push(...administrativeToolPolicyIssues(entries));
   return Object.freeze(entries);
 }
 
@@ -389,17 +455,44 @@ function parseNetwork(value: unknown, issues: string[]): NetworkConfig | undefin
   return mode === undefined ? undefined : Object.freeze({ mode });
 }
 
-function parseFilesystem(value: unknown, issues: string[]): FilesystemConfig | undefined {
+function parseFilesystem(
+  value: unknown,
+  issues: string[],
+): AdministrativeFilesystemConfig | undefined {
   if (!isRecord(value)) {
     issues.push("config.filesystem must be a table");
     return undefined;
   }
-  inspectKeys(value, ["cwd_writable", "hidden_paths", "denied_paths"], "config.filesystem", issues);
-  const cwdWritable = own(value, "cwd_writable");
-  if (typeof cwdWritable !== "boolean") {
-    issues.push("config.filesystem.cwd_writable must be a boolean");
+  inspectKeys(
+    value,
+    ["cwd_default", "cwd_allowed", "hidden_paths", "denied_paths"],
+    "config.filesystem",
+    issues,
+  );
+  const cwdDefault = enumValue(
+    own(value, "cwd_default"),
+    WORKSPACE_MODES,
+    "config.filesystem.cwd_default",
+    issues,
+  );
+  const cwdAllowed = own(value, "cwd_allowed");
+  if (
+    !Array.isArray(cwdAllowed) ||
+    cwdAllowed.length === 0 ||
+    !cwdAllowed.every(
+      (mode: unknown) =>
+        typeof mode === "string" && (WORKSPACE_MODES as readonly string[]).includes(mode),
+    ) ||
+    new Set(cwdAllowed).size !== cwdAllowed.length
+  ) {
+    issues.push(
+      "config.filesystem.cwd_allowed must be a nonempty array of unique read_only/read_write modes",
+    );
     return undefined;
   }
+  if (cwdDefault === undefined) return undefined;
+  if (!cwdAllowed.includes(cwdDefault))
+    issues.push("config.filesystem.cwd_default must be included in config.filesystem.cwd_allowed");
   const hiddenPaths = own(value, "hidden_paths");
   if (
     !Array.isArray(hiddenPaths) ||
@@ -442,7 +535,8 @@ function parseFilesystem(value: unknown, issues: string[]): FilesystemConfig | u
     return undefined;
   }
   return Object.freeze({
-    cwdWritable,
+    cwdDefault,
+    cwdAllowed: Object.freeze([...(cwdAllowed as WorkspaceMode[])]),
     hiddenPaths: Object.freeze([...hiddenPaths].sort()),
     deniedPaths: Object.freeze([...deniedPaths].sort()),
   });
@@ -487,7 +581,7 @@ export function parseConfig(
   sourceText: string,
   source: string,
   catalog: ManagedExtensionCatalog,
-): SandboxConfig<AuthoredPiEnvironmentValue> {
+): AdministrativeConfig<AuthoredPiEnvironmentValue> {
   let parsed: unknown;
   try {
     parsed = parseToml(sourceText);
@@ -503,8 +597,8 @@ export function parseConfig(
   inspectKeys(parsed, ROOT_KEYS, "config", issues);
 
   const configVersion = own(parsed, "config_version");
-  if (configVersion !== 13) {
-    issues.push("config.config_version must be the integer 13");
+  if (configVersion !== 14) {
+    issues.push("config.config_version must be the integer 14");
   }
 
   const modelsFileValue = own(parsed, "models_file");
@@ -549,9 +643,13 @@ export function parseConfig(
   if (execution?.backend === "direct" && network?.mode !== "host") {
     issues.push('config.network.mode must be "host" when config.execution.backend is "direct"');
   }
-  if (execution?.backend === "direct" && filesystem?.cwdWritable === false) {
+  if (
+    execution?.backend === "direct" &&
+    filesystem !== undefined &&
+    (filesystem.cwdAllowed.length !== 1 || filesystem.cwdAllowed[0] !== "read_write")
+  ) {
     issues.push(
-      'config.filesystem.cwd_writable must be true when config.execution.backend is "direct"',
+      'config.filesystem.cwd_allowed must be ["read_write"] when config.execution.backend is "direct"',
     );
   }
   if (
@@ -607,7 +705,7 @@ export function parseConfig(
   }
 
   return Object.freeze({
-    configVersion: 13,
+    configVersion: 14,
     codemode,
     mcp,
     audit,

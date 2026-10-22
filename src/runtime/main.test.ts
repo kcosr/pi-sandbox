@@ -110,29 +110,38 @@ describe("execution startup diagnostics", () => {
 });
 
 describe("administrative configuration", () => {
-  it("reports the application version without reading policy or inspecting the probe workspace", async () => {
-    const write = vi.spyOn(process.stdout, "write").mockReturnValue(true);
-    const cwd = vi.spyOn(process, "cwd").mockImplementation(() => {
-      throw new Error("probe has no workspace");
-    });
-    try {
-      await runPiSandbox(
-        parseSandboxArguments(["--version"], {
-          configPath: "/nonexistent/config.toml",
-          allowConfigOverride: false,
-        }),
-      );
-      expect(write).toHaveBeenCalledWith(`${DISPLAY_VERSION}\n`);
-      expect(cwd).not.toHaveBeenCalled();
-    } finally {
-      cwd.mockRestore();
-      write.mockRestore();
-    }
-  });
+  it.each(["--version", "-v"])(
+    "reports %s without reading policy or inspecting the probe workspace",
+    async (versionFlag) => {
+      const write = vi.spyOn(process.stdout, "write").mockReturnValue(true);
+      const cwd = vi.spyOn(process, "cwd").mockImplementation(() => {
+        throw new Error("probe has no workspace");
+      });
+      try {
+        await runPiSandbox(
+          parseSandboxArguments([versionFlag], {
+            configPath: "/nonexistent/config.toml",
+            allowConfigOverride: false,
+          }),
+        );
+        expect(write).toHaveBeenCalledWith(`${DISPLAY_VERSION}\n`);
+        expect(cwd).not.toHaveBeenCalled();
+      } finally {
+        cwd.mockRestore();
+        write.mockRestore();
+      }
+    },
+  );
 
   it("enforces the execution backend's platform contract", () => {
     const config = {
-      configVersion: 13,
+      configVersion: 14,
+      workspace: {
+        mode: "read_write",
+        default: "read_write",
+        allowed: ["read_write"],
+        source: "default",
+      },
       codemode: { enabled: false, timeoutMs: 300000 },
       mcp: { servers: {} },
       sessions: { retentionDays: 0 },
@@ -216,7 +225,7 @@ describe("administrative configuration", () => {
         },
         "linux",
       ),
-    ).toThrow("Direct execution requires filesystem.cwd_writable = true");
+    ).toThrow('Direct execution requires filesystem.cwd_allowed = ["read_write"]');
     expect(() =>
       assertExecutionPlatform(
         { ...config, filesystem: { cwdWritable: false, deniedPaths: [], hiddenPaths: [] } },
@@ -376,7 +385,13 @@ describe("administrative configuration", () => {
     ]);
     const allow = { audit: false, mode: "allow", sessionGrant: "never" } as const;
     const config = {
-      configVersion: 13,
+      configVersion: 14,
+      workspace: {
+        mode: "read_write",
+        default: "read_write",
+        allowed: ["read_write"],
+        source: "default",
+      },
       codemode: { enabled: false, timeoutMs: 300000 },
       mcp: { servers: {} },
       sessions: { retentionDays: 0 },
@@ -518,7 +533,7 @@ describe("administrative configuration", () => {
     await writeFile(rooted(root, "/etc/pi-sandbox/models.json"), '{"providers":{}}');
     // The fixture selects Linux, where resolving this macro would fail.
     const config = await validateAdministrativeConfiguration(root);
-    expect(config.configVersion).toBe(13);
+    expect(config.configVersion).toBe(14);
     expect(config.filesystem.hiddenPaths).toEqual(["/srv/{{machine_id}}"]);
     expect(config.environment.pi.PI_MACHINE_ID).toBe("{{machine_id}}");
   });
@@ -661,7 +676,10 @@ describe("administrative configuration", () => {
             sandbox: { CACHE: "~/cache/{{uid}}" },
             extensions: { service: { CACHE: "~/service/{{username}}" } },
           },
-          overrides: { filesystem: { cwdWritable: false }, tools: {} },
+          overrides: {
+            filesystem: { cwdDefault: "read_only", cwdAllowed: ["read_only"] },
+            tools: {},
+          },
         }),
       SYSTEM_CONFIG_PATH,
       getHome,
@@ -888,7 +906,7 @@ describe("administrative configuration", () => {
             modelsFile: selectedPath,
             execution: { backend: "direct" },
             network: { mode: "host" },
-            tools: { write: { mode: "disabled", sessionGrant: "never" } },
+            tools: { write: { enabled: false } },
           },
         });
       },
@@ -944,7 +962,7 @@ default_policy = { mode = "ask", session_grant = "never", audit = true }`,
     );
     const broker = parseBrokerResponse(
       JSON.stringify({
-        version: 10,
+        version: 11,
         status: "ok",
         environment: { pi: { DOCS_TOKEN: "scoped-token" }, sandbox: {}, extensions: {} },
         overrides: { mcp: { servers: { docs: { enabled: true }, local: { enabled: false } } } },
@@ -1025,7 +1043,7 @@ default_policy = { mode = "ask", session_grant = "never", audit = true }`,
           },
         }),
       ),
-    ).rejects.toThrow("Direct execution requires network.mode = host");
+    ).rejects.toThrow('config.network.mode must be "host"');
   });
 
   it("validates the known read-only allow precondition on the effective broker policy", async () => {
@@ -1035,7 +1053,12 @@ default_policy = { mode = "ask", session_grant = "never", audit = true }`,
     await writeFile(rooted(root, "/etc/pi-sandbox/models.json"), JSON.stringify({ providers: {} }));
     await writeFile(
       configPath,
-      `${source.replace('mode = "disabled"', 'mode = "broker"')}\n[tools.bash.known_read_only]\nmode = "allow"\nsession_grant = "never"\n`,
+      source
+        .replace('mode = "disabled"', 'mode = "broker"')
+        .replace(
+          '[tools.bash]\nenabled = true\naudit = true\nread_only = { mode = "ask", session_grant = "never" }\nread_write = { mode = "ask", session_grant = "never" }',
+          '[tools.bash]\nenabled = true\naudit = true\nread_only = { mode = "ask", session_grant = "never" }\nread_write = { mode = "ask", session_grant = "never", known_read_only = { mode = "allow", session_grant = "never" } }',
+        ),
     );
     const resolve = (tools: IdentityOverrides["tools"]) =>
       resolveEffectiveAdministrativeConfiguration(root, {}, () =>
@@ -1048,11 +1071,11 @@ default_policy = { mode = "ask", session_grant = "never", audit = true }`,
       "config.tools.bash.commandClasses.known_read_only.mode",
       "allow",
     );
-    await expect(resolve({ ls: { mode: "ask", sessionGrant: "never" } })).rejects.toThrow(
-      'tools.bash.known_read_only.mode "allow" requires tools.ls.mode "allow" (it is "ask")',
-    );
     await expect(
-      resolve({ bash: { mode: "ask", sessionGrant: "never" } }),
+      resolve({ ls: { readWrite: { mode: "ask", sessionGrant: "never" } } }),
+    ).rejects.toThrow("config.tools[read_write].bash.known_read_only");
+    await expect(
+      resolve({ bash: { readWrite: { mode: "ask", sessionGrant: "never" } } }),
     ).resolves.not.toHaveProperty("config.tools.bash.commandClasses");
   });
 
@@ -1088,11 +1111,10 @@ default_policy = { mode = "ask", session_grant = "never", audit = true }`,
       config
         .replace('backend = "bubblewrap"', 'backend = "direct"')
         .replace('mode = "none"', 'mode = "host"')
-        .replace("cwd_writable = true", "cwd_writable = false"),
+        .replace('cwd_default = "read_write"', 'cwd_default = "read_only"')
+        .replace('cwd_allowed = ["read_write"]', 'cwd_allowed = ["read_only"]'),
     );
-    await expect(validateAdministrativeConfiguration(root)).rejects.toThrow(
-      'config.filesystem.cwd_writable must be true when config.execution.backend is "direct"',
-    );
+    await expect(validateAdministrativeConfiguration(root)).rejects.toThrow("cwd_allowed");
   });
 
   it.each(["/proc", "/tmp"])(
@@ -1123,12 +1145,12 @@ default_policy = { mode = "ask", session_grant = "never", audit = true }`,
           overrides: {
             execution: { backend: "direct" },
             network: { mode: "host" },
-            filesystem: { cwdWritable: false },
+            filesystem: { cwdDefault: "read_only", cwdAllowed: ["read_only"] },
             tools: {},
           },
         }),
       ),
-    ).rejects.toThrow("Direct execution requires filesystem.cwd_writable = true");
+    ).rejects.toThrow('config.filesystem.cwd_allowed must be ["read_write"]');
   });
 
   it("restores the exact caller environment when a later administrative input fails", async () => {
@@ -1173,12 +1195,12 @@ default_policy = { mode = "ask", session_grant = "never", audit = true }`,
           overrides: {
             execution: { backend: "direct" },
             network: { mode: "host" },
-            filesystem: { cwdWritable: true },
+            filesystem: { cwdDefault: "read_write", cwdAllowed: ["read_write"] },
             tools: {},
           },
         }),
       ),
-    ).rejects.toThrow("Direct execution requires filesystem.hidden_paths = []");
+    ).rejects.toThrow("config.filesystem.hidden_paths requires the bubblewrap backend");
   });
 
   it("overrides a caller-supplied user models path with the administrative path", async () => {
@@ -1296,7 +1318,7 @@ describe("effective file-backed Pi environment", () => {
     const caller = { TOKEN: "ambient", KEEP: "unchanged" };
     const broker = parseBrokerResponse(
       JSON.stringify({
-        version: 10,
+        version: 11,
         status: "ok",
         environment: { pi: { TOKEN: { literal } }, sandbox: {}, extensions: {} },
         overrides: {},
@@ -1406,5 +1428,64 @@ default_policy = { mode = "ask", session_grant = "never", audit = false }`,
       "Pi environment file could not be read or has invalid contents",
     );
     expect(caller).toEqual({ TOKEN: "ambient", KEEP: "unchanged" });
+  });
+});
+
+describe("effective workspace mode selection", () => {
+  it("uses final broker modes and policies, rejecting selection outside their set", async () => {
+    const root = await createRoot();
+    await writeFile(rooted(root, "/etc/pi-sandbox/models.json"), JSON.stringify({ providers: {} }));
+    const configPath = rooted(root, "/etc/pi-sandbox/config.toml");
+    const original = await readFile(configPath, "utf8");
+    await writeFile(configPath, original.replace('mode = "disabled"', 'mode = "broker"'));
+    const resolveIdentity = () =>
+      Promise.resolve({
+        environment: { pi: {}, sandbox: {}, extensions: {} },
+        overrides: {
+          filesystem: {
+            cwdDefault: "read_only" as const,
+            cwdAllowed: ["read_only", "read_write"] as const,
+          },
+          tools: { bash: { readOnly: { mode: "allow" as const, sessionGrant: "never" as const } } },
+        },
+      });
+    const readonly = await resolveEffectiveAdministrativeConfiguration(root, {}, resolveIdentity);
+    expect(readonly.config.workspace).toEqual({
+      mode: "read_only",
+      default: "read_only",
+      allowed: ["read_only", "read_write"],
+      source: "default",
+    });
+    expect(readonly.config.filesystem.cwdWritable).toBe(false);
+    expect(readonly.config.tools.bash!.mode).toBe("allow");
+    const writable = await resolveEffectiveAdministrativeConfiguration(
+      root,
+      {},
+      resolveIdentity,
+      SYSTEM_CONFIG_PATH,
+      undefined,
+      undefined,
+      "read_write",
+    );
+    expect(writable.config.filesystem.cwdWritable).toBe(true);
+    expect(writable.config.tools.bash!.mode).toBe("ask");
+    expect(writable.config.workspace.source).toBe("flag");
+    await expect(
+      resolveEffectiveAdministrativeConfiguration(
+        root,
+        {},
+        async () => ({
+          ...(await resolveIdentity()),
+          overrides: {
+            filesystem: { cwdDefault: "read_only", cwdAllowed: ["read_only"] },
+            tools: {},
+          },
+        }),
+        SYSTEM_CONFIG_PATH,
+        undefined,
+        undefined,
+        "read_write",
+      ),
+    ).rejects.toThrow("not permitted");
   });
 });

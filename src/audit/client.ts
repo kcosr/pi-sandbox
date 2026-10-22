@@ -12,6 +12,8 @@ export interface AuditEvent {
     | "session_ended";
   pi_session_id: string;
   cwd?: string;
+  workspace_mode?: "read_only" | "read_write";
+  workspace_mode_source?: "default" | "flag";
   invocation_id?: string;
   tool?: string;
   boundary?: "bubblewrap" | "direct" | "seatbelt" | "host";
@@ -94,6 +96,8 @@ function validateEvent(event: AuditEvent): void {
       "tool_execution_intent",
       "tool_completed",
     ],
+    workspace_mode: ["read_only", "read_write"],
+    workspace_mode_source: ["default", "flag"],
     boundary: ["bubblewrap", "direct", "seatbelt", "host"],
     mcp_transport: ["http", "stdio"],
     approval_source: ["policy", "prompt", "session_grant"],
@@ -135,12 +139,22 @@ function validateEvent(event: AuditEvent): void {
     (event.path !== undefined && !event.path.startsWith("/"))
   )
     invalid();
-  if (event.event === "session_started" && event.cwd === undefined) invalid();
+  if (event.event === "session_started") {
+    if (
+      event.cwd === undefined ||
+      event.workspace_mode === undefined ||
+      event.workspace_mode_source === undefined
+    )
+      invalid();
+  } else if (event.workspace_mode !== undefined || event.workspace_mode_source !== undefined)
+    invalid();
   if (toolEvent && (event.tool === undefined || event.invocation_id === undefined)) invalid();
   if (
     !toolEvent &&
     Object.entries(event).some(
-      ([key, value]) => value !== undefined && !["event", "pi_session_id", "cwd"].includes(key),
+      ([key, value]) =>
+        value !== undefined &&
+        !["event", "pi_session_id", "cwd", "workspace_mode", "workspace_mode_source"].includes(key),
     )
   )
     invalid();
@@ -256,7 +270,7 @@ export async function connectAuditClient(path: string): Promise<AuditClient> {
       }
       const record = response as Record<string, unknown>;
       const keys = Object.keys(record).sort().join(",");
-      if (record.version !== 2) throw new Error("Invalid audit collector version");
+      if (record.version !== 3) throw new Error("Invalid audit collector version");
       if (record.ok === false && keys === "code,ok,version") {
         if (
           !["protocol_error", "syslog_unavailable", "audit_disabled"].includes(String(record.code))
@@ -315,7 +329,7 @@ export async function connectAuditClient(path: string): Promise<AuditClient> {
         ) {
           throw new Error("Audit command exceeds size limit");
         }
-        request = `${JSON.stringify({ version: 2, event })}\n`;
+        request = `${JSON.stringify({ version: 3, event })}\n`;
         if (Buffer.byteLength(request) > MAX_REQUEST_BYTES) {
           throw new Error("Audit request exceeds size limit");
         }

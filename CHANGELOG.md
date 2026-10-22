@@ -2,6 +2,16 @@
 
 ## Unreleased
 
+### Breaking changes
+
+- Require managed configuration version 14: replace `filesystem.cwd_writable` with `cwd_default` / `cwd_allowed`, and give all seven sandbox tools `enabled`, `read_only`, and `read_write` policies. Host extension and MCP policy shapes are unchanged.
+- Require user/group rule version 11 and broker protocol 11. Sandbox-tool overrides use branch policies and independent enablement; filesystem overrides use mode defaults and allowed sets.
+- Upgrade the application, identity broker, and audit collector together. Audit wire version 3 and stored record schema 4 include the selected workspace mode and its source on session-start records.
+
+### Added
+
+- Select administrator-permitted CWD access at startup with `--writable-cwd` or `--read-only-cwd`, applying the matching sandbox-tool approval policies and reporting the selection in diagnostics. Existing packaged permissions remain unchanged.
+
 ## 0.10.0 - 2026-10-20
 
 ### Breaking changes
