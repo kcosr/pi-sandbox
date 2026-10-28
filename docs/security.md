@@ -789,6 +789,16 @@ ordinary operands as scripts, response files or configuration, and may load plug
 or hooks. Review these behaviors and relevant environment dependencies before
 allowing a shape; do not approve general interpreters or arbitrary execution flags.
 
+An option declared `{ any_literal = true }` approves all parser-supported literal
+values, including empty strings and dash-leading data. `tool -m -x` treats `-x` as
+the value of `-m`; it is not checked as a separate option. Similarly, `-m --`
+consumes `--` as data. Administrators must verify that the utility really consumes
+one required argument for that option and that all admitted combinations and
+repeated values are suitable for automatic approval. Every repeated value-taking
+option is checked separately; zero-value flags cannot repeat. Exact value arrays
+remain exact matches, with no wildcard strings. Shell expansions remain excluded,
+but literal data can still have effects when interpreted by the utility.
+
 The shared parser, redirection checks and execution-context gates still apply.
 Known registry commands retain their documented environment checks even when a
 custom argument shape matches. Every stage must match a custom allow rule or an

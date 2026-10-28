@@ -82,6 +82,24 @@ describe("parseConfig", () => {
     );
   });
 
+  it("parses the authored any-literal option table without treating enum strings as markers", () => {
+    const config = parseConfig(
+      completeConfig() +
+        `
+[tools.bash.command_sets.messages]
+command = "utility"
+mode = "allow"
+session_grant = "never"
+options = { "-m" = { any_literal = true }, "--format" = ["*", "string"] }
+operands = { min = 0, max = 0 }
+`,
+    );
+    expect(config.tools.bash!.commandSets!.messages!.options).toEqual({
+      "-m": { kind: "any_literal" },
+      "--format": { kind: "values", values: ["*", "string"] },
+    });
+  });
+
   it("admits Seatbelt denials only with its explicit network and lifetime contract", () => {
     const seatbelt = completeConfig().replace('backend = "bubblewrap"', 'backend = "seatbelt"');
     const parsed = parseConfig(

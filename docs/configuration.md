@@ -1304,12 +1304,13 @@ mode = "allow"
 session_grant = "never"
 required_flags = ["--read"]
 optional_flags = ["--verbose"]
-options = { "--format" = ["text", "json"] }
+options = { "--format" = ["text", "json"], "-m" = { any_literal = true } }
 operands = { min = 1, max = 1 }
 ```
 
 The example allows `utility --read --format=json input` and
 `/usr/libexec/pi-sandbox/utility --read input` without a prompt.
+It also allows `utility --read -m 'first message' -m 'second message' input`.
 `utility --write input` follows the ordinary Bash policy. `utility --read input |
 grep result` is automatically allowed only when the effective `known_read_only`
 policy also allows the `grep` stage. An unknown stage, unsupported shell syntax,
@@ -1344,10 +1345,20 @@ Argument matching is deliberately narrow:
 
 - Required flags must occur once; optional flags may occur once. Each is an exact
   short flag such as `-r` or long flag such as `--read`.
-- Named `options` take one value from their nonempty literal list, using a
-  separate word or long `--name=value` spelling. These options are optional.
-- Repeated flags/options, short clusters, attached short values, long-option
+- Named `options` take exactly one value, using a separate word or long
+  `--name=value` spelling. A nonempty list permits only those exact strings;
+  `{ any_literal = true }` permits any value accepted as a literal by the shell
+  parser. No string is a wildcard or type marker: `["*", "string"]` admits just
+  those two values. The object accepts no additional keys and must contain `true`.
+- Value-taking options are optional and may repeat, including enumerated ones.
+  Every occurrence must match; a bad or missing later value makes the whole call
+  fall back to ordinary Bash policy. Zero-value flags still cannot repeat.
+- Short clusters, attached short values, long-option
   abbreviations, and unknown option names do not match.
+- A value-taking option consumes the next literal word even if it is empty or
+  starts with `-`. For example, `-m -x` passes `-x` as the value of `-m`, and
+  `-m --` passes `--` as a value rather than ending option parsing. With
+  `any_literal`, `-m ''` and long `--message=` both accept an empty value.
 - All options precede operands. `--` may end option parsing, but option-looking
   operands still do not match. Operand contents otherwise remain literal and
   are constrained only by their count and the shared shell parser.
@@ -1355,8 +1366,15 @@ Argument matching is deliberately narrow:
   unsupported syntax remain outside automatic approval. Pipes and supported
   command lists must qualify at every stage.
 
+Single-quoted `'$HOME'`, `'$(command)'`, and `'*'` are literal data; unquoted or
+double-quoted variable/command substitutions and unquoted globs do not qualify.
+An unquoted `~/path` option value also does not qualify. Quoting changes shell
+interpretation, not how the utility interprets the resulting string.
+
 There are at most 64 sets, 64 command alternatives per set, 64 combined flag/option names per set, 64 values per
-option, 256 UTF-8 bytes per command/flag/value, and 0–1024 operands. The serialized
+enumerated option, 256 UTF-8 bytes per authored command/flag/enumerated value, and
+0–1024 operands. Runtime `any_literal` values share the parser's 16 KiB whole-command
+limit, without a separate 256-byte value cap. The serialized
 authored command-set table is limited to 128 KiB. Configured approval evidence
 is limited to 256 stages; larger calls fall back to the main Bash policy.
 
@@ -1375,8 +1393,11 @@ together for audit wire version 3 and record schema 4. Main schema 13 and broker
 protocol/rule version 10 are unchanged.
 
 An administrator must review the executable's behavior, plugins, configuration,
-response-file syntax and environment dependencies. A harmless-looking operand can
-still cause effects inside that program. These rules never broaden filesystem or
+response-file syntax and environment dependencies. Configured value-taking options
+must really consume one argument, including dash-leading values; optional-argument
+or boolean options do not fit this grammar. Approving a shape covers all accepted
+value combinations and repeats. A literal string can still be a script, response
+file or another instruction to the utility. These rules never broaden filesystem or
 network access enforced by the selected backend. See [security](security.md#administrator-command-sets).
 
 ## Tool event logging

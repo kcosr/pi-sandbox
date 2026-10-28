@@ -1819,7 +1819,7 @@ describe("known read-only Bash commands", () => {
         sessionGrant: "never" as const,
         requiredFlags: ["--read"],
         optionalFlags: [],
-        options: { "--format": ["text", "json"] },
+        options: { "--format": { kind: "values" as const, values: ["text", "json"] } },
         operands: { min: 1, max: 1 },
       },
     };

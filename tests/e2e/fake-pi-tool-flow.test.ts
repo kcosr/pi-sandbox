@@ -393,6 +393,11 @@ describe.skipIf(!REAL_BWRAP_AVAILABLE)(
       await writeFile(path.join(commandDirectory, "cat"), '#!/bin/bash\nprintf "shadow cat\\n"\n', {
         mode: 0o700,
       });
+      await writeFile(
+        path.join(commandDirectory, "record-args"),
+        '#!/bin/bash\nprintf "<%s>\\n" "$@"\n',
+        { mode: 0o700 },
+      );
       await writeFile(path.join(workspace, "listed.txt"), "content\n");
       executor = new RecordingExecutor(
         await createBubblewrapExecutor({
@@ -523,6 +528,53 @@ describe.skipIf(!REAL_BWRAP_AVAILABLE)(
           invoke(fakePi, "bash", { command: "sha256sum --binary listed.txt | head -1" }),
         ).rejects.toThrow("policy_denied");
         expect(bashCommands().slice(before)).toEqual(["sha256sum --binary listed.txt"]);
+      } finally {
+        await fakePi.emit("session_shutdown", {}, nonInteractiveContext());
+      }
+    });
+
+    it("allows repeated literal option values and falls back before dispatch on mismatches", async () => {
+      const fakePi = await start({
+        audit: false,
+        mode: "deny",
+        sessionGrant: "never",
+        commandSets: {
+          arguments: {
+            commands: ["record-args"],
+            mode: "allow",
+            sessionGrant: "never",
+            requiredFlags: ["--read"],
+            optionalFlags: [],
+            options: {
+              "-m": { kind: "any_literal" },
+              "--format": { kind: "values", values: ["text", "json"] },
+            },
+            operands: { min: 0, max: 0 },
+          },
+        },
+        commandClasses: { known_read_only: { mode: "allow", sessionGrant: "never" } },
+      });
+      const command =
+        "record-args --read -m '$(touch injected)' -m '' -m -- -m '$HOME' --format text --format=json | head -20";
+      const before = bashCommands().length;
+      try {
+        expect(resultText(await invoke(fakePi, "bash", { command }))).toBe(
+          "<--read>\n<-m>\n<$(touch injected)>\n<-m>\n<>\n<-m>\n<-->\n<-m>\n<$HOME>\n<--format>\n<text>\n<--format=json>\n",
+        );
+        for (const rejected of [
+          "record-args --read -m first -m | head -1",
+          "record-args --read --format text --format invalid",
+          "record-args --read -m '$HOME' | touch injected",
+          "record-args --read -m $(touch injected)",
+          "record-args --read -m one > injected",
+          "record-args --read --read -m one",
+        ]) {
+          await expect(invoke(fakePi, "bash", { command: rejected })).rejects.toThrow(
+            "policy_denied",
+          );
+        }
+        expect(bashCommands().slice(before)).toEqual([command]);
+        expect(existsSync(path.join(workspace, "injected"))).toBe(false);
       } finally {
         await fakePi.emit("session_shutdown", {}, nonInteractiveContext());
       }

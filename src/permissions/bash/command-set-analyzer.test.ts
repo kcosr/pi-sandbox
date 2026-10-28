@@ -11,7 +11,10 @@ const rule: BashCommandSet = {
   sessionGrant: "never",
   requiredFlags: ["--read"],
   optionalFlags: ["--verbose"],
-  options: { "--format": ["text", "json"] },
+  options: {
+    "--format": { kind: "values", values: ["text", "json"] },
+    "-m": { kind: "any_literal" },
+  },
   operands: { min: 1, max: 1 },
 };
 const probe: ExecutableProbe = {
@@ -60,6 +63,7 @@ describe("configured command stage classification", () => {
     "cd ~/project; records --read file",
     "records --read input && records --read other || true",
     "records --read input </dev/null >/dev/null",
+    "records --read -m first -m 'second message' --format json --format=text input | head -1",
   ])("classifies each accepted stage in %s", async (command) => {
     expect(await classified(command)).toMatchObject({ commandClass: "configured_command" });
   });
@@ -82,6 +86,15 @@ describe("configured command stage classification", () => {
     "./records --read file",
     "env records --read file",
     "records --read file | grep --unapproved pattern",
+    "records --read -m one -m ~/file input | head -1",
+    "records --read -m one -m $value input",
+    'records --read -m "$value" input',
+    'records --read -m "$(touch out)" input',
+    "records --read -m *.txt input",
+    "records --read -m one -m input | head -1",
+    "records --read -m one -m",
+    "records --read -m one input >out",
+    "records --read -m one input | unknown",
   ])("keeps the whole invocation unclassified for %s", async (command) => {
     expect(await classified(command)).toMatchObject({ commandClass: "unclassified" });
   });
@@ -91,6 +104,20 @@ describe("configured command stage classification", () => {
       commandClass: "known_read_only",
       version: KNOWN_READ_ONLY_VERSION,
       commands: ["grep", "head"],
+    });
+  });
+
+  it("keeps option data out of stage coverage and preserves the command size bound", async () => {
+    const first = await classified("records --read -m 'first message' input");
+    const second = await classified("records --read -m 'second message' input");
+    expect(first).toEqual(second);
+    expect(first).toMatchObject({
+      commandClass: "configured_command",
+      stages: [{ command: "records", knownReadOnly: false, commandSets: ["records_read"] }],
+    });
+    expect(JSON.stringify(first)).not.toContain("message");
+    expect(await classified(`records --read -m '${"x".repeat(16 * 1024)}' input`)).toMatchObject({
+      commandClass: "unclassified",
     });
   });
 
@@ -166,6 +193,10 @@ describe("configured command stage classification", () => {
     expect(await configured.analyze("rg --custom --no-config file")).toMatchObject({
       commandClass: "configured_command",
     });
+    expect(await configured.analyze("rg --custom -m --no-config file")).toMatchObject({
+      commandClass: "unclassified",
+      issue: { code: "unsafe_environment" },
+    });
   });
 
   it("rejects project-resolved executable aliases and missing commands", async () => {
@@ -204,13 +235,17 @@ describe("configured command stage classification", () => {
       ...rule,
       requiredFlags: [...rule.requiredFlags],
       optionalFlags: [...rule.optionalFlags],
-      options: { "--format": ["json"] },
+      options: {
+        "--format": { kind: "values" as const, values: ["json"] },
+        "-m": { kind: "any_literal" as const },
+      },
       operands: { min: 1, max: 1 },
     };
     const configured = analyzer({ records_read: mutable });
     mutable.requiredFlags.length = 0;
     mutable.optionalFlags.push("--write");
-    mutable.options["--format"].push("binary");
+    mutable.options["--format"].values.push("binary");
+    delete (mutable.options as Partial<typeof mutable.options>)["-m"];
     mutable.operands.max = 2;
     for (const command of [
       "records file",
@@ -220,6 +255,9 @@ describe("configured command stage classification", () => {
     ])
       expect(await configured.analyze(command)).toMatchObject({ commandClass: "unclassified" });
     expect(await configured.analyze("records --read --format json file")).toMatchObject({
+      commandClass: "configured_command",
+    });
+    expect(await configured.analyze("records --read -m retained file")).toMatchObject({
       commandClass: "configured_command",
     });
   });

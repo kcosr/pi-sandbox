@@ -22,6 +22,65 @@ function rule(overrides: Record<string, unknown> = {}) {
 }
 
 describe("administrator command-set grammar", () => {
+  it("normalizes literal options and exact enumerations into deeply frozen predicates", () => {
+    const option = { any_literal: true };
+    const source = { read: rule({ options: { "-m": option, "--exact": ["*", "string"] } }) };
+    const parsed = parseBashCommandSets(source, PATH);
+    expect(parsed.read!.options).toEqual({
+      "-m": { kind: "any_literal" },
+      "--exact": { kind: "values", values: ["*", "string"] },
+    });
+    option.any_literal = false;
+    expect(parsed.read!.options["-m"]).toEqual({ kind: "any_literal" });
+    expect(Object.isFrozen(parsed.read!.options["-m"])).toBe(true);
+  });
+
+  it.each([
+    {},
+    { any_literal: false },
+    { any_literal: "true" },
+    { any_literal: 1 },
+    { any_literal: true, values: ["x"] },
+    { any_literal: true, extra: true },
+    { kind: "any_literal" },
+    { values: ["x"] },
+    "string",
+    "*",
+    true,
+    1,
+    null,
+  ])("rejects invalid option predicates %#", (option) => {
+    expect(() =>
+      parseBashCommandSets({ read: rule({ options: { "-m": option } }) }, PATH),
+    ).toThrow();
+  });
+
+  it.each(["json", true, 1, null])(
+    "explains both accepted option forms for scalar %#",
+    (option) => {
+      expect(() =>
+        parseBashCommandSets({ read: rule({ options: { "-m": option } }) }, PATH),
+      ).toThrow(
+        `${PATH}.read.options.-m must be an array of exact literal values or { any_literal = true }`,
+      );
+    },
+  );
+
+  it("counts literal predicates in the shared option limit and spelling checks", () => {
+    const options = Object.fromEntries(
+      Array.from({ length: 62 }, (_, i) => [`--opt${i}`, { any_literal: true }]),
+    );
+    const source = rule({ optional_flags: ["-v"], options });
+    expect(Object.keys(parseBashCommandSets({ read: source }, PATH).read!.options)).toHaveLength(
+      62,
+    );
+    options["--overflow"] = { any_literal: true };
+    expect(() => parseBashCommandSets({ read: source }, PATH)).toThrow("at most 64");
+    expect(() =>
+      parseBashCommandSets({ read: rule({ options: { "--read": { any_literal: true } } }) }, PATH),
+    ).toThrow("repeat");
+  });
+
   it("normalizes strings and explicit alternatives into one immutable command list", () => {
     for (const command of [
       "utility",
@@ -108,14 +167,20 @@ describe("administrator command-set grammar", () => {
       sessionGrant: "never",
       requiredFlags: ["--read"],
       optionalFlags: ["-v", "--verbose"],
-      options: { "--format": ["text", "json"] },
+      options: { "--format": { kind: "values", values: ["text", "json"] } },
       operands: { min: 1, max: 1 },
     });
     source.read_data.required_flags.push("--write");
     source.read_data.options["--format"].push("binary");
     source.read_data.operands.max = 4;
     expect(result.read_data!.requiredFlags).toEqual(["--read"]);
-    expect(result.read_data!.options["--format"]).toEqual(["text", "json"]);
+    expect(result.read_data!.options["--format"]).toEqual({
+      kind: "values",
+      values: ["text", "json"],
+    });
+    const option = result.read_data!.options["--format"]!;
+    if (option.kind !== "values") throw new Error("expected enumerated option");
+    expect(Object.isFrozen(option.values)).toBe(true);
     expect(result.read_data!.operands.max).toBe(1);
     for (const value of [
       result,

@@ -4,8 +4,14 @@
 
 ### Added
 
+- Support `{ any_literal = true }` for Bash command-set option values while retaining exact value lists. ([#46](https://github.com/kcosr/pi-sandbox/pull/46))
+
 - Allow Bash command sets to list basename and absolute-path alternatives with the same argument rule. ([#45](https://github.com/kcosr/pi-sandbox/pull/45))
 - Support administrator `execution.command_path_prepend` for additional command directories, keeping bundled tools first and approval lookup aligned with execution. ([#45](https://github.com/kcosr/pi-sandbox/pull/45))
+
+### Changed
+
+- Allow repeated value-taking options in Bash command sets, validating each occurrence; duplicate zero-value flags still fall back to ordinary policy. ([#46](https://github.com/kcosr/pi-sandbox/pull/46))
 
 ## 0.11.0 - 2026-10-28
 

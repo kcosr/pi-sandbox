@@ -46,7 +46,11 @@ function analyzer() {
         sessionGrant: "never",
         requiredFlags: ["--read"],
         optionalFlags: [],
-        options: { "--format": ["text", "json"] },
+        options: {
+          "--format": { kind: "values", values: ["text", "json"] },
+          "-m": { kind: "any_literal" },
+          "--message": { kind: "any_literal" },
+        },
         operands: { min: 1, max: 1 },
       },
     },
@@ -54,6 +58,33 @@ function analyzer() {
 }
 
 describe("native configured command composition", () => {
+  it("preserves arbitrary literal and repeated option values as real Bash argv", async () => {
+    const command =
+      "records --read -m '' -m -x -m -- --message='a; $(touch injected)' --message='$HOME' --format json --format=text input | cat";
+    expect(await analyzer().analyze(command)).toMatchObject({ commandClass: "configured_command" });
+    const result = await run("/bin/bash", ["--noprofile", "--norc", "-c", command], {
+      cwd,
+      env: environment(),
+      timeout: 5000,
+    });
+    expect(JSON.parse(result.stdout)).toEqual([
+      "--read",
+      "-m",
+      "",
+      "-m",
+      "-x",
+      "-m",
+      "--",
+      "--message=a; $(touch injected)",
+      "--message=$HOME",
+      "--format",
+      "json",
+      "--format=text",
+      "input",
+    ]);
+    expect(result.stderr).toBe("");
+    await expect(access(join(cwd, "injected"))).rejects.toThrow();
+  });
   it("runs explicitly configured absolute paths with spaces without PATH lookup", async () => {
     const directory = join(root, "My Tools");
     const executable = join(directory, "records");
@@ -150,6 +181,9 @@ describe("native configured command composition", () => {
     "records --read input && touch output",
     "records --write output | cat",
     "records --read input --format json | cat",
+    "records --read -m one --format json --format invalid input | cat",
+    "records --read -m one -m | cat",
+    "records --read -m one input | touch output",
   ])("keeps the entire invocation on ordinary policy: %s", async (command) => {
     expect(await analyzer().analyze(command)).toMatchObject({ commandClass: "unclassified" });
     await expect(access(join(cwd, "output"))).rejects.toThrow();

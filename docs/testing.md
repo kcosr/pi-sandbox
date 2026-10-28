@@ -550,6 +550,8 @@ Apple `cat` Unix-domain socket fallback is recorded as a residual risk in
 
 Require strict main-only config tests for field names, IDs, executable/builtin
 separation, exact flags, enumerated values, operand ranges and all size bounds.
+Cover strict `{ any_literal = true }` tables, rejection of false/scalar/extra-key
+forms, exact literal `"*"`/`"string"` enum values, and deeply frozen tagged predicates.
 Cover string/list alternatives, duplicate and malformed paths, exact decoded
 spelling without inferred aliases, quoted path spaces, and absolute builtin-named
 files requiring actual executable checks. Explicit paths bypass PATH lookup while
@@ -558,11 +560,18 @@ Matcher controls cover omitted, repeated, abbreviated, clustered, attached and
 misordered options; option-like operands; literal quoting and unsupported shell
 expansions. Preserve context/environment gates, including those for custom forms
 of known registry commands.
+Repeated value-taking options must validate every occurrence, while duplicate
+zero-value flags still fail. Test empty values, dash-leading values, `--` consumed
+as data, missing final values, long equals forms, tilde/variable/substitution/glob
+fallback, and the whole-command bound without a per-literal 256-byte cap. A consumed
+value spelling an environment-bypass flag must not count as that flag.
 
 Policy and managed-extension tests must cover custom-only and mixed pipelines,
 whole-call fallback before dispatch, effective built-in allow requirements, deny
 exceptions and disabled precedence. Confirm no custom session grant, ordinary
 fallback prompt wording, deep-frozen rule/stage snapshots and fingerprint v3.
+Option predicate changes must invalidate grants; option data must not enter stage
+coverage. Diagnostics show authored enum/any-literal forms rather than internal tags.
 Direct evidence tests exercise the 256-stage/64-ID bounds, malformed or duplicate
 IDs, missing custom matches, and oversized-result fallback to ordinary policy.
 Broker tests retain main definitions across overrides and reject command-set
