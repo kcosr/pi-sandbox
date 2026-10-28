@@ -1,6 +1,13 @@
+import { freezeBashCommandSets } from "./bash/command-set-contracts.js";
 import { createHash } from "node:crypto";
 
-import { COMMAND_CLASSES, type BashRequestClass, type CommandClass } from "./bash/contracts.js";
+import {
+  COMMAND_CLASSES,
+  type BashRequestClass,
+  type CommandClass,
+  type BashStageCoverage,
+} from "./bash/contracts.js";
+import { freezeCommandStages, validCommandStages } from "./command-set-evidence.js";
 import { commandClassPolicy, freezeCommandClassPolicies, joinPolicies } from "./command-classes.js";
 import type { ApprovalSubject, SubjectPolicy } from "./contracts.js";
 
@@ -27,6 +34,7 @@ export interface ApprovalRequest {
   readonly arguments: JsonObject;
   /** Analyzer result bound before approval; absent when the subject has no class policy. */
   readonly commandClass?: BashRequestClass;
+  readonly commandStages?: readonly BashStageCoverage[];
   readonly fingerprint: string;
   readonly [approvalRequestBrand]: true;
 }
@@ -146,6 +154,7 @@ export function prepareApprovalRequest(input: {
   readonly display: string;
   readonly arguments: JsonObject;
   readonly commandClass?: BashRequestClass;
+  readonly commandStages?: readonly BashStageCoverage[];
 }): ApprovalRequest {
   if (input.display.length === 0) {
     throw new Error("Approval request display must not be empty");
@@ -154,10 +163,21 @@ export function prepareApprovalRequest(input: {
   if (
     commandClass !== undefined &&
     commandClass !== "unclassified" &&
+    commandClass !== "configured_command" &&
     !(COMMAND_CLASSES as readonly string[]).includes(commandClass)
   ) {
     throw new Error("Approval request command class is not recognized");
   }
+
+  if (
+    commandClass === "configured_command"
+      ? input.subject !== "bash" || !validCommandStages(input.commandStages)
+      : input.commandStages !== undefined
+  ) {
+    throw new Error("Approval request command evidence is invalid");
+  }
+  const commandStages =
+    input.commandStages === undefined ? undefined : freezeCommandStages(input.commandStages);
 
   const argumentsCopy = snapshotJsonObject(input.arguments);
   return Object.freeze({
@@ -165,7 +185,14 @@ export function prepareApprovalRequest(input: {
     display: input.display,
     arguments: argumentsCopy,
     ...(commandClass === undefined ? {} : { commandClass }),
-    fingerprint: requestFingerprint(input.subject, input.display, argumentsCopy, commandClass),
+    ...(commandStages === undefined ? {} : { commandStages }),
+    fingerprint: requestFingerprint(
+      input.subject,
+      input.display,
+      argumentsCopy,
+      commandClass,
+      commandStages,
+    ),
     [approvalRequestBrand]: true as const,
   });
 }
@@ -175,9 +202,24 @@ function requestFingerprint(
   display: string,
   arguments_: JsonObject,
   commandClass: BashRequestClass | undefined,
+  commandStages?: readonly BashStageCoverage[],
 ): string {
   const fingerprintInput = canonicalizeJson(
-    { version: 2, subject, display, arguments: arguments_, commandClass: commandClass ?? null },
+    {
+      version: 3,
+      subject,
+      display,
+      arguments: arguments_,
+      commandClass: commandClass ?? null,
+      commandStages:
+        commandStages === undefined
+          ? null
+          : commandStages.map((stage) => ({
+              command: stage.command,
+              knownReadOnly: stage.knownReadOnly,
+              commandSets: [...stage.commandSets],
+            })),
+    },
     "request",
   );
   return createHash("sha256").update(fingerprintInput, "utf8").digest("hex");
@@ -215,6 +257,7 @@ export class PolicyEngine {
       this.subjectEpochs.get(subject) ?? 0,
       resolved.policy.mode,
       resolved.policy.sessionGrant,
+      resolved.policy.commandSets ?? null,
       COMMAND_CLASSES.map((commandClass) => {
         const policy = resolved.policy.commandClasses?.[commandClass];
         return policy === undefined ? null : [commandClass, policy.mode, policy.sessionGrant];
@@ -263,7 +306,7 @@ export class PolicyEngine {
     if (resolved === undefined) {
       return denied("policy", "policy_denied");
     }
-    const effective = effectivePolicy(resolved.policy, request.commandClass);
+    const effective = effectivePolicy(resolved.policy, request.commandClass, request.commandStages);
     const revision = this.revision(request.subject, resolved);
     switch (effective.policy.mode) {
       case "allow":
@@ -382,7 +425,26 @@ export class PolicyEngine {
 function effectivePolicy(
   policy: SubjectPolicy,
   commandClass: BashRequestClass | undefined,
+  commandStages?: readonly BashStageCoverage[],
 ): EffectivePolicy {
+  if (commandClass === "configured_command") {
+    const builtin = commandClassPolicy(policy, "known_read_only");
+    const builtinAllowed = builtin !== undefined && joinPolicies(policy, builtin).mode === "allow";
+    const allowed =
+      policy.mode !== "disabled" &&
+      validCommandStages(commandStages) &&
+      commandStages.every(
+        (stage) =>
+          stage.commandSets.some(
+            (id) =>
+              Object.hasOwn(policy.commandSets ?? {}, id) &&
+              policy.commandSets![id]!.command === stage.command &&
+              policy.commandSets![id]!.mode === "allow",
+          ) ||
+          (stage.knownReadOnly && builtinAllowed),
+      );
+    return { policy: allowed ? { mode: "allow", sessionGrant: "never" } : policy, scope: "tool" };
+  }
   if (commandClass === undefined || commandClass === "unclassified")
     return { policy, scope: "tool" };
   const classPolicy = commandClassPolicy(policy, commandClass);
@@ -402,9 +464,15 @@ function freezePolicies(policies: ApprovalPolicies): ApprovalPolicies {
   const copy = Object.fromEntries(
     Object.entries(policies).map(([subject, policy]) => {
       const commandClasses = freezeCommandClassPolicies(policy.commandClasses);
+      const commandSets =
+        policy.commandSets === undefined ? undefined : freezeBashCommandSets(policy.commandSets);
       return [
         subject,
-        Object.freeze(commandClasses === undefined ? { ...policy } : { ...policy, commandClasses }),
+        Object.freeze({
+          ...policy,
+          ...(commandClasses === undefined ? {} : { commandClasses }),
+          ...(commandSets === undefined ? {} : { commandSets }),
+        }),
       ];
     }),
   ) as Record<ApprovalSubject, SubjectPolicy>;
@@ -420,6 +488,7 @@ function verifyPreparedRequest(request: ApprovalRequest): void {
     request.display,
     request.arguments,
     request.commandClass,
+    request.commandStages,
   );
   if (request.fingerprint !== expected) {
     throw new Error("Approval request fingerprint does not match its contents");

@@ -262,7 +262,7 @@ unmatched ones; the application rejects unknown matching server IDs. The broker
 emits bounded, deduplicated `policy_layers` rather than flattening ordered rules.
 Saved user preferences cannot enable an effectively disabled server. Policies
 are startup snapshots and apply equally to direct and Code Mode calls. Main
-schema 13 and audit wire 2/record 3 are unchanged. See the complete
+schema 13 is unchanged; the current audit contract uses wire 3/record 4. See the complete
 [identity broker contract](../docs/identity-broker.md#mcp-tool-approval-policies).
 
 ### Account macros

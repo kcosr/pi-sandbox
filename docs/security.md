@@ -355,8 +355,8 @@ in Bubblewrap; Seatbelt uses writable real host scratch directories.
 
 ## Audit correlation
 
-The application and collector use strict audit wire version 2; the collector emits
-record schema version 3 and requires configuration version 13. They must be
+The application and collector use strict audit wire version 3; the collector emits
+record schema version 4 and requires configuration version 13. They must be
 installed from the same release. MCP records carry the configured server ID,
 original tool name, and `http` or `stdio` transport. Nested audited calls carry
 `parent_invocation_id` from trusted execution context, never from script arguments.
@@ -366,7 +366,10 @@ With a Bash class policy, Bash decision records carry the paired
 `command_class` and `known_read_only_version` fields. Both the application and
 the collector require them together, only on Bash `tool_execution_intent` and
 `tool_denied` events, with a version from 1 through 4294967295. They describe
-the classification used for policy, not the command's actual effects.
+the classification used for policy, not the command's actual effects. Custom-rule
+decisions use `configured_command` with a nonempty, bounded list of matching
+`command_set_ids`, never the `known_read_only` label. Other classes cannot carry
+those IDs. The registry version continues to describe only the built-in profiles.
 
 When global auditing is enabled, code mode records outer lifecycle metadata
 without script source; nested built-in and MCP tools follow their own audit
@@ -774,3 +777,21 @@ under their own UID.
 Records exclude file contents, edit diffs, and tool output. Target paths, the
 launch CWD, and bounded Bash commands are intentional identifying fields and
 may contain sensitive information. Bash commands are truncated, not redacted.
+
+### Administrator command sets
+
+Main-policy `[tools.bash.command_sets]` entries are administrator assertions about
+literal argument shapes. They are not additions to the product-reviewed read-only
+registry, and do not prove that an executable is harmless. Programs can interpret
+ordinary operands as scripts, response files or configuration, and may load plugins
+or hooks. Review these behaviors and relevant environment dependencies before
+allowing a shape; do not approve general interpreters or arbitrary execution flags.
+
+The shared parser, redirection checks and execution-context gates still apply.
+Known registry commands retain their documented environment checks even when a
+custom argument shape matches. Every stage must match a custom allow rule or an
+effectively allowed built-in class for automatic approval; otherwise the entire
+call uses the ordinary Bash policy. `disabled` never becomes available through
+these rules. Matching grants no new OS authority and performs no partial execution.
+The existing executable-resolution race remains; this feature neither pins binary
+contents nor treats arbitrary user-writable program configuration as trusted.

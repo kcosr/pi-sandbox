@@ -38,6 +38,7 @@ import {
 } from "../permissions/command-classes.js";
 import { parseCodeModeConfig, parseMcpConfig } from "./mcp.js";
 import { ConfigError } from "./errors.js";
+import { parseBashCommandSets } from "./command-sets.js";
 
 type UnknownRecord = Record<string, unknown>;
 
@@ -134,7 +135,7 @@ function parseSubjectPolicy(
     POLICY_KEYS,
     path,
     issues,
-    toolName === COMMAND_CLASS_TOOL ? COMMAND_CLASSES : [],
+    toolName === COMMAND_CLASS_TOOL ? [...COMMAND_CLASSES, "command_sets"] : [],
   );
   const mode = enumValue(own(value, "mode"), POLICY_MODES, `${path}.mode`, issues);
   const sessionGrant = enumValue(
@@ -151,6 +152,14 @@ function parseSubjectPolicy(
     toolName === COMMAND_CLASS_TOOL
       ? parseCommandClassPolicies(value, path, mode, sessionGrant, issues)
       : undefined;
+  let commandSets;
+  if (toolName === COMMAND_CLASS_TOOL && Object.hasOwn(value, "command_sets")) {
+    try {
+      commandSets = parseBashCommandSets(value.command_sets, `${path}.command_sets`);
+    } catch (error) {
+      issues.push(error instanceof Error ? error.message : `${path}.command_sets is invalid`);
+    }
+  }
 
   if (mode === undefined || sessionGrant === undefined) {
     return undefined;
@@ -166,6 +175,7 @@ function parseSubjectPolicy(
     sessionGrant,
     audit,
     ...(commandClasses === undefined ? {} : { commandClasses }),
+    ...(commandSets === undefined ? {} : { commandSets }),
   });
 }
 

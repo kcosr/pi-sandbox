@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 
 import { TOOL_NAMES, type SandboxConfig } from "../domain/index.js";
 import type { BashCommandAnalyzer } from "../permissions/bash/contracts.js";
+import { createBashCommandAnalyzer } from "../permissions/bash/analyzer.js";
 import { safeSandboxEnvironment } from "../../packages/sandbox-extension/src/runtime/bubblewrap-policy.js";
 import {
   bashExecutionContext,
@@ -142,5 +143,48 @@ describe("configured Bash analyzer", () => {
         createConfiguredBashAnalyzer(runtime("bubblewrap"), () => analyzer(version)),
       ).toThrow("invalid analyzer");
     }
+  });
+
+  it("constructs from command sets alone and snapshots effective rules and environment", async () => {
+    const base = runtime("direct", false, false);
+    const commandSets = {
+      records_read: {
+        command: "records",
+        mode: "allow" as const,
+        sessionGrant: "never" as const,
+        requiredFlags: ["--read"],
+        optionalFlags: [] as string[],
+        options: {},
+        operands: { min: 1, max: 1 },
+      },
+    };
+    const ambientEnvironment = { PATH: "/usr/bin" };
+    const configured = createConfiguredBashAnalyzer(
+      {
+        ...base,
+        ambientEnvironment,
+        config: {
+          ...base.config,
+          tools: {
+            ...base.config.tools,
+            bash: { ...base.config.tools.bash!, commandSets },
+          },
+        },
+      },
+      (context) =>
+        createBashCommandAnalyzer(context, {
+          isExecutableFile: (path) => Promise.resolve(path === "/usr/bin/records"),
+          realpath: (path) => Promise.resolve(path),
+        }),
+    );
+    expect(configured).toBeDefined();
+    ambientEnvironment.PATH = "/work/project:/usr/bin";
+    commandSets.records_read.requiredFlags.length = 0;
+    commandSets.records_read.optionalFlags.push("--write");
+    expect(await configured!.analyze("records --read input")).toMatchObject({
+      commandClass: "configured_command",
+    });
+    for (const command of ["records input", "records --read --write input"])
+      expect(await configured!.analyze(command)).toMatchObject({ commandClass: "unclassified" });
   });
 });

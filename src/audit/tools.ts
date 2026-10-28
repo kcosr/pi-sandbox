@@ -32,7 +32,8 @@ interface Invocation {
 
 export type CommandClassAudit = Required<
   Pick<AuditEvent, "command_class" | "known_read_only_version">
->;
+> &
+  Pick<AuditEvent, "command_set_ids">;
 
 function errorOutcome(error: unknown, signal?: AbortSignal): "error" | "cancelled" | "timeout" {
   if (signal?.aborted === true) return "cancelled";
@@ -138,6 +139,9 @@ export class ToolAuditor {
         : {
             command_class: classification.command_class,
             known_read_only_version: classification.known_read_only_version,
+            ...(classification.command_set_ids === undefined
+              ? {}
+              : { command_set_ids: classification.command_set_ids }),
           };
     if (!decision.allowed) {
       invocation.denied = true;

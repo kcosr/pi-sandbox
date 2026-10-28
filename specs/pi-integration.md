@@ -229,7 +229,8 @@ Disabled servers skip their executable, identity, credential-reference, and
 transport work; independently configured scoped environment still applies.
 User saved preferences may narrow admission but cannot enable an effectively
 disabled server. Administrative changes require restart. Broker support remains
-Linux-only; main configuration schema 13 and audit wire 2/record 3 are unchanged.
+Linux-only; main configuration schema 13 is unchanged. The current audit contract uses
+wire 3/record 4 for configured Bash command provenance.
 
 Host lookups are bounded to four seconds, the client deadline is ten seconds,
 and the service lifetime is fifteen seconds. Local accounts and SSSD via local

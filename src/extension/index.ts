@@ -34,7 +34,9 @@ import {
   type BashAnalysis,
   type BashCommandAnalyzer,
   type BashRequestClass,
+  type BashStageCoverage,
 } from "../permissions/bash/contracts.js";
+import { freezeCommandStages, validCommandStages } from "../permissions/command-set-evidence.js";
 import { snapshotJsonObject } from "../../packages/sandbox-extension/src/invocation.js";
 import { SandboxExecutionError } from "../../packages/sandbox-extension/src/runtime/index.js";
 import {
@@ -69,6 +71,7 @@ interface ExtensionState {
 interface CommandClassification {
   readonly commandClass: BashRequestClass;
   readonly version: number;
+  readonly stages?: readonly BashStageCoverage[];
   /** Bounded first analyzer issue for an unclassified command. */
   readonly issue?: string;
 }
@@ -186,6 +189,7 @@ async function authorize<T extends JsonObject>(
     ),
     arguments: arguments_,
     ...(classification === undefined ? {} : { commandClass: classification.commandClass }),
+    ...(classification?.stages === undefined ? {} : { commandStages: classification.stages }),
   });
   await authorizeRequest(state, request, ctx, signal, classification);
   return request.arguments as T;
@@ -217,7 +221,13 @@ async function classifyCommand(
   }
   return analysis.commandClass === "unclassified"
     ? unclassified(analysis.issue.message)
-    : Object.freeze({ commandClass: analysis.commandClass, version });
+    : Object.freeze({
+        commandClass: analysis.commandClass,
+        version,
+        ...(analysis.commandClass === "configured_command"
+          ? { stages: freezeCommandStages(analysis.stages) }
+          : {}),
+      });
 }
 
 /** A classified result names every stage; an unclassified one carries a well-formed issue. */
@@ -225,6 +235,7 @@ function isBashAnalysis(value: unknown, version: number): value is BashAnalysis 
   if (typeof value !== "object" || value === null) return false;
   const result = value as Record<string, unknown>;
   if (result.version !== version) return false;
+  if (result.commandClass === "configured_command") return validCommandStages(result.stages);
   if (result.commandClass === "unclassified") {
     const issue = result.issue;
     if (typeof issue !== "object" || issue === null) return false;
@@ -273,6 +284,13 @@ function classificationAudit(
     : {
         command_class: classification.commandClass,
         known_read_only_version: classification.version,
+        ...(classification.stages === undefined
+          ? {}
+          : {
+              command_set_ids: [
+                ...new Set(classification.stages.flatMap((stage) => stage.commandSets)),
+              ].sort(),
+            }),
       };
 }
 

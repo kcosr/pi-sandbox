@@ -916,6 +916,48 @@ describe("identity command-class overrides", () => {
     },
   } satisfies SandboxConfig;
 
+  it("preserves only the main command-set definitions across ordinary policy overrides", () => {
+    const commandSets = {
+      utility_read: {
+        command: "utility",
+        mode: "allow",
+        sessionGrant: "never",
+        requiredFlags: ["--read"],
+        optionalFlags: [],
+        options: {},
+        operands: { min: 1, max: 1 },
+      },
+    } as const;
+    const configured = {
+      ...base,
+      tools: { ...base.tools, bash: { ...base.tools.bash, commandSets } },
+    };
+    for (const mode of ["allow", "ask", "deny", "disabled"] as const) {
+      const selected = applyIdentityOverrides(configured, {
+        tools: { bash: { mode, sessionGrant: "never" } },
+      });
+      expect(selected.tools.bash!.commandSets).toBe(commandSets);
+      expect(selected.tools.bash!.mode).toBe(mode);
+      expect(selected.tools.bash).not.toHaveProperty("commandClasses");
+    }
+    const untrustedOverride = { mode: "ask", sessionGrant: "never", commandSets } as const;
+    expect(
+      applyIdentityOverrides(base, { tools: { bash: untrustedOverride } }).tools.bash,
+    ).not.toHaveProperty("commandSets");
+  });
+
+  it("rejects command-set definitions in broker tool policy responses", () => {
+    for (const field of ["command_sets", "commandSets"]) {
+      const source = JSON.stringify({
+        version: 10,
+        status: "ok",
+        environment: { pi: {}, sandbox: {}, extensions: {} },
+        overrides: { tools: { bash: { mode: "ask", session_grant: "never", [field]: {} } } },
+      });
+      expect(() => parseBrokerResponse(source)).toThrow();
+    }
+  });
+
   it("replaces the whole Bash policy, including an absent class policy", () => {
     expect(applyIdentityOverrides(base, { tools: {} }).tools.bash).toBe(base.tools.bash);
     const withoutClass = applyIdentityOverrides(base, {

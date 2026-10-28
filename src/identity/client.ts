@@ -178,7 +178,17 @@ export function applyIdentityOverrides<PiValue extends AuthoredPiEnvironmentValu
       toolName,
       overrides.tools[toolName] === undefined
         ? base.tools[toolName]
-        : Object.freeze({ ...overrides.tools[toolName], audit: base.tools[toolName]!.audit }),
+        : Object.freeze({
+            mode: overrides.tools[toolName].mode,
+            sessionGrant: overrides.tools[toolName].sessionGrant,
+            ...(overrides.tools[toolName].commandClasses === undefined
+              ? {}
+              : { commandClasses: overrides.tools[toolName].commandClasses }),
+            audit: base.tools[toolName]!.audit,
+            ...(base.tools[toolName]!.commandSets === undefined
+              ? {}
+              : { commandSets: base.tools[toolName]!.commandSets }),
+          }),
     ]),
   ) as Record<string, ToolPolicy>;
   assertEffectiveCommandClassPolicies(tools);

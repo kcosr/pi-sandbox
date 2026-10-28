@@ -89,3 +89,9 @@ reimplemented rather than mechanically reapplied.
 - Keep all tests offline. Do not invoke live LLM providers.
 - Use Node.js 24 or newer and Rust/Cargo 1.85 or newer; keep `NODE_ENV` unset for installs, builds, and tests.
 - Verify formatting/linting, type checking, unit tests, integration tests, real Bubblewrap tests, build output, and package/install smoke tests before release.
+
+- Main-only `tools.bash.command_sets` defines narrow administrator allow assertions,
+  not product-certified read-only commands. Preserve per-stage whole-call policy
+  composition, disabled-tool precedence, immutable evidence and main definitions
+  across broker overrides. Audit configured decisions separately with wire 3 and
+  record schema 4; neither broker rules nor wire patches may redefine the grammar.

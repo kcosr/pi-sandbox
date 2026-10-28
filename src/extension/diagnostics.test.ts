@@ -320,6 +320,41 @@ Use /sandbox mounts or /sandbox policy for details.`);
     expect(detail).not.toContain("Has no network access");
   });
 
+  it("lists administrator command shapes separately from reviewed profiles", () => {
+    const base = diagnosticConfig();
+    const config = {
+      ...base,
+      tools: {
+        ...base.tools,
+        bash: {
+          mode: "ask",
+          sessionGrant: "offer",
+          audit: false,
+          commandSets: {
+            Utility_Read: {
+              command: "utility",
+              mode: "allow",
+              sessionGrant: "never",
+              requiredFlags: ["--read"],
+              optionalFlags: ["--verbose"],
+              options: { "--format": ["json", "text"] },
+              operands: { min: 1, max: 1 },
+            },
+          },
+        },
+      },
+    } satisfies SandboxConfig;
+    const detail = formatSandboxPolicy(
+      { config, hasSessionGrant: () => false, isToolActive: () => true },
+      "bash",
+    );
+    expect(detail).toContain("Utility_Read");
+    expect(detail).toContain("utility");
+    expect(detail).toContain("--read");
+    expect(detail).toContain("--format");
+    expect(detail).toContain("1..1");
+  });
+
   it("reports Bash command-class policies, active class grants, and the registry", () => {
     const base = diagnosticConfig();
     const config = {

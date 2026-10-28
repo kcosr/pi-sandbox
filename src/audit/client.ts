@@ -1,3 +1,4 @@
+import { isCommandSetId, MAXIMUM_COMMAND_SETS } from "../permissions/bash/command-set-contracts.js";
 import { lstat } from "node:fs/promises";
 import { createConnection } from "node:net";
 import { dirname, isAbsolute, normalize } from "node:path";
@@ -29,8 +30,9 @@ export interface AuditEvent {
   command?: string;
   command_truncated?: boolean;
   /** Present on Bash decision events only while the effective policy has a class policy. */
-  command_class?: "known_read_only" | "unclassified";
+  command_class?: "known_read_only" | "unclassified" | "configured_command";
   known_read_only_version?: number;
+  command_set_ids?: readonly string[];
 }
 
 export interface AuditClient {
@@ -107,7 +109,7 @@ function validateEvent(event: AuditEvent): void {
       "invalid_prompt_decision",
     ],
     outcome: ["success", "error", "cancelled", "timeout"],
-    command_class: ["known_read_only", "unclassified"],
+    command_class: ["known_read_only", "unclassified", "configured_command"],
   };
   const allowed = new Set([
     ...Object.keys(limits),
@@ -116,6 +118,7 @@ function validateEvent(event: AuditEvent): void {
     "command_truncated",
     "duration_ms",
     "known_read_only_version",
+    "command_set_ids",
   ]);
   const invalid = () => {
     throw new Error("Invalid audit event");
@@ -172,6 +175,17 @@ function validateEvent(event: AuditEvent): void {
     invalid();
   if ((event.command_class === undefined) !== (event.known_read_only_version === undefined))
     invalid();
+  if (event.command_class === "configured_command") {
+    const ids = event.command_set_ids;
+    if (
+      !Array.isArray(ids) ||
+      ids.length === 0 ||
+      ids.length > MAXIMUM_COMMAND_SETS ||
+      new Set(ids).size !== ids.length ||
+      !ids.every((id: unknown) => typeof id === "string" && isCommandSetId(id))
+    )
+      invalid();
+  } else if (event.command_set_ids !== undefined) invalid();
   if (
     event.command_class !== undefined &&
     (event.tool !== "bash" ||
@@ -256,7 +270,7 @@ export async function connectAuditClient(path: string): Promise<AuditClient> {
       }
       const record = response as Record<string, unknown>;
       const keys = Object.keys(record).sort().join(",");
-      if (record.version !== 2) throw new Error("Invalid audit collector version");
+      if (record.version !== 3) throw new Error("Invalid audit collector version");
       if (record.ok === false && keys === "code,ok,version") {
         if (
           !["protocol_error", "syslog_unavailable", "audit_disabled"].includes(String(record.code))
@@ -315,7 +329,7 @@ export async function connectAuditClient(path: string): Promise<AuditClient> {
         ) {
           throw new Error("Audit command exceeds size limit");
         }
-        request = `${JSON.stringify({ version: 2, event })}\n`;
+        request = `${JSON.stringify({ version: 3, event })}\n`;
         if (Buffer.byteLength(request) > MAX_REQUEST_BYTES) {
           throw new Error("Audit request exceeds size limit");
         }

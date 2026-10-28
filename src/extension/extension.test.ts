@@ -1811,6 +1811,90 @@ describe("known read-only Bash commands", () => {
   const bashCalls = (executor: ReturnType<typeof fakeExecutor>) =>
     executor.calls.filter((call) => call.argv[1] === "-c").map((call) => call.argv[2]);
 
+  it("authorizes custom shapes and complete mixed pipelines, and audits their separate provenance", async () => {
+    const commandSets = {
+      "Utility-Read": {
+        command: "utility",
+        mode: "allow" as const,
+        sessionGrant: "never" as const,
+        requiredFlags: ["--read"],
+        optionalFlags: [],
+        options: { "--format": ["text", "json"] },
+        operands: { min: 1, max: 1 },
+      },
+    };
+    const events: AuditEvent[] = [];
+    const auditClient: AuditClient = {
+      submit: (event) => {
+        events.push(event);
+        return Promise.resolve();
+      },
+      close: async () => {},
+    };
+    const base = classConfig(
+      { mode: "ask", sessionGrant: "offer", commandSets },
+      { mode: "allow", sessionGrant: "never" },
+    );
+    const cfg = {
+      ...base,
+      audit: { enabled: true, facility: "local0" as const },
+      tools: { ...base.tools, bash: { ...base.tools.bash!, audit: true } },
+    };
+    const analyzer = () =>
+      createBashCommandAnalyzer(
+        {
+          backend: "bubblewrap",
+          cwd: "/work/project",
+          environment: { PATH: "/usr/bin:/bin" },
+          commandSets,
+        },
+        {
+          isExecutableFile: () => Promise.resolve(true),
+          realpath: (path) => Promise.resolve(path),
+        },
+      );
+    const { pi, executor } = await startClassified(cfg, analyzer(), auditClient);
+    const { ctx, prompts } = promptingContext(() => "Deny");
+    const accepted = [
+      "utility --read --format=json file",
+      "utility --read file | grep result",
+      "sleep 0; utility --read file",
+    ];
+    for (const command of accepted) await runBash(pi, command, ctx);
+    expect(prompts).toHaveLength(0);
+    for (const command of [
+      "utility --write file",
+      "utility --read file | unknown file",
+      "utility --read file > output",
+    ])
+      await expect(runBash(pi, command, ctx)).rejects.toThrow("Pi Sandbox denied bash");
+    expect(prompts).toHaveLength(3);
+    expect(bashCalls(executor)).toEqual(accepted);
+    const intents = events.filter((event) => event.event === "tool_execution_intent");
+    expect(intents).toHaveLength(accepted.length);
+    for (const intent of intents)
+      expect(intent).toMatchObject({
+        tool: "bash",
+        command_class: "configured_command",
+        command_set_ids: ["Utility-Read"],
+        approval_source: "policy",
+      });
+    expect(
+      events
+        .filter((event) => event.event !== "tool_execution_intent" && event.event !== "tool_denied")
+        .every((event) => event.command_set_ids === undefined),
+    ).toBe(true);
+    const customOnly = await startClassified(
+      classConfig({ mode: "deny", sessionGrant: "never", commandSets }),
+      analyzer(),
+    );
+    await runBash(customOnly.pi, "utility --read file");
+    await expect(runBash(customOnly.pi, "utility --read file | grep result")).rejects.toThrow(
+      "policy_denied",
+    );
+    expect(bashCalls(customOnly.executor)).toEqual(["utility --read file"]);
+  });
+
   it("allows known read-only commands without a prompt and explains unclassified denials", async () => {
     const analyzer = fakeAnalyzer();
     const { pi, executor } = await startClassified(

@@ -36,7 +36,13 @@ export function bashExecutionContext(runtime: BashAnalysisRuntime): BashExecutio
             runtime.sandboxEnvironment,
             runtime.toolBundle,
           );
-  return Object.freeze({ backend, cwd: runtime.cwd, environment });
+  const commandSets = runtime.config.tools[COMMAND_CLASS_TOOL]?.commandSets;
+  return Object.freeze({
+    backend,
+    cwd: runtime.cwd,
+    environment,
+    ...(commandSets ? { commandSets } : {}),
+  });
 }
 
 /** Construct an analyzer only when the effective Bash policy has a command-class policy. */

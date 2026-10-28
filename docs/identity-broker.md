@@ -438,7 +438,10 @@ protocol version 10, and omits it when absent:
 The client accepts `known_read_only` only for `bash`, with exactly `mode` and
 `session_grant`, and rejects a class policy that is not normalized as
 `identity_broker_response_invalid`. A returned Bash policy replaces the base
-Bash policy wholesale, including its class policy. When matching rules set Bash
+Bash invocation policy, including its built-in class policy. Main-policy
+`command_sets` definitions are preserved separately: rules and wire responses
+cannot define, clear or replace their grammar. Effective `disabled` still disables
+Bash and leaves those definitions inert. When matching rules set Bash
 but none supplies `known_read_only`, or normalization drops it, the user has no
 class policy even if the base configuration has one. Repeat the class table in
 rules that should keep it.

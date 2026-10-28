@@ -23,8 +23,9 @@ interface RankedPolicy {
 export type CommandClassPolicyViolation = "main_disabled" | "not_more_permissive";
 
 export function hasCommandClassPolicies(policy: SubjectPolicy | undefined): boolean {
-  return COMMAND_CLASSES.some(
-    (commandClass) => policy?.commandClasses?.[commandClass] !== undefined,
+  return (
+    COMMAND_CLASSES.some((commandClass) => policy?.commandClasses?.[commandClass] !== undefined) ||
+    Object.keys(policy?.commandSets ?? {}).length > 0
   );
 }
 
@@ -32,7 +33,12 @@ export function commandClassPolicy(
   policy: SubjectPolicy,
   commandClass: BashRequestClass | undefined,
 ): CommandClassPolicy | undefined {
-  if (commandClass === undefined || commandClass === "unclassified") return undefined;
+  if (
+    commandClass === undefined ||
+    commandClass === "unclassified" ||
+    commandClass === "configured_command"
+  )
+    return undefined;
   return policy.commandClasses?.[commandClass];
 }
 
