@@ -29,6 +29,7 @@ describe("approval presentation", () => {
   it("labels classified requests and leaves others unchanged", () => {
     expect(approvalSubjectLabel("bash", "known_read_only")).toBe("bash (known read-only)");
     expect(approvalSubjectLabel("bash", "unclassified")).toBe("bash");
+    expect(approvalSubjectLabel("bash", "configured_command")).toBe("bash");
     expect(approvalSubjectLabel("write")).toBe("write");
     expect(approvalPreview("bash (known read-only)", { command: "ls\n-la" })).toBe(
       "bash (known read-only): ls -la",

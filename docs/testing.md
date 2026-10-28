@@ -545,3 +545,29 @@ marker in its own subshell, because Bash 3.2 `printf` otherwise keeps a failed
 broken-pipe write buffered and later flushes it to standard error. The
 Apple `cat` Unix-domain socket fallback is recorded as a residual risk in
 [security](security.md#parser-and-shell-differentials).
+
+### Administrator command sets
+
+Require strict main-only config tests for field names, IDs, executable/builtin
+separation, exact flags, enumerated values, operand ranges and all size bounds.
+Matcher controls cover omitted, repeated, abbreviated, clustered, attached and
+misordered options; option-like operands; literal quoting and unsupported shell
+expansions. Preserve context/environment gates, including those for custom forms
+of known registry commands.
+
+Policy and managed-extension tests must cover custom-only and mixed pipelines,
+whole-call fallback before dispatch, effective built-in allow requirements, deny
+exceptions and disabled precedence. Confirm no custom session grant, ordinary
+fallback prompt wording, deep-frozen rule/stage snapshots and fingerprint v3.
+Direct evidence tests exercise the 256-stage/64-ID bounds, malformed or duplicate
+IDs, missing custom matches, and oversized-result fallback to ordinary policy.
+Broker tests retain main definitions across overrides and reject command-set
+definitions in rule/wire inputs. Audit client and collector tests require wire 3,
+record schema 4, separate configured-command IDs and strict older-wire rejection.
+
+`tests/integration/bash-command-sets.test.ts` compares real Bash argv and pipeline
+behavior with the declared shapes using an owned offline executable; injection
+controls must leave sentinel paths absent. The real Bubblewrap cases in
+`tests/e2e/fake-pi-tool-flow.test.ts` qualify a custom executable, mixed built-in
+coverage, pre-dispatch fallback and disabled-tool omission. These controls do not
+certify arbitrary administrator-selected utilities as read-only.

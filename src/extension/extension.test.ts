@@ -1866,9 +1866,11 @@ describe("known read-only Bash commands", () => {
       "utility --write file",
       "utility --read file | unknown file",
       "utility --read file > output",
+      Array.from({ length: 257 }, () => "utility --read file").join("; "),
     ])
       await expect(runBash(pi, command, ctx)).rejects.toThrow("Pi Sandbox denied bash");
-    expect(prompts).toHaveLength(3);
+    expect(prompts).toHaveLength(4);
+    expect(events.at(-1)).toMatchObject({ event: "tool_denied", command_class: "unclassified" });
     expect(bashCalls(executor)).toEqual(accepted);
     const intents = events.filter((event) => event.event === "tool_execution_intent");
     expect(intents).toHaveLength(accepted.length);
@@ -1893,6 +1895,16 @@ describe("known read-only Bash commands", () => {
       "policy_denied",
     );
     expect(bashCalls(customOnly.executor)).toEqual(["utility --read file"]);
+    const fallback = await startClassified(
+      classConfig({ mode: "ask", sessionGrant: "offer", commandSets }),
+      analyzer(),
+    );
+    const prompt = promptingContext(() => "Deny");
+    await expect(
+      runBash(fallback.pi, "utility --read file | grep result", prompt.ctx),
+    ).rejects.toThrow("Pi Sandbox denied bash");
+    expect(prompt.prompts[0]?.title).toBe("Allow bash: utility --read file | grep result?");
+    expect(bashCalls(fallback.executor)).toEqual([]);
   });
 
   it("allows known read-only commands without a prompt and explains unclassified denials", async () => {
