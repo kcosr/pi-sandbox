@@ -446,13 +446,11 @@ describe.skipIf(!REAL_BWRAP_AVAILABLE)(
       );
       for (const command of newReadOnlyCommands) {
         const output = resultText(await invoke(fakePi, "bash", { command }));
-        expect(output).toContain(
-          command.startsWith("cd")
-            ? "/run/pi-sandbox/home"
-            : command.startsWith("sleep")
-              ? ""
-              : "content",
-        );
+        if (command.startsWith("sleep")) {
+          expect(output).toBe("(no output)");
+        } else {
+          expect(output).toContain(command.startsWith("cd") ? "/run/pi-sandbox/home" : "content");
+        }
       }
       await expect(invoke(fakePi, "bash", { command: "touch x" })).rejects.toThrow(
         'Pi Sandbox denied bash: policy_denied; not a known read-only command: "touch" is not a known read-only command',

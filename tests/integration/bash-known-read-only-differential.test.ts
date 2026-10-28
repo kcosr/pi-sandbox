@@ -279,8 +279,8 @@ const ACCEPTED_CORPUS = [
   "<'in put' cat 2>&1 | wc",
   String.raw`grep "a\|b" in 2>&1 | head`,
   String.raw`grep "\bword\b\n" in`,
-  String.raw`echo "a\"b" "c\\d" "\$HOME" | cat`,
-  'echo "\\`id\\`" | cat',
+  String.raw`cat "a\"b" "c\\d" "\$HOME" | cat`,
+  'cat "\\`id\\`" | cat',
   String.raw`cat "2">/dev/null`,
   String.raw`cat <"\/dev/tcp/example.invalid/80" || ls`,
   String.raw`sed -n "/start/,/};/p" in | cat`,
@@ -294,7 +294,7 @@ const ACCEPTED_CORPUS = [
   "cd sub; cd ~/ && cat <in",
   "cd ~/sub >/dev/null && cat <nested",
   // Odd source backslash parity makes a literal dollar, never a substitution.
-  'echo "' + "\\".repeat(3) + '$(id)" | cat',
+  'cat "' + "\\".repeat(3) + '$(id)" | cat',
 ];
 
 function literalValue(word: BashWord | undefined): string {
