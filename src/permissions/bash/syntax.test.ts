@@ -5,6 +5,7 @@ import {
   parseBashCommand,
   type BashScript,
   type BashSimpleCommand,
+  type BashWord,
 } from "./syntax.js";
 
 function script(input: string): BashScript {
@@ -21,8 +22,13 @@ function commands(input: string): BashSimpleCommand[] {
   );
 }
 
+function literalValue(word: BashWord): string {
+  if (word.kind !== "literal") throw new Error("expected a literal word");
+  return word.value;
+}
+
 function argv(input: string): string[][] {
-  return commands(input).map((command) => command.words.map((word) => word.value));
+  return commands(input).map((command) => command.words.map(literalValue));
 }
 
 function issue(input: string): { code: string; offset?: number } {
@@ -41,9 +47,9 @@ describe("Bash recognizer words", () => {
     ]);
     const [command] = commands(`ls  -la 'x y'`);
     expect(command?.words).toEqual([
-      { value: "ls", raw: "ls", offset: 0, end: 2, quoted: false },
-      { value: "-la", raw: "-la", offset: 4, end: 7, quoted: false },
-      { value: "x y", raw: "'x y'", offset: 8, end: 13, quoted: true },
+      { kind: "literal", value: "ls", raw: "ls", offset: 0, end: 2, quoted: false },
+      { kind: "literal", value: "-la", raw: "-la", offset: 4, end: 7, quoted: false },
+      { kind: "literal", value: "x y", raw: "'x y'", offset: 8, end: 13, quoted: true },
     ]);
   });
 
@@ -53,6 +59,60 @@ describe("Bash recognizer words", () => {
     ]);
     expect(argv("echo 'a\nb'\techo")).toEqual([["echo", "a\nb", "echo"]]);
     expect(argv("echo '\u00a0x'")).toEqual([["echo", "\u00a0x"]]);
+  });
+
+  it.each(['"', "\\", "$", "`"])("decodes a quoted escape of %j exactly once", (character) => {
+    const input = `echo "\\${character}"`;
+    expect(argv(input)).toEqual([["echo", character]]);
+    expect(commands(input)[0]?.words[1]).toEqual({
+      kind: "literal",
+      value: character,
+      raw: input.slice(5),
+      offset: 5,
+      end: input.length,
+      quoted: true,
+    });
+  });
+
+  it.each(["|", "b", "n", "x", " ", "'", "é"])(
+    "retains the backslash before ordinary quoted character %j",
+    (character) => {
+      expect(argv(`echo "\\${character}"`)).toEqual([["echo", `\\${character}`]]);
+    },
+  );
+
+  it("does not recursively decode escaped dollars or backticks", () => {
+    expect(argv('echo "\\$(id)" "\\`id\\`"')).toEqual([["echo", "$(id)", "`id`"]]);
+    expect(argv('echo "a\\"; cat >file"')).toEqual([["echo", 'a"; cat >file']]);
+  });
+
+  it("preserves escape parity and offsets before active expansion characters", () => {
+    for (const marker of ["$HOME", "`id` "]) {
+      for (let count = 1; count <= 8; count += 1) {
+        const input = `echo "${"\\".repeat(count)}${marker}"`;
+        if (count % 2 === 0) {
+          expect(issue(input)).toEqual({ code: "unsupported_character", offset: 6 + count });
+        } else if (marker.startsWith("$")) {
+          expect(argv(input)).toEqual([["echo", `${"\\".repeat(Math.floor(count / 2))}${marker}`]]);
+        } else {
+          // The first backtick is literal, but the second one still requests expansion.
+          expect(issue(input)).toEqual({ code: "unsupported_character", offset: 9 + count });
+        }
+      }
+    }
+  });
+
+  it("continues rejecting every double-quoted exclamation mark", () => {
+    for (let count = 0; count <= 8; count += 1) {
+      const input = `echo "${"\\".repeat(count)}!"`;
+      expect(issue(input)).toEqual({ code: "unsupported_character", offset: 6 + count });
+    }
+  });
+
+  it("rejects quoted line continuations and preserves literal single-quoted newlines", () => {
+    expect(issue('echo "a\\\nb"')).toEqual({ code: "unsupported_character", offset: 7 });
+    expect(argv("echo 'a\\\nb'")).toEqual([["echo", "a\\\nb"]]);
+    expect(issue('echo "unterminated\\')).toEqual({ code: "unsupported_syntax", offset: 5 });
   });
 
   it.each([
@@ -73,7 +133,6 @@ describe("Bash recognizer words", () => {
     ["ls ^x", 3],
     ["echo $'\\x6c\\x73'", 5],
     ['echo "$x"', 6],
-    ['echo "a\\b"', 7],
     ['echo "`id`"', 6],
     ['echo "!x"', 6],
     ["ls\u00a0x", 2],
@@ -107,6 +166,57 @@ describe("Bash recognizer words", () => {
   });
 });
 
+describe("Bash recognizer symbolic home-relative words", () => {
+  it.each(["", "project", "../other", "a.b/c,d:e@f%g+h=i-j_k"])(
+    "records suffix %j without expanding or fabricating a value",
+    (suffix) => {
+      const input = `cd ~/${suffix}`;
+      expect(commands(input)[0]?.words[1]).toEqual({
+        kind: "home_relative",
+        suffix,
+        raw: `~/${suffix}`,
+        offset: 3,
+        end: input.length,
+        quoted: false,
+      });
+    },
+  );
+
+  it("preserves quoted tilde paths as literal words", () => {
+    expect(argv(`cd '~/project'; cd "~/project"`)).toEqual([
+      ["cd", "~/project"],
+      ["cd", "~/project"],
+    ]);
+  });
+
+  it.each(["~", "~user/project", "~+/project", "~-/project", "~1/project"])(
+    "rejects unsupported tilde form %j",
+    (path) => {
+      expect(issue(`cd ${path}`)).toEqual({ code: "unsupported_character", offset: 3 });
+    },
+  );
+
+  it.each(['~/"project"', "~/a'b'", "~/a*", "~/a$HOME", "~/a~b", "~/a\\b", "~/a{b,c}"])(
+    "rejects nonliteral suffix in %j",
+    (path) => {
+      expect(issue(`cd ${path}`).code).toBe("unsupported_character");
+    },
+  );
+
+  it("requires literal command names before invoking the name hook", () => {
+    const seen: string[] = [];
+    expect(
+      parseBashCommand("~/bin/grep x", {
+        commandName(word) {
+          seen.push(word.value);
+          return undefined;
+        },
+      }),
+    ).toMatchObject({ ok: false, issue: { code: "unknown_command", offset: 0 } });
+    expect(seen).toEqual([]);
+  });
+});
+
 describe("Bash recognizer structure", () => {
   it("parses statements, lists and pipelines", () => {
     const parsed = script("\n\nls -la | grep x | head -3 && pwd || echo no; cat a\n\ntrue;\n");
@@ -114,7 +224,7 @@ describe("Bash recognizer structure", () => {
       parsed.statements.map((statement) => ({
         operators: statement.operators,
         pipelines: statement.pipelines.map((pipeline) =>
-          pipeline.commands.map((command) => command.words.map((word) => word.value).join(" ")),
+          pipeline.commands.map((command) => command.words.map(literalValue).join(" ")),
         ),
       })),
     ).toEqual([
@@ -189,7 +299,7 @@ describe("Bash recognizer structure", () => {
           : undefined;
       },
       command(command) {
-        seen.push(`command:${command.words.map((word) => word.value).join(" ")}`);
+        seen.push(`command:${command.words.map(literalValue).join(" ")}`);
         return undefined;
       },
     });
@@ -206,7 +316,7 @@ describe("Bash recognizer redirections", () => {
     const [command] = commands(
       "ls >/dev/null 2>>/dev/null &>/dev/null 1>>'/dev/null' 2>&1 1>&2 >&2 2>&2 1>&1 >& 1 <in 0< 'in put'",
     );
-    expect(command?.words.map((word) => word.value)).toEqual(["ls"]);
+    expect(command?.words.map(literalValue)).toEqual(["ls"]);
     expect(
       command?.redirections.map((redirection) => {
         switch (redirection.kind) {
@@ -236,13 +346,14 @@ describe("Bash recognizer redirections", () => {
 
   it("applies the Bash descriptor-number rule", () => {
     const [unspaced] = commands("echo 2>/dev/null");
-    expect(unspaced?.words.map((word) => word.value)).toEqual(["echo"]);
+    expect(unspaced?.words.map(literalValue)).toEqual(["echo"]);
     expect(unspaced?.redirections[0]).toMatchObject({ kind: "discard", fds: [2] });
 
     for (const input of [
       "echo 2 >/dev/null",
       "echo a2>/dev/null",
       `echo '2'>/dev/null`,
+      `echo "2">/dev/null`,
       `echo 2"">/dev/null`,
       "echo -2>/dev/null",
       "echo 2&>/dev/null",
@@ -258,7 +369,7 @@ describe("Bash recognizer redirections", () => {
       { kind: "duplicate", fd: 1, target: 2 },
       { kind: "discard", fds: [1] },
     ]);
-    expect(commands("2>/dev/null ls")[0]?.words.map((word) => word.value)).toEqual(["ls"]);
+    expect(commands("2>/dev/null ls")[0]?.words.map(literalValue)).toEqual(["ls"]);
   });
 
   it.each([
@@ -281,6 +392,7 @@ describe("Bash recognizer redirections", () => {
     ["ls >&-", 3],
     ["ls 2>&-", 3],
     ["ls >&'1'", 3],
+    ['ls 2>&"1"', 3],
     ["ls 2>&1x", 3],
     ["ls <&0", 3],
     ["ls <>x", 3],
@@ -292,6 +404,12 @@ describe("Bash recognizer redirections", () => {
     ["cat </dev/tcp/1.2.3.4/80", 4],
     ["cat <'/dev/udp/h/53'", 4],
     ["cat <//dev//tcp/h/80", 4],
+    ["cat <~/file", 4],
+    ["cat >~/file", 4],
+    ["cat 2>~/file", 4],
+    ["cat >&~/file", 4],
+    ['cat >"/dev/\\null"', 4],
+    ['cat <"/dev/tcp/example.invalid/80"', 4],
   ])("rejects redirection %j", (input, offset) => {
     expect(issue(input)).toEqual({ code: "unsupported_redirection", offset });
   });

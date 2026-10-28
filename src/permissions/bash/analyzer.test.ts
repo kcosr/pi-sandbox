@@ -82,6 +82,13 @@ describe("Bash command analyzer classification", () => {
     ["rg -n 'TODO|FIXME' src 2>&1 | wc -l", ["rg", "wc"]],
     ["find . -name '*.ts' -print0 &>/dev/null", ["find"]],
     ["sed -n '1,20p' README.md", ["sed"]],
+    ['grep -n "Alpha\\|Beta" source.cc 2>&1 | head', ["grep", "head"]],
+    ['grep -n "\\"state\\"" source.json 2>/dev/null', ["grep"]],
+    ['echo "\\$HOME" "literal \\`name\\`"', ["echo"]],
+    ["cd ~/project && pwd", ["cd", "pwd"]],
+    ["cd -P ~/project; pwd", ["cd", "pwd"]],
+    ["cd -- ~/; head -20 notes.txt", ["cd", "head"]],
+    ["cd -L -P -L -- ~/../other && cat notes.txt", ["cd", "cat"]],
     ["echo 'rm -rf /; $(id)' \"a b\"", ["echo"]],
     ["ls '|' ';' '&&' '>x'", ["ls"]],
     ["tail -n +5 x | uniq -c | sort -rn", ["tail", "uniq", "sort"]],
@@ -184,6 +191,30 @@ describe("Bash command analyzer classification", () => {
     "ls\u2028",
     "cd a b",
     "cd -e x",
+    "cd ~/project extra",
+    "cd ~/project -P",
+    "cd ~/project ~/other",
+    "cd -LP ~/project",
+    "cd -- -P ~/project",
+    "cd -- -- ~/project",
+    "cd ~",
+    "cd ~user/project",
+    "cd ~+/project",
+    "cd ~-/project",
+    'cd ~/"project"',
+    "cd ~/project/*.cc",
+    "cd $HOME/project",
+    "cd ~/project; touch file",
+    "cd ~/project >report.txt >/dev/null",
+    "~/bin/grep pattern file",
+    "cat <~/file",
+    'echo "\\\\$(id)"',
+    'echo "\\\\`id`"',
+    'echo "\\!"',
+    'echo "a\\\nb"',
+    'LC_ALL="C" grep x file',
+    'find . "-de""lete"',
+    'sort "--compress-program=sh" x',
     "tail -f x",
     "tail -F x",
     "tail +5f x",
@@ -265,6 +296,29 @@ describe("Bash command analyzer classification", () => {
     expect((await issueOf("ls > out")).message).toBe(
       "output redirection to a file is not read-only (only /dev/null is accepted)",
     );
+    expect(await issueOf("cat ~/file")).toMatchObject({ code: "unsupported_operand", offset: 4 });
+    expect(await issueOf("cat <~/file")).toMatchObject({
+      code: "unsupported_redirection",
+      offset: 4,
+    });
+    expect(await issueOf("~/bin/grep x")).toMatchObject({ code: "unknown_command", offset: 0 });
+    const escapedThenUnknown = 'echo "a\\\\b"; rm file';
+    expect(await issueOf(escapedThenUnknown)).toMatchObject({
+      code: "unknown_command",
+      offset: escapedThenUnknown.indexOf("rm"),
+    });
+  });
+
+  it("rejects symbolic arguments before every non-cd profile, including any-words builtins", async () => {
+    for (const { name } of KNOWN_READ_ONLY_COMMANDS) {
+      if (name === "cd") continue;
+      expect(await issueOf(`${name} ~/file`)).toMatchObject({
+        code: "unsupported_operand",
+        offset: name.length + 1,
+      });
+    }
+    expect(await issueOf("grep -f ~/patterns file")).toMatchObject({ code: "unsupported_operand" });
+    expect(await issueOf("sed -n 1p ~/file")).toMatchObject({ code: "unsupported_operand" });
   });
 
   it("returns the first issue in source order", async () => {
@@ -285,6 +339,47 @@ describe("Bash command analyzer classification", () => {
 });
 
 describe("Bash command analyzer execution context", () => {
+  it("classifies symbolic cd without resolving HOME or consulting the filesystem", async () => {
+    const homes: (string | undefined)[] = [
+      undefined,
+      "",
+      "/home/example",
+      "/tmp/private-seatbelt-home",
+      "/path with spaces;$(id)*",
+      "relative",
+      "-P",
+    ];
+    for (const home of homes) {
+      const probe = fakeProbe({});
+      const environment = home === undefined ? {} : { HOME: home };
+      for (const backend of ["bubblewrap", "seatbelt", "direct"] as const) {
+        const analyzer = createBashCommandAnalyzer({ backend, cwd: CWD, environment }, probe);
+        expect(await analyzer.analyze("cd ~/../project && pwd")).toMatchObject({
+          commandClass: "known_read_only",
+          commands: ["cd", "pwd"],
+        });
+      }
+      expect(probe.calls).toEqual([]);
+    }
+  });
+
+  it("retains exported-function, startup-hook and executable checks after symbolic cd", async () => {
+    expect(
+      await issueOf("cd ~/project", { "BASH_FUNC_cd%%": "() { echo replaced; }" }),
+    ).toMatchObject({ code: "unsafe_environment", offset: 0 });
+    expect(await issueOf("cd ~/project", { BASH_ENV: "/tmp/startup" })).toMatchObject({
+      code: "unsafe_environment",
+    });
+    expect(await issueOf("cd ~/project && ls", { PATH: ".:/usr/bin" })).toMatchObject({
+      code: "unsafe_environment",
+      offset: 16,
+    });
+    const probe = fakeProbe({ "/usr/bin/ls": `${CWD}/bin/ls` });
+    expect(await issueOf("cd ~/project && ls", { PATH: "/usr/bin" }, probe)).toMatchObject({
+      code: "untrusted_executable",
+    });
+  });
+
   it.each([
     ["BASH_ENV", "/home/u/.bashrc"],
     ["SHELLOPTS", "xtrace"],

@@ -1,8 +1,10 @@
 # Bash command analysis and known read-only commands
 
-Status: implemented on `feature/bash-known-read-only` (analyzer, managed
-integration, identity broker and audit collector) and natively qualified on
-macOS 26.7.1 arm64 with `/bin/bash` 3.2.57 at `1750997` (Section 11).
+Status: implemented, registry version 2 (analyzer, managed integration,
+identity broker and audit collector). Version 1 was natively qualified on
+macOS 26.7.1 arm64 with `/bin/bash` 3.2.57 at `1750997`; version 2's analyzer
+and native utility tests passed on macOS 15.7.4 x86_64 with stock Bash 3.2.57
+(Section 11).
 
 Prepared 2026-10-13 against Pi Sandbox `dc45abc` and pinned Pi 1.1.0. This
 document is the contract for the Bash command analyzer and the first command
@@ -199,8 +201,9 @@ model and the approval UI, that quotes input only as short escaped excerpts;
 `issue.offset` is the UTF-16 offset of the offending input when one exists.
 When several issues apply, the reported issue is the first of: an unsafe
 command-wide environment variable (Section 6.2 Rules 1 and 2), the locale rule
-(Rule 3), then the first problem in source order, whether a stage's context
-check or the syntax, option or operand error at which recognition stopped. The structured
+(Rule 3), then the first failing stage in source order, whether its context
+check or the syntax, option or operand error at which recognition stopped.
+Symbolic-word placement is checked before the stage's option grammar. The structured
 parse (statements, stages, decoded words and normalized redirections) is
 exposed by the syntax module for future features and tests; it is not
 persisted.
@@ -333,13 +336,35 @@ A word is a concatenation of one or more of:
 
 - **Unquoted text** from `[A-Za-z0-9_./,:@%+=-]`.
 - **Single-quoted text:** `'…'`, any characters except `'`.
-- **Double-quoted text:** `"…"`, any characters except `"`, `\`, `$`, `` ` ``
-  and `!`.
+- **Double-quoted text:** `"…"`, with backslash pairs decoded left to right.
+  Before `"`, `\`, `$` or backtick, the backslash is removed and the next
+  character is literal. Other pairs retain both characters, such as `\|`,
+  `\b` and `\n`. Reject unescaped dollars/backticks, every `!` including `\!`,
+  and backslash-newline. Decoded characters are not rescanned as syntax.
 
 Decoded word values drop the quotes. Every other character outside quotes is
-rejected, including `$ \` \ ! # ~ * ? [ ] { } ( ) ^` and other punctuation.
-Consequently there are no expansions, globs, escapes, comments, line
-continuations, subshells, arithmetic, process substitution or brace expansion.
+rejected, including `$ \` \ ! # * ? [ ] { } ( ) ^` and other punctuation.
+Unquoted escapes, line continuations, comments, globs, variables, command
+substitution, arithmetic, process substitution and brace expansion are rejected.
+
+The sole symbolic word is a whole unquoted `~/` token whose possibly empty
+suffix uses the unquoted alphabet above. It has kind `home_relative` and a
+`suffix`, without a fabricated decoded `value`; ordinary words have kind
+`literal` and a decoded `value`. Both preserve raw text and offsets. Quoted
+fragments, further tildes, escapes, bare `~` and named-user forms are rejected.
+Command names and redirects require literals. Before every non-`cd` profile
+dispatch, the analyzer requires all arguments to be literal, including the
+any-words `echo`, `true` and `false` profiles.
+
+Only `cd` may consume a symbolic word, as its sole final directory argument.
+Zero or more exact literal `-L`/`-P` words, followed by at most one `--`, may
+precede it; no clusters, later options or extra operands are admitted. Existing
+literal-only `cd` option handling is unchanged. Classification never resolves
+HOME, queries account data or canonicalizes the suffix: Bash supplies one
+unsplit, unglobbed directory value at execution. `cd` can change its process's
+directory, print or fail; HOME contents cannot become executable shell syntax.
+The actual backend HOME may differ from the analyzer's base environment,
+particularly for Seatbelt's later-created scratch directories.
 
 ### 7.3 Structure
 
@@ -424,29 +449,42 @@ following word becomes a format instead of a file, and BSD `grep --context` and
 `diff --context` or `--unified` take only an optional attached value, so a
 following number becomes a pattern or file operand. Every reading is read-only.
 
-### 8.2 Initial registry (version 1)
+### 8.2 Current registry (version 2)
 
 Shell builtins: `cd`, `echo`, `false`, `pwd`, `true`.
 
 Executables: `basename`, `cat`, `cut`, `diff`, `dirname`, `du`, `find`, `grep`,
-`head`, `ls`, `nl`, `readlink`, `realpath`, `rg`, `sed`, `sort`, `stat`, `tail`,
+`head`, `ls`, `nl`, `readlink`, `realpath`, `rg`, `sed`, `sleep`, `sort`, `stat`, `tail`,
 `tr`, `uniq`, `wc`.
 
 Notable exclusions inside accepted commands:
 
-| Command | Not accepted                                                                                                                                                                    |
-| ------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `cd`    | more than one operand, `-e`, `-@`                                                                                                                                               |
-| `find`  | `-exec`, `-execdir`, `-ok`, `-okdir`, `-delete`, `-fprint`, `-fprint0`, `-fprintf`, `-fls`, unknown primaries                                                                   |
-| `rg`    | `--pre`, `--pre-glob`, `-z`/`--search-zip`, `--hostname-bin`; any use while `RIPGREP_CONFIG_PATH` is set unless `--no-config`                                                   |
-| `grep`  | any use while `GREP_OPTIONS` is set                                                                                                                                             |
-| `sed`   | everything except `-n`/`--quiet`/`--silent` with one script of the form `Np`, `N,Mp`, `$p` or `N,$p` (decimal `N`, `M`), and at most one file; one of those options is required |
-| `sort`  | `-o`/`--output`, `-T`/`--temporary-directory`, `--compress-program`                                                                                                             |
-| `tail`  | `-f`, `-F`, `--follow`, `--retry`, `--pid`, `-s`/`--sleep-interval`                                                                                                             |
-| `uniq`  | a second operand (it names an output file), counting every word after the first operand                                                                                         |
-| `cat`   | BSD `-l` (locks output)                                                                                                                                                         |
+| Command | Not accepted                                                                                                                                                                     |
+| ------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `cd`    | more than one operand, `-e`, `-@`                                                                                                                                                |
+| `find`  | `-exec`, `-execdir`, `-ok`, `-okdir`, `-delete`, `-fprint`, `-fprint0`, `-fprintf`, `-fls`, unknown primaries                                                                    |
+| `rg`    | `--pre`, `--pre-glob`, `-z`/`--search-zip`, `--hostname-bin`; any use while `RIPGREP_CONFIG_PATH` is set unless `--no-config`                                                    |
+| `grep`  | any use while `GREP_OPTIONS` is set                                                                                                                                              |
+| `sed`   | everything except `-n`/`--quiet`/`--silent` with one numeric print script or restricted `/start/,/end/p` program (below), and at most one file; one of those options is required |
+| `sleep` | anything other than exactly one canonical decimal integer from `0` through `2147483647`; no flags, including `--`, units, signs, fractions or leading zeros                      |
+| `sort`  | `-o`/`--output`, `-T`/`--temporary-directory`, `--compress-program`                                                                                                              |
+| `tail`  | `-f`, `-F`, `--follow`, `--retry`, `--pid`, `-s`/`--sleep-interval`                                                                                                              |
+| `uniq`  | a second operand (it names an output file), counting every word after the first operand                                                                                          |
+| `cat`   | BSD `-l` (locks output)                                                                                                                                                          |
 
-Commands deliberately not in version 1 include `git` (repository configuration
+The sed script grammar preserves `Np`, `N,Mp`, `$p` and `N,$p` (decimal `N`,
+`M`). The only additional production is exactly `/body/,/body/p`. Bodies are
+nonempty printable ASCII excluding `/`, `\` and `[`, with only `\\`, `\/`,
+`\*`, `\.`, `\^` and `\$` escape pairs. A bounded linear scan consumes every
+byte; it does not split on delimiters or compile a JavaScript regex. Semicolons
+inside bodies are data. Bracket expressions, unsupported escapes, modifiers,
+newlines, alternate delimiters and extra script bytes remain rejected.
+
+Sleep's exact single-argument grammar is checked before generic option parsing.
+At most ten digits are accepted before numeric comparison. Finite duration does
+not imply a short wait or change cancellation and command timeout behavior.
+
+Commands deliberately not in version 2 include `git` (repository configuration
 can run helpers), interpreters and shells, wrappers (`env`, `xargs`, `timeout`,
 `nice`, `command`, `builtin`), network-capable tools (including DNS lookups),
 pagers, editors and `printf` (its `-v` assigns variables).
@@ -513,7 +551,8 @@ registry disagree and names the regeneration command.
   compared with the parse, which checks stage wiring, capture routing, discards
   and duplication without device or inode numbers, so the test runs unchanged
   on Linux and macOS. It also runs a seeded generated corpus and checks every
-  accepted input.
+  accepted input. Stubs inspect inherited descriptors directly with Node `fstat`;
+  macOS `/dev/fd` path stats can intermittently misreport live pipe types.
 - Policy-engine, configuration, broker, identity-overlay, audit and diagnostics
   tests for Sections 3–4, including scoped session grants, nested code-mode
   calls and fail-closed handling of malformed analyzer results.
@@ -523,7 +562,9 @@ registry disagree and names the regeneration command.
   unclassified command.
 - A documentation test that fails when the generated table in
   `docs/configuration.md` differs from `renderKnownReadOnlyTable()`.
-- Native macOS qualification is a Mac-owner item. A first run on macOS 26.7.1
+- Version 2's analyzer and native utility tests passed on macOS 15.7.4 x86_64
+  with stock Bash 3.2.57 and system sed/sleep. The following historical evidence
+  covers version 1: a first run on macOS 26.7.1
   with `/bin/bash` 3.2.57 probed every registry option spelling against the
   utilities resolved by both the packaged Seatbelt system `PATH` and the
   selected tool-bundle prefix and found no accepted option that writes files,

@@ -546,6 +546,24 @@ later change cannot reuse a classification. A configured class policy without a
 working analyzer aborts startup; there is no fallback to unclassified evaluation
 or to another backend. User `!` commands are never analyzed.
 
+Registry version 2 adds literal double-quote escapes, symbolic `~/...` only as
+`cd`'s final directory operand, restricted `sed` regex-range printing, and
+integer `sleep`. Double-quote decoding follows Bash's backslash parity without
+rescanning decoded dollars or backticks. Every non-`cd` profile receives only
+literal words, including `echo`, `true` and `false`; command names and redirects
+also require literals. The analyzer never reads or resolves HOME. Bash's tilde
+replacement is one unsplit, unglobbed value consumed only by the reviewed `cd`
+builtin, which changes its process's directory or fails even when HOME contains
+spaces, shell-looking text or a leading dash. Backend access and executable
+trust checks remain unchanged after `cd`.
+
+Redirection checks still use the exact decoded target in source order. For
+example, `>"\/dev\/null"` retains backslashes and is rejected, while an input
+target beginning with a retained backslash is an ordinary relative path, not
+Bash's `/dev/tcp` pseudo-path. File output remains unclassified even if a later
+redirect discards the stream. The sed profile scans one complete print program;
+it does not admit extra scripts, execution or file writes.
+
 ### Execution-context checks
 
 The analyzer is created once at startup with the context the executor uses: the
@@ -648,6 +666,8 @@ gives a known read-only command no capability those tools lack.
   limit, cancellation and the optional administrator command maximum; there is
   no implicit timeout. Large traversals, unbounded device reads and blocking
   reads from FIFOs consume time and host resources until a limit applies.
+  Accepted `sleep` durations are finite integers up to 2147483647 seconds and
+  can still occupy a command for a long time; classification adds no timeout.
 
 ### Parser and shell differentials
 

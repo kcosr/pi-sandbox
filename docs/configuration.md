@@ -1028,7 +1028,8 @@ For example, `touch x` reports `"touch" is not a known read-only command`. The
 reason is a printable-ASCII, plain-English explanation of at most about 160
 characters that quotes the command only as short escaped excerpts. An unsafe
 command-wide environment variable or locale is reported first; otherwise the
-first problem in source order is reported. Pi Sandbox additionally limits the
+first failing stage in source order is reported, with symbolic-word placement
+checked before its option grammar. Pi Sandbox additionally limits the
 reason, including any ellipsis, to 512 bytes and replaces control characters.
 If analysis fails or returns an invalid result, the command is unclassified and
 the reason is `command analysis failed`. Prompt denials,
@@ -1038,7 +1039,7 @@ class policy, denials are unchanged.
 ### Recognized syntax
 
 The analyzer never executes, expands or resolves the command through a shell.
-It accepts only a literal subset of Bash whose meaning is the same in GNU Bash
+It accepts only a restricted subset of Bash whose meaning is the same in GNU Bash
 3.2 and later under `bash -c`; anything else is unclassified, with no attempt to
 recover:
 
@@ -1047,10 +1048,20 @@ recover:
   characters are accepted only inside quotes, and only when the execution
   locale is C, POSIX or UTF-8.
 - **Words:** unquoted letters, digits and `_ . / , : @ % + = -`; single-quoted
-  text; and double-quoted text without `"`, `\`, `$`, `` ` `` or `!`. There are
-  no variables, command substitution, globs, brace or tilde expansion, escapes,
-  comments, line continuations, arithmetic, process substitution, subshells or
-  grouping.
+  text; and double-quoted text with literal escapes. Inside double quotes,
+  backslash removes the special meaning of `"`, `\`, `$` and backtick; before
+  other characters it remains literal (`\|`, `\b` and `\n` keep their backslashes).
+  Unescaped dollars/backticks, every `!`, unquoted backslashes and line
+  continuations are rejected. Variables, command substitution, globs, brace
+  expansion, comments, arithmetic, process substitution and grouping remain
+  unsupported.
+- **Home-relative `cd`:** a whole unquoted `~/...` word is accepted only as
+  `cd`'s sole final directory argument. Its suffix uses the unquoted alphabet
+  above and may be empty. Repeated individual `-L`/`-P` options and then one
+  optional `--` may precede it; option clusters are unsupported for this form.
+  Bare `~`, named-user forms, quoted fragments, other commands and redirect
+  targets remain unsupported. Classification does not resolve HOME; Bash uses
+  the backend's actual HOME when executing the unchanged command.
 - **Structure:** commands joined by `|` into pipelines, pipelines joined by `&&`
   or `||`, and statements separated by `;` or newlines. A newline directly after
   `&&`, `||` or `|` continues the command. Leading, trailing and repeated
@@ -1088,9 +1099,9 @@ any non-empty `LD_*`, `DYLD_*` or `GCONV_PATH` variable. See
 
 ### Known read-only command registry
 
-Registry version 1 contains the shell builtins `cd`, `echo`, `false`, `pwd` and
+Registry version 2 contains the shell builtins `cd`, `echo`, `false`, `pwd` and
 `true`, and the executables `basename`, `cat`, `cut`, `diff`, `dirname`, `du`,
-`find`, `grep`, `head`, `ls`, `nl`, `readlink`, `realpath`, `rg`, `sed`, `sort`,
+`find`, `grep`, `head`, `ls`, `nl`, `readlink`, `realpath`, `rg`, `sed`, `sleep`, `sort`,
 `stat`, `tail`, `tr`, `uniq` and `wc`. Builtins are not resolved through `PATH`;
 executables must resolve outside the launch directory.
 
@@ -1116,7 +1127,8 @@ Notable exclusions include `find -exec`, `-execdir`, `-ok`, `-okdir`,
 `-delete`, `-fprint`, `-fprint0`, `-fprintf`, `-fls` and unknown primaries;
 `rg --pre`, `--pre-glob`, `-z`/`--search-zip` and `--hostname-bin`; every `sed`
 use except `-n` (or `--quiet`/`--silent`, one of which is required) with one
-`Np`, `N,Mp`, `$p` or `N,$p` script and at most one file; `sort -o`, `-T` and
+numeric print script or the restricted `/start/,/end/p` form described below,
+and at most one file; `sort -o`, `-T` and
 `--compress-program`; `tail -f`, `-F`, `--follow`, `--retry`, `--pid` and `-s`;
 a second `uniq` operand, which names an output file; and BSD `cat -l`. `rg` is
 unclassified while `RIPGREP_CONFIG_PATH` is set unless `--no-config` is given,
@@ -1124,6 +1136,19 @@ and `grep` while `GREP_OPTIONS` is set. `cd` accepts at most one operand and
 changes only the directory of the same `bash -c` process. `git`, interpreters
 and shells, wrappers such as `env`, `xargs`, `timeout` and `command`,
 network-capable tools, pagers, editors and `printf` are not in the registry.
+
+`sed` preserves numeric `Np`, `N,Mp`, `$p` and `N,$p` scripts and additionally
+accepts exactly two nonempty regex addresses followed by `p`: `/start/,/end/p`.
+Regex bodies contain printable ASCII except `/`, `\` and `[`, or the exact
+escape pairs `\\`, `\/`, `\*`, `\.`, `\^`, `\$`. Semicolons inside bodies are
+data; extra commands, bracket expressions, modifiers, alternate delimiters,
+newlines and additional files are rejected. No substitution, execution or file
+writing command is accepted.
+
+`sleep` accepts exactly one canonical decimal integer from `0` through
+`2147483647`, with no leading zeros, signs, units, fractions, flags or `--`.
+The bound ensures a finite portable argument; it is not a short duration or an
+implicit timeout. Existing cancellation and configured command limits apply.
 Each registry change increments its version, which diagnostics and event records
 report. To regenerate the table after a registry change, run
 `PI_SANDBOX_UPDATE_DOCS=1 npx vitest run src/permissions/known-read-only-docs.test.ts`.
@@ -1135,7 +1160,7 @@ report. To regenerate the table after a registry change, run
 | --- | --- | --- |
 | `basename` | executable | Options: `-a`/`--multiple`, `-s SUFFIX`/`--suffix=SUFFIX`, `-z`/`--zero`. Operands: names (not read). |
 | `cat` | executable | Options: `-A`/`--show-all`, `-b`/`--number-nonblank`, `-e`, `-E`/`--show-ends`, `-n`/`--number`, `-s`/`--squeeze-blank`, `-t`, `-T`/`--show-tabs`, `-u`, `-v`/`--show-nonprinting`. Operands: files to read. |
-| `cd` | shell builtin | Options: `-L`, `-P`. Operands: at most one directory. |
+| `cd` | shell builtin | Options: `-L`, `-P`. Operands: at most one directory. A home-relative `~/...` directory must be the final word, preceded only by individual `-L`/`-P` words and at most one final `--`. |
 | `cut` | executable | Options: `-b LIST`/`--bytes=LIST`, `-c LIST`/`--characters=LIST`, `-d DELIM`/`--delimiter=DELIM`, `-f LIST`/`--fields=LIST`, `-n`, `-s`/`--only-delimited`, `-z`/`--zero-terminated`, `--complement`, `--output-delimiter=STRING`. Operands: files to read. |
 | `diff` | executable | Options: `-a`/`--text`, `-b`/`--ignore-space-change`, `-B`/`--ignore-blank-lines`, `-c`, `-C NUM`, `--context[=NUM]`, `-d`/`--minimal`, `-i`/`--ignore-case`, `-I RE`/`--ignore-matching-lines=RE`, `-N`/`--new-file`, `-p`/`--show-c-function`, `-q`/`--brief`, `-r`/`--recursive`, `-s`/`--report-identical-files`, `-t`/`--expand-tabs`, `-T`/`--initial-tab`, `-u`, `-U NUM`, `--unified[=NUM]`, `-w`/`--ignore-all-space`, `-W NUM`/`--width=NUM`, `-x PAT`/`--exclude=PAT`, `-X FILE`/`--exclude-from=FILE`, `-y`/`--side-by-side`, `--normal`, `--strip-trailing-cr`, `--suppress-common-lines`, `--color[=WHEN]`. Operands: files or directories to compare. |
 | `dirname` | executable | Options: `-z`/`--zero`. Operands: names (not read). |
@@ -1151,7 +1176,8 @@ report. To regenerate the table after a registry change, run
 | `readlink` | executable | Options: `-f`/`--canonicalize`, `-e`/`--canonicalize-existing`, `-m`/`--canonicalize-missing`, `-n`/`--no-newline`, `-q`/`--quiet`, `-s`/`--silent`, `-v`/`--verbose`, `-z`/`--zero`. Operands: paths to resolve. |
 | `realpath` | executable | Options: `-e`/`--canonicalize-existing`, `-m`/`--canonicalize-missing`, `-L`/`--logical`, `-P`/`--physical`, `-q`/`--quiet`, `-s`/`--strip`, `--no-symlinks`, `-z`/`--zero`, `--relative-to=DIR`, `--relative-base=DIR`. Operands: paths to resolve. |
 | `rg` | executable | Options: `-A NUM`/`--after-context=NUM`, `-B NUM`/`--before-context=NUM`, `-C NUM`/`--context=NUM`, `-a`/`--text`, `-b`/`--byte-offset`, `-c`/`--count`, `--count-matches`, `-s`/`--case-sensitive`, `--color=WHEN`, `--column`, `--crlf`, `-d NUM`/`--max-depth=NUM`, `-e PATTERN`/`--regexp=PATTERN`, `-f PATTERNFILE`/`--file=PATTERNFILE`, `-F`/`--fixed-strings`, `--files`, `-l`/`--files-with-matches`, `--files-without-match`, `-L`/`--follow`, `-g GLOB`/`--glob=GLOB`, `--glob-case-insensitive`, `--iglob=GLOB`, `-H`/`--with-filename`, `-I`/`--no-filename`, `--heading`, `--no-heading`, `--hidden`, `-i`/`--ignore-case`, `--json`, `-m NUM`/`--max-count=NUM`, `-M NUM`/`--max-columns=NUM`, `--max-filesize=SIZE`, `-n`/`--line-number`, `-N`/`--no-line-number`, `--no-config`, `--no-ignore`, `--no-ignore-dot`, `--no-ignore-exclude`, `--no-ignore-files`, `--no-ignore-global`, `--no-ignore-parent`, `--no-ignore-vcs`, `--no-messages`, `--no-require-git`, `-0`/`--null`, `--null-data`, `--one-file-system`, `-o`/`--only-matching`, `-p`/`--pretty`, `-P`/`--pcre2`, `-q`/`--quiet`, `-r REPLACEMENT`/`--replace=REPLACEMENT`, `-S`/`--smart-case`, `--sort=SORTBY`, `--sortr=SORTBY`, `--stats`, `-t TYPE`/`--type=TYPE`, `-T TYPE`/`--type-not=TYPE`, `--type-list`, `--trim`, `-u`/`--unrestricted`, `-U`/`--multiline`, `--multiline-dotall`, `-v`/`--invert-match`, `--vimgrep`, `-w`/`--word-regexp`, `-x`/`--line-regexp`. Operands: a pattern (unless `-e`/`-f`), then files or directories to search. Unclassified while `RIPGREP_CONFIG_PATH` is non-empty unless `--no-config` is given. |
-| `sed` | executable | Options: `-n`/`--quiet`, `--silent`. Operands: one script of the form `Np`, `N,Mp`, `$p` or `N,$p` (decimal `N`, `M`), then at most one file. One of `-n`, `--quiet` or `--silent` is required. |
+| `sed` | executable | Options: `-n`/`--quiet`, `--silent`. Operands: one script of the form `Np`, `N,Mp`, `$p`, `N,$p` (decimal `N`, `M`) or `/START/,/END/p`, then at most one file. One of `-n`, `--quiet` or `--silent` is required. Regex bodies must be nonempty printable ASCII, with no bracket expressions and only the escapes `\\`, `\/`, `\*`, `\.`, `\^`, `\$`; no extra commands or modifiers. |
+| `sleep` | executable | No options, including `--`. Exactly one canonical decimal integer seconds operand from `0` through `2147483647`; no signs, leading zeros, fractions, exponents or suffixes. This classification adds no timeout. |
 | `sort` | executable | Options: `-b`/`--ignore-leading-blanks`, `-c`, `-C`, `-d`/`--dictionary-order`, `-f`/`--ignore-case`, `-g`/`--general-numeric-sort`, `-h`/`--human-numeric-sort`, `-i`/`--ignore-nonprinting`, `-k KEYDEF`/`--key=KEYDEF`, `-m`/`--merge`, `-M`/`--month-sort`, `-n`/`--numeric-sort`, `-r`/`--reverse`, `-R`/`--random-sort`, `-s`/`--stable`, `-S SIZE`/`--buffer-size=SIZE`, `-t SEP`/`--field-separator=SEP`, `-u`/`--unique`, `-V`/`--version-sort`, `-z`/`--zero-terminated`, `--sort=WORD`. Operands: files to read. |
 | `stat` | executable | Options: `-L`/`--dereference`, `-c FORMAT`/`--format=FORMAT`, `--printf=FORMAT`, `-f`/`--file-system`, `-t`/`--terse`. Operands: files to describe. |
 | `tail` | executable | Options: `-c NUM`/`--bytes=NUM`, `-n NUM`/`--lines=NUM`, `-q`/`--quiet`, `--silent`, `-v`/`--verbose`, `-NUM`. Operands: files to read. Operands starting with `+` are not accepted. |
@@ -1195,9 +1221,9 @@ Known read-only:   ask
   Session option:  offer
   Active grant:    yes
 
-Known read-only commands (registry version 1):
+Known read-only commands (registry version 2):
   Shell builtins: cd, echo, false, pwd, true
-  Executables: basename, cat, cut, diff, dirname, du, find, grep, head, ls, nl, readlink, realpath, rg, sed, sort, stat, tail, tr, uniq, wc
+  Executables: basename, cat, cut, diff, dirname, du, find, grep, head, ls, nl, readlink, realpath, rg, sed, sleep, sort, stat, tail, tr, uniq, wc
 
 Scope:
   ...

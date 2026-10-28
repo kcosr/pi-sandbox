@@ -4,6 +4,8 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { createBashCommandAnalyzer } from "../../src/permissions/bash/analyzer.js";
+import { seatbeltCommandEnvironment } from "../../packages/sandbox-extension/src/runtime/seatbelt-executor.js";
 
 import {
   executeEdit,
@@ -61,6 +63,23 @@ describe.skipIf(process.platform !== "darwin")("typed tools through Seatbelt", (
   it("resolves tilde paths against the private Seatbelt home", async () => {
     await executeWrite(executor, { path: "~/home.txt", content: "home\n" }, cwd);
     expect(await readFile(join(executor.home, "home.txt"), "utf8")).toBe("home\n");
+  });
+
+  it("classifies symbolic cd without consulting the later-created scratch HOME", async () => {
+    const environment = seatbeltCommandEnvironment({}, toolBundle);
+    expect(environment.HOME).toBeUndefined();
+    const analyzer = createBashCommandAnalyzer({ backend: "seatbelt", cwd, environment });
+    await mkdir(join(executor.home, "read-only-child"));
+    await writeFile(join(executor.home, "read-only-child", "marker"), "home-marker\n");
+    const command = "cd ~/read-only-child && pwd && cat marker; sleep 0";
+    expect(await analyzer.analyze(command)).toMatchObject({
+      commandClass: "known_read_only",
+      version: 2,
+    });
+    const result = await executor.execute({ argv: ["/bin/bash", "-c", command], timeoutMs: 5000 });
+    expect(result.exitCode).toBe(0);
+    expect(result.stdout.toString()).toBe(`${executor.home}/read-only-child\nhome-marker\n`);
+    expect(result.stderr.toString()).toBe("");
   });
 
   it("rejects a write over a directory and cleans its temporary sibling", async () => {

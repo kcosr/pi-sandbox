@@ -1,14 +1,21 @@
 import { describe, expect, it } from "vitest";
 
 import { describeOption, parseOptions, type OptionGrammar } from "./options.js";
-import { parseBashCommand, type BashWord } from "./syntax.js";
+import { parseBashCommand, type BashLiteralWord } from "./syntax.js";
 
-function words(input: string): BashWord[] {
+function words(input: string): BashLiteralWord[] {
   const result = parseBashCommand(`echo ${input}`);
   if (!result.ok) {
     throw new Error(result.issue.message);
   }
-  return [...(result.script.statements[0]?.pipelines[0]?.commands[0]?.words.slice(1) ?? [])];
+  return (result.script.statements[0]?.pipelines[0]?.commands[0]?.words.slice(1) ?? []).map(
+    (word) => {
+      if (word.kind !== "literal") {
+        throw new Error("option fixtures require literal words");
+      }
+      return word;
+    },
+  );
 }
 
 const grammar: OptionGrammar = {
@@ -99,6 +106,16 @@ describe("option engine", () => {
       options: ["-a", "--key=v"],
       operands: ["-"],
       strict: ["-"],
+    });
+    expect(parse(String.raw`"--key=\$HOME"`)).toEqual({
+      options: ["--key=$HOME"],
+      operands: [],
+      strict: [],
+    });
+    expect(parse(String.raw`"--key=one\|two"`)).toEqual({
+      options: [String.raw`--key=one\|two`],
+      operands: [],
+      strict: [],
     });
   });
 

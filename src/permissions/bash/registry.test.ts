@@ -15,7 +15,8 @@ function check(input: string): string {
     throw new Error(`${input}: ${parsed.issue.message}`);
   }
   const words = parsed.script.statements[0]?.pipelines[0]?.commands[0]?.words ?? [];
-  const profile = knownReadOnlyProfile(words[0]?.value ?? "");
+  const name = words[0];
+  const profile = knownReadOnlyProfile(name?.kind === "literal" ? name.value : "");
   if (profile === undefined) {
     throw new Error(`${input}: no profile`);
   }
@@ -38,7 +39,24 @@ const ACCEPTED: Readonly<Record<string, readonly string[]>> = {
     "cat -A -b -e -s -t -u",
     "cat a -n",
   ],
-  cd: ["cd", "cd /tmp", "cd -", "cd -L x", "cd -P -- x", "cd -LP"],
+  cd: [
+    "cd",
+    "cd /tmp",
+    "cd -",
+    "cd -L x",
+    "cd -P -- x",
+    "cd -LP",
+    "cd -LP x",
+    "cd ~/",
+    "cd ~/project",
+    "cd ~/../project",
+    "cd -P ~/project",
+    "cd -- ~/",
+    "cd -L -P -L ~/project",
+    "cd -P -- ~/project",
+    "cd '-P' '--' ~/project",
+    "cd '~/project'",
+  ],
   cut: [
     "cut -d: -f1 /etc/passwd",
     "cut -d , -f 2-3 x",
@@ -129,6 +147,26 @@ const ACCEPTED: Readonly<Record<string, readonly string[]>> = {
     "sed -n '10,$p'",
     "sed --quiet 3p",
     "sed --silent -- 3,4p x",
+    "sed -n '/class Handler/,/};/p' source.h",
+    "sed -n '/Handler::reset/,/^}/p' source.cc",
+    String.raw`sed -n '/reset (const char \*value)/,/^}/p' source.cc`,
+    String.raw`sed -n '/^a\/b/,/^end/p' notes.txt`,
+    String.raw`sed -n '/^a\\b/,/^end/p' notes.txt`,
+    String.raw`sed -n '/^a\.b/,/^end/p' notes.txt`,
+    String.raw`sed -n '/\^start/,/^end/p' notes.txt`,
+    String.raw`sed -n '/\$start/,/^end/p' notes.txt`,
+    "sed --quiet '/a,b;w e/,/end]/p' x",
+    "sed --silent -- '/ /,/ /p'",
+  ],
+  sleep: [
+    "sleep 0",
+    "sleep 1",
+    "sleep 10",
+    "sleep 11",
+    "sleep 40",
+    "sleep 2147483647",
+    "sleep '10'",
+    'sleep "40"',
   ],
   sort: [
     "sort x",
@@ -170,6 +208,15 @@ const REJECTED: Readonly<Record<string, readonly (readonly [string, string])[]>>
     ["cd a -L", "unsupported_operand"],
     ["cd -e x", "unsupported_option"],
     ["cd -@ x", "unsupported_option"],
+    ["cd ~/project extra", "unsupported_operand"],
+    ["cd ~/project -P", "unsupported_operand"],
+    ["cd ~/a ~/b", "unsupported_operand"],
+    ["cd literal ~/project", "unsupported_operand"],
+    ["cd -LP ~/project", "unsupported_operand"],
+    ["cd -PL ~/project", "unsupported_operand"],
+    ["cd -- -P ~/project", "unsupported_operand"],
+    ["cd -- -- ~/project", "unsupported_operand"],
+    ["cd -e ~/project", "unsupported_operand"],
   ],
   cut: [["cut -w x", "unsupported_option"]],
   diff: [
@@ -267,7 +314,70 @@ const REJECTED: Readonly<Record<string, readonly (readonly [string, string])[]>>
     ["sed -n -E 1p x", "unsupported_option"],
     ["sed -n -f script x", "unsupported_option"],
     ["sed -n /x/p x", "unsupported_operand"],
+    ["sed -n '//,/end/p' x", "unsupported_operand"],
+    ["sed -n '/start/,//p' x", "unsupported_operand"],
+    ["sed -n '/start/,/end/p; e id' x", "unsupported_operand"],
+    ["sed -n '/start/,/end/w out' x", "unsupported_operand"],
+    ["sed -n '/start/,/end/p;w out' x", "unsupported_operand"],
+    ["sed -n '/start/,/end/p;r input' x", "unsupported_operand"],
+    ["sed -n '/start/,/end/Ip' x", "unsupported_operand"],
+    ["sed -n '/start/I,/end/p' x", "unsupported_operand"],
+    ["sed -n '/start/,/end/Mp' x", "unsupported_operand"],
+    ["sed -n '/[A-Z]/,/end/p' x", "unsupported_operand"],
+    ["sed -n '/[^x]/,/end/p' x", "unsupported_operand"],
+    ["sed -n '/[]]/,/end/p' x", "unsupported_operand"],
+    ["sed -n '/[/]/,/end/p' x", "unsupported_operand"],
+    ["sed -n '/[[:alpha:]]/,/end/p' x", "unsupported_operand"],
+    ["sed -n '/start/,/[end/p' x", "unsupported_operand"],
+    ["sed -n '/start/,/end/p ' x", "unsupported_operand"],
+    ["sed -n '/start/,/end/p#comment' x", "unsupported_operand"],
+    ["sed -n '/start/,/end/p\n' x", "unsupported_operand"],
+    ["sed -n '/sta\nrt/,/end/p' x", "unsupported_operand"],
+    ["sed -n '/sta\trt/,/end/p' x", "unsupported_operand"],
+    ["sed -n '/café/,/end/p' x", "unsupported_operand"],
+    ["sed -n '/start/, /end/p' x", "unsupported_operand"],
+    ["sed -n '/start/,/end/ p' x", "unsupported_operand"],
+    ["sed -n '/start/,10p' x", "unsupported_operand"],
+    ["sed -n '1,/end/p' x", "unsupported_operand"],
+    ["sed -n '/start/,/end/!p' x", "unsupported_operand"],
+    ["sed -n '/start/,/end/{p}' x", "unsupported_operand"],
+    ["sed -n '/start/,/end/p' a b", "unsupported_operand"],
+    ["sed -n '/start/,/end/p' a -n", "unsupported_operand"],
+    [String.raw`sed -n '\%start%,\%end%p' x`, "unsupported_operand"],
+    [String.raw`sed -n '/sta\nrt/,/end/p' x`, "unsupported_operand"],
+    [String.raw`sed -n '/sta\x2frt/,/end/p' x`, "unsupported_operand"],
+    [String.raw`sed -n '/\[start/,/end/p' x`, "unsupported_operand"],
+    [String.raw`sed -n '/start/,/end\' x`, "unsupported_operand"],
+    [String.raw`sed -n '/start\/,/end/p' x`, "unsupported_operand"],
   ],
+  sleep: [
+    "sleep",
+    "sleep 1 2",
+    "sleep -- 10",
+    "sleep 10 --",
+    "sleep --help",
+    "sleep --version",
+    "sleep -1",
+    "sleep +1",
+    "sleep 00",
+    "sleep 01",
+    "sleep 1.0",
+    "sleep .1",
+    "sleep 1e1",
+    "sleep 10s",
+    "sleep 1m",
+    "sleep inf",
+    "sleep NaN",
+    "sleep 2147483648",
+    "sleep 9999999999",
+    "sleep 10000000000",
+    "sleep ' 1'",
+    "sleep '1 '",
+    "sleep '1\n'",
+    "sleep '1\t'",
+    "sleep '١'",
+    "sleep ''",
+  ].map((input) => [input, "unsupported_operand"] as const),
   sort: [
     ["sort -o out x", "unsupported_option"],
     ["sort -oout x", "unsupported_option"],
@@ -318,8 +428,8 @@ const REJECTED: Readonly<Record<string, readonly (readonly [string, string])[]>>
 };
 
 describe("known read-only registry", () => {
-  it("contains exactly the version-1 commands", () => {
-    expect(KNOWN_READ_ONLY_VERSION).toBe(1);
+  it("contains exactly the version-2 commands", () => {
+    expect(KNOWN_READ_ONLY_VERSION).toBe(2);
     expect(KNOWN_READ_ONLY_COMMANDS.map((command) => `${command.name}:${command.kind}`)).toEqual([
       "basename:executable",
       "cat:executable",
@@ -340,6 +450,7 @@ describe("known read-only registry", () => {
       "realpath:executable",
       "rg:executable",
       "sed:executable",
+      "sleep:executable",
       "sort:executable",
       "stat:executable",
       "tail:executable",
@@ -373,6 +484,38 @@ describe("known read-only registry", () => {
       }
     });
   }
+
+  it("rejects symbolic words in direct calls to every literal-only profile", () => {
+    const parsed = parseBashCommand("cd ~/project");
+    if (!parsed.ok) {
+      throw new Error(parsed.issue.message);
+    }
+    const home = parsed.script.statements[0]?.pipelines[0]?.commands[0]?.words[1];
+    expect(home?.kind).toBe("home_relative");
+    if (home === undefined) {
+      throw new Error("missing symbolic directory fixture");
+    }
+    for (const profile of KNOWN_READ_ONLY_PROFILES) {
+      if (profile.name === "cd") {
+        continue;
+      }
+      expect(profile.check([home])).toMatchObject({
+        ok: false,
+        issue: { code: "unsupported_operand", offset: 3 },
+      });
+    }
+  });
+
+  it("keeps sed delimiters distinct from escaped slash data", () => {
+    expect(check(String.raw`sed -n '/a\\/,/end/p' x`)).toBe("ok");
+    expect(check(String.raw`sed -n '/a\\\//,/end/p' x`)).toBe("ok");
+    expect(check(String.raw`sed -n '/a\\\/,/end/p' x`)).toBe("unsupported_operand");
+  });
+
+  it("bounds sleep input before numeric conversion", () => {
+    expect(check(`sleep ${"1".repeat(1000)}`)).toBe("unsupported_operand");
+    expect(check(`sleep '${"0".repeat(1000)}'`)).toBe("unsupported_operand");
+  });
 
   it("reports rg configuration and grep option environment dependencies", () => {
     expect(knownReadOnlyProfile("rg")?.environment).toEqual([
