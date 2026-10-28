@@ -187,8 +187,8 @@ A normal upgrade preserves the compiled configuration directory. Use
 only when intentionally deploying the configuration packaged with a release.
 See [installation and operation](docs/installation.md).
 
-Pi Sandbox has its own release version. A tagged `0.10.0` build using Pi `1.3.0`
-shows `1.3.0+ps.0.10.0` in `pi-sandbox --version` and the TUI header. Development
+Pi Sandbox has its own release version. A tagged `0.11.0` build using Pi `1.3.0`
+shows `1.3.0+ps.0.11.0` in `pi-sandbox --version` and the TUI header. Development
 builds add source identity. See [versions and releases](docs/releases.md) for
 the independent version numbers and source-only GitHub release process.
 

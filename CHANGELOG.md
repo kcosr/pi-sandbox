@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 0.11.0 - 2026-10-28
+
 ### Breaking changes
 
 - Upgrade the application and audit collector together for audit wire 3 and record schema 4; main configuration schema 13 and identity broker protocol/rule version 10 are unchanged. ([#44](https://github.com/kcosr/pi-sandbox/pull/44))
