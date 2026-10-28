@@ -337,7 +337,10 @@ Use /sandbox mounts or /sandbox policy for details.`);
               sessionGrant: "never",
               requiredFlags: ["--read"],
               optionalFlags: ["--verbose"],
-              options: { "--format": ["json", "text"] },
+              options: {
+                "--format": { kind: "values", values: ["json", "text"] },
+                "-m": { kind: "any_literal" },
+              },
               operands: { min: 1, max: 1 },
             },
           },
@@ -354,6 +357,9 @@ Use /sandbox mounts or /sandbox policy for details.`);
     expect(detail).toContain(JSON.stringify('/opt/tool "suite"/utility'));
     expect(detail).toContain("--read");
     expect(detail).toContain("--format");
+    expect(detail).toContain('"--format":["json","text"]');
+    expect(detail).toContain('"-m":{"any_literal":true}');
+    expect(detail).not.toContain('"kind"');
     expect(detail).toContain("1..1");
   });
 

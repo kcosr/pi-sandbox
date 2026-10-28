@@ -217,10 +217,15 @@ function formatSubjectPolicy(
       classSections.push(
         "Administrator command sets (allow exceptions, not built-in read-only proofs):\n" +
           sets
-            .map(
-              ([id, set]) =>
-                `  ${id}: ${set.commands.map((command) => JSON.stringify(command)).join(", ")}; required flags: ${set.requiredFlags.join(", ") || "none"}; optional flags: ${set.optionalFlags.join(", ") || "none"}; options: ${JSON.stringify(set.options)}; operands: ${set.operands.min}..${set.operands.max}`,
-            )
+            .map(([id, set]) => {
+              const options = Object.fromEntries(
+                Object.entries(set.options).map(([name, option]) => [
+                  name,
+                  option.kind === "values" ? option.values : { any_literal: true },
+                ]),
+              );
+              return `  ${id}: ${set.commands.map((command) => JSON.stringify(command)).join(", ")}; required flags: ${set.requiredFlags.join(", ") || "none"}; optional flags: ${set.optionalFlags.join(", ") || "none"}; options: ${JSON.stringify(options)}; operands: ${set.operands.min}..${set.operands.max}`;
+            })
             .join("\n"),
       );
     }

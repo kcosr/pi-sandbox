@@ -10,7 +10,13 @@ const rule: BashCommandSet = {
   sessionGrant: "never",
   requiredFlags: ["--read"],
   optionalFlags: ["--verbose", "-v"],
-  options: { "--format": ["text", "json"], "-f": ["text", "json"] },
+  options: {
+    "--format": { kind: "values", values: ["text", "json"] },
+    "-f": { kind: "values", values: ["text", "json"] },
+    "-m": { kind: "any_literal" },
+    "--message": { kind: "any_literal" },
+    "--exact": { kind: "values", values: ["*", "string", "--"] },
+  },
   operands: { min: 1, max: 1 },
 };
 
@@ -31,6 +37,17 @@ describe("configured command argument matching", () => {
     "--read -f json file",
     "--read -- file",
     "--read ./-file",
+    "--read --format json --format=text file",
+    "--read -f json -f text file",
+    "--read -m first -m second file",
+    "--read --message first --message=second file",
+    "--read '-m' 'a message' --message='another message' file",
+    "--read -m '' --message= file",
+    "--read -m -x --message -- file",
+    "--read -m --read file",
+    "--read -m '$HOME' --message '$(touch sentinel)' file",
+    "--read --exact '*' --exact string --exact -- file",
+    `--read -m '${"x".repeat(1024)}' file`,
   ])("matches the complete explicit form %s", (arguments_) => {
     expect(matchCommandSet(rule, argumentsOf(arguments_)).ok).toBe(true);
   });
@@ -47,7 +64,20 @@ describe("configured command argument matching", () => {
     "--read -- --verbose",
     "--read --read file",
     "--read --verbose --verbose file",
-    "--read --format json --format text file",
+    "--read --format json --format xml file",
+    "--read --format xml --format json file",
+    "--read --format json --format= file",
+    "--read -f text -f",
+    "--read -m first -m",
+    "--read -m",
+    "--read --message",
+    "--read --message ~/file",
+    "--read -m ~/file",
+    "--read -mfoo file",
+    "--read --mess=data file",
+    "--read file -m message",
+    "--read --exact anything file",
+    "-m --read file",
     "--read=true file",
     "--rea file",
     "--write file",
@@ -66,6 +96,12 @@ describe("configured command argument matching", () => {
   it("checks values separately from operand counts", () => {
     const result = matchCommandSet(rule, argumentsOf("--read --format json file"));
     expect(result).toEqual({ ok: true, optionNames: new Set(["--read", "--format"]) });
+  });
+
+  it("records actual option names without treating consumed values as flags", () => {
+    expect(matchCommandSet(rule, argumentsOf("--read -m --verbose -m -- --message= file"))).toEqual(
+      { ok: true, optionNames: new Set(["--read", "-m", "--message"]) },
+    );
   });
 
   it("supports a zero-operand command without making any flags implicitly valid", () => {

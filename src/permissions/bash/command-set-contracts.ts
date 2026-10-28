@@ -1,11 +1,15 @@
 /** Administrator-approved invocation shapes, separate from the reviewed read-only registry. */
+export type BashCommandOption =
+  | { readonly kind: "values"; readonly values: readonly string[] }
+  | { readonly kind: "any_literal" };
+
 export interface BashCommandSet {
   readonly commands: readonly string[];
   readonly mode: "allow";
   readonly sessionGrant: "never";
   readonly requiredFlags: readonly string[];
   readonly optionalFlags: readonly string[];
-  readonly options: Readonly<Record<string, readonly string[]>>;
+  readonly options: Readonly<Record<string, BashCommandOption>>;
   readonly operands: { readonly min: number; readonly max: number };
 }
 
@@ -92,9 +96,11 @@ export function freezeBashCommandSets(sets: BashCommandSets): BashCommandSets {
           optionalFlags: Object.freeze([...rule.optionalFlags]),
           options: Object.freeze(
             Object.fromEntries(
-              Object.entries(rule.options).map(([name, values]) => [
+              Object.entries(rule.options).map(([name, option]) => [
                 name,
-                Object.freeze([...values]),
+                option.kind === "values"
+                  ? Object.freeze({ kind: "values", values: Object.freeze([...option.values]) })
+                  : Object.freeze({ kind: "any_literal" }),
               ]),
             ),
           ),

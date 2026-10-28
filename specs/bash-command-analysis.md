@@ -534,7 +534,7 @@ registry disagree and names the regeneration command.
 The main administrator may define `[tools.bash.command_sets.<id>]` using the
 strict [configuration contract](../docs/configuration.md#administrator-bash-command-sets).
 Each rule declares a string or nonempty list of external basenames and/or literal
-normalized absolute executable paths, exact flags, finite option values and
+normalized absolute executable paths, exact flags, enumerated or unrestricted literal option values and
 operand counts, with only `allow`/`never`. Matching is independent of built-in
 read-only recognition. The analyzer snapshots rules and returns all matching IDs
 plus a `knownReadOnly` boolean for each stage. If no custom rule matches anywhere,
@@ -549,6 +549,19 @@ basename separately from classification. They bypass PATH lookup but require a
 regular executable file, a resolvable parent and target, and rejection of lexical
 or resolved paths inside CWD, Bubblewrap private/hidden roots, or Seatbelt denied
 roots. Failed checks make the whole call unclassified, preserving ordinary policy.
+
+Authored option arrays normalize to frozen `{ kind: "values", values }` predicates;
+the strict `{ any_literal = true }` table normalizes to `{ kind: "any_literal" }`.
+No scalar marker or extra object fields are accepted. Both forms consume exactly
+one literal word (or the suffix of a long `--name=value`), including empty and
+dash-leading values. `--` in that position is data, not an option terminator.
+Every repeated value-taking option is checked independently; duplicate zero-value
+flags remain unsupported. Missing values, nonliteral words and invalid enumerated
+values leave the whole call on ordinary policy. The shared parser's 16 KiB command
+limit bounds runtime values; configured enum bounds do not restrict `any_literal`.
+The administrator owns the assertion that the utility's real grammar and behavior
+are safe for every accepted value combination and repetition. No shell expansion,
+utility-specific parsing or additional audit/wire shape is introduced.
 
 Main-only `execution.command_path_prepend` supplies canonical directory strings
 shared by analyzer and executor environment construction: bundle/bin, configured

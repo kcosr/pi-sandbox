@@ -11,6 +11,7 @@ import {
   MAXIMUM_COMMAND_SET_OPTIONS,
   MAXIMUM_COMMAND_SET_STRING_BYTES,
   MAXIMUM_COMMAND_SET_VALUES,
+  type BashCommandOption,
   type BashCommandSet,
   type BashCommandSets,
 } from "../permissions/bash/command-set-contracts.js";
@@ -63,6 +64,18 @@ function operandCount(value: unknown, path: string): number {
   return value;
 }
 
+function parseOption(value: unknown, path: string): BashCommandOption {
+  if (Array.isArray(value)) {
+    const values = stringList(value, path, MAXIMUM_COMMAND_SET_VALUES, isCommandSetValue);
+    if (values.length === 0) throw new Error(`${path} must list at least one value`);
+    return { kind: "values", values };
+  }
+  const option = table(value, path);
+  keys(option, ["any_literal"], [], path);
+  if (option.any_literal !== true) throw new Error(`${path}.any_literal must be true`);
+  return { kind: "any_literal" };
+}
+
 function parseRule(value: unknown, path: string): BashCommandSet {
   const rule = table(value, path);
   keys(
@@ -102,18 +115,10 @@ function parseRule(value: unknown, path: string): BashCommandSet {
   if (new Set(names).size !== names.length)
     throw new Error(`${path} must not repeat a flag or option spelling across fields`);
   const parsedOptions = Object.fromEntries(
-    Object.entries(options).map(([name, values]) => {
+    Object.entries(options).map(([name, value]) => {
       if (!isCommandSetFlag(name))
         throw new Error(`${path}.options contains an invalid option spelling`);
-      const parsed = stringList(
-        values,
-        `${path}.options.${name}`,
-        MAXIMUM_COMMAND_SET_VALUES,
-        isCommandSetValue,
-      );
-      if (parsed.length === 0)
-        throw new Error(`${path}.options.${name} must list at least one value`);
-      return [name, parsed];
+      return [name, parseOption(value, `${path}.options.${name}`)];
     }),
   );
   const operands = table(rule.operands, `${path}.operands`);

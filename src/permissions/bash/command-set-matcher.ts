@@ -37,9 +37,9 @@ export function matchCommandSet(
         return fail(word, true, "configured command options must precede all operands");
       const separator = text.startsWith("--") ? text.indexOf("=") : -1;
       const name = separator < 0 ? text : text.slice(0, separator);
-      if (present.has(name))
-        return fail(word, true, `configured command option ${excerpt(name, 32)} is repeated`);
       if (flags.has(name)) {
+        if (present.has(name))
+          return fail(word, true, `configured command flag ${excerpt(name, 32)} is repeated`);
         if (separator >= 0)
           return fail(word, true, `configured command flag ${excerpt(name, 32)} takes no value`);
       } else if (Object.hasOwn(rule.options, name)) {
@@ -55,7 +55,8 @@ export function matchCommandSet(
             );
           value = next.value;
         }
-        if (!rule.options[name]!.includes(value))
+        const option = rule.options[name]!;
+        if (option.kind === "values" && !option.values.includes(value))
           return fail(
             word,
             true,

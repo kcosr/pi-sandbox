@@ -203,6 +203,34 @@ describe("administrator command set approval", () => {
       }),
     ).toThrow("evidence");
   });
+
+  it("invalidates grants when an option changes between enumerated and unrestricted literals", async () => {
+    let selected = policy({
+      commandSets: {
+        utility_read: { ...rule, options: { "-m": { kind: "values", values: ["first"] } } },
+      },
+    });
+    const engine = new PolicyEngine({}, () => ({ policy: selected, revision: "same-provider" }));
+    const unmatched = prepareApprovalRequest({
+      subject: "bash",
+      display: "write",
+      arguments: { command: "utility --write file" },
+    });
+    for (const option of [
+      { kind: "any_literal" } as const,
+      { kind: "values", values: ["second"] } as const,
+    ]) {
+      expect(
+        await engine.evaluate(unmatched, {
+          ui: { prompt: () => Promise.resolve("allow_session" as const) },
+        }),
+      ).toMatchObject({ allowed: true });
+      expect(engine.hasSessionGrant("bash")).toBe(true);
+      selected = policy({ commandSets: { utility_read: { ...rule, options: { "-m": option } } } });
+      expect(engine.hasSessionGrant("bash")).toBe(false);
+      expect(await engine.evaluate(unmatched)).toMatchObject({ allowed: false, reason: "no_ui" });
+    }
+  });
   it("snapshots administrator rules before caller mutation", async () => {
     const mutable = { ...rule, commands: ["utility"] };
     const engine = new PolicyEngine({ bash: policy({ commandSets: { utility_read: mutable } }) });
