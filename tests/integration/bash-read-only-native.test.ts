@@ -79,7 +79,8 @@ describe.skipIf(!available).each(paths)(
     it.each(["-P", "-"])("keeps option-like HOME %s inside the cd builtin", async (home) => {
       mkdirSync(join(work, home, "child"), { recursive: true });
       const withoutTerminator = await run("cd ~/child", home);
-      expect(withoutTerminator.status).toBe(2);
+      // Bash 3.2 reports builtin usage errors as 1; newer Bash uses 2.
+      expect([1, 2]).toContain(withoutTerminator.status);
       expect(withoutTerminator.stdout).toBe("");
       expect(withoutTerminator.stderr).toMatch(/invalid option/);
       const withTerminator = await run("cd -- ~/child && pwd", home);

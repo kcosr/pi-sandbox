@@ -28,6 +28,7 @@ import { createPiSandboxExtension } from "./index.js";
 import { LINUX_TOOL_COMMANDS } from "../../packages/sandbox-extension/src/runtime/index.js";
 import type { AuditClient, AuditEvent } from "../audit/client.js";
 import type { BashAnalysis, BashCommandAnalyzer } from "../permissions/bash/contracts.js";
+import { createBashCommandAnalyzer } from "../permissions/bash/analyzer.js";
 import type { CommandClassPolicy, SubjectPolicy } from "../permissions/index.js";
 import type { SandboxExecutor } from "./types.js";
 
@@ -1744,6 +1745,13 @@ describe("known read-only Bash commands", () => {
     };
   }
 
+  function realAnalyzer() {
+    return createBashCommandAnalyzer(
+      { backend: "bubblewrap", cwd: "/work/project", environment: { PATH: "/usr/bin:/bin" } },
+      { isExecutableFile: () => Promise.resolve(true), realpath: (path) => Promise.resolve(path) },
+    );
+  }
+
   function classConfig(main: SubjectPolicy, knownReadOnly?: CommandClassPolicy): SandboxConfig {
     const base = config();
     return {
@@ -2027,7 +2035,13 @@ describe("known read-only Bash commands", () => {
   });
 
   it("classifies nested code-mode Bash calls through the managed authorization path", async () => {
-    const analyzer = fakeAnalyzer();
+    const analyzer = realAnalyzer();
+    const commands = [
+      String.raw`grep "a\|b" file`,
+      "cd ~/project && pwd",
+      "sed -n '/start/,/end/p' file",
+      "sleep 0",
+    ];
     const base = classConfig(
       { mode: "deny", sessionGrant: "never" },
       { mode: "allow", sessionGrant: "never" },
@@ -2067,15 +2081,15 @@ describe("known read-only Bash commands", () => {
     const result = await pi.tools.get("codemode")!.execute(
       "script-1",
       {
-        code: 'await tools.bash({ command: "ls -la" });\ntry { await tools.bash({ command: "echo x > out" }); } catch (error) { return String(error.message); }',
+        code: `for (const command of ${JSON.stringify(commands)}) await tools.bash({ command });
+try { await tools.bash({ command: "echo x > out" }); } catch (error) { return String(error.message); }`,
       },
       undefined,
       undefined,
       ctx,
     );
-    expect(analyzer.analyzed).toEqual(["ls -la", "echo x > out"]);
-    expect(bashCalls(executor)).toEqual(["ls -la"]);
-    expect(JSON.stringify(result)).toContain(`not a known read-only command: ${REDIRECTION_ISSUE}`);
+    expect(bashCalls(executor)).toEqual(commands);
+    expect(JSON.stringify(result)).toContain("not a known read-only command:");
   });
 
   it("never analyzes fixed-allow user shell commands", async () => {
@@ -2142,8 +2156,8 @@ describe("known read-only Bash commands", () => {
         Object.entries(base.tools).map(([name, policy]) => [name, { ...policy, audit: true }]),
       ),
     };
-    const { pi } = await startClassified(cfg, fakeAnalyzer(), auditClient);
-    await runBash(pi, "ls");
+    const { pi } = await startClassified(cfg, realAnalyzer(), auditClient);
+    await runBash(pi, "cd ~/project; sleep 0");
     await expect(runBash(pi, "echo > out")).rejects.toThrow("policy_denied");
     await executeTool(pi, "write", { path: "note.txt", content: "text" });
     const decisions = events
@@ -2155,8 +2169,8 @@ describe("known read-only Bash commands", () => {
         event.known_read_only_version,
       ]);
     expect(decisions).toEqual([
-      ["bash", "tool_execution_intent", "known_read_only", 7],
-      ["bash", "tool_denied", "unclassified", 7],
+      ["bash", "tool_execution_intent", "known_read_only", 2],
+      ["bash", "tool_denied", "unclassified", 2],
       ["write", "tool_execution_intent", undefined, undefined],
     ]);
     expect(
