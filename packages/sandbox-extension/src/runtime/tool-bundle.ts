@@ -3,6 +3,7 @@ import { access, lstat, realpath } from "node:fs/promises";
 import path from "node:path";
 import { TOOL_COMMAND_NAMES, type ToolBundle, type ToolCommandName } from "./contracts.js";
 import { isNormalizedAbsoluteFilePath } from "./paths.js";
+import { snapshotCommandPathPrepend } from "./command-path.js";
 
 function within(root: string, target: string): boolean {
   return target === root || target.startsWith(`${root}/`);
@@ -66,6 +67,15 @@ export function assertToolBundlePlacement(
     throw new Error("sandbox_tool_bundle_path_unavailable");
 }
 
-export function toolBundlePath(bundle: ToolBundle | undefined, fallback: string): string {
-  return bundle === undefined ? fallback : `${path.join(bundle.root, "bin")}:${fallback}`;
+export function toolBundlePath(
+  bundle: ToolBundle | undefined,
+  fallback: string,
+  commandPathPrepend: readonly string[] = [],
+): string {
+  const prefixes = snapshotCommandPathPrepend(commandPathPrepend);
+  return [
+    ...(bundle === undefined ? [] : [path.join(bundle.root, "bin")]),
+    ...prefixes,
+    fallback,
+  ].join(":");
 }

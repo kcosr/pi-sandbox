@@ -1,3 +1,4 @@
+import { assertCommandPathPlacement, snapshotCommandPathPrepend } from "../command-path.js";
 import {
   SandboxExecutionError,
   type SandboxCommandRequest,
@@ -26,6 +27,8 @@ export interface CreateSeatbeltExecutorOptions {
   readonly environment?: Readonly<Record<string, string>>;
   readonly limits?: SandboxResourceLimits;
   readonly toolBundle?: ToolBundle;
+  /** Trusted canonical searchable directories; aliases must be resolved before construction. */
+  readonly commandPathPrepend?: readonly string[];
 }
 
 export const SEATBELT_LAUNCHER = "/usr/bin/sandbox-exec";
@@ -70,6 +73,7 @@ export function validateSeatbeltOptions(options: CreateSeatbeltExecutorOptions):
           "environment",
           "limits",
           "toolBundle",
+          "commandPathPrepend",
         ].includes(key),
     )
   )
@@ -91,6 +95,12 @@ export function validateSeatbeltOptions(options: CreateSeatbeltExecutorOptions):
   const policy = seatbeltBasePolicy(options);
   buildSeatbeltProfile(policy);
   const toolBundle = snapshotToolBundle(options.toolBundle);
+  assertCommandPathPlacement(snapshotCommandPathPrepend(options.commandPathPrepend), {
+    backend: "seatbelt",
+    cwd: options.cwd,
+    cwdWritable: policy.workspaceWritable,
+    deniedPaths: options.deniedPaths ?? [],
+  });
   assertToolBundlePlacement(toolBundle, options.cwd, policy.workspaceWritable, options.deniedPaths);
   resolveSeatbeltLimits(options.limits);
   seatbeltEnvironment(options.environment);

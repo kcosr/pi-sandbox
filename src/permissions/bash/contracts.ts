@@ -23,6 +23,9 @@ export interface BashExecutionContext {
   readonly environment: Readonly<Record<string, string>>;
   /** Administrator-approved argument forms; never part of the reviewed read-only registry. */
   readonly commandSets?: BashCommandSets;
+  /** Effective host paths replaced by Bubblewrap mounts or denied by Seatbelt. */
+  readonly hiddenPaths?: readonly string[];
+  readonly deniedPaths?: readonly string[];
 }
 
 /** Filesystem queries used by context checks; injectable for tests. */

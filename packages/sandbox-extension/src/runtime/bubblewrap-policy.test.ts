@@ -211,6 +211,47 @@ describe("Bubblewrap policy", () => {
     );
   });
 
+  it("places trusted prefixes between bundled tools and system PATH in launch arguments", () => {
+    const bundle = { root: "/opt/pi-sandbox/tools", commands: {} };
+    const prefixes = ["/opt/libexec", "/srv/tools"];
+    const environment = bubblewrapCommandEnvironment({}, bundle, prefixes);
+    expect(environment.PATH).toBe(
+      `/opt/pi-sandbox/tools/bin:/opt/libexec:/srv/tools:${safeSandboxEnvironment().PATH}`,
+    );
+    const args = buildBubblewrapArguments(
+      "/work/project",
+      ["/bin/true"],
+      "none",
+      {},
+      true,
+      [],
+      bundle,
+      prefixes,
+    );
+    expect(hasSequence(args, ["--setenv", "PATH", environment.PATH!])).toBe(true);
+    expect(bubblewrapCommandEnvironment({}, undefined, []).PATH).toBe(
+      safeSandboxEnvironment().PATH,
+    );
+    for (const prefix of ["/tmp/tools", "/work/project/bin"])
+      expect(() =>
+        buildBubblewrapArguments("/work/project", ["/bin/true"], "none", {}, true, [], undefined, [
+          prefix,
+        ]),
+      ).toThrow();
+    expect(() =>
+      buildBubblewrapArguments(
+        "/work/project",
+        ["/bin/true"],
+        "none",
+        {},
+        true,
+        [{ target: "/opt/libexec/private", kind: "directory" }],
+        undefined,
+        ["/opt/libexec"],
+      ),
+    ).toThrow("unavailable");
+  });
+
   it("adds validated custom variables after the fixed environment", () => {
     const args = buildBubblewrapArguments("/home/person/project", ["/bin/true"], "none", {
       Z_LAST: "z",

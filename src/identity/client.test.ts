@@ -285,6 +285,8 @@ describe("broker response", () => {
       { process_lifetime: "session" },
       { backend: "bubblewrap", max_command_timeout_seconds: 60 },
       { backend: "bubblewrap", maximumTimeoutMs: 60_000 },
+      { backend: "bubblewrap", command_path_prepend: ["/usr/libexec/pi-sandbox"] },
+      { backend: "bubblewrap", commandPathPrepend: ["/usr/libexec/pi-sandbox"] },
       { process_lifetime: null },
       { backend: null },
       { backend: "smolvm" },
@@ -734,10 +736,24 @@ describe("identity overrides", () => {
       hiddenPaths: ["/srv/runs"],
     });
     expect(restricted.execution).toEqual(base.execution);
-    const capped = { ...base, execution: { ...base.execution, maximumTimeoutMs: 3_600_000 } };
-    expect(
-      applyIdentityOverrides(capped, { execution: { backend: "direct" }, tools: {} }).execution,
-    ).toEqual({ backend: "direct", maximumTimeoutMs: 3_600_000 });
+    const commandPathPrepend = Object.freeze(["/usr/libexec/pi-sandbox", "/opt/trusted tools"]);
+    const capped = {
+      ...base,
+      execution: { ...base.execution, maximumTimeoutMs: 3_600_000, commandPathPrepend },
+    };
+    const patchedExecution = applyIdentityOverrides(capped, {
+      execution: { backend: "direct" },
+      tools: {},
+    }).execution;
+    expect(patchedExecution).toEqual({
+      backend: "direct",
+      maximumTimeoutMs: 3_600_000,
+      commandPathPrepend,
+    });
+    expect(patchedExecution.commandPathPrepend).toBe(commandPathPrepend);
+    expect(applyIdentityOverrides(capped, { tools: {} }).execution.commandPathPrepend).toBe(
+      commandPathPrepend,
+    );
     const direct = applyIdentityOverrides(restricted, {
       execution: { backend: "direct" },
       network: { mode: "host" },
@@ -919,7 +935,7 @@ describe("identity command-class overrides", () => {
   it("preserves only the main command-set definitions across ordinary policy overrides", () => {
     const commandSets = {
       utility_read: {
-        command: "utility",
+        commands: ["utility", "/usr/libexec/pi-sandbox/utility"],
         mode: "allow",
         sessionGrant: "never",
         requiredFlags: ["--read"],

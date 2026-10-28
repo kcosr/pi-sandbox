@@ -249,9 +249,9 @@ by the existing timeout and output limits.
 The analyzer is constructed once per runtime with the execution context the
 executor actually uses: backend, canonical launch directory, and the exact
 environment passed to `bash -c` children (fixed sandbox values plus
-administrator `environment.sandbox` values plus tool-bundle `PATH` for
+administrator `environment.sandbox` values plus tool-bundle/configured `PATH` for
 Bubblewrap/Seatbelt; the sanitized ambient environment plus administrator values
-plus tool-bundle `PATH` for direct). The environment comes from pure helpers that
+plus tool-bundle/configured `PATH` for direct). The environment comes from pure helpers that
 the executors themselves use. The Seatbelt context omits the scratch `HOME`,
 `TMPDIR`, `TMP`, `TEMP` and `XDG_*` values that the executor creates at its own
 startup; none of them participates in the checks below. A command is
@@ -279,14 +279,15 @@ unclassified when:
    variables whose value starts with `()`.
 5. An executable stage is used while a `command_not_found_handle` function is
    exported.
-6. For each executable stage, `PATH` lookup in the context environment:
+6. For each bare executable stage, `PATH` lookup in the context environment:
    - has no `PATH` or an empty one (Bash would use a compiled-in default search
      path that can include the current directory);
    - encounters an empty or relative `PATH` entry, or an entry inside the launch
      directory by its normalized path or after resolving symbolic links, before
      the command is found;
    - finds no regular executable file; or
-   - resolves (after `realpath`) to a file inside the launch directory.
+   - enters a Bubblewrap private/hidden or Seatbelt denied path, or resolves
+     the executable into one of those paths or the launch directory.
 7. A profile's declared environment dependency is unsafe: `RIPGREP_CONFIG_PATH`
    set while `rg` is used without `--no-config`, or `GREP_OPTIONS` set while
    `grep` is used (Apple grep and older GNU grep honor it).
@@ -393,7 +394,9 @@ particularly for Seatbelt's later-created scratch directories.
   match a registry profile name. An unquoted reserved word (`if`, `time`,
   `coproc`, `function` and the rest of Bash's list) or an assignment-shaped
   first word (`NAME=value`, `NAME+=value`) is a syntax error, so assignment
-  prefixes are never accepted. A command name containing `/` is rejected.
+  prefixes are never accepted. A command name containing `/` is rejected unless
+  it exactly matches a normalized absolute alternative in an administrator
+  command set. Relative paths remain unclassified.
 - All branches of `&&`, `||` and `;` are analyzed; control flow is not
   evaluated.
 
@@ -530,13 +533,31 @@ registry disagree and names the regeneration command.
 
 The main administrator may define `[tools.bash.command_sets.<id>]` using the
 strict [configuration contract](../docs/configuration.md#administrator-bash-command-sets).
-Each rule declares one external basename, exact flags, finite option values and
+Each rule declares a string or nonempty list of external basenames and/or literal
+normalized absolute executable paths, exact flags, finite option values and
 operand counts, with only `allow`/`never`. Matching is independent of built-in
 read-only recognition. The analyzer snapshots rules and returns all matching IDs
 plus a `knownReadOnly` boolean for each stage. If no custom rule matches anywhere,
 it retains the ordinary built-in result. Any uncovered stage or unsupported shell
 syntax makes the whole invocation unclassified. Existing environment checks for a
 known executable apply even if it matches only a custom rule.
+
+The authored `command` field normalizes once to a frozen internal `commands` array.
+No basename or canonical-path alias is inferred. Absolute paths always require
+custom coverage, never the built-in fast path; environment guards use the literal
+basename separately from classification. They bypass PATH lookup but require a
+regular executable file, a resolvable parent and target, and rejection of lexical
+or resolved paths inside CWD, Bubblewrap private/hidden roots, or Seatbelt denied
+roots. Failed checks make the whole call unclassified, preserving ordinary policy.
+
+Main-only `execution.command_path_prepend` supplies canonical directory strings
+shared by analyzer and executor environment construction: bundle/bin, configured
+directories, then the backend's existing PATH. Startup validates searchable
+directories and namespace placement after effective policy resolution. See the
+[configuration contract](../docs/configuration.md#command-search-path).
+These checks do not pin executable bytes or prove that every intermediate symlink
+avoids writable paths; the existing administrator trust and analysis-to-execution
+race remain. No symlink walker, owner check or binary hash policy is introduced.
 
 For a configured result, the policy engine requires every stage to have a currently
 defined custom allow rule for that command, or to be recognized by the built-in

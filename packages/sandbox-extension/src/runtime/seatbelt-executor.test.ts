@@ -75,6 +75,12 @@ it("describes the fixed and administrator Seatbelt command environment", () => {
   expect(seatbeltCommandEnvironment().PATH).toBe(
     "/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin",
   );
+  expect(
+    seatbeltCommandEnvironment({}, { root: "/opt/tools", commands: {} }, ["/opt/libexec"]).PATH,
+  ).toBe(
+    "/opt/tools/bin:/opt/libexec:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin",
+  );
+  expect(seatbeltCommandEnvironment({}, undefined, [])).toEqual(seatbeltCommandEnvironment());
   for (const name of ["PATH", "HOME", "BASH_ENV", "PI_SANDBOX_VALUE"])
     expect(() => seatbeltCommandEnvironment({ [name]: "/x" })).toThrow(
       "sandbox_environment_invalid",

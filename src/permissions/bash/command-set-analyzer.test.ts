@@ -6,7 +6,7 @@ import type { BashAnalysis, ExecutableProbe } from "./contracts.js";
 import { KNOWN_READ_ONLY_VERSION } from "./registry.js";
 
 const rule: BashCommandSet = {
-  command: "records",
+  commands: ["records"],
   mode: "allow",
   sessionGrant: "never",
   requiredFlags: ["--read"],
@@ -97,7 +97,7 @@ describe("configured command stage classification", () => {
   it("keeps every matching named rule and independent curated recognition", async () => {
     const grepRule: BashCommandSet = {
       ...rule,
-      command: "grep",
+      commands: ["grep"],
       requiredFlags: [],
       optionalFlags: ["-i"],
       options: {},
@@ -115,7 +115,7 @@ describe("configured command stage classification", () => {
   it("allows an administrator shape independently of the built-in argument profile", async () => {
     const grepRule = {
       ...rule,
-      command: "grep",
+      commands: ["grep"],
       requiredFlags: ["--custom"],
       operands: { min: 1, max: 1 },
     };
@@ -140,7 +140,7 @@ describe("configured command stage classification", () => {
   });
 
   it("retains known executable environment gates even for custom-only matches", async () => {
-    const grepRule = { ...rule, command: "grep", requiredFlags: ["--custom"] };
+    const grepRule = { ...rule, commands: ["grep"], requiredFlags: ["--custom"] };
     expect(
       await analyzer(
         { records_read: grepRule },
@@ -152,7 +152,7 @@ describe("configured command stage classification", () => {
     });
     const rgRule = {
       ...rule,
-      command: "rg",
+      commands: ["rg"],
       requiredFlags: ["--custom"],
       optionalFlags: ["--no-config"],
     };
@@ -190,7 +190,7 @@ describe("configured command stage classification", () => {
   it("does not let direct embedding definitions shadow shell builtins", async () => {
     const builtinRule = {
       ...rule,
-      command: "printf",
+      commands: ["printf"],
       requiredFlags: [],
       operands: { min: 0, max: 10 },
     };

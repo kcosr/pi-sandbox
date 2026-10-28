@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+### Added
+
+- Allow Bash command sets to list basename and absolute-path alternatives with the same argument rule. ([#45](https://github.com/kcosr/pi-sandbox/pull/45))
+- Support administrator `execution.command_path_prepend` for additional command directories, keeping bundled tools first and approval lookup aligned with execution. ([#45](https://github.com/kcosr/pi-sandbox/pull/45))
+
 ## 0.11.0 - 2026-10-28
 
 ### Breaking changes

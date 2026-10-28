@@ -24,6 +24,7 @@ import {
 } from "./contracts.js";
 import { LINUX_TOOL_COMMANDS } from "./tool-commands.js";
 import { snapshotToolBundle, toolBundlePath, validateToolBundle } from "./tool-bundle.js";
+import { canonicalizeCommandPathPrepend, snapshotCommandPathPrepend } from "./command-path.js";
 
 export interface CreateDirectExecutorOptions {
   readonly cwd: string;
@@ -32,6 +33,8 @@ export interface CreateDirectExecutorOptions {
   readonly limits?: SandboxResourceLimits;
   readonly platform?: NodeJS.Platform;
   readonly toolBundle?: ToolBundle;
+  /** Trusted canonical searchable directories; aliases must be resolved before construction. */
+  readonly commandPathPrepend?: readonly string[];
 }
 
 const DARWIN_PREFIXES = Object.freeze(["/opt/homebrew", "/usr/local"]);
@@ -109,8 +112,10 @@ export async function createDirectExecutor(
   options: CreateDirectExecutorOptions,
 ): Promise<SandboxExecutor> {
   let toolBundle: ToolBundle | undefined;
+  let commandPathPrepend: readonly string[];
   try {
     toolBundle = snapshotToolBundle(options.toolBundle);
+    commandPathPrepend = snapshotCommandPathPrepend(options.commandPathPrepend);
   } catch (cause) {
     throw new SandboxExecutionError("sandbox_start_failed", { cause });
   }
@@ -132,11 +137,21 @@ export async function createDirectExecutor(
     });
   }
 
+  try {
+    commandPathPrepend = await canonicalizeCommandPathPrepend(
+      commandPathPrepend,
+      { backend: "direct", cwd },
+      true,
+    );
+  } catch (cause) {
+    throw new SandboxExecutionError("sandbox_start_failed", { cause });
+  }
   const commands = await resolveDirectToolCommands(options.platform, toolBundle);
   const environment = directCommandEnvironment(
     options.ambientEnvironment ?? process.env,
     options.environment,
     toolBundle,
+    commandPathPrepend,
   );
   const home = path.normalize(environment.HOME ?? homedir());
   if (!path.isAbsolute(home) || home.includes("\0")) {
@@ -160,10 +175,12 @@ export function directCommandEnvironment(
   ambientEnvironment: NodeJS.ProcessEnv,
   environment?: Readonly<Record<string, string>>,
   toolBundle?: ToolBundle,
+  commandPathPrepend: readonly string[] = [],
 ): Readonly<Record<string, string>> {
+  const prefixes = snapshotCommandPathPrepend(commandPathPrepend);
   const combined = { ...ambientEnvironment, ...environment };
-  if (toolBundle !== undefined)
-    combined.PATH = toolBundlePath(toolBundle, combined.PATH ?? "/usr/bin:/bin");
+  if (toolBundle !== undefined || prefixes.length > 0)
+    combined.PATH = toolBundlePath(toolBundle, combined.PATH || "/usr/bin:/bin", prefixes);
   return Object.freeze(
     Object.fromEntries(
       Object.entries(combined).filter(

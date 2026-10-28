@@ -574,12 +574,12 @@ backend, the canonical launch directory and the environment passed to `bash -c`
 children. That environment comes from the executors' own construction:
 
 - Bubblewrap: fixed sandbox values, the effective `environment.sandbox` values
-  and the tool-bundle `PATH`;
+  and the tool-bundle/configured `PATH`;
 - Seatbelt: fixed values, the effective `environment.sandbox` values and the
-  tool-bundle `PATH`. The per-startup scratch `HOME`, `TMPDIR`, `TMP`, `TEMP` and
+  tool-bundle/configured `PATH`. The per-startup scratch `HOME`, `TMPDIR`, `TMP`, `TEMP` and
   `XDG_*` directories are created later and are not consulted by any check;
 - direct: the ambient environment captured at startup without `PI_SANDBOX_*`
-  variables, overlaid with `environment.sandbox` and the tool-bundle `PATH`.
+  variables, overlaid with `environment.sandbox` and the tool-bundle/configured `PATH`.
 
 A command is unclassified when:
 
@@ -603,11 +603,11 @@ A command is unclassified when:
    and as legacy variables whose value starts with `()`;
 5. an executable stage is used while a `command_not_found_handle` function is
    exported;
-6. for an executable stage, `PATH` is missing or empty, or lookup meets an
+6. for a bare executable stage, `PATH` is missing or empty, or lookup meets an
    empty or relative entry, or an entry inside the launch directory by its path
    or after resolving symbolic links, before finding the command; finds no
    regular executable file; or resolves through `realpath` to a file inside the
-   launch directory. Without `PATH`, Bash would use a compiled-in search path
+   launch directory or a private, hidden or denied path. Without `PATH`, Bash would use a compiled-in search path
    that can include the current directory; or
 7. a profile's environment dependency is set: `RIPGREP_CONFIG_PATH` while `rg`
    is used without `--no-config`, or `GREP_OPTIONS` while `grep` is used, which
@@ -626,7 +626,9 @@ the last five from its own environment before direct mode captures it.
 `environment.sandbox` and the Bubblewrap executor also reject `BASHOPTS`,
 `CDPATH`, `GLOBIGNORE` and `IFS`, as Seatbelt does. Seatbelt also rejects every
 `LD_*` and `DYLD_*` name, and neither isolated
-backend accepts an administrator `PATH` or exported-function name. Under those
+backend accepts a raw `environment.sandbox.PATH` or exported-function name. The
+typed main-only `execution.command_path_prepend` option extends command lookup
+after validating directory syntax and placement. Under those
 backends only administrator `environment.sandbox` values can trigger the
 environment checks; the inherited direct-mode environment can trigger any of
 them. A user who exports these variables keeps Bash access; affected commands
@@ -795,3 +797,23 @@ call uses the ordinary Bash policy. `disabled` never becomes available through
 these rules. Matching grants no new OS authority and performs no partial execution.
 The existing executable-resolution race remains; this feature neither pins binary
 contents nor treats arbitrary user-writable program configuration as trusted.
+
+Command alternatives match exact decoded basenames or explicitly listed absolute
+paths. An absolute path requires an executable regular file and resolvable parent
+and target outside the launch directory. Absolute alternatives never become
+built-in read-only commands just because their basename matches a registry entry.
+Both absolute and PATH-resolved executables are rejected from classification when
+they resolve into Bubblewrap private/hidden paths or Seatbelt denied paths. The
+checks use the host filesystem and bound namespace mismatches; they do not prove
+that every intermediate symlink avoids writable paths or close the race between
+analysis and execution. Administrators must not route trusted executable paths
+through agent-writable symlinks. Failed classification still uses ordinary policy.
+
+`execution.command_path_prepend` trusts the whole directory, not only configured
+command-set names. A program named `cat`, `grep` or another registry name can
+shadow its system counterpart and inherit its argument classifier. No program
+behavior, hash, signature or ownership verification is implied. Startup requires
+searchable canonical directories outside writable CWD and incompatible sandbox
+mounts/denials; it does not grant extra access. Secure the directory through
+deployment controls, particularly with direct execution. Bundled commands remain
+first on PATH, and typed file tools keep their fixed executable selection.

@@ -1,5 +1,5 @@
 import { execFile } from "node:child_process";
-import { access, mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { access, mkdir, mkdtemp, realpath, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { promisify } from "node:util";
@@ -14,7 +14,7 @@ let cwd: string;
 let bin: string;
 
 beforeAll(async () => {
-  root = await mkdtemp(join(tmpdir(), "pi-command-set-"));
+  root = await realpath(await mkdtemp(join(tmpdir(), "pi-command-set-")));
   cwd = join(root, "workspace");
   bin = join(root, "bin");
   await mkdir(cwd);
@@ -41,7 +41,7 @@ function analyzer() {
     environment: environment(),
     commandSets: {
       inspect_records: {
-        command: "records",
+        commands: ["records"],
         mode: "allow",
         sessionGrant: "never",
         requiredFlags: ["--read"],
@@ -54,6 +54,72 @@ function analyzer() {
 }
 
 describe("native configured command composition", () => {
+  it("runs explicitly configured absolute paths with spaces without PATH lookup", async () => {
+    const directory = join(root, "My Tools");
+    const executable = join(directory, "records");
+    await mkdir(directory);
+    await writeFile(
+      executable,
+      `#!${process.execPath}\nprocess.stdout.write(JSON.stringify(process.argv.slice(2)));\n`,
+      { mode: 0o700 },
+    );
+    const context = { backend: "direct" as const, cwd, environment: { PATH: "", LANG: "C" } };
+    const configured = createBashCommandAnalyzer({
+      ...context,
+      commandSets: {
+        read: {
+          commands: [executable],
+          mode: "allow",
+          sessionGrant: "never",
+          requiredFlags: ["--read"],
+          optionalFlags: [],
+          options: {},
+          operands: { min: 1, max: 1 },
+        },
+      },
+    });
+    const command = `'${executable}' --read 'literal input'`;
+    expect(await configured.analyze(command)).toMatchObject({
+      commandClass: "configured_command",
+      stages: [{ command: executable, knownReadOnly: false }],
+    });
+    const result = await run("/bin/bash", ["--noprofile", "--norc", "-c", command], {
+      cwd,
+      env: context.environment,
+      timeout: 5000,
+    });
+    expect(JSON.parse(result.stdout)).toEqual(["--read", "literal input"]);
+    expect(result.stderr).toBe("");
+  });
+
+  it("rejects a workspace-owned symlink even when its final target is outside", async () => {
+    const alias = join(root, "workspace-alias");
+    const link = join(cwd, "records");
+    await symlink(cwd, alias);
+    await symlink(join(bin, "records"), link);
+    const executable = join(alias, "records");
+    const configured = createBashCommandAnalyzer({
+      backend: "direct",
+      cwd,
+      environment: environment(),
+      commandSets: {
+        read: {
+          commands: [executable],
+          mode: "allow",
+          sessionGrant: "never",
+          requiredFlags: ["--read"],
+          optionalFlags: [],
+          options: {},
+          operands: { min: 1, max: 1 },
+        },
+      },
+    });
+    expect(await configured.analyze(`'${executable}' --read input`)).toMatchObject({
+      commandClass: "unclassified",
+      issue: { code: "untrusted_executable" },
+    });
+  });
+
   it("classifies the mixed pipeline while Bash passes quoted operands literally", async () => {
     const command = "records --read --format json 'a; $(touch injected)' | cat";
     expect(await analyzer().analyze(command)).toMatchObject({

@@ -2,6 +2,7 @@ import path from "node:path";
 
 import type { NetworkMode, ToolBundle } from "./contracts.js";
 import { assertToolBundlePlacement, snapshotToolBundle, toolBundlePath } from "./tool-bundle.js";
+import { assertCommandPathPlacement, snapshotCommandPathPrepend } from "./command-path.js";
 
 import {
   PRIVATE_SANDBOX_SYSTEM_PATHS,
@@ -78,6 +79,7 @@ export function buildBubblewrapArguments(
   cwdWritable = true,
   hiddenMasks: readonly HiddenPathMask[] = [],
   toolBundle?: ToolBundle,
+  commandPathPrepend: readonly string[] = [],
 ): readonly string[] {
   assertSandboxCwd(cwd, cwdWritable);
   const masks = planHiddenPaths(
@@ -88,6 +90,13 @@ export function buildBubblewrapArguments(
   assertNetworkMode(networkMode);
   const customEnvironment = validateSandboxEnvironment(environment);
   const bundle = snapshotToolBundle(toolBundle);
+  const prefixes = snapshotCommandPathPrepend(commandPathPrepend);
+  assertCommandPathPlacement(prefixes, {
+    backend: "bubblewrap",
+    cwd,
+    cwdWritable,
+    hiddenPaths: hiddenMasks.map(({ target }) => target),
+  });
   assertToolBundlePlacement(
     bundle,
     cwd,
@@ -164,7 +173,7 @@ export function buildBubblewrapArguments(
   for (const target of [...masks.beforeCwd, ...masks.afterCwd]) {
     if (kinds.get(target) === "directory") args.push("--remount-ro", target);
   }
-  for (const [key, value] of commandEnvironmentEntries(customEnvironment, bundle)) {
+  for (const [key, value] of commandEnvironmentEntries(customEnvironment, bundle, prefixes)) {
     args.push("--setenv", key, value);
   }
   args.push(
@@ -184,12 +193,14 @@ export function buildBubblewrapArguments(
 export function bubblewrapCommandEnvironment(
   environment: Readonly<Record<string, string>> = {},
   toolBundle?: ToolBundle,
+  commandPathPrepend: readonly string[] = [],
 ): Readonly<Record<string, string>> {
   return Object.freeze(
     Object.fromEntries(
       commandEnvironmentEntries(
         validateSandboxEnvironment(environment),
         snapshotToolBundle(toolBundle),
+        snapshotCommandPathPrepend(commandPathPrepend),
       ),
     ),
   );
@@ -198,10 +209,12 @@ export function bubblewrapCommandEnvironment(
 function commandEnvironmentEntries(
   customEnvironment: readonly (readonly [string, string])[],
   bundle: ToolBundle | undefined,
+  commandPathPrepend: readonly string[],
 ): readonly (readonly [string, string])[] {
   return [
     ...Object.entries(SAFE_ENVIRONMENT).map(
-      ([key, value]) => [key, key === "PATH" ? toolBundlePath(bundle, value) : value] as const,
+      ([key, value]) =>
+        [key, key === "PATH" ? toolBundlePath(bundle, value, commandPathPrepend) : value] as const,
     ),
     ...customEnvironment,
   ];

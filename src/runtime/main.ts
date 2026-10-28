@@ -1,3 +1,4 @@
+import { canonicalizeCommandPathPrepend } from "../../packages/sandbox-extension/src/runtime/command-path.js";
 import { readFile } from "node:fs/promises";
 import { isAbsolute, join, resolve } from "node:path";
 
@@ -250,6 +251,7 @@ async function createProbedExecutor(
   config: SandboxConfig,
   environment: EnvironmentVariables,
   ambientEnvironment: NodeJS.ProcessEnv,
+  commandPathPrepend: readonly string[],
 ): Promise<SandboxExecutor> {
   let executor: SandboxExecutor;
   const limits =
@@ -271,6 +273,7 @@ async function createProbedExecutor(
         hiddenPaths: config.filesystem.hiddenPaths,
         ...(buildLayout.toolBundle ? { toolBundle: buildLayout.toolBundle } : {}),
         environment,
+        commandPathPrepend,
       });
     } else if (config.execution.backend === "seatbelt") {
       if (config.network.mode === "local")
@@ -283,12 +286,14 @@ async function createProbedExecutor(
         ...(buildLayout.toolBundle ? { toolBundle: buildLayout.toolBundle } : {}),
         networkMode: config.network.mode,
         environment,
+        commandPathPrepend,
       });
     } else if (config.execution.backend === "direct") {
       executor = await createDirectExecutor({
         cwd,
         limits,
         environment,
+        commandPathPrepend,
         ambientEnvironment,
         ...(buildLayout.toolBundle ? { toolBundle: buildLayout.toolBundle } : {}),
       });
@@ -522,17 +527,34 @@ export async function runPiSandbox({ piArgs: args, configPath }: SandboxArgument
     (instance) => instance.requiredHostExecutables,
   );
   await assertExecutionPrerequisites(config.execution.backend, buildLayout, managedExecutables);
+  const commandPathPrepend = await canonicalizeCommandPathPrepend(
+    config.execution.commandPathPrepend,
+    {
+      backend: config.execution.backend,
+      cwd,
+      cwdWritable: config.filesystem.cwdWritable,
+      hiddenPaths: config.filesystem.hiddenPaths,
+      deniedPaths: config.filesystem.deniedPaths,
+    },
+  );
   const bashAnalyzer = createConfiguredBashAnalyzer({
     config,
     cwd,
     sandboxEnvironment: identityEnvironment.sandbox,
     ambientEnvironment: ambientHostEnvironment,
+    commandPathPrepend,
     ...(buildLayout.toolBundle ? { toolBundle: buildLayout.toolBundle } : {}),
   });
   const executor = createManagedExecutor({
     cwd,
     create: () =>
-      createProbedExecutor(cwd, config, identityEnvironment.sandbox, ambientHostEnvironment),
+      createProbedExecutor(
+        cwd,
+        config,
+        identityEnvironment.sandbox,
+        ambientHostEnvironment,
+        commandPathPrepend,
+      ),
   });
   const hostExecutors: Record<string, HostCommandExecutor> = {};
   let auditClient: AuditClient | undefined;

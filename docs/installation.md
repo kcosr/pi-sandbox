@@ -295,6 +295,10 @@ beside the real managed executable, allowing extracted archives to relocate
 together. Selected host `fd`/`rg` paths precede Pi's cache and PATH lookup; a
 missing selected file fails without fallback or download. No TOML runtime,
 standalone JSON, or environment setting can replace this build selection.
+Separately installed administrator utilities can be added to managed command
+lookup with [`execution.command_path_prepend`](configuration.md#command-search-path).
+It leaves bundle precedence and fixed typed-tool selection intact. The setting
+neither packages the utilities nor creates new filesystem grants.
 
 `node scripts/build-extensions.mjs --distribution FILE` and
 `node scripts/pack-extensions.mjs OUTPUT --distribution FILE` use the same

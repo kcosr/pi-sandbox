@@ -2043,6 +2043,24 @@ session_grant = "offer"
     }
 
     #[test]
+    fn rejects_command_path_overrides_in_user_and_group_rules() {
+        for (selector, kind) in [
+            ("uid = 7", RecordKind::User),
+            ("gid = 7", RecordKind::Group),
+        ] {
+            for field in ["command_path_prepend", "commandPathPrepend"] {
+                let source = format!(
+                    "version = 10\n{selector}\n[overrides.execution]\nbackend = \"bubblewrap\"\n{field} = [\"/usr/libexec/pi-sandbox\"]\n"
+                );
+                assert_eq!(
+                    parse_record(source.as_bytes(), kind),
+                    Err(LookupError::InvalidFile)
+                );
+            }
+        }
+    }
+
+    #[test]
     fn rejects_wrong_uid_version_unknown_fields_and_invalid_policies() {
         let cases: &[&[u8]] = &[
             b"version = 4\nuid = 7\n",

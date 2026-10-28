@@ -219,7 +219,7 @@ function formatSubjectPolicy(
           sets
             .map(
               ([id, set]) =>
-                `  ${id}: ${set.command}; required flags: ${set.requiredFlags.join(", ") || "none"}; optional flags: ${set.optionalFlags.join(", ") || "none"}; options: ${JSON.stringify(set.options)}; operands: ${set.operands.min}..${set.operands.max}`,
+                `  ${id}: ${set.commands.map((command) => JSON.stringify(command)).join(", ")}; required flags: ${set.requiredFlags.join(", ") || "none"}; optional flags: ${set.optionalFlags.join(", ") || "none"}; options: ${JSON.stringify(set.options)}; operands: ${set.operands.min}..${set.operands.max}`,
             )
             .join("\n"),
       );

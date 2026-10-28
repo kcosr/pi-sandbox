@@ -71,6 +71,7 @@ describe("Bash execution context", () => {
     expect(context).toEqual({
       backend: "bubblewrap",
       cwd: "/work/project",
+      hiddenPaths: [],
       environment: {
         ...safeSandboxEnvironment(),
         PATH: `/opt/pi-sandbox/tools/bin:${safeSandboxEnvironment().PATH}`,
@@ -87,6 +88,7 @@ describe("Bash execution context", () => {
     expect(bashExecutionContext(runtime("seatbelt"))).toEqual({
       backend: "seatbelt",
       cwd: "/work/project",
+      deniedPaths: [],
       environment: {
         PROJECT_MODE: "managed",
         RIPGREP_CONFIG_PATH: "/etc/rg",
@@ -120,6 +122,60 @@ describe("Bash execution context", () => {
       bashExecutionContext({ ...runtime("seatbelt"), sandboxEnvironment: { PATH: "/x" } }),
     ).toThrow("sandbox_environment_invalid");
   });
+
+  it.each(["bubblewrap", "seatbelt", "direct"] as const)(
+    "uses prepared canonical command paths for %s without changing ambient PATH",
+    (backend) => {
+      const base = runtime(backend);
+      const input = ["/opt/libexec", "/srv/shared-tools"];
+      const configured = {
+        ...base,
+        config: {
+          ...base.config,
+          execution: { ...base.config.execution, commandPathPrepend: ["/authored-alias"] },
+        },
+      };
+      expect(() => bashExecutionContext(configured)).toThrow("must be prepared");
+      const context = bashExecutionContext({ ...configured, commandPathPrepend: input });
+      input[0] = "/work/project/bin";
+      expect(context.environment.PATH).toBe(
+        bashExecutionContext(base).environment.PATH!.replace(
+          "/opt/pi-sandbox/tools/bin:",
+          "/opt/pi-sandbox/tools/bin:/opt/libexec:/srv/shared-tools:",
+        ),
+      );
+      expect(base.ambientEnvironment.PATH).toBe("/home/alice/bin:/usr/bin");
+    },
+  );
+
+  it("snapshots only the effective backend exclusions for command analysis", () => {
+    const hiddenPaths = ["/hidden"];
+    const deniedPaths = ["/denied"];
+    for (const backend of ["bubblewrap", "seatbelt", "direct"] as const) {
+      const base = runtime(backend);
+      const context = bashExecutionContext({
+        ...base,
+        config: {
+          ...base.config,
+          filesystem: { ...base.config.filesystem, hiddenPaths, deniedPaths },
+        },
+      });
+      if (backend === "bubblewrap") {
+        expect(context.hiddenPaths).toEqual(["/hidden"]);
+        expect(context.hiddenPaths).not.toBe(hiddenPaths);
+        expect(Object.isFrozen(context.hiddenPaths)).toBe(true);
+        expect(context).not.toHaveProperty("deniedPaths");
+      } else if (backend === "seatbelt") {
+        expect(context.deniedPaths).toEqual(["/denied"]);
+        expect(context.deniedPaths).not.toBe(deniedPaths);
+        expect(Object.isFrozen(context.deniedPaths)).toBe(true);
+        expect(context).not.toHaveProperty("hiddenPaths");
+      } else {
+        expect(context).not.toHaveProperty("hiddenPaths");
+        expect(context).not.toHaveProperty("deniedPaths");
+      }
+    }
+  });
 });
 
 describe("configured Bash analyzer", () => {
@@ -149,7 +205,7 @@ describe("configured Bash analyzer", () => {
     const base = runtime("direct", false, false);
     const commandSets = {
       records_read: {
-        command: "records",
+        commands: ["records"],
         mode: "allow" as const,
         sessionGrant: "never" as const,
         requiredFlags: ["--read"],

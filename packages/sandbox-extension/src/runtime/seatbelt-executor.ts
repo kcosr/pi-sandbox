@@ -1,3 +1,8 @@
+import {
+  assertCommandPathPlacement,
+  canonicalizeCommandPathPrepend,
+  snapshotCommandPathPrepend,
+} from "./command-path.js";
 import { constants } from "node:fs";
 import { access, lstat, mkdir, mkdtemp, realpath, rmdir, stat, writeFile } from "node:fs/promises";
 import path from "node:path";
@@ -87,10 +92,11 @@ const SEATBELT_PATH = "/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:
 export function seatbeltCommandEnvironment(
   environment?: Readonly<Record<string, string>>,
   toolBundle?: ToolBundle,
+  commandPathPrepend: readonly string[] = [],
 ): Readonly<Record<string, string>> {
   return Object.freeze({
     ...seatbeltEnvironment(environment),
-    PATH: toolBundlePath(snapshotToolBundle(toolBundle), SEATBELT_PATH),
+    PATH: toolBundlePath(snapshotToolBundle(toolBundle), SEATBELT_PATH, commandPathPrepend),
     LANG: "C.UTF-8",
   });
 }
@@ -105,7 +111,12 @@ export async function createSeatbeltExecutor(
     validateSeatbeltOptions(options);
     const basePolicy = seatbeltBasePolicy(options);
     const limits = resolveSeatbeltLimits(options.limits);
-    const environment = seatbeltCommandEnvironment(options.environment, options.toolBundle);
+    const commandPathPrepend = snapshotCommandPathPrepend(options.commandPathPrepend);
+    const environment = seatbeltCommandEnvironment(
+      options.environment,
+      options.toolBundle,
+      commandPathPrepend,
+    );
     const toolBundle = snapshotToolBundle(options.toolBundle);
     if (process.platform !== "darwin" || !["arm64", "x64"].includes(process.arch))
       throw new Error("sandbox_seatbelt_platform_unsupported");
@@ -122,6 +133,11 @@ export async function createSeatbeltExecutor(
         return canonical;
       }),
     );
+    await canonicalizeCommandPathPrepend(
+      commandPathPrepend,
+      { backend: "seatbelt", cwd, cwdWritable: basePolicy.workspaceWritable, deniedPaths: denied },
+      true,
+    );
     const commands = await resolveDirectToolCommands("darwin", toolBundle);
     const executables: string[] = [];
     for (const executable of [...SEATBELT_REQUIRED_EXECUTABLES, ...Object.values(commands)]) {
@@ -136,6 +152,13 @@ export async function createSeatbeltExecutor(
     const root = await canonicalizeSeatbeltDirectory(await mkdtemp("/private/tmp/pi-sandbox-"));
     runtime = await identity(root);
     assertToolBundlePlacement(toolBundle, cwd, basePolicy.workspaceWritable, denied, [root]);
+    assertCommandPathPlacement(commandPathPrepend, {
+      backend: "seatbelt",
+      cwd,
+      cwdWritable: basePolicy.workspaceWritable,
+      deniedPaths: denied,
+      privatePaths: [root],
+    });
     const writable: CanonicalSeatbeltDirectory[] = [];
     for (const name of ["home", "tmp", "cache", "config", "state"]) {
       const directory = path.join(root, name);

@@ -332,7 +332,7 @@ Use /sandbox mounts or /sandbox policy for details.`);
           audit: false,
           commandSets: {
             Utility_Read: {
-              command: "utility",
+              commands: ["utility", "/usr/libexec/pi-sandbox/utility", '/opt/tool "suite"/utility'],
               mode: "allow",
               sessionGrant: "never",
               requiredFlags: ["--read"],
@@ -350,6 +350,8 @@ Use /sandbox mounts or /sandbox policy for details.`);
     );
     expect(detail).toContain("Utility_Read");
     expect(detail).toContain("utility");
+    expect(detail).toContain('"utility", "/usr/libexec/pi-sandbox/utility"');
+    expect(detail).toContain(JSON.stringify('/opt/tool "suite"/utility'));
     expect(detail).toContain("--read");
     expect(detail).toContain("--format");
     expect(detail).toContain("1..1");

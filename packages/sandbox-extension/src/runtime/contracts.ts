@@ -53,6 +53,8 @@ export interface CreateBubblewrapExecutorOptions {
   /** Administrator-provided variables added to the fixed sandbox environment. */
   readonly environment?: Readonly<Record<string, string>>;
   readonly toolBundle?: ToolBundle;
+  /** Trusted canonical searchable directories, placed after bundled tools and before system PATH. */
+  readonly commandPathPrepend?: readonly string[];
   /** Absolute build-selected Bubblewrap executable. No runtime default or fallback exists. */
   readonly bubblewrapPath: string;
   readonly limits?: SandboxResourceLimits;

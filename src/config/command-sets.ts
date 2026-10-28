@@ -1,11 +1,12 @@
 import {
   freezeBashCommandSets,
-  isCommandSetCommand,
+  isCommandSetAlternative,
   isCommandSetFlag,
   isCommandSetId,
   isCommandSetValue,
   MAXIMUM_COMMAND_SETS,
   MAXIMUM_COMMAND_SETS_BYTES,
+  MAXIMUM_COMMAND_SET_COMMANDS,
   MAXIMUM_COMMAND_SET_OPERANDS,
   MAXIMUM_COMMAND_SET_OPTIONS,
   MAXIMUM_COMMAND_SET_STRING_BYTES,
@@ -70,9 +71,15 @@ function parseRule(value: unknown, path: string): BashCommandSet {
     ["required_flags", "optional_flags", "options"],
     path,
   );
-  if (typeof rule.command !== "string" || !isCommandSetCommand(rule.command))
+  const commands = stringList(
+    typeof rule.command === "string" ? [rule.command] : rule.command,
+    `${path}.command`,
+    MAXIMUM_COMMAND_SET_COMMANDS,
+    () => true,
+  );
+  if (commands.length === 0 || !commands.every(isCommandSetAlternative))
     throw new Error(
-      `${path}.command must name a bare external executable, not a Bash builtin or reserved word`,
+      `${path}.command must name external executables by basename or normalized absolute path (1–${MAXIMUM_COMMAND_SET_COMMANDS} entries, maximum ${MAXIMUM_COMMAND_SET_STRING_BYTES} bytes each)`,
     );
   if (rule.mode !== "allow") throw new Error(`${path}.mode must be allow`);
   if (rule.session_grant !== "never") throw new Error(`${path}.session_grant must be never`);
@@ -115,7 +122,7 @@ function parseRule(value: unknown, path: string): BashCommandSet {
   const max = operandCount(operands.max, `${path}.operands.max`);
   if (min > max) throw new Error(`${path}.operands.min must not exceed max`);
   return {
-    command: rule.command,
+    commands,
     mode: "allow",
     sessionGrant: "never",
     requiredFlags,

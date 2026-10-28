@@ -550,6 +550,10 @@ Apple `cat` Unix-domain socket fallback is recorded as a residual risk in
 
 Require strict main-only config tests for field names, IDs, executable/builtin
 separation, exact flags, enumerated values, operand ranges and all size bounds.
+Cover string/list alternatives, duplicate and malformed paths, exact decoded
+spelling without inferred aliases, quoted path spaces, and absolute builtin-named
+files requiring actual executable checks. Explicit paths bypass PATH lookup while
+retaining shell, loader, known-program environment and namespace-placement checks.
 Matcher controls cover omitted, repeated, abbreviated, clustered, attached and
 misordered options; option-like operands; literal quoting and unsupported shell
 expansions. Preserve context/environment gates, including those for custom forms
@@ -571,3 +575,12 @@ controls must leave sentinel paths absent. The real Bubblewrap cases in
 `tests/e2e/fake-pi-tool-flow.test.ts` qualify a custom executable, mixed built-in
 coverage, pre-dispatch fallback and disabled-tool omission. These controls do not
 certify arbitrary administrator-selected utilities as read-only.
+
+PATH-prepend tests must cover main-only admission, syntax-only installation,
+ordered canonical snapshots, canonical duplicate/missing/non-directory failures,
+writable-CWD and private/hidden/denied placement, and rebinding before startup.
+Verify bundle-first precedence and identical executor/analyzer environments for
+all backends. Real Bubblewrap coverage must invoke a configured helper through
+both basename and absolute path and retain fixed typed-tool executable selection.
+Ordinary package checks must preserve omitted-option behavior and reject the
+managed-only setting in standalone JSON.

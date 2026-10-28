@@ -5,7 +5,7 @@ import { matchCommandSet } from "./command-set-matcher.js";
 import { parseBashCommand, type BashWord } from "./syntax.js";
 
 const rule: BashCommandSet = {
-  command: "records",
+  commands: ["records"],
   mode: "allow",
   sessionGrant: "never",
   requiredFlags: ["--read"],

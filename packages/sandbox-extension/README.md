@@ -185,3 +185,12 @@ executor constructor. `root` and selected command paths must be canonical and
 existing; command paths remain beneath that root. Applications that rebundle
 the default entry must preserve its adjacent tools layout. See the repository's
 installation documentation for the strict build artifact schema.
+
+Trusted embedding code may supply `commandPathPrepend` to an executor constructor.
+It accepts canonical existing searchable directory paths, validated against writable
+CWD and the backend's private/hidden/denied paths. The option extends command PATH
+after bundled tools and before the normal backend PATH; it does not replace fixed
+file-tool executables. The embedding application trusts every executable in these
+directories and owns its approval policy. The standalone JSON schema does not
+expose this option. Managed Pi Sandbox supplies it through its main administrator
+`execution.command_path_prepend` setting.

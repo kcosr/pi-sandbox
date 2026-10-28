@@ -51,7 +51,7 @@ describe("parseConfig", () => {
         mode,
         commandSets: {
           utility_read: {
-            command: "utility",
+            commands: ["utility"],
             requiredFlags: ["--read"],
             optionalFlags: [],
             operands: { min: 1, max: 1 },
@@ -66,6 +66,20 @@ describe("parseConfig", () => {
     expect(() =>
       parseConfig(completeConfig() + entry.replace('mode = "allow"', 'mode = "deny"')),
     ).toThrow("mode must be allow");
+    const alternatives = parseConfig(
+      completeConfig() +
+        entry.replace(
+          'command = "utility"',
+          'command = ["utility", "/usr/libexec/pi-sandbox/utility"]',
+        ),
+    );
+    expect(alternatives.tools.bash!.commandSets!.utility_read!.commands).toEqual([
+      "utility",
+      "/usr/libexec/pi-sandbox/utility",
+    ]);
+    expect(Object.isFrozen(alternatives.tools.bash!.commandSets!.utility_read!.commands)).toBe(
+      true,
+    );
   });
 
   it("admits Seatbelt denials only with its explicit network and lifetime contract", () => {
@@ -632,6 +646,86 @@ describe("parseConfig", () => {
     expect(() =>
       parseConfig(completeConfig().replace("config_version = 13", "config_version = 12")),
     ).toThrow("must be the integer 13");
+  });
+
+  it("accepts ordered literal main command paths without reading the installation filesystem", () => {
+    const paths = ["/nonexistent-pi-command-prepend-fixture/tools", "/opt/Tools With Spaces"];
+    expect(parseConfig(completeConfig()).execution.commandPathPrepend).toBeUndefined();
+    for (const backend of ["bubblewrap", "seatbelt", "direct"]) {
+      const source = completeConfig()
+        .replace(
+          'backend = "bubblewrap"',
+          `backend = "${backend}"\ncommand_path_prepend = ${JSON.stringify(paths)}`,
+        )
+        .replace('[network]\nmode = "none"', '[network]\nmode = "host"');
+      const parsed = parseConfig(source);
+      expect(parsed.execution.commandPathPrepend).toEqual(paths);
+      expect(Object.isFrozen(parsed.execution.commandPathPrepend)).toBe(true);
+      expect(Object.isFrozen(parsed.execution)).toBe(true);
+      expect(
+        parseConfig(source.replace(JSON.stringify(paths), "[]")).execution.commandPathPrepend,
+      ).toEqual([]);
+    }
+  });
+
+  it("rejects invalid command path prefixes and enforces entry and aggregate bounds", () => {
+    const withPaths = (paths: unknown) =>
+      completeConfig().replace(
+        'backend = "bubblewrap"',
+        `backend = "bubblewrap"\ncommand_path_prepend = ${JSON.stringify(paths)}`,
+      );
+    const fullPath = `/${"a".repeat(4095)}`;
+    const fourFullPaths = ["a", "b", "c", "d"].map((prefix) => `/${prefix.repeat(4095)}`);
+    for (const paths of [
+      "/opt/tools",
+      true,
+      [7],
+      [""],
+      ["/"],
+      ["tools"],
+      ["~/tools"],
+      ["/opt/./tools"],
+      ["/opt/../tools"],
+      ["/opt//tools"],
+      ["/opt/tools/"],
+      ["/opt/tools:/usr/bin"],
+      ["/opt/\n/tools"],
+      ["/opt/\u202e/tools"],
+      ["/opt/{{username}}/tools"],
+      ["/opt/{{machine_id}}/tools"],
+      ["/opt/tools", "/opt/tools"],
+      [`${fullPath}a`],
+      Array.from({ length: 65 }, (_, index) => `/opt/tools${index}`),
+      fourFullPaths,
+    ]) {
+      expect(() => parseConfig(withPaths(paths))).toThrow("config.execution.command_path_prepend");
+    }
+    for (const paths of [
+      [fullPath],
+      Array.from({ length: 64 }, (_, index) => `/opt/tools${index}`),
+      [...fourFullPaths.slice(0, 3), fourFullPaths[3]!.slice(0, -3)],
+    ]) {
+      expect(parseConfig(withPaths(paths)).execution.commandPathPrepend).toEqual(paths);
+    }
+  });
+
+  it("does not expose command path configuration through scoped environment or unrelated tables", () => {
+    expect(() =>
+      parseConfig(
+        completeConfig().replace(
+          "[environment.sandbox]",
+          '[environment.sandbox]\nPATH = "/opt/custom:/usr/bin"',
+        ),
+      ),
+    ).toThrow("config.environment must contain only valid pi, sandbox, and extensions tables");
+    expect(() =>
+      parseConfig(
+        completeConfig().replace(
+          "[filesystem]",
+          '[filesystem]\ncommand_path_prepend = ["/opt/tools"]',
+        ),
+      ),
+    ).toThrow("config.filesystem.command_path_prepend is not a recognized field");
   });
 
   it("rejects incomplete or ambiguous identity configuration", () => {
