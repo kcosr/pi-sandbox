@@ -466,6 +466,14 @@ input of a seeded generated corpus, and that deliberately wrong predictions
 fail. It skips only when `/bin/bash`, `/usr/bin/mktemp`, `/bin/cat` or `/bin/mv`
 is missing.
 
+Each stub uses the test runner's Node executable to inspect inherited descriptors
+with `fstat`, without redirecting the probe's own streams. On macOS, path-based
+`/dev/fd` inspection can intermittently return an incorrect type or `EBADF` for
+a live pipe. Direct inspection preserves exact descriptor checks and marker
+routing assertions. The generated corpus has a five-minute harness budget to
+accommodate per-stage Node startup on slower hosts; its 4,000 inputs and the
+ten-second per-command limit are unchanged.
+
 The curated and generated differential corpora include the version 2 forms,
 escaped redirect targets, `cd` success/failure branches and pipeline directory
 isolation. Deliberately wrong argv and directory predictions must fail.
@@ -521,9 +529,9 @@ rules, and normalization for every main and class combination. Collector tests
 accept and forward the paired fields on Bash decision events and reject
 unpaired, misplaced, non-Bash, zero or out-of-range values.
 
-Native macOS qualification is a Mac-owner item. Version 2 adds portable tests,
-but its new forms require a fresh native run; the historical evidence below
-qualifies version 1 only. A first native run on macOS
+Version 2's analyzer and native utility tests passed on macOS 15.7.4 x86_64
+with stock Bash 3.2.57 and system sed/sleep. The historical evidence below
+qualifies version 1. A first native run on macOS
 26.7.1 with `/bin/bash` 3.2.57 passed the analyzer unit tests and probed every
 registry option spelling (946 generic and 164 `find` cases) against the
 utilities resolved by both the packaged Seatbelt system `PATH` and the selected

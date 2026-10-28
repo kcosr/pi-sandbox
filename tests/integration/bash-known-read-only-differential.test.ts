@@ -512,21 +512,33 @@ describe.skipIf(!available)("known read-only differential against real Bash", ()
     for (const name of ["out", "err"]) {
       writeFileSync(join(root, name), "");
     }
+    const descriptorProbe = join(root, "descriptor-kinds.cjs");
+    // Inspect inherited descriptors directly. Darwin /dev/fd path stats can transiently
+    // report incorrect types or EBADF; redirecting this helper would change the observed fds.
+    writeFileSync(
+      descriptorProbe,
+      [
+        'const { fstatSync, writeFileSync } = require("node:fs");',
+        "const kinds = [0, 1, 2].map((fd) => {",
+        "  const info = fstatSync(fd);",
+        '  if (info.isFIFO()) return "p";',
+        '  if (info.isCharacterDevice()) return "c";',
+        '  if (info.isDirectory()) return "d";',
+        '  if (info.isFile()) return "f";',
+        "  throw new Error(`unsupported descriptor type for ${fd}`);",
+        '}).join(" ");',
+        'writeFileSync(process.argv[2], kinds + "\\n");',
+        "",
+      ].join("\n"),
+    );
     for (const name of EXECUTABLES) {
       const stub = [
         "#!/bin/sh",
         "trap '' PIPE",
         `rec=$(${MKTEMP} ${shellQuote(join(traceDirectory, "rec.XXXXXX"))} 2>/dev/null) || exit 97`,
         "id=${rec##*/}",
-        "kind() {",
-        '  if [ -p "/dev/fd/$1" ]; then k=p',
-        '  elif [ -c "/dev/fd/$1" ]; then k=c',
-        '  elif [ -d "/dev/fd/$1" ]; then k=d',
-        '  elif [ -f "/dev/fd/$1" ]; then k=f',
-        "  else k=x",
-        "  fi",
-        "}",
-        "kind 0; k0=$k; kind 1; k1=$k; kind 2; k2=$k",
+        `${shellQuote(process.execPath)} ${shellQuote(descriptorProbe)} "$rec.kinds" || exit 97`,
+        'read -r k0 k1 k2 <"$rec.kinds" || exit 97',
         // Each marker write runs in its own subshell: after a failed write (for example a
         // broken pipe), Bash 3.2's printf keeps the unwritten output buffered and would
         // flush it into a later redirection, such as the stderr marker.
@@ -635,7 +647,7 @@ describe.skipIf(!available)("known read-only differential against real Bash", ()
     expect(matches(expected, outcome), context).toBe(true);
   }
 
-  it("classifies descriptor kinds through /dev/fd on this platform", () => {
+  it("classifies inherited descriptor kinds directly on this platform", () => {
     const outcome = run("ls </dev/null 2>/dev/null | head <sub");
     const kinds = Object.fromEntries(
       outcome.observed.map((record) => [record.name, record.kinds.join("")]),
@@ -663,7 +675,7 @@ describe.skipIf(!available)("known read-only differential against real Bash", ()
       await verify(command);
     }
     expect(accepted).toBeGreaterThan(150);
-  }, 120_000);
+  }, 300_000);
 
   it.each([
     'echo "' + "\\".repeat(2) + '$(id)"',

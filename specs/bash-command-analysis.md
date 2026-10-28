@@ -2,8 +2,9 @@
 
 Status: implemented, registry version 2 (analyzer, managed integration,
 identity broker and audit collector). Version 1 was natively qualified on
-macOS 26.7.1 arm64 with `/bin/bash` 3.2.57 at `1750997`; version 2 requires
-fresh native qualification (Section 11).
+macOS 26.7.1 arm64 with `/bin/bash` 3.2.57 at `1750997`; version 2's analyzer
+and native utility tests passed on macOS 15.7.4 x86_64 with stock Bash 3.2.57
+(Section 11).
 
 Prepared 2026-10-13 against Pi Sandbox `dc45abc` and pinned Pi 1.1.0. This
 document is the contract for the Bash command analyzer and the first command
@@ -550,7 +551,8 @@ registry disagree and names the regeneration command.
   compared with the parse, which checks stage wiring, capture routing, discards
   and duplication without device or inode numbers, so the test runs unchanged
   on Linux and macOS. It also runs a seeded generated corpus and checks every
-  accepted input.
+  accepted input. Stubs inspect inherited descriptors directly with Node `fstat`;
+  macOS `/dev/fd` path stats can intermittently misreport live pipe types.
 - Policy-engine, configuration, broker, identity-overlay, audit and diagnostics
   tests for Sections 3–4, including scoped session grants, nested code-mode
   calls and fail-closed handling of malformed analyzer results.
@@ -560,9 +562,9 @@ registry disagree and names the regeneration command.
   unclassified command.
 - A documentation test that fails when the generated table in
   `docs/configuration.md` differs from `renderKnownReadOnlyTable()`.
-- Native macOS qualification is a Mac-owner item. Version 2's new portable tests
-  require a fresh native run; this historical evidence covers version 1 only.
-  A first run on macOS 26.7.1
+- Version 2's analyzer and native utility tests passed on macOS 15.7.4 x86_64
+  with stock Bash 3.2.57 and system sed/sleep. The following historical evidence
+  covers version 1: a first run on macOS 26.7.1
   with `/bin/bash` 3.2.57 probed every registry option spelling against the
   utilities resolved by both the packaged Seatbelt system `PATH` and the
   selected tool-bundle prefix and found no accepted option that writes files,
