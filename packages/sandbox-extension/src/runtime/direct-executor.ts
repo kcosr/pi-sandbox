@@ -180,7 +180,7 @@ export function directCommandEnvironment(
   const prefixes = snapshotCommandPathPrepend(commandPathPrepend);
   const combined = { ...ambientEnvironment, ...environment };
   if (toolBundle !== undefined || prefixes.length > 0)
-    combined.PATH = toolBundlePath(toolBundle, combined.PATH ?? "/usr/bin:/bin", prefixes);
+    combined.PATH = toolBundlePath(toolBundle, combined.PATH || "/usr/bin:/bin", prefixes);
   return Object.freeze(
     Object.fromEntries(
       Object.entries(combined).filter(

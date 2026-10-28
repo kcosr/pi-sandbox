@@ -684,7 +684,10 @@ command_path_prepend = ["/usr/libexec/pi-sandbox"]
 The same setting works with Seatbelt and direct execution. PATH order is the
 build-selected tool bundle's `bin` directory, if present, then configured directories
 in authored order, then the existing backend PATH (the inherited PATH in direct
-mode). Omission or an empty list preserves existing behavior. This changes command
+mode). Omission or an empty list preserves existing behavior when no bundle is
+selected. When direct mode constructs PATH for a bundle or nonempty prepend list,
+an absent or empty inherited PATH uses `/usr/bin:/bin` as its baseline. This avoids
+introducing a trailing empty component. This changes command
 lookup inside the executor, including Bash and user `!` shell; it does not change
 Pi, host Git, or MCP server environments. Typed file tools retain their fixed
 executable selection. `environment.sandbox.PATH` remains reserved.

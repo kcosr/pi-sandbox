@@ -118,6 +118,17 @@ describe("direct executor", () => {
     expect(directCommandEnvironment({}, {}, undefined, ["/opt/libexec"]).PATH).toBe(
       "/opt/libexec:/usr/bin:/bin",
     );
+    expect(directCommandEnvironment({ PATH: "" }, {}, undefined, ["/opt/libexec"]).PATH).toBe(
+      "/opt/libexec:/usr/bin:/bin",
+    );
+    expect(
+      directCommandEnvironment({ PATH: "" }, {}, { root: "/opt/tools", commands: {} }).PATH,
+    ).toBe("/opt/tools/bin:/usr/bin:/bin");
+    expect(
+      directCommandEnvironment({ PATH: "" }, {}, { root: "/opt/tools", commands: {} }, [
+        "/opt/libexec",
+      ]).PATH,
+    ).toBe("/opt/tools/bin:/opt/libexec:/usr/bin:/bin");
     expect(
       directCommandEnvironment({ PATH: "/usr/bin" }, {}, { root: "/opt/tools", commands: {} }, [
         "/opt/libexec",
@@ -125,42 +136,53 @@ describe("direct executor", () => {
     ).toBe("/opt/tools/bin:/opt/libexec:/usr/bin");
   });
 
-  it("runs administrator helpers by basename with a frozen PATH snapshot", async () => {
-    const root = await temporaryCwd();
-    const cwd = join(root, "workspace");
-    const tools = join(root, "libexec");
-    await Promise.all([mkdir(cwd), mkdir(tools)]);
-    await writeFile(join(tools, "pi-path-fixture"), '#!/bin/sh\nprintf "helper:%s" "$1"\n', {
-      mode: 0o700,
-    });
-    const prefixes = [tools];
-    const pending = createDirectExecutor({
-      cwd,
-      ...selectedTools,
-      ambientEnvironment: { PATH: "/usr/bin:/bin" },
-      commandPathPrepend: prefixes,
-    });
-    prefixes[0] = cwd;
-    const executor = await pending;
-    try {
-      const result = await executor.execute({
-        argv: [executor.commands.bash, "-c", "pi-path-fixture selected"],
+  it.each(["/usr/bin:/bin", ""])(
+    "runs administrator helpers with frozen prefixes and inherited PATH=%j",
+    async (inheritedPath) => {
+      const root = await temporaryCwd();
+      const cwd = join(root, "workspace");
+      const tools = join(root, "libexec");
+      await Promise.all([mkdir(cwd), mkdir(tools)]);
+      await writeFile(join(tools, "pi-path-fixture"), '#!/bin/sh\nprintf "helper:%s" "$1"\n', {
+        mode: 0o700,
       });
-      expect(result.exitCode).toBe(0);
-      expect(result.stdout.toString()).toBe("helper:selected");
-      expect(executor.commands).toEqual(
-        await resolveDirectToolCommands(process.platform, toolBundle),
-      );
-    } finally {
-      await executor.close();
-    }
-    const alias = join(root, "alias");
-    await symlink(tools, alias);
-    for (const directory of [alias, cwd])
-      await expect(
-        createDirectExecutor({ cwd, ...selectedTools, commandPathPrepend: [directory] }),
-      ).rejects.toMatchObject({ code: "sandbox_start_failed" });
-  });
+      await writeFile(join(cwd, "pi-cwd-fixture"), '#!/bin/sh\nprintf "untrusted-cwd"\n', {
+        mode: 0o700,
+      });
+      const prefixes = [tools];
+      const pending = createDirectExecutor({
+        cwd,
+        ...selectedTools,
+        ambientEnvironment: { PATH: inheritedPath },
+        commandPathPrepend: prefixes,
+      });
+      prefixes[0] = cwd;
+      const executor = await pending;
+      try {
+        const result = await executor.execute({
+          argv: [executor.commands.bash, "-c", "pi-path-fixture selected"],
+        });
+        expect(result.exitCode).toBe(0);
+        expect(result.stdout.toString()).toBe("helper:selected");
+        const rejected = await executor.execute({
+          argv: [executor.commands.bash, "-c", "pi-cwd-fixture"],
+        });
+        expect(rejected.exitCode).toBe(127);
+        expect(rejected.stdout.toString()).toBe("");
+        expect(executor.commands).toEqual(
+          await resolveDirectToolCommands(process.platform, toolBundle),
+        );
+      } finally {
+        await executor.close();
+      }
+      const alias = join(root, "alias");
+      await symlink(tools, alias);
+      for (const directory of [alias, cwd])
+        await expect(
+          createDirectExecutor({ cwd, ...selectedTools, commandPathPrepend: [directory] }),
+        ).rejects.toMatchObject({ code: "sandbox_start_failed" });
+    },
+  );
 
   it("rejects unsupported platforms without falling back", async () => {
     await expect(resolveDirectToolCommands("win32")).rejects.toMatchObject({
