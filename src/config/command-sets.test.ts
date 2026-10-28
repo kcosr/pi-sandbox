@@ -55,6 +55,17 @@ describe("administrator command-set grammar", () => {
     ).toThrow();
   });
 
+  it.each(["json", true, 1, null])(
+    "explains both accepted option forms for scalar %#",
+    (option) => {
+      expect(() =>
+        parseBashCommandSets({ read: rule({ options: { "-m": option } }) }, PATH),
+      ).toThrow(
+        `${PATH}.read.options.-m must be an array of exact literal values or { any_literal = true }`,
+      );
+    },
+  );
+
   it("counts literal predicates in the shared option limit and spelling checks", () => {
     const options = Object.fromEntries(
       Array.from({ length: 62 }, (_, i) => [`--opt${i}`, { any_literal: true }]),

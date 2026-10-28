@@ -18,9 +18,9 @@ import {
 
 type Table = Record<string, unknown>;
 
-function table(value: unknown, path: string): Table {
+function table(value: unknown, path: string, expected = "a table"): Table {
   if (typeof value !== "object" || value === null || Array.isArray(value) || value instanceof Date)
-    throw new Error(`${path} must be a table`);
+    throw new Error(`${path} must be ${expected}`);
   return value as Table;
 }
 
@@ -70,7 +70,7 @@ function parseOption(value: unknown, path: string): BashCommandOption {
     if (values.length === 0) throw new Error(`${path} must list at least one value`);
     return { kind: "values", values };
   }
-  const option = table(value, path);
+  const option = table(value, path, "an array of exact literal values or { any_literal = true }");
   keys(option, ["any_literal"], [], path);
   if (option.any_literal !== true) throw new Error(`${path}.any_literal must be true`);
   return { kind: "any_literal" };
