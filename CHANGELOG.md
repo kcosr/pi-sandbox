@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+### Added
+
+- Recognize literal double-quote escapes, `cd ~/...`, restricted sed range printing and integer sleep as known read-only Bash commands, preserving execution-context and redirection checks.
+
 ## 0.10.0 - 2026-10-20
 
 ### Breaking changes

@@ -1,5 +1,5 @@
 import type { BashAnalysisIssue } from "./contracts.js";
-import { excerpt, type BashWord } from "./syntax.js";
+import { excerpt, type BashLiteralWord } from "./syntax.js";
 
 /** GNU getopt_long-style option recognition (specs/bash-command-analysis.md Section 8.1). */
 
@@ -25,18 +25,18 @@ export interface ParsedOption {
   /** Spelling used, for example `-n` or `--lines`. */
   readonly name: string;
   readonly value?: string;
-  readonly word: BashWord;
+  readonly word: BashLiteralWord;
 }
 
 export interface ParsedArguments {
   readonly options: readonly ParsedOption[];
   /** Operands under GNU argument permutation. */
-  readonly operands: readonly BashWord[];
+  readonly operands: readonly BashLiteralWord[];
   /**
    * Every word from the first operand onward. Implementations that stop option parsing at the
    * first operand (BSD getopt, `POSIXLY_CORRECT`) treat all of these as operands.
    */
-  readonly strictOperands: readonly BashWord[];
+  readonly strictOperands: readonly BashLiteralWord[];
 }
 
 export type OptionParseResult =
@@ -45,7 +45,7 @@ export type OptionParseResult =
 
 const NUMERIC_OPTION = /^-[0-9]+$/;
 
-function optionIssue(command: string, name: string, word: BashWord, detail: string) {
+function optionIssue(command: string, name: string, word: BashLiteralWord, detail: string) {
   return {
     ok: false as const,
     issue: Object.freeze({
@@ -59,16 +59,16 @@ function optionIssue(command: string, name: string, word: BashWord, detail: stri
 /** Parse `words` (arguments after the command name) against a positive option list. */
 export function parseOptions(
   command: string,
-  words: readonly BashWord[],
+  words: readonly BashLiteralWord[],
   grammar: OptionGrammar,
 ): OptionParseResult {
   const options: ParsedOption[] = [];
-  const operands: BashWord[] = [];
+  const operands: BashLiteralWord[] = [];
   let strictStart: number | undefined;
   let endOfOptions = false;
 
   for (let index = 0; index < words.length; index += 1) {
-    const word = words[index] as BashWord;
+    const word = words[index] as BashLiteralWord;
     const text = word.value;
     if (endOfOptions || text === "-" || !text.startsWith("-")) {
       operands.push(word);

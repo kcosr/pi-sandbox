@@ -426,6 +426,13 @@ describe.skipIf(!REAL_BWRAP_AVAILABLE)(
         .map((request) => request.argv[2] ?? "");
     }
 
+    const newReadOnlyCommands = [
+      String.raw`grep "con\|tent" listed.txt`,
+      "sed -n '/content/,/end/p' listed.txt",
+      "sleep 0",
+      "cd ~/ && pwd",
+    ];
+
     it("runs known read-only pipelines without a prompt and explains denied commands", async () => {
       const fakePi = await start({
         audit: false,
@@ -437,10 +444,23 @@ describe.skipIf(!REAL_BWRAP_AVAILABLE)(
       expect(resultText(await invoke(fakePi, "bash", { command: "ls | head" }))).toContain(
         "listed.txt",
       );
+      for (const command of newReadOnlyCommands) {
+        const output = resultText(await invoke(fakePi, "bash", { command }));
+        expect(output).toContain(
+          command.startsWith("cd")
+            ? "/run/pi-sandbox/home"
+            : command.startsWith("sleep")
+              ? ""
+              : "content",
+        );
+      }
       await expect(invoke(fakePi, "bash", { command: "touch x" })).rejects.toThrow(
         'Pi Sandbox denied bash: policy_denied; not a known read-only command: "touch" is not a known read-only command',
       );
-      expect(bashCommands().slice(before)).toEqual(["ls | head"]);
+      await expect(
+        invoke(fakePi, "bash", { command: "cat listed.txt >x >/dev/null" }),
+      ).rejects.toThrow("not a known read-only command");
+      expect(bashCommands().slice(before)).toEqual(["ls | head", ...newReadOnlyCommands]);
       expect(existsSync(path.join(workspace, "x"))).toBe(false);
       await fakePi.emit("session_shutdown", {}, nonInteractiveContext());
     });
@@ -469,6 +489,9 @@ describe.skipIf(!REAL_BWRAP_AVAILABLE)(
       const before = bashCommands().length;
       await invokeWith(fakePi, "bash", { command: "ls | head" }, interactive);
       await invokeWith(fakePi, "bash", { command: "ls -a" }, interactive);
+      for (const command of newReadOnlyCommands) {
+        await invokeWith(fakePi, "bash", { command }, interactive);
+      }
       await expect(invokeWith(fakePi, "bash", { command: "touch x" }, interactive)).rejects.toThrow(
         /^Pi Sandbox denied bash: user_denied$/u,
       );
@@ -479,7 +502,7 @@ describe.skipIf(!REAL_BWRAP_AVAILABLE)(
         },
         { title: "Allow bash: touch x?", choices: ["Allow once", "Deny"] },
       ]);
-      expect(bashCommands().slice(before)).toEqual(["ls | head", "ls -a"]);
+      expect(bashCommands().slice(before)).toEqual(["ls | head", "ls -a", ...newReadOnlyCommands]);
       expect(existsSync(path.join(workspace, "x"))).toBe(false);
       await fakePi.emit("session_shutdown", {}, nonInteractiveContext());
     });

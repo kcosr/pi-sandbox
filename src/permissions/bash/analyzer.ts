@@ -245,12 +245,27 @@ export const createBashCommandAnalyzer: CreateBashCommandAnalyzer = (
           : undefined;
       },
       command(simple) {
-        const name = simple.words[0]?.value ?? "";
+        const commandWord = simple.words[0];
+        if (commandWord?.kind !== "literal") {
+          return issue("unknown_command", "a literal command name is required", simple.offset);
+        }
+        const name = commandWord.value;
         const profile = knownReadOnlyProfile(name);
         if (profile === undefined) {
           return issue("unknown_command", `${excerpt(name, 32)} is not a known read-only command`);
         }
-        const checked = profile.check(simple.words.slice(1));
+        const arguments_ = simple.words.slice(1);
+        if (name !== "cd") {
+          const symbolic = arguments_.find((word) => word.kind !== "literal");
+          if (symbolic !== undefined) {
+            return issue(
+              "unsupported_operand",
+              "home-relative paths are supported only as the directory operand of cd",
+              symbolic.offset,
+            );
+          }
+        }
+        const checked = profile.check(arguments_);
         if (!checked.ok) {
           return checked.issue;
         }

@@ -4,11 +4,11 @@ import type {
   KnownReadOnlyCommandKind,
 } from "./contracts.js";
 import { describeOption, parseOptions, type OptionGrammar, type OptionSpec } from "./options.js";
-import { excerpt, type BashWord } from "./syntax.js";
+import { excerpt, type BashLiteralWord, type BashWord } from "./syntax.js";
 
-/** Version-1 known read-only command registry (specs/bash-command-analysis.md Section 8). */
+/** Version-2 known read-only command registry (specs/bash-command-analysis.md Section 8). */
 
-export const KNOWN_READ_ONLY_VERSION = 1;
+export const KNOWN_READ_ONLY_VERSION = 2;
 
 /** Environment variable that makes a profile unsafe when non-empty. */
 export interface EnvironmentDependency {
@@ -82,11 +82,32 @@ interface GetoptProfileOptions {
   readonly operands: string;
   /** Maximum operands, counted as an implementation that stops at the first operand would. */
   readonly maxOperands?: number;
-  readonly operandIssue?: (operand: BashWord) => string | undefined;
+  readonly operandIssue?: (operand: BashLiteralWord) => string | undefined;
   readonly requireOption?: readonly string[];
   readonly environment?: readonly EnvironmentDependency[];
   readonly note?: string;
-  readonly check?: (operands: readonly BashWord[]) => ProfileCheckResult | undefined;
+  readonly check?: (operands: readonly BashLiteralWord[]) => ProfileCheckResult | undefined;
+}
+
+/** Keep symbolic directory words out of every literal-only profile, even in direct calls. */
+function literalProfile(
+  profile: Omit<KnownReadOnlyProfile, "check"> & {
+    check(words: readonly BashLiteralWord[]): ProfileCheckResult;
+  },
+): KnownReadOnlyProfile {
+  return Object.freeze({
+    ...profile,
+    check(words: readonly BashWord[]): ProfileCheckResult {
+      const literals: BashLiteralWord[] = [];
+      for (const word of words) {
+        if (word.kind !== "literal") {
+          return operandIssue(word, `${profile.name} accepts only literal arguments`);
+        }
+        literals.push(word);
+      }
+      return profile.check(literals);
+    },
+  });
 }
 
 function describeEnvironment(environment: readonly EnvironmentDependency[]): string {
@@ -117,12 +138,12 @@ function getoptProfile(options: GetoptProfileOptions): KnownReadOnlyProfile {
   ]
     .filter((part) => part !== "")
     .join(" ");
-  return Object.freeze({
+  return literalProfile({
     name,
     kind: options.kind ?? "executable",
     summary,
     environment,
-    check(words: readonly BashWord[]): ProfileCheckResult {
+    check(words: readonly BashLiteralWord[]): ProfileCheckResult {
       const parsed = parseOptions(name, words, grammar);
       if (!parsed.ok) {
         return parsed;
@@ -165,7 +186,7 @@ function getoptProfile(options: GetoptProfileOptions): KnownReadOnlyProfile {
 }
 
 function anyWordsProfile(name: string, summary: string): KnownReadOnlyProfile {
-  return Object.freeze({
+  return literalProfile({
     name,
     kind: "shell_builtin" as const,
     summary,
@@ -238,7 +259,7 @@ function isFindExpressionStart(value: string): boolean {
   return value.startsWith("-") || value === "(" || value === ")" || value === "!" || value === ",";
 }
 
-const findProfile: KnownReadOnlyProfile = Object.freeze({
+const findProfile: KnownReadOnlyProfile = literalProfile({
   name: "find",
   kind: "executable" as const,
   summary:
@@ -249,7 +270,7 @@ const findProfile: KnownReadOnlyProfile = Object.freeze({
     `primaries with one argument ${[...FIND_UNARY, "-newerXY"].map((primary) => `\`${primary}\``).join(", ")} ` +
     "(`XY` from `aBcm` then `aBcmt`).",
   environment: Object.freeze([]),
-  check(words: readonly BashWord[]): ProfileCheckResult {
+  check(words: readonly BashLiteralWord[]): ProfileCheckResult {
     let index = 0;
     while (index < words.length && FIND_LEADING_OPTIONS.includes(words[index]?.value ?? "")) {
       index += 1;
@@ -258,7 +279,7 @@ const findProfile: KnownReadOnlyProfile = Object.freeze({
       index += 1;
     }
     while (index < words.length) {
-      const word = words[index] as BashWord;
+      const word = words[index] as BashLiteralWord;
       const token = word.value;
       if (FIND_OPERATORS.includes(token) || FIND_NULLARY.includes(token)) {
         index += 1;
@@ -293,6 +314,111 @@ const findProfile: KnownReadOnlyProfile = Object.freeze({
 
 const SED_SCRIPT = /^(?:[0-9]+|\$|[0-9]+,(?:[0-9]+|\$))p$/;
 
+/** Read one deliberately bracket-free BRE, without interpreting its regex semantics. */
+function sedRegexEnd(script: string, start: number): number | undefined {
+  for (let index = start; index < script.length; index += 1) {
+    const character = script[index] as string;
+    if (character === "/") {
+      return index === start ? undefined : index;
+    }
+    if (character === "\\") {
+      const escaped = script[index + 1];
+      if (escaped === undefined || !"\\/*.^$".includes(escaped)) {
+        return undefined;
+      }
+      index += 1;
+    } else if (
+      character === "[" ||
+      character.charCodeAt(0) < 0x20 ||
+      character.charCodeAt(0) > 0x7e
+    ) {
+      return undefined;
+    }
+  }
+  return undefined;
+}
+
+function isSedPrintScript(script: string): boolean {
+  if (SED_SCRIPT.test(script)) {
+    return true;
+  }
+  if (!script.startsWith("/")) {
+    return false;
+  }
+  const first = sedRegexEnd(script, 1);
+  if (first === undefined || script.slice(first, first + 3) !== "/,/") {
+    return false;
+  }
+  const second = sedRegexEnd(script, first + 3);
+  return second !== undefined && script.slice(second) === "/p";
+}
+
+const literalCdProfile = getoptProfile({
+  name: "cd",
+  kind: "shell_builtin",
+  grammar: { options: [flag("L"), flag("P")] },
+  operands: "at most one directory",
+  maxOperands: 1,
+});
+
+const cdProfile: KnownReadOnlyProfile = Object.freeze({
+  ...literalCdProfile,
+  summary:
+    literalCdProfile.summary +
+    " A home-relative `~/...` directory must be the final word, preceded only by individual `-L`/`-P` words and at most one final `--`.",
+  check(words: readonly BashWord[]): ProfileCheckResult {
+    const homeIndex = words.findIndex((word) => word.kind === "home_relative");
+    if (homeIndex < 0) {
+      return literalCdProfile.check(words);
+    }
+    if (homeIndex !== words.length - 1) {
+      return operandIssue(
+        words[homeIndex + 1],
+        "cd requires the home-relative directory to be its final word",
+      );
+    }
+    const optionNames = new Set<string>();
+    for (let index = 0; index < homeIndex; index += 1) {
+      const word = words[index] as BashWord;
+      if (word.kind !== "literal") {
+        return operandIssue(word, "cd accepts only one home-relative directory");
+      }
+      if (word.value === "-L" || word.value === "-P") {
+        optionNames.add(word.value);
+      } else if (word.value !== "--" || index !== homeIndex - 1) {
+        return operandIssue(
+          word,
+          "cd accepts only individual -L/-P options and one final -- before a home-relative directory",
+        );
+      }
+    }
+    return { ok: true, optionNames };
+  },
+});
+
+const sleepProfile = literalProfile({
+  name: "sleep",
+  kind: "executable",
+  summary:
+    "No options, including `--`. Exactly one canonical decimal integer seconds operand from `0` through `2147483647`; no signs, leading zeros, fractions, exponents or suffixes. This classification adds no timeout.",
+  environment: Object.freeze([]),
+  check(words: readonly BashLiteralWord[]): ProfileCheckResult {
+    const seconds = words[0];
+    if (
+      words.length !== 1 ||
+      seconds === undefined ||
+      /^(?:0|[1-9][0-9]{0,9})/.exec(seconds.value)?.[0] !== seconds.value ||
+      Number(seconds.value) > 2147483647
+    ) {
+      return operandIssue(
+        words.length > 1 ? words[1] : seconds,
+        "sleep requires one canonical decimal integer seconds operand from 0 through 2147483647",
+      );
+    }
+    return { ok: true, optionNames: NONE };
+  },
+});
+
 const PROFILES: readonly KnownReadOnlyProfile[] = [
   getoptProfile({
     name: "basename",
@@ -319,13 +445,7 @@ const PROFILES: readonly KnownReadOnlyProfile[] = [
     },
     operands: "files to read",
   }),
-  getoptProfile({
-    name: "cd",
-    kind: "shell_builtin",
-    grammar: { options: [flag("L"), flag("P")] },
-    operands: "at most one directory",
-    maxOperands: 1,
-  }),
+  cdProfile,
   getoptProfile({
     name: "cut",
     grammar: {
@@ -645,18 +765,22 @@ const PROFILES: readonly KnownReadOnlyProfile[] = [
     name: "sed",
     grammar: { options: [flag("n", "quiet"), flag(undefined, "silent")] },
     operands:
-      "one script of the form `Np`, `N,Mp`, `$p` or `N,$p` (decimal `N`, `M`), then at most one file",
+      "one script of the form `Np`, `N,Mp`, `$p`, `N,$p` (decimal `N`, `M`) or `/START/,/END/p`, then at most one file",
     requireOption: ["-n", "--quiet", "--silent"],
-    note: "One of `-n`, `--quiet` or `--silent` is required.",
+    note: "One of `-n`, `--quiet` or `--silent` is required. Regex bodies must be nonempty printable ASCII, with no bracket expressions and only the escapes `\\\\`, `\\/`, `\\*`, `\\.`, `\\^`, `\\$`; no extra commands or modifiers.",
     maxOperands: 2,
     check(operands) {
       const script = operands[0];
-      if (script === undefined || !SED_SCRIPT.test(script.value)) {
-        return operandIssue(script, "sed accepts only a line-range print script such as 1,20p");
+      if (script === undefined || !isSedPrintScript(script.value)) {
+        return operandIssue(
+          script,
+          "sed accepts only a numeric or restricted regex-range print script",
+        );
       }
       return undefined;
     },
   }),
+  sleepProfile,
   getoptProfile({
     name: "sort",
     grammar: {

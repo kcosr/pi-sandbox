@@ -1,18 +1,31 @@
 import type { BashAnalysisIssue, BashAnalysisIssueCode } from "./contracts.js";
 
-/** Strict recognizer for the literal Bash subset in specs/bash-command-analysis.md Section 7. */
+/** Strict recognizer for the curated Bash subset in specs/bash-command-analysis.md Section 7. */
 
 export const MAX_COMMAND_BYTES = 16 * 1024;
 
-export interface BashWord {
-  /** Value after quote removal. */
-  readonly value: string;
+interface BashWordSource {
   /** Exact source text, including quotes. */
   readonly raw: string;
   readonly offset: number;
   readonly end: number;
   readonly quoted: boolean;
 }
+
+export interface BashLiteralWord extends BashWordSource {
+  readonly kind: "literal";
+  /** Exact literal value after quote removal; never expanded or rescanned. */
+  readonly value: string;
+}
+
+export interface BashHomeRelativeWord extends BashWordSource {
+  readonly kind: "home_relative";
+  /** Literal text after the initial ~/; HOME is deliberately not resolved. */
+  readonly suffix: string;
+  readonly quoted: false;
+}
+
+export type BashWord = BashLiteralWord | BashHomeRelativeWord;
 
 export type BashStandardStream = 1 | 2;
 
@@ -21,7 +34,7 @@ export type BashRedirection =
       readonly kind: "discard";
       readonly fds: readonly BashStandardStream[];
       readonly append: boolean;
-      readonly target: BashWord;
+      readonly target: BashLiteralWord;
       readonly offset: number;
     }
   | {
@@ -33,7 +46,7 @@ export type BashRedirection =
   | {
       readonly kind: "input";
       readonly fd: 0;
-      readonly target: BashWord;
+      readonly target: BashLiteralWord;
       readonly offset: number;
     };
 
@@ -63,7 +76,7 @@ export interface BashScript {
 
 /** Optional semantic checks invoked in source order; an issue stops recognition. */
 export interface BashParseHooks {
-  commandName?(word: BashWord): BashAnalysisIssue | undefined;
+  commandName?(word: BashLiteralWord): BashAnalysisIssue | undefined;
   command?(command: BashSimpleCommand): BashAnalysisIssue | undefined;
 }
 
@@ -280,6 +293,9 @@ class Lexer {
 
   private word(offset: number): Token {
     const input = this.input;
+    if (input[offset] === "~" && input[offset + 1] === "/") {
+      return this.homeRelativeWord(offset);
+    }
     let value = "";
     let quoted = false;
     for (;;) {
@@ -302,16 +318,34 @@ class Lexer {
           const inner = input[index];
           if (inner === undefined) fail("unsupported_syntax", "unterminated double quote", start);
           if (inner === '"') break;
-          if (inner === "\\" || inner === "$" || inner === "`" || inner === "!") {
+          if (inner === "\\") {
+            const next = input[index + 1];
+            if (next === undefined) fail("unsupported_syntax", "unterminated double quote", start);
+            if (next === "\n") {
+              fail("unsupported_character", "line continuations are not supported", index);
+            }
+            if (next === "!") {
+              fail(
+                "unsupported_character",
+                'character "!" is not supported inside double quotes',
+                index + 1,
+              );
+            }
+            value +=
+              next === '"' || next === "\\" || next === "$" || next === "`" ? next : `\\${next}`;
+            index += 2;
+            continue;
+          }
+          if (inner === "$" || inner === "`" || inner === "!") {
             fail(
               "unsupported_character",
               `character ${JSON.stringify(inner)} is not supported inside double quotes`,
               index,
             );
           }
+          value += inner;
           index += 1;
         }
-        value += input.slice(start + 1, index);
         quoted = true;
         this.position = index + 1;
         continue;
@@ -333,8 +367,34 @@ class Lexer {
     const ioNumber = !quoted && /^[0-9]+$/.test(raw) && (next === "<" || next === ">");
     return {
       type: "word",
-      word: { value, raw, offset, end: this.position, quoted },
+      word: { kind: "literal", value, raw, offset, end: this.position, quoted },
       ioNumber,
+    };
+  }
+
+  private homeRelativeWord(offset: number): Token {
+    this.position = offset + 2;
+    while (!isWordBoundary(this.input[this.position])) {
+      if (!isUnquotedCharacter(this.input.charCodeAt(this.position))) {
+        fail(
+          "unsupported_character",
+          "home-relative paths require a wholly unquoted literal suffix",
+          this.position,
+        );
+      }
+      this.position += 1;
+    }
+    return {
+      type: "word",
+      word: {
+        kind: "home_relative",
+        suffix: this.input.slice(offset + 2, this.position),
+        raw: this.input.slice(offset, this.position),
+        offset,
+        end: this.position,
+        quoted: false,
+      },
+      ioNumber: false,
     };
   }
 }
@@ -456,6 +516,9 @@ class Parser {
   }
 
   private checkCommandName(word: BashWord): void {
+    if (word.kind !== "literal") {
+      fail("unknown_command", "home-relative command names are not supported", word.offset);
+    }
     if (!word.quoted && RESERVED_WORDS.has(word.raw)) {
       fail(
         "unsupported_syntax",
@@ -499,7 +562,7 @@ class Parser {
             offset,
           );
         }
-        const target = this.target();
+        const target = this.target(offset);
         if (NETWORK_PATH.test(target.value)) {
           fail("unsupported_redirection", "network redirections are not supported", offset);
         }
@@ -516,7 +579,7 @@ class Parser {
             offset,
           );
         }
-        const target = this.target();
+        const target = this.target(offset);
         if (target.value !== "/dev/null") {
           fail(
             "unsupported_redirection",
@@ -557,13 +620,20 @@ class Parser {
     }
   }
 
-  private target(): BashWord {
+  private target(offset: number): BashLiteralWord {
     const token = this.lexer.next();
     if (token.type !== "word" || token.ioNumber) {
       fail(
         "unsupported_syntax",
         `expected a redirection target before ${describeToken(token)}`,
         tokenOffset(token),
+      );
+    }
+    if (token.word.kind !== "literal") {
+      fail(
+        "unsupported_redirection",
+        "home-relative redirection targets are not supported",
+        offset,
       );
     }
     return token.word;

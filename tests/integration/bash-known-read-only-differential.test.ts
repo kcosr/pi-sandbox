@@ -28,6 +28,7 @@ import {
   parseBashCommand,
   type BashPipeline,
   type BashScript,
+  type BashWord,
 } from "../../src/permissions/bash/syntax.js";
 
 /**
@@ -137,7 +138,7 @@ function random(seed: number): () => number {
 const NAMES = [
   "ls", "cat", "grep", "head", "tail", "sort", "uniq", "wc", "cut", "tr", "nl", "stat", "du",
   "diff", "find", "sed", "rg", "basename", "dirname", "readlink", "realpath", "echo", "true",
-  "false", "pwd", "cd", "rm", "git", "X=1", "./ls", "'ls'", "l's'",
+  "false", "pwd", "cd", "sleep", "rm", "git", "X=1", "./ls", "'ls'", "l's'",
 ];
 // prettier-ignore
 const ARGUMENTS = [
@@ -146,6 +147,7 @@ const ARGUMENTS = [
   '""', "2", "1", "0", "12", "a2", "'2'", "x=y", "1p", "'$p'", "1,2p", "+5", "--pre=sh", "--color",
   "--color=never", "-name", "'*.txt'", "-type", "f", "-print", "'('", "')'", "'!'", "-delete",
   "'é'", '"ü"', "'a\nb'", "'\t'", "%s", "@:,+=", "-P", "-L",
+  "~/sub", "~/missing", '"a\\|b"', '"a\\$b"', '"a\\\\b"', "'/a/,/b/p'",
 ];
 // prettier-ignore
 const REDIRECTIONS = [
@@ -275,7 +277,30 @@ const ACCEPTED_CORPUS = [
   "true | cat",
   "cat </dev/null",
   "<'in put' cat 2>&1 | wc",
+  String.raw`grep "a\|b" in 2>&1 | head`,
+  String.raw`grep "\bword\b\n" in`,
+  String.raw`echo "a\"b" "c\\d" "\$HOME" | cat`,
+  'echo "\\`id\\`" | cat',
+  String.raw`cat "2">/dev/null`,
+  String.raw`cat <"\/dev/tcp/example.invalid/80" || ls`,
+  String.raw`sed -n "/start/,/};/p" in | cat`,
+  String.raw`sed -n "/\\*start/,/end\$/p" in`,
+  "sleep 0; sleep '1' | cat",
+  "cd ~/sub && cat <nested",
+  "cd -L -P -L ~/sub && cat <nested",
+  "cd -P -- ~/sub && cat <nested",
+  "cd ~/missing || cat <in",
+  "cd ~/sub | cat <in",
+  "cd sub; cd ~/ && cat <in",
+  "cd ~/sub >/dev/null && cat <nested",
+  // Odd source backslash parity makes a literal dollar, never a substitution.
+  'echo "' + "\\".repeat(3) + '$(id)" | cat',
 ];
+
+function literalValue(word: BashWord | undefined): string {
+  if (word?.kind !== "literal") throw new Error("expected a literal word");
+  return word.value;
+}
 
 function predict(script: BashScript, root: string, emptyCdStatus: number): Prediction {
   const stages: Stage[] = [];
@@ -313,8 +338,10 @@ function predict(script: BashScript, root: string, emptyCdStatus: number): Predi
         }
       }
       const [nameWord, ...argumentWords] = command.words;
-      const name = nameWord?.value ?? "";
-      const argv = argumentWords.map((word) => word.value);
+      const name = literalValue(nameWord);
+      const argv = argumentWords.map((word) =>
+        word.kind === "literal" ? word.value : `${join(root, "work")}/${word.suffix}`,
+      );
       const [stdin, stdout, stderr] = fds;
       let stageStatus = 0;
       if (failed) {
@@ -594,7 +621,7 @@ describe.skipIf(!available)("known read-only differential against real Bash", ()
     expect(analysis, command).toMatchObject({ commandClass: "known_read_only" });
     const names = parsed.script.statements.flatMap((statement) =>
       statement.pipelines.flatMap((pipeline) =>
-        pipeline.commands.map((simple) => simple.words[0]?.value),
+        pipeline.commands.map((simple) => literalValue(simple.words[0])),
       ),
     );
     if (analysis.commandClass === "known_read_only") {
@@ -639,12 +666,31 @@ describe.skipIf(!available)("known read-only differential against real Bash", ()
   }, 120_000);
 
   it.each([
+    'echo "' + "\\".repeat(2) + '$(id)"',
+    String.raw`echo "\!"`,
+    String.raw`cat >"\/dev\/null"`,
+    String.raw`cat <"/dev/tcp/example.invalid/80"`,
+    'cat 2>&"1"',
+    "echo ~/sub",
+    "true ~/sub",
+    "false ~/sub",
+    "cat <~/sub/in",
+    "cd ~/sub; cat >out >/dev/null",
+    "sed -n '/start/,/end/p;w out' in",
+    "sleep -- 1",
+  ])("keeps unsafe or unsupported syntax unclassified: %s", async (command) => {
+    expect(await analyzer.analyze(command)).toMatchObject({ commandClass: "unclassified" });
+  });
+
+  it.each([
     ["ls >/dev/null | cat", "ls | cat >/dev/null"],
     ["ls 2>&1 >/dev/null | cat", "ls >/dev/null 2>&1 | cat"],
     ["ls >/dev/null | true", "ls | true"],
     ["ls; cat", "cat; ls"],
     ["cat <in | cat", "cat <'in put' | cat"],
     ["ls >&2", "ls"],
+    ["cd ~/sub && cat <in", "cat <in"],
+    [String.raw`grep "a\|b" in`, "grep ab in"],
   ])("detects a prediction for %j that does not match %j", (predicted, executed) => {
     expect(matches(prediction(predicted), run(executed))).toBe(false);
   });

@@ -444,6 +444,13 @@ abbreviations (`sort --compress=sh`), `uniq a b` and `uniq a -c`, `sed …e`,
 pipelines. Recognizer tests additionally reject control characters inside
 quotes, invalid Unicode and repeated-slash `/dev/tcp` spellings.
 
+Version 2 additionally tests double-quote escape parity and retained backslashes,
+source offsets and quoted descriptor digits, symbolic `cd` prefix grammar, the
+mandatory literal-argument gate for every other profile, complete sed program
+consumption, and exact integer sleep bounds. Huge sleep values are analyzed
+only. File writes, active substitutions, option smuggling, symbolic redirect
+targets and environment/function overrides remain negative controls.
+
 The differential integration test
 `tests/integration/bash-known-read-only-differential.test.ts` runs every accepted
 corpus entry under the real `/bin/bash` with POSIX `sh` stub executables on an
@@ -458,6 +465,17 @@ numbers, so it runs unchanged on Linux and macOS. It also checks every accepted
 input of a seeded generated corpus, and that deliberately wrong predictions
 fail. It skips only when `/bin/bash`, `/usr/bin/mktemp`, `/bin/cat` or `/bin/mv`
 is missing.
+
+The curated and generated differential corpora include the version 2 forms,
+escaped redirect targets, `cd` success/failure branches and pipeline directory
+isolation. Deliberately wrong argv and directory predictions must fail.
+`tests/integration/bash-read-only-native.test.ts` also runs the actual `cd`
+builtin with HOME containing spaces, glob characters, shell-looking text,
+leading dashes, empty and unset values. Expected directory and relative-file
+results are independent of the production analyzer; marker files must not be
+created by HOME contents. Actual sed runs compare synthetic range output with
+fixed expected text for every admitted escape shape, and actual sleep runs use
+only zero and one second.
 
 `src/permissions/known-read-only-docs.test.ts` fails when the generated command
 table in [configuration](configuration.md#known-read-only-command-registry)
@@ -474,6 +492,9 @@ managed runtime does, through the managed extension: with main `deny` and class
 not-a-known-read-only feedback; with main `ask` and class `ask`/`offer`, a
 class-scoped session grant covers later known read-only commands but not an
 unclassified command.
+Both policies exercise escaped grep patterns, sed regex ranges, sleep and
+`cd ~/`; the latter must use Bubblewrap's private HOME. Native Seatbelt tests
+exercise its actual scratch HOME without resolving it during classification.
 
 Managed integration tests prove:
 
@@ -500,7 +521,9 @@ rules, and normalization for every main and class combination. Collector tests
 accept and forward the paired fields on Bash decision events and reject
 unpaired, misplaced, non-Bash, zero or out-of-range values.
 
-Native macOS qualification is a Mac-owner item. A first native run on macOS
+Native macOS qualification is a Mac-owner item. Version 2 adds portable tests,
+but its new forms require a fresh native run; the historical evidence below
+qualifies version 1 only. A first native run on macOS
 26.7.1 with `/bin/bash` 3.2.57 passed the analyzer unit tests and probed every
 registry option spelling (946 generic and 164 `find` cases) against the
 utilities resolved by both the packaged Seatbelt system `PATH` and the selected
