@@ -1347,11 +1347,15 @@ stops before a NUL or an unpaired Unicode surrogate with the truncation flag set
 content or credentials; length limits do not redact them. Session events include
 the captured launch CWD. Records use JSON escaping to remain single-line.
 
-When the effective Bash policy has a `known_read_only` class policy, Bash
-`tool_execution_intent` and `tool_denied` records also carry `command_class`
-(`known_read_only` or `unclassified`) and `known_read_only_version`, the
-positive registry version used for the decision. Both fields appear together,
-only on those two Bash events, and are absent without a class policy.
+When the effective Bash policy has a `known_read_only` class policy or any
+`command_sets`, Bash `tool_execution_intent` and `tool_denied` records also carry
+`command_class` (`known_read_only`, `configured_command` or `unclassified`) and
+`known_read_only_version`, the positive built-in registry version used for the
+decision. Both fields appear together, only on those two Bash events, and are
+absent when neither a class policy nor command sets are configured.
+`configured_command` additionally carries a nonempty, bounded `command_set_ids`
+list identifying the matching administrator rules; other classes omit that list.
+The registry version does not certify custom utilities as read-only.
 `approval_source` keeps its existing values; a class-scoped grant reports
 `session_grant`.
 
