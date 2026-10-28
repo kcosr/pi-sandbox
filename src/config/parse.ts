@@ -1,4 +1,5 @@
 import { parse as parseToml } from "@iarna/toml";
+import { snapshotCommandPathPrepend } from "../../packages/sandbox-extension/src/runtime/command-path.js";
 
 import {
   AUDIT_FACILITIES,
@@ -464,7 +465,12 @@ function parseExecution(value: unknown, issues: string[]): ExecutionConfig | und
     return undefined;
   }
 
-  inspectAllowedKeys(value, ["backend", "max_command_timeout_seconds"], "config.execution", issues);
+  inspectAllowedKeys(
+    value,
+    ["backend", "max_command_timeout_seconds", "command_path_prepend"],
+    "config.execution",
+    issues,
+  );
   const backend = enumValue(
     own(value, "backend"),
     EXECUTION_BACKENDS,
@@ -485,11 +491,22 @@ function parseExecution(value: unknown, issues: string[]): ExecutionConfig | und
       );
     } else maximumTimeoutMs = Math.ceil(seconds * 1_000);
   }
+  let commandPathPrepend: readonly string[] | undefined;
+  if (Object.hasOwn(value, "command_path_prepend")) {
+    try {
+      commandPathPrepend = snapshotCommandPathPrepend(value.command_path_prepend);
+    } catch (error) {
+      issues.push(
+        `config.execution.command_path_prepend: ${error instanceof Error ? error.message : "invalid command paths"}`,
+      );
+    }
+  }
   return backend === undefined
     ? undefined
     : Object.freeze({
         backend,
         ...(maximumTimeoutMs === undefined ? {} : { maximumTimeoutMs }),
+        ...(commandPathPrepend === undefined ? {} : { commandPathPrepend }),
       });
 }
 

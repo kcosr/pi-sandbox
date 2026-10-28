@@ -671,6 +671,51 @@ and after broker execution and network overrides are applied.
 Managed host tools are unaffected by this table: they deliberately use the
 invoking user's host network namespace and ordinary host controls.
 
+## Command search path
+
+The main administrator configuration may add command search directories:
+
+```toml
+[execution]
+backend = "bubblewrap"
+command_path_prepend = ["/usr/libexec/pi-sandbox"]
+```
+
+The same setting works with Seatbelt and direct execution. PATH order is the
+build-selected tool bundle's `bin` directory, if present, then configured directories
+in authored order, then the existing backend PATH (the inherited PATH in direct
+mode). Omission or an empty list preserves existing behavior. This changes command
+lookup inside the executor, including Bash and user `!` shell; it does not change
+Pi, host Git, or MCP server environments. Typed file tools retain their fixed
+executable selection. `environment.sandbox.PATH` remains reserved.
+
+Use at most 64 distinct normalized absolute directory paths, each at most 4096
+UTF-8 bytes, with at most 16 KiB total including separators. Colons, control
+characters, root `/`, empty components, `.`/`..`, trailing slashes, and macro
+syntax are rejected. Installation validates syntax only. At startup, after
+effective policy resolution, each entry must resolve to an existing searchable
+directory; canonical duplicates fail. The canonical list is shared by command
+execution and approval analysis. If a canonical directory becomes a symlink to
+another path before executor startup, startup fails rather than rebinding it.
+This does not pin directory inodes or executable contents.
+
+Directories inside writable CWD are rejected. Bubblewrap rejects paths beneath
+private `/tmp`, `/run`, `/proc`, `/sys` and `/dev`, and any overlap with hidden
+paths. Seatbelt rejects overlap with denied paths. These checks apply to authored
+and resolved locations. No new host mount or filesystem grant is created. Missing,
+unresolvable or unsuitable directories fail startup instead of being skipped.
+User/group rules cannot set this main-only option; restart after changing it.
+The existing per-command classifier still rejects executables inside launch CWD
+even when that directory is read-only; permitting a search directory at startup
+does not itself grant automatic approval.
+
+**Trust all programs in a prepended directory.** For example, an executable named
+`grep` there can shadow system `grep` and inherit the built-in argument classifier.
+The application checks placement, not program behavior, ownership or signatures.
+Secure these directories through your installation process. To approve only one
+literal executable path without adding its directory to PATH, use an absolute
+`command` alternative in a [command set](#administrator-bash-command-sets).
+
 ## Command scheduling, timeouts and cleanup
 
 Pi controls tool scheduling, including explicit sequential batches. The executors
@@ -1251,7 +1296,7 @@ mode = "allow"
 session_grant = "never"
 
 [tools.bash.command_sets.utility_read]
-command = "utility"
+command = ["utility", "/usr/libexec/pi-sandbox/utility"]
 mode = "allow"
 session_grant = "never"
 required_flags = ["--read"]
@@ -1260,7 +1305,8 @@ options = { "--format" = ["text", "json"] }
 operands = { min = 1, max = 1 }
 ```
 
-The example allows `utility --read --format=json input` without a prompt.
+The example allows `utility --read --format=json input` and
+`/usr/libexec/pi-sandbox/utility --read input` without a prompt.
 `utility --write input` follows the ordinary Bash policy. `utility --read input |
 grep result` is automatically allowed only when the effective `known_read_only`
 policy also allows the `grep` stage. An unknown stage, unsupported shell syntax,
@@ -1274,10 +1320,22 @@ Each table requires `command`, `mode = "allow"`, `session_grant = "never"`, and
 empty collection. No other policies, regexes, globs, or arbitrary match scripts
 are accepted. IDs start with an ASCII letter and contain up to 64 ASCII letters,
 digits, underscores or hyphens; prototype-property names are rejected.
-`command` is an external executable basename, not an absolute path, shell builtin,
-reserved word or wrapper prefix. Matching retains the existing execution-context
-checks, including executable resolution outside the launch directory and unsafe
-shell/loader/environment checks. Relative and absolute command paths do not match.
+`command` accepts one string or a nonempty list of distinct alternatives. Each is
+an external executable basename or a normalized absolute file path. All
+alternatives share the same argument rule. Bare shell builtins, reserved words,
+relative paths and wrapper prefixes are rejected. Absolute paths must have no
+empty, `.` or `..` components; a literal path with spaces is supported when quoted
+in Bash. Matching uses the exact decoded spelling: listing a basename does not
+admit an absolute path, and listing a symlink does not admit its canonical target.
+
+Basenames retain existing PATH resolution. Explicit paths bypass PATH search but
+must resolve to an executable regular file outside the launch directory, including
+their canonical parent and target. Bubblewrap private/hidden paths and Seatbelt
+denied paths cannot qualify. These failures fall back to ordinary Bash policy;
+they do not prohibit the command from running after ordinary approval. Absolute
+paths never inherit built-in read-only classification, even when their basename
+is `grep` or `true`; applicable known-program environment checks still apply.
+All alternatives retain shared unsafe shell/loader/environment checks.
 
 Argument matching is deliberately narrow:
 
@@ -1294,7 +1352,7 @@ Argument matching is deliberately narrow:
   unsupported syntax remain outside automatic approval. Pipes and supported
   command lists must qualify at every stage.
 
-There are at most 64 sets, 64 combined flag/option names per set, 64 values per
+There are at most 64 sets, 64 command alternatives per set, 64 combined flag/option names per set, 64 values per
 option, 256 UTF-8 bytes per command/flag/value, and 0–1024 operands. The serialized
 authored command-set table is limited to 128 KiB. Configured approval evidence
 is limited to 256 stages; larger calls fall back to the main Bash policy.

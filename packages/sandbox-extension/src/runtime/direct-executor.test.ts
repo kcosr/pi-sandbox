@@ -1,5 +1,5 @@
 import { selectedTestToolBundle } from "../../../../tests/support/tool-bundle.js";
-import { mkdtemp, realpath, rm } from "node:fs/promises";
+import { mkdir, mkdtemp, realpath, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -109,6 +109,57 @@ describe("direct executor", () => {
     } finally {
       await executor.close();
     }
+  });
+
+  it("preserves unset and empty direct PATH when no new prefixes are selected", () => {
+    expect(directCommandEnvironment({})).not.toHaveProperty("PATH");
+    expect(directCommandEnvironment({}, {}, undefined, [])).not.toHaveProperty("PATH");
+    expect(directCommandEnvironment({ PATH: "" }, {}, undefined, []).PATH).toBe("");
+    expect(directCommandEnvironment({}, {}, undefined, ["/opt/libexec"]).PATH).toBe(
+      "/opt/libexec:/usr/bin:/bin",
+    );
+    expect(
+      directCommandEnvironment({ PATH: "/usr/bin" }, {}, { root: "/opt/tools", commands: {} }, [
+        "/opt/libexec",
+      ]).PATH,
+    ).toBe("/opt/tools/bin:/opt/libexec:/usr/bin");
+  });
+
+  it("runs administrator helpers by basename with a frozen PATH snapshot", async () => {
+    const root = await temporaryCwd();
+    const cwd = join(root, "workspace");
+    const tools = join(root, "libexec");
+    await Promise.all([mkdir(cwd), mkdir(tools)]);
+    await writeFile(join(tools, "pi-path-fixture"), '#!/bin/sh\nprintf "helper:%s" "$1"\n', {
+      mode: 0o700,
+    });
+    const prefixes = [tools];
+    const pending = createDirectExecutor({
+      cwd,
+      ...selectedTools,
+      ambientEnvironment: { PATH: "/usr/bin:/bin" },
+      commandPathPrepend: prefixes,
+    });
+    prefixes[0] = cwd;
+    const executor = await pending;
+    try {
+      const result = await executor.execute({
+        argv: [executor.commands.bash, "-c", "pi-path-fixture selected"],
+      });
+      expect(result.exitCode).toBe(0);
+      expect(result.stdout.toString()).toBe("helper:selected");
+      expect(executor.commands).toEqual(
+        await resolveDirectToolCommands(process.platform, toolBundle),
+      );
+    } finally {
+      await executor.close();
+    }
+    const alias = join(root, "alias");
+    await symlink(tools, alias);
+    for (const directory of [alias, cwd])
+      await expect(
+        createDirectExecutor({ cwd, ...selectedTools, commandPathPrepend: [directory] }),
+      ).rejects.toMatchObject({ code: "sandbox_start_failed" });
   });
 
   it("rejects unsupported platforms without falling back", async () => {

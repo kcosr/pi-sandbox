@@ -1,6 +1,6 @@
 /** Administrator-approved invocation shapes, separate from the reviewed read-only registry. */
 export interface BashCommandSet {
-  readonly command: string;
+  readonly commands: readonly string[];
   readonly mode: "allow";
   readonly sessionGrant: "never";
   readonly requiredFlags: readonly string[];
@@ -12,6 +12,7 @@ export interface BashCommandSet {
 export type BashCommandSets = Readonly<Record<string, BashCommandSet>>;
 
 export const MAXIMUM_COMMAND_SETS = 64;
+export const MAXIMUM_COMMAND_SET_COMMANDS = 64;
 export const MAXIMUM_COMMAND_SET_OPTIONS = 64;
 export const MAXIMUM_COMMAND_SET_VALUES = 64;
 export const MAXIMUM_COMMAND_SET_STRING_BYTES = 256;
@@ -45,6 +46,23 @@ export function isCommandSetCommand(value: string): boolean {
   );
 }
 
+/** Exact authored spelling; filesystem canonicalization never creates command aliases. */
+export function isCommandSetAbsolutePath(value: string): boolean {
+  return (
+    value.startsWith("/") &&
+    value.length > 1 &&
+    isCommandSetValue(value) &&
+    value
+      .slice(1)
+      .split("/")
+      .every((component) => component.length > 0 && component !== "." && component !== "..")
+  );
+}
+
+export function isCommandSetAlternative(value: string): boolean {
+  return isCommandSetCommand(value) || isCommandSetAbsolutePath(value);
+}
+
 export function isCommandSetFlag(value: string): boolean {
   return (
     /^(?:-[A-Za-z0-9]|--[A-Za-z0-9][A-Za-z0-9_-]*)$/u.test(value) &&
@@ -67,7 +85,7 @@ export function freezeBashCommandSets(sets: BashCommandSets): BashCommandSets {
       Object.entries(sets).map(([id, rule]) => [
         id,
         Object.freeze({
-          command: rule.command,
+          commands: Object.freeze([...rule.commands]),
           mode: rule.mode,
           sessionGrant: rule.sessionGrant,
           requiredFlags: Object.freeze([...rule.requiredFlags]),

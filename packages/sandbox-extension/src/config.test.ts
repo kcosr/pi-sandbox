@@ -83,6 +83,27 @@ describe("standalone sandbox configuration", () => {
         parseSandboxConfig({ ...config, backend: { ...backend, processLifetime } }),
       ).toThrow("configuration keys");
   });
+  it("keeps managed command PATH configuration out of standalone JSON", () => {
+    for (const field of ["commandPathPrepend", "command_path_prepend"]) {
+      expect(() => parseSandboxConfig({ ...config, [field]: ["/opt/libexec"] })).toThrow();
+      for (const backend of [
+        config.backend,
+        { kind: "seatbelt", network: "none", cwdWritable: true, deniedPaths: [], environment: {} },
+        {
+          kind: "bubblewrap",
+          executable: "/usr/bin/bwrap",
+          runtime: "/usr/bin/node",
+          network: "none",
+          cwdWritable: true,
+          hiddenPaths: [],
+          environment: {},
+        },
+      ])
+        expect(() =>
+          parseSandboxConfig({ ...config, backend: { ...backend, [field]: ["/opt/libexec"] } }),
+        ).toThrow();
+    }
+  });
   it("rejects removed VM ownership and controller attachments", () => {
     expect(() => parseSandboxConfig({ ...config, backend: { kind: "smolvm" } })).toThrow(
       "Unsupported sandbox backend",

@@ -21,26 +21,47 @@ export interface BashAnalysisRuntime {
   /** Ambient snapshot passed to the direct executor. */
   readonly ambientEnvironment: NodeJS.ProcessEnv;
   readonly toolBundle?: ToolBundle;
+  /** Canonical startup snapshot also passed to the executor constructor. */
+  readonly commandPathPrepend?: readonly string[];
 }
 
 /** The context the selected executor uses for `[bash, "-c", command]`, from the executors' own helpers. */
 export function bashExecutionContext(runtime: BashAnalysisRuntime): BashExecutionContext {
   const backend = runtime.config.execution.backend;
+  if (
+    (runtime.config.execution.commandPathPrepend?.length ?? 0) > 0 &&
+    runtime.commandPathPrepend === undefined
+  )
+    throw new Error("Command PATH must be prepared before Bash analysis");
   const environment =
     backend === "bubblewrap"
-      ? bubblewrapCommandEnvironment(runtime.sandboxEnvironment, runtime.toolBundle)
+      ? bubblewrapCommandEnvironment(
+          runtime.sandboxEnvironment,
+          runtime.toolBundle,
+          runtime.commandPathPrepend,
+        )
       : backend === "seatbelt"
-        ? seatbeltCommandEnvironment(runtime.sandboxEnvironment, runtime.toolBundle)
+        ? seatbeltCommandEnvironment(
+            runtime.sandboxEnvironment,
+            runtime.toolBundle,
+            runtime.commandPathPrepend,
+          )
         : directCommandEnvironment(
             runtime.ambientEnvironment,
             runtime.sandboxEnvironment,
             runtime.toolBundle,
+            runtime.commandPathPrepend,
           );
   const commandSets = runtime.config.tools[COMMAND_CLASS_TOOL]?.commandSets;
   return Object.freeze({
     backend,
     cwd: runtime.cwd,
     environment,
+    ...(backend === "bubblewrap"
+      ? { hiddenPaths: Object.freeze([...runtime.config.filesystem.hiddenPaths]) }
+      : backend === "seatbelt"
+        ? { deniedPaths: Object.freeze([...runtime.config.filesystem.deniedPaths]) }
+        : {}),
     ...(commandSets ? { commandSets } : {}),
   });
 }

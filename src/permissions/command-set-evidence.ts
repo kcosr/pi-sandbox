@@ -1,6 +1,7 @@
 import {
   isCommandSetCommand,
   isCommandSetId,
+  isCommandSetAbsolutePath,
   MAXIMUM_COMMAND_SETS,
 } from "./bash/command-set-contracts.js";
 import type { BashStageCoverage } from "./bash/contracts.js";
@@ -18,6 +19,7 @@ export function validCommandStages(value: unknown): value is readonly BashStageC
         Object.keys(record).sort().join(",") === "command,commandSets,knownReadOnly" &&
         typeof record.command === "string" &&
         (isCommandSetCommand(record.command) ||
+          (record.knownReadOnly === false && isCommandSetAbsolutePath(record.command)) ||
           (record.knownReadOnly === true && /^[A-Za-z][A-Za-z0-9_]*$/.test(record.command))) &&
         typeof record.knownReadOnly === "boolean" &&
         Array.isArray(record.commandSets) &&

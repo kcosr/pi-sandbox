@@ -6,7 +6,7 @@ import type { BashStageCoverage } from "./bash/contracts.js";
 import type { BashCommandSet } from "./bash/command-set-contracts.js";
 
 const rule: BashCommandSet = {
-  command: "utility",
+  commands: ["utility"],
   mode: "allow",
   sessionGrant: "never",
   requiredFlags: ["--read"],
@@ -26,11 +26,14 @@ const policy = (extra: Partial<SubjectPolicy> = {}): SubjectPolicy => ({
   commandSets: { utility_read: rule },
   ...extra,
 });
-function request(stages: readonly BashStageCoverage[] = [custom]) {
+function request(
+  stages: readonly BashStageCoverage[] = [custom],
+  command = "utility --read input",
+) {
   return prepareApprovalRequest({
     subject: "bash",
     display: "Run utility",
-    arguments: { command: "utility --read input" },
+    arguments: { command },
     commandClass: "configured_command",
     commandStages: stages,
   });
@@ -104,11 +107,65 @@ describe("administrator command set approval", () => {
     ).toMatchObject({ allowed: true, source: "policy" });
   });
   it("requires current named rules with the same command identity", async () => {
-    for (const commandSets of [{}, { utility_read: { ...rule, command: "other" } }]) {
+    for (const commandSets of [{}, { utility_read: { ...rule, commands: ["other"] } }]) {
       expect(
         await new PolicyEngine({ bash: policy({ commandSets }) }).evaluate(request()),
       ).toMatchObject({ allowed: false, reason: "no_ui" });
     }
+  });
+  it("requires exact alternative membership without implicit basename or path aliases", async () => {
+    const absolute = "/usr/libexec/pi-sandbox/utility";
+    for (const commands of [["utility"], [absolute], ["utility", absolute]]) {
+      const engine = new PolicyEngine({
+        bash: policy({ commandSets: { utility_read: { ...rule, commands } } }),
+      });
+      for (const command of [
+        "utility",
+        absolute,
+        "/other/utility",
+        "/usr/libexec/pi-sandbox/utility-link",
+      ]) {
+        const result = await engine.evaluate(
+          request([{ ...custom, command }], `${command} --read input`),
+        );
+        expect(result).toMatchObject(
+          commands.includes(command)
+            ? { allowed: true, source: "policy" }
+            : { allowed: false, reason: "no_ui" },
+        );
+      }
+    }
+  });
+
+  it("binds each actual command spelling into the evidence fingerprint", () => {
+    const absolute = "/usr/libexec/pi-sandbox/utility";
+    expect(request([{ ...custom, command: absolute }]).fingerprint).not.toBe(request().fingerprint);
+  });
+
+  it("invalidates ordinary session grants when configured alternatives change", async () => {
+    let selected = policy();
+    const engine = new PolicyEngine({}, () => ({
+      policy: selected,
+      revision: "unchanged-provider-revision",
+    }));
+    const unmatched = prepareApprovalRequest({
+      subject: "bash",
+      display: "write",
+      arguments: { command: "utility --write file" },
+    });
+    expect(
+      await engine.evaluate(unmatched, {
+        ui: { prompt: () => Promise.resolve("allow_session" as const) },
+      }),
+    ).toMatchObject({ allowed: true });
+    expect(engine.hasSessionGrant("bash")).toBe(true);
+    selected = policy({
+      commandSets: {
+        utility_read: { ...rule, commands: ["utility", "/usr/libexec/pi-sandbox/utility"] },
+      },
+    });
+    expect(engine.hasSessionGrant("bash")).toBe(false);
+    expect(await engine.evaluate(unmatched)).toMatchObject({ allowed: false, reason: "no_ui" });
   });
   it("binds and freezes stage evidence, and rejects missing or misplaced evidence", () => {
     const stages = [{ ...custom, commandSets: ["utility_read"] }];
@@ -147,9 +204,14 @@ describe("administrator command set approval", () => {
     ).toThrow("evidence");
   });
   it("snapshots administrator rules before caller mutation", async () => {
-    const mutable = { ...rule, command: "utility" };
+    const mutable = { ...rule, commands: ["utility"] };
     const engine = new PolicyEngine({ bash: policy({ commandSets: { utility_read: mutable } }) });
-    mutable.command = "other";
+    mutable.commands[0] = "other";
+    mutable.commands.push("added");
     expect(await engine.evaluate(request())).toMatchObject({ allowed: true, source: "policy" });
+    expect(await engine.evaluate(request([{ ...custom, command: "added" }]))).toMatchObject({
+      allowed: false,
+      reason: "no_ui",
+    });
   });
 });

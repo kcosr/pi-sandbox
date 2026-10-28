@@ -30,6 +30,7 @@ import {
 } from "./contracts.js";
 import { resolveDirectToolCommands } from "./direct-executor.js";
 import { assertToolBundlePlacement, snapshotToolBundle } from "./tool-bundle.js";
+import { canonicalizeCommandPathPrepend, snapshotCommandPathPrepend } from "./command-path.js";
 import { buildSandboxSeccompFilter } from "./seccomp-boundary-filter.js";
 import {
   encodeWorkerFrame,
@@ -75,8 +76,12 @@ export async function createBubblewrapExecutor(
 ): Promise<SandboxExecutor> {
   let toolBundle: ToolBundle | undefined;
   let limits: ResolvedSandboxLimits;
+  let commandPathPrepend: readonly string[];
+  const cwdWritable = options.cwdWritable ?? true;
+  const hiddenPaths = Object.freeze([...(options.hiddenPaths ?? [])]);
   try {
     toolBundle = snapshotToolBundle(options.toolBundle);
+    commandPathPrepend = snapshotCommandPathPrepend(options.commandPathPrepend);
     limits = resolveSandboxLimits(options.limits);
     if (Object.hasOwn(options, "processLifetime"))
       throw new Error("sandbox_process_lifetime_removed");
@@ -121,11 +126,15 @@ export async function createBubblewrapExecutor(
   ];
   validateWorkerCommand(workerCommand);
   const environment = Object.freeze({ ...(options.environment ?? {}) });
-  const hiddenPaths = Object.freeze([...(options.hiddenPaths ?? [])]);
   const hiddenMasks: HiddenPathMask[] = [];
   const commands = await resolveDirectToolCommands("linux", toolBundle);
   try {
-    assertToolBundlePlacement(toolBundle, cwd, options.cwdWritable ?? true, hiddenPaths);
+    commandPathPrepend = await canonicalizeCommandPathPrepend(
+      commandPathPrepend,
+      { backend: "bubblewrap", cwd, cwdWritable, hiddenPaths },
+      true,
+    );
+    assertToolBundlePlacement(toolBundle, cwd, cwdWritable, hiddenPaths);
     const plan = planHiddenPaths(cwd, hiddenPaths);
     const effectivePaths = new Set([...plan.beforeCwd, ...plan.afterCwd]);
     for (const target of hiddenPaths) {
@@ -139,9 +148,10 @@ export async function createBubblewrapExecutor(
       workerCommand,
       options.networkMode ?? "none",
       environment,
-      options.cwdWritable ?? true,
+      cwdWritable,
       hiddenMasks,
       toolBundle,
+      commandPathPrepend,
     );
   } catch (cause) {
     throw new SandboxExecutionError("sandbox_start_failed", { cause });
@@ -160,10 +170,11 @@ export async function createBubblewrapExecutor(
     seccompFilter,
     options.networkMode ?? "none",
     environment,
-    options.cwdWritable ?? true,
+    cwdWritable,
     Object.freeze(hiddenMasks),
     commands,
     toolBundle,
+    commandPathPrepend,
   );
   try {
     await executor.start(workerCommand);
@@ -246,6 +257,7 @@ class PersistentBubblewrapExecutor implements SandboxExecutor {
     private readonly hiddenMasks: readonly HiddenPathMask[],
     public readonly commands: ToolCommandPaths,
     private readonly toolBundle: ToolBundle | undefined,
+    private readonly commandPathPrepend: readonly string[],
   ) {
     let finish!: () => void;
     this.#finished = new Promise<void>((resolve) => {
@@ -277,6 +289,7 @@ class PersistentBubblewrapExecutor implements SandboxExecutor {
           this.cwdWritable,
           this.hiddenMasks,
           this.toolBundle,
+          this.commandPathPrepend,
         ),
         {
           cwd: this.cwd,

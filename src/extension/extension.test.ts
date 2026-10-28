@@ -1814,7 +1814,7 @@ describe("known read-only Bash commands", () => {
   it("authorizes custom shapes and complete mixed pipelines, and audits their separate provenance", async () => {
     const commandSets = {
       "Utility-Read": {
-        command: "utility",
+        commands: ["utility", "/usr/libexec/pi-sandbox/utility"],
         mode: "allow" as const,
         sessionGrant: "never" as const,
         requiredFlags: ["--read"],
@@ -1857,6 +1857,7 @@ describe("known read-only Bash commands", () => {
     const { ctx, prompts } = promptingContext(() => "Deny");
     const accepted = [
       "utility --read --format=json file",
+      "/usr/libexec/pi-sandbox/utility --read --format=json file",
       "utility --read file | grep result",
       "sleep 0; utility --read file",
     ];

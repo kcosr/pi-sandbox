@@ -438,7 +438,7 @@ function effectivePolicy(
           stage.commandSets.some(
             (id) =>
               Object.hasOwn(policy.commandSets ?? {}, id) &&
-              policy.commandSets![id]!.command === stage.command &&
+              policy.commandSets![id]!.commands.includes(stage.command) &&
               policy.commandSets![id]!.mode === "allow",
           ) ||
           (stage.knownReadOnly && builtinAllowed),

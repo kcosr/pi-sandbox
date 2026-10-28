@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import {
+  isCommandSetAbsolutePath,
   isCommandSetCommand,
   MAXIMUM_COMMAND_SETS_BYTES,
 } from "../permissions/bash/command-set-contracts.js";
@@ -21,11 +22,88 @@ function rule(overrides: Record<string, unknown> = {}) {
 }
 
 describe("administrator command-set grammar", () => {
+  it("normalizes strings and explicit alternatives into one immutable command list", () => {
+    for (const command of [
+      "utility",
+      "/usr/libexec/pi-sandbox/utility",
+      "/opt/tool suite/utility",
+      "/bin/printf",
+    ]) {
+      const scalar = parseBashCommandSets({ inspect: rule({ command }) }, PATH);
+      const list = parseBashCommandSets({ inspect: rule({ command: [command] }) }, PATH);
+      expect(scalar).toEqual(list);
+      expect(scalar.inspect!.commands).toEqual([command]);
+      expect(scalar.inspect).not.toHaveProperty("command");
+      expect(Object.isFrozen(scalar.inspect!.commands)).toBe(true);
+    }
+    const command = ["utility", "/usr/libexec/pi-sandbox/utility"];
+    const parsed = parseBashCommandSets({ inspect: rule({ command }) }, PATH);
+    command[0] = "other";
+    command.push("third");
+    expect(parsed.inspect!.commands).toEqual(["utility", "/usr/libexec/pi-sandbox/utility"]);
+    expect(isCommandSetCommand("/usr/bin/utility")).toBe(false);
+    expect(isCommandSetAbsolutePath("utility")).toBe(false);
+  });
+
+  it.each(
+    [
+      [],
+      ["utility", "utility"],
+      ["/usr/bin/utility", "/usr/bin/utility"],
+      ["utility", false],
+      ["utility", ["other"]],
+      [""],
+      ["utility", "./utility"],
+      ["utility", "/"],
+      ["utility", "//usr/bin/utility"],
+      ["utility", "/usr//bin/utility"],
+      ["utility", "/usr/bin/utility/"],
+      ["utility", "/usr/./bin/utility"],
+      ["utility", "/usr/bin/../utility"],
+      ["utility", "/usr/bin/\u0000utility"],
+      ["utility", "/usr/bin/\u202eutility"],
+      ["utility", "/usr/bin/\u2028utility"],
+      ["utility", "/usr/bin/\ud800utility"],
+      ["utility", "printf"],
+      null,
+      1,
+      {},
+    ].map((command) => ({ command })),
+  )("rejects invalid command alternatives %#", ({ command }) => {
+    expect(() => parseBashCommandSets({ inspect: rule({ command }) }, PATH)).toThrow();
+  });
+
+  it("enforces per-entry, list and aggregate command bounds", () => {
+    const commands = Array.from({ length: 64 }, (_, index) => `utility${index}`);
+    expect(
+      parseBashCommandSets({ inspect: rule({ command: commands }) }, PATH).inspect!.commands,
+    ).toEqual(commands);
+    expect(() =>
+      parseBashCommandSets({ inspect: rule({ command: [...commands, "overflow"] }) }, PATH),
+    ).toThrow("at most 64");
+    for (const command of ["a".repeat(256), `/${"a".repeat(255)}`, `/a${"é".repeat(127)}`]) {
+      expect(Buffer.byteLength(command)).toBe(256);
+      expect(parseBashCommandSets({ inspect: rule({ command }) }, PATH).inspect!.commands).toEqual([
+        command,
+      ]);
+      expect(() =>
+        parseBashCommandSets({ inspect: rule({ command: `${command}x` }) }, PATH),
+      ).toThrow();
+    }
+    const manyAliases = Object.fromEntries(
+      Array.from({ length: 64 }, (_, index) => [
+        `rule${index}`,
+        rule({ command: commands.map((name) => `${name}${"x".repeat(240)}`) }),
+      ]),
+    );
+    expect(() => parseBashCommandSets(manyAliases, PATH)).toThrow("exceeds");
+  });
+
   it("deeply snapshots the accepted positive grammar", () => {
     const source = { read_data: rule() };
     const result = parseBashCommandSets(source, PATH);
     expect(result.read_data).toEqual({
-      command: "utility",
+      commands: ["utility"],
       mode: "allow",
       sessionGrant: "never",
       requiredFlags: ["--read"],
@@ -42,6 +120,7 @@ describe("administrator command-set grammar", () => {
     for (const value of [
       result,
       result.read_data,
+      result.read_data!.commands,
       result.read_data!.requiredFlags,
       result.read_data!.optionalFlags,
       result.read_data!.options,
@@ -80,7 +159,6 @@ describe("administrator command-set grammar", () => {
     { mode: "ask" },
     { mode: "deny" },
     { session_grant: "offer" },
-    { command: "/usr/bin/utility" },
     { command: "../utility" },
     { command: "utility arg" },
     { command: "utility\n" },

@@ -48,6 +48,8 @@ export interface FilesystemConfig {
 export interface ExecutionConfig {
   readonly backend: ExecutionBackend;
   readonly maximumTimeoutMs?: number;
+  /** Main-policy command lookup prefixes; never selected by user/group overrides. */
+  readonly commandPathPrepend?: readonly string[];
 }
 
 export interface ToolPolicy extends SubjectPolicy {

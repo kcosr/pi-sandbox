@@ -375,6 +375,7 @@ describe.skipIf(!REAL_BWRAP_AVAILABLE)(
   () => {
     let baseDirectory: string;
     let workspace: string;
+    let commandDirectory: string;
     let executor: RecordingExecutor;
 
     beforeAll(async () => {
@@ -382,10 +383,21 @@ describe.skipIf(!REAL_BWRAP_AVAILABLE)(
       baseDirectory = await realpath(await mkdtemp(path.join(fixtureRoot, "pi-sandbox-kro-e2e-")));
       workspace = path.join(baseDirectory, "workspace");
       await mkdir(workspace, { mode: 0o700 });
+      commandDirectory = path.join(baseDirectory, "libexec");
+      await mkdir(commandDirectory, { mode: 0o700 });
+      await writeFile(
+        path.join(commandDirectory, "records"),
+        '#!/bin/bash\n[[ "$1" == "--read" ]] || exit 20\n/bin/cat -- "$2"\n',
+        { mode: 0o700 },
+      );
+      await writeFile(path.join(commandDirectory, "cat"), '#!/bin/bash\nprintf "shadow cat\\n"\n', {
+        mode: 0o700,
+      });
       await writeFile(path.join(workspace, "listed.txt"), "content\n");
       executor = new RecordingExecutor(
         await createBubblewrapExecutor({
           cwd: workspace,
+          commandPathPrepend: [commandDirectory],
           bubblewrapPath: BWRAP_PATH,
           workerCommand: testSandboxWorkerCommand(),
         }),
@@ -399,12 +411,18 @@ describe.skipIf(!REAL_BWRAP_AVAILABLE)(
     });
 
     async function start(bash: SandboxConfig["tools"][string]): Promise<FakePi> {
-      const config = { ...allowAllConfig(), tools: { ...allowAllConfig().tools, bash } };
+      const base = allowAllConfig();
+      const config = {
+        ...base,
+        execution: { ...base.execution, commandPathPrepend: [commandDirectory] },
+        tools: { ...base.tools, bash },
+      };
       const bashAnalyzer = createConfiguredBashAnalyzer({
         config,
         cwd: workspace,
         sandboxEnvironment: config.environment.sandbox,
         ambientEnvironment: process.env,
+        commandPathPrepend: [commandDirectory],
       });
       expect(bashAnalyzer).toBeDefined();
       const fakePi = new FakePi();
@@ -435,7 +453,7 @@ describe.skipIf(!REAL_BWRAP_AVAILABLE)(
 
     const commandSets = {
       checksum_file: {
-        command: "sha256sum",
+        commands: ["sha256sum"],
         mode: "allow",
         sessionGrant: "never",
         requiredFlags: ["--binary"],
@@ -444,6 +462,50 @@ describe.skipIf(!REAL_BWRAP_AVAILABLE)(
         operands: { min: 1, max: 1 },
       },
     } as const;
+
+    it("runs configured basename/absolute alternatives with the same PATH and fixed typed tools", async () => {
+      const executable = path.join(commandDirectory, "records");
+      const fakePi = await start({
+        audit: false,
+        mode: "deny",
+        sessionGrant: "never",
+        commandSets: {
+          read_records: {
+            ...commandSets.checksum_file,
+            commands: ["records", executable],
+            requiredFlags: ["--read"],
+          },
+        },
+        commandClasses: { known_read_only: { mode: "allow", sessionGrant: "never" } },
+      });
+      const before = bashCommands().length;
+      try {
+        const commands = [
+          "records --read listed.txt",
+          `'${executable}' --read listed.txt | head -1`,
+          "cat listed.txt",
+        ];
+        for (const command of commands) {
+          expect(resultText(await invoke(fakePi, "bash", { command }))).toBe(
+            command.startsWith("cat") ? "shadow cat\n" : "content\n",
+          );
+        }
+        for (const command of [
+          "records --write listed.txt",
+          `'${executable}' --read listed.txt | touch unapproved`,
+        ]) {
+          await expect(invoke(fakePi, "bash", { command })).rejects.toThrow("policy_denied");
+        }
+        expect(bashCommands().slice(before)).toEqual(commands);
+        expect(resultText(await invoke(fakePi, "read", { path: "listed.txt" }))).toContain(
+          "content",
+        );
+        expect(executor.commands.cat).not.toBe(path.join(commandDirectory, "cat"));
+        expect(existsSync(path.join(workspace, "unapproved"))).toBe(false);
+      } finally {
+        await fakePi.emit("session_shutdown", {}, nonInteractiveContext());
+      }
+    });
 
     it("runs configured shapes and requires class approval for the remaining pipeline", async () => {
       const fakePi = await start({

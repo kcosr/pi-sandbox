@@ -49,6 +49,16 @@ describe("configured command stage evidence", () => {
       validCommandStages([custom, { command: "cd", knownReadOnly: true, commandSets: [] }]),
     ).toBe(true);
   });
+  it("admits exact absolute command evidence only as a configured stage", () => {
+    const absolute = { ...custom, command: "/usr/libexec/pi-sandbox/utility" };
+    expect(validCommandStages([absolute])).toBe(true);
+    expect(validCommandStages([{ ...absolute, knownReadOnly: true }])).toBe(false);
+    expect(validCommandStages([{ ...absolute, commandSets: [] }])).toBe(false);
+    expect(validCommandStages([{ ...absolute, command: "/usr/bin/../utility" }])).toBe(false);
+    expect(validCommandStages([{ ...absolute, command: "/bin/printf" }])).toBe(true);
+    expect(validCommandStages([{ ...absolute, command: `/${"a".repeat(255)}` }])).toBe(true);
+    expect(validCommandStages([{ ...absolute, command: `/${"a".repeat(256)}` }])).toBe(false);
+  });
   it("deep-copies and freezes stage data", () => {
     const input = [{ command: "utility", knownReadOnly: false, commandSets: ["Utility-Read"] }];
     const frozen = freezeCommandStages(input);
