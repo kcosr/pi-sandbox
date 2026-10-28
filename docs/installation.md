@@ -467,8 +467,9 @@ pairs omit `audit`, which stays global. See the
 Rules older than version 8 must also remove
 `overrides.execution.process_lifetime` and an empty `[overrides.execution]`
 table if no backend override remains. The installer does not rewrite these
-rule files, including with `--replace-config`. Main configuration schema 13 and
-audit wire version 2/record version 3 are unchanged. Restart Pi processes after
+rule files, including with `--replace-config`. Main configuration schema 13 is unchanged. Upgrade the application and audit
+collector together: audit wire version 3/record schema 4 adds configured Bash
+command provenance and rejects older wire versions. Restart Pi processes after
 updating administrative rules; an already running process retains its policy.
 
 The macOS packaged default selects Seatbelt with networking

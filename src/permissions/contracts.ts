@@ -1,4 +1,5 @@
 import type { CommandClass } from "./bash/contracts.js";
+import type { BashCommandSets } from "./bash/command-set-contracts.js";
 
 export {
   TOOL_NAMES,
@@ -35,4 +36,6 @@ export interface SubjectPolicy {
   readonly sessionGrant: SessionGrantPolicy;
   /** Present only when non-empty; every entry is strictly more permissive than the main policy. */
   readonly commandClasses?: CommandClassPolicies;
+  /** Main-policy automatic-approval exceptions; never supplied by identity overrides. */
+  readonly commandSets?: BashCommandSets;
 }

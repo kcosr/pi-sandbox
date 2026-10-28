@@ -9,6 +9,8 @@ import type {
   CreateBashCommandAnalyzer,
   ExecutableProbe,
 } from "./contracts.js";
+import { freezeBashCommandSets, isCommandSetCommand } from "./command-set-contracts.js";
+import { matchCommandSet } from "./command-set-matcher.js";
 import {
   KNOWN_READ_ONLY_COMMANDS,
   KNOWN_READ_ONLY_VERSION,
@@ -24,8 +26,10 @@ type Problem = readonly [BashAnalysisIssueCode, string];
 interface AcceptedStage {
   readonly command: BashSimpleCommand;
   readonly name: string;
-  readonly profile: KnownReadOnlyProfile;
+  readonly profile: KnownReadOnlyProfile | undefined;
   readonly optionNames: ReadonlySet<string>;
+  readonly knownReadOnly: boolean;
+  readonly commandSets: readonly string[];
 }
 
 /** Variables Bash imports at startup that can run code or change parsing and lookup. */
@@ -121,6 +125,9 @@ export const createBashCommandAnalyzer: CreateBashCommandAnalyzer = (
   const environment: Readonly<Record<string, string>> = Object.freeze({ ...context.environment });
   const functions = exportedFunctionNames(environment);
   const loader = loaderIssue(environment);
+  const commandSets = Object.entries(freezeBashCommandSets(context.commandSets ?? {})).filter(
+    ([, rule]) => isCommandSetCommand(rule.command),
+  );
 
   async function isExecutable(path: string): Promise<boolean> {
     try {
@@ -189,7 +196,7 @@ export const createBashCommandAnalyzer: CreateBashCommandAnalyzer = (
         command.offset,
       );
     }
-    if (profile.kind === "executable") {
+    if (profile?.kind !== "shell_builtin") {
       if (functions.has("command_not_found_handle")) {
         return issue(
           "unsafe_environment",
@@ -207,7 +214,7 @@ export const createBashCommandAnalyzer: CreateBashCommandAnalyzer = (
         return issue(problem[0], problem[1], command.offset);
       }
     }
-    for (const dependency of profile.environment) {
+    for (const dependency of profile?.environment ?? []) {
       const value = environment[dependency.variable];
       if (
         value !== undefined &&
@@ -236,7 +243,8 @@ export const createBashCommandAnalyzer: CreateBashCommandAnalyzer = (
             word.offset,
           );
         }
-        return knownReadOnlyProfile(word.value) === undefined
+        return knownReadOnlyProfile(word.value) === undefined &&
+          !commandSets.some(([, rule]) => rule.command === word.value)
           ? issue(
               "unknown_command",
               `${excerpt(word.value, 32)} is not a known read-only command`,
@@ -251,9 +259,6 @@ export const createBashCommandAnalyzer: CreateBashCommandAnalyzer = (
         }
         const name = commandWord.value;
         const profile = knownReadOnlyProfile(name);
-        if (profile === undefined) {
-          return issue("unknown_command", `${excerpt(name, 32)} is not a known read-only command`);
-        }
         const arguments_ = simple.words.slice(1);
         if (name !== "cd") {
           const symbolic = arguments_.find((word) => word.kind !== "literal");
@@ -265,11 +270,32 @@ export const createBashCommandAnalyzer: CreateBashCommandAnalyzer = (
             );
           }
         }
-        const checked = profile.check(arguments_);
-        if (!checked.ok) {
-          return checked.issue;
+        const checked = profile?.check(arguments_);
+        const matching: string[] = [];
+        const optionNames = new Set(checked?.ok ? checked.optionNames : []);
+        let configuredIssue: BashAnalysisIssue | undefined;
+        for (const [id, rule] of commandSets) {
+          if (rule.command !== name) continue;
+          const candidate = matchCommandSet(rule, arguments_);
+          if (candidate.ok) {
+            matching.push(id);
+            for (const option of candidate.optionNames) optionNames.add(option);
+          } else configuredIssue ??= candidate.issue;
         }
-        stages.push({ command: simple, name, profile, optionNames: checked.optionNames });
+        if (!checked?.ok && matching.length === 0)
+          return (
+            checked?.issue ??
+            configuredIssue ??
+            issue("unknown_command", `${excerpt(name, 32)} has no matching command rule`)
+          );
+        stages.push({
+          command: simple,
+          name,
+          profile,
+          optionNames,
+          knownReadOnly: checked?.ok === true,
+          commandSets: Object.freeze(matching),
+        });
         return undefined;
       },
     });
@@ -299,6 +325,22 @@ export const createBashCommandAnalyzer: CreateBashCommandAnalyzer = (
         commandClass: "unclassified",
         version: KNOWN_READ_ONLY_VERSION,
         issue: found,
+      });
+    }
+    if (stages.some((stage) => stage.commandSets.length > 0)) {
+      return Object.freeze({
+        commandClass: "configured_command",
+        version: KNOWN_READ_ONLY_VERSION,
+        commands: Object.freeze(stages.map((stage) => stage.name)),
+        stages: Object.freeze(
+          stages.map((stage) =>
+            Object.freeze({
+              command: stage.name,
+              knownReadOnly: stage.knownReadOnly,
+              commandSets: stage.commandSets,
+            }),
+          ),
+        ),
       });
     }
     return Object.freeze({

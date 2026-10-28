@@ -1233,6 +1233,91 @@ Scope:
 Without a class policy, `/sandbox policy` and `/sandbox policy bash` are
 unchanged and show no class rows.
 
+## Administrator Bash command sets
+
+Optional main-policy `[tools.bash.command_sets.<id>]` tables automatically allow
+specific literal argument shapes. They are separate from the reviewed
+`known_read_only` registry: the administrator is asserting that these invocations
+are suitable for automatic approval, not that the program is inherently read-only.
+
+```toml
+[tools.bash]
+mode = "ask"
+session_grant = "offer"
+audit = true
+
+[tools.bash.known_read_only]
+mode = "allow"
+session_grant = "never"
+
+[tools.bash.command_sets.utility_read]
+command = "utility"
+mode = "allow"
+session_grant = "never"
+required_flags = ["--read"]
+optional_flags = ["--verbose"]
+options = { "--format" = ["text", "json"] }
+operands = { min = 1, max = 1 }
+```
+
+The example allows `utility --read --format=json input` without a prompt.
+`utility --write input` follows the ordinary Bash policy. `utility --read input |
+grep result` is automatically allowed only when the effective `known_read_only`
+policy also allows the `grep` stage. An unknown stage, unsupported shell syntax,
+or a file-write redirect makes the **whole call** follow ordinary Bash policy.
+No stage executes before the whole call is approved. Existing validation of
+`known_read_only` still requires `read`, `grep`, `find` and `ls` to be allowed.
+Custom-only rules do not have that built-in-class precondition.
+
+Each table requires `command`, `mode = "allow"`, `session_grant = "never"`, and
+`operands = { min, max }`. Flags and `options` may be omitted; omission means an
+empty collection. No other policies, regexes, globs, or arbitrary match scripts
+are accepted. IDs start with an ASCII letter and contain up to 64 ASCII letters,
+digits, underscores or hyphens; prototype-property names are rejected.
+`command` is an external executable basename, not an absolute path, shell builtin,
+reserved word or wrapper prefix. Matching retains the existing execution-context
+checks, including executable resolution outside the launch directory and unsafe
+shell/loader/environment checks. Relative and absolute command paths do not match.
+
+Argument matching is deliberately narrow:
+
+- Required flags must occur once; optional flags may occur once. Each is an exact
+  short flag such as `-r` or long flag such as `--read`.
+- Named `options` take one value from their nonempty literal list, using a
+  separate word or long `--name=value` spelling. These options are optional.
+- Repeated flags/options, short clusters, attached short values, long-option
+  abbreviations, and unknown option names do not match.
+- All options precede operands. `--` may end option parsing, but option-looking
+  operands still do not match. Operand contents otherwise remain literal and
+  are constrained only by their count and the shared shell parser.
+- Shell expansions, background execution, file-write redirects, and other
+  unsupported syntax remain outside automatic approval. Pipes and supported
+  command lists must qualify at every stage.
+
+There are at most 64 sets, 64 combined flag/option names per set, 64 values per
+option, 256 UTF-8 bytes per command/flag/value, and 0–1024 operands. The serialized
+authored command-set table is limited to 128 KiB. Configured approval evidence
+is limited to 256 stages; larger calls fall back to the main Bash policy.
+
+These definitions belong only to the main administrator configuration. User/group
+rules cannot define or replace them. A broker-selected Bash policy preserves the
+main definitions; `disabled` still removes Bash, while `deny` can have these
+explicit allow exceptions. No custom-rule session grant is created. A call that
+does not qualify uses the ordinary Bash prompt and its ordinary session-grant
+scope. Restart after changing definitions.
+
+`/sandbox policy bash` lists the configured shapes separately. Bash decision
+audit records use `command_class = "configured_command"` and the matching
+`command_set_ids`; `known_read_only_version` still identifies the built-in registry,
+not a safety certification of custom utilities. Upgrade application and collector
+together for audit wire version 3 and record schema 4. Main schema 13 and broker
+protocol/rule version 10 are unchanged.
+
+An administrator must review the executable's behavior, plugins, configuration,
+response-file syntax and environment dependencies. A harmless-looking operand can
+still cause effects inside that program. These rules never broaden filesystem or
+network access enforced by the selected backend. See [security](security.md#administrator-command-sets).
+
 ## Tool event logging
 
 The configuration requires an `[audit]` table with `enabled` and
@@ -1262,11 +1347,15 @@ stops before a NUL or an unpaired Unicode surrogate with the truncation flag set
 content or credentials; length limits do not redact them. Session events include
 the captured launch CWD. Records use JSON escaping to remain single-line.
 
-When the effective Bash policy has a `known_read_only` class policy, Bash
-`tool_execution_intent` and `tool_denied` records also carry `command_class`
-(`known_read_only` or `unclassified`) and `known_read_only_version`, the
-positive registry version used for the decision. Both fields appear together,
-only on those two Bash events, and are absent without a class policy.
+When the effective Bash policy has a `known_read_only` class policy or any
+`command_sets`, Bash `tool_execution_intent` and `tool_denied` records also carry
+`command_class` (`known_read_only`, `configured_command` or `unclassified`) and
+`known_read_only_version`, the positive built-in registry version used for the
+decision. Both fields appear together, only on those two Bash events, and are
+absent when neither a class policy nor command sets are configured.
+`configured_command` additionally carries a nonempty, bounded `command_set_ids`
+list identifying the matching administrator rules; other classes omit that list.
+The registry version does not certify custom utilities as read-only.
 `approval_source` keeps its existing values; a class-scoped grant reports
 `session_grant`.
 

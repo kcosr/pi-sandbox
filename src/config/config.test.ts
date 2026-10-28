@@ -41,6 +41,33 @@ function parseConfig(
 }
 
 describe("parseConfig", () => {
+  it("admits main-only Bash command sets without changing ordinary tool policy", () => {
+    const entry = `\n[tools.bash.command_sets.utility_read]\ncommand = "utility"\nmode = "allow"\nsession_grant = "never"\nrequired_flags = ["--read"]\noptions = { "--format" = ["text", "json"] }\noperands = { min = 1, max = 1 }\n`;
+    for (const mode of ["ask", "allow", "deny", "disabled"]) {
+      const config = parseConfig(
+        completeConfig({ bash: `mode = "${mode}"\nsession_grant = "never"` }) + entry,
+      );
+      expect(config.tools.bash).toMatchObject({
+        mode,
+        commandSets: {
+          utility_read: {
+            command: "utility",
+            requiredFlags: ["--read"],
+            optionalFlags: [],
+            operands: { min: 1, max: 1 },
+          },
+        },
+      });
+      expect(Object.isFrozen(config.tools.bash!.commandSets)).toBe(true);
+    }
+    expect(() => parseConfig(completeConfig() + entry.replace("tools.bash", "tools.read"))).toThrow(
+      "command_sets is not a recognized field",
+    );
+    expect(() =>
+      parseConfig(completeConfig() + entry.replace('mode = "allow"', 'mode = "deny"')),
+    ).toThrow("mode must be allow");
+  });
+
   it("admits Seatbelt denials only with its explicit network and lifetime contract", () => {
     const seatbelt = completeConfig().replace('backend = "bubblewrap"', 'backend = "seatbelt"');
     const parsed = parseConfig(

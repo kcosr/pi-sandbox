@@ -211,6 +211,19 @@ function formatSubjectPolicy(
   ];
   const classSections: string[] = [];
   if (subject === COMMAND_CLASS_TOOL) {
+    const sets = Object.entries(policy.commandSets ?? {});
+    if (sets.length > 0) {
+      rows.push(["Configured command sets", String(sets.length)]);
+      classSections.push(
+        "Administrator command sets (allow exceptions, not built-in read-only proofs):\n" +
+          sets
+            .map(
+              ([id, set]) =>
+                `  ${id}: ${set.command}; required flags: ${set.requiredFlags.join(", ") || "none"}; optional flags: ${set.optionalFlags.join(", ") || "none"}; options: ${JSON.stringify(set.options)}; operands: ${set.operands.min}..${set.operands.max}`,
+            )
+            .join("\n"),
+      );
+    }
     for (const [commandClass, classPolicy] of commandClassPolicies(policy)) {
       const label = capitalize(commandClassLabel(commandClass));
       const classGranted = input.hasSessionGrant(subject, commandClass);

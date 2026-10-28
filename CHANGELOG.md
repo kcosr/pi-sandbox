@@ -2,7 +2,13 @@
 
 ## Unreleased
 
+### Breaking changes
+
+- Upgrade the application and audit collector together for audit wire 3 and record schema 4; main configuration schema 13 and identity broker protocol/rule version 10 are unchanged. ([#44](https://github.com/kcosr/pi-sandbox/pull/44))
+
 ### Added
+
+- Allow administrator-defined Bash command shapes with exact flags, finite option values and operand counts; compose whole pipelines with existing read-only policies and record custom rule provenance separately. ([#44](https://github.com/kcosr/pi-sandbox/pull/44))
 
 - Recognize literal double-quote escapes, `cd ~/...`, restricted sed range printing and integer sleep as known read-only Bash commands, preserving execution-context and redirection checks. ([#43](https://github.com/kcosr/pi-sandbox/pull/43))
 

@@ -69,6 +69,8 @@ struct Event {
     command_class: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     known_read_only_version: Option<u32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    command_set_ids: Option<Vec<String>>,
 }
 
 #[derive(Deserialize)]
@@ -204,7 +206,7 @@ fn read_frame(reader: &mut impl BufRead) -> io::Result<Option<Request>> {
         }
     }
     let request: Request = serde_json::from_slice(&bytes).map_err(|_| invalid())?;
-    if request.version != 2 || !valid_event(&request.event) {
+    if request.version != 3 || !valid_event(&request.event) {
         return Err(invalid());
     }
     Ok(Some(request))
@@ -312,10 +314,34 @@ fn valid_event(e: &Event) -> bool {
     if (e.command_class.is_some() || e.known_read_only_version.is_some())
         && (e.command_class.is_none()
             || e.known_read_only_version.is_none_or(|version| version == 0)
-            || !one_of(&e.command_class, &["known_read_only", "unclassified"])
+            || !one_of(
+                &e.command_class,
+                &["known_read_only", "unclassified", "configured_command"],
+            )
             || !matches!(e.event.as_str(), "tool_execution_intent" | "tool_denied")
             || e.tool.as_deref() != Some("bash"))
     {
+        return false;
+    }
+    if e.command_class.as_deref() == Some("configured_command") {
+        let Some(ids) = &e.command_set_ids else {
+            return false;
+        };
+        if ids.is_empty()
+            || ids.len() > 64
+            || ids.iter().enumerate().any(|(i, id)| {
+                id.len() > 64
+                    || !id.as_bytes().first().is_some_and(u8::is_ascii_alphabetic)
+                    || !id
+                        .bytes()
+                        .all(|c| c.is_ascii_alphanumeric() || c == b'_' || c == b'-')
+                    || matches!(id.as_str(), "__proto__" | "prototype" | "constructor")
+                    || ids[..i].contains(id)
+            })
+        {
+            return false;
+        }
+    } else if e.command_set_ids.is_some() {
         return false;
     }
     one_of(&e.boundary, &["bubblewrap", "direct", "host"])
@@ -362,7 +388,7 @@ fn serve(
             Err(_) => {
                 return reply(
                     output,
-                    serde_json::json!({"version":2,"ok":false,"code":"protocol_error"}),
+                    serde_json::json!({"version":3,"ok":false,"code":"protocol_error"}),
                 );
             }
         };
@@ -372,12 +398,12 @@ fn serve(
         {
             return reply(
                 output,
-                serde_json::json!({"version":2,"ok":false,"code":"protocol_error"}),
+                serde_json::json!({"version":3,"ok":false,"code":"protocol_error"}),
             );
         }
         sequence = sequence.checked_add(1).ok_or_else(invalid)?;
         let record = Record {
-            schema_version: 3,
+            schema_version: 4,
             principal_uid: credentials.uid,
             principal_user: principal_user.as_deref(),
             principal_pid: credentials.pid,
@@ -391,12 +417,12 @@ fn serve(
         if submit(&message).is_err() {
             return reply(
                 output,
-                serde_json::json!({"version":2,"ok":false,"code":"syslog_unavailable"}),
+                serde_json::json!({"version":3,"ok":false,"code":"syslog_unavailable"}),
             );
         }
         reply(
             output,
-            serde_json::json!({"version":2,"ok":true,"audit_session_id":session}),
+            serde_json::json!({"version":3,"ok":true,"audit_session_id":session}),
         )?;
         if request.event.event == "session_started" {
             active_session = Some(request.event.pi_session_id);
@@ -426,7 +452,7 @@ fn run() -> io::Result<()> {
     else {
         return reply(
             &mut io::stdout().lock(),
-            serde_json::json!({"version":2,"ok":false,"code":"audit_disabled"}),
+            serde_json::json!({"version":3,"ok":false,"code":"audit_disabled"}),
         );
     };
     let credentials = peer_credentials(0)?;
@@ -494,10 +520,10 @@ mod tests {
     use std::os::unix::net::UnixStream;
 
     fn start(id: &str) -> serde_json::Value {
-        serde_json::json!({"version":2,"event":{"event":"session_started","pi_session_id":id,"cwd":"/workspace"}})
+        serde_json::json!({"version":3,"event":{"event":"session_started","pi_session_id":id,"cwd":"/workspace"}})
     }
     fn tool() -> serde_json::Value {
-        serde_json::json!({"version":2,"event":{"event":"tool_execution_intent","pi_session_id":"pi-1","tool":"bash","invocation_id":"call-1","boundary":"bubblewrap","approval_source":"prompt","command":"printf 'hello\\n'","command_truncated":false}})
+        serde_json::json!({"version":3,"event":{"event":"tool_execution_intent","pi_session_id":"pi-1","tool":"bash","invocation_id":"call-1","boundary":"bubblewrap","approval_source":"prompt","command":"printf 'hello\\n'","command_truncated":false}})
     }
     #[test]
     fn rejects_removed_vm_boundary() {
@@ -510,7 +536,7 @@ mod tests {
     }
 
     fn mcp(transport: &str) -> serde_json::Value {
-        serde_json::json!({"version":2,"event":{
+        serde_json::json!({"version":3,"event":{
             "event":"tool_execution_intent","pi_session_id":"pi-1",
             "tool":"mcp__docs__search","invocation_id":"nested-1","boundary":"host",
             "mcp_server":"docs","mcp_tool":"search/raw","mcp_transport":transport,
@@ -556,7 +582,7 @@ mod tests {
         let record: serde_json::Value =
             serde_json::from_str(line.split_once(": ").unwrap().1).unwrap();
         assert_eq!(record["principal_uid"], 1001);
-        assert_eq!(record["schema_version"], 3);
+        assert_eq!(record["schema_version"], 4);
         assert_eq!(record["principal_user"], "alice");
         assert!(record.get("principal_gid").is_none());
         assert_eq!(record["principal_pid"], 42);
@@ -572,7 +598,7 @@ mod tests {
     }
 
     #[test]
-    fn preserves_typed_mcp_metadata_and_parent_in_schema_three_records() {
+    fn preserves_typed_mcp_metadata_and_parent_in_schema_four_records() {
         for transport in ["http", "stdio"] {
             let mut output = Vec::new();
             let mut messages = Vec::new();
@@ -593,7 +619,7 @@ mod tests {
             let line = std::str::from_utf8(&messages[1]).unwrap();
             let record: serde_json::Value =
                 serde_json::from_str(line.split_once(": ").unwrap().1).unwrap();
-            assert_eq!(record["schema_version"], 3);
+            assert_eq!(record["schema_version"], 4);
             assert_eq!(record["mcp_server"], "docs");
             assert_eq!(record["mcp_tool"], "search/raw");
             assert_eq!(record["mcp_transport"], transport);
@@ -601,7 +627,7 @@ mod tests {
             assert_eq!(record["principal_uid"], 1001);
             for ack in String::from_utf8(output).unwrap().lines() {
                 let ack: serde_json::Value = serde_json::from_str(ack).unwrap();
-                assert_eq!(ack["version"], 2);
+                assert_eq!(ack["version"], 3);
                 assert_eq!(ack["ok"], true);
             }
         }
@@ -797,6 +823,44 @@ mod tests {
     }
 
     #[test]
+    fn configured_command_ids_have_strict_separate_provenance() {
+        let mut base = classified("tool_execution_intent", "configured_command", 2);
+        base["event"]["command_set_ids"] = serde_json::json!(["Utility-Read", "a".repeat(64)]);
+        let record = forwarded(base.clone());
+        assert_eq!(record["schema_version"], 4);
+        assert_eq!(record["command_set_ids"], base["event"]["command_set_ids"]);
+        let accepted = |request: &serde_json::Value| {
+            read_frame(&mut Cursor::new(lines(std::slice::from_ref(request)))).is_ok()
+        };
+        for ids in [
+            serde_json::json!([]),
+            serde_json::json!(["x", "x"]),
+            serde_json::json!(["../bad"]),
+            serde_json::json!(["constructor"]),
+            serde_json::json!(["a".repeat(65)]),
+            serde_json::json!("x"),
+            serde_json::Value::Null,
+        ] {
+            let mut request = base.clone();
+            request["event"]["command_set_ids"] = ids;
+            assert!(!accepted(&request));
+        }
+        let mut missing = base.clone();
+        missing["event"]
+            .as_object_mut()
+            .unwrap()
+            .remove("command_set_ids");
+        assert!(!accepted(&missing));
+        for class in ["known_read_only", "unclassified"] {
+            let mut request = base.clone();
+            request["event"]["command_class"] = serde_json::json!(class);
+            assert!(!accepted(&request));
+        }
+        base["version"] = serde_json::json!(2);
+        assert!(!accepted(&base));
+    }
+
+    #[test]
     fn rejects_unpaired_misplaced_or_invalid_command_class() {
         let accepted = |request: &serde_json::Value| {
             read_frame(&mut Cursor::new(lines(std::slice::from_ref(request)))).is_ok()
@@ -848,7 +912,7 @@ mod tests {
         let mut completed = tool();
         completed["event"]["event"] = serde_json::json!("tool_completed");
         completed["event"]["outcome"] = serde_json::json!("success");
-        let ended = serde_json::json!({"version":2,"event":{"event":"session_ended","pi_session_id":"pi-1"}});
+        let ended = serde_json::json!({"version":3,"event":{"event":"session_ended","pi_session_id":"pi-1"}});
         for unclassified in [
             read,
             requested,
@@ -907,10 +971,10 @@ mod tests {
     #[test]
     fn rejects_oversized_partial_and_duplicate_fields() {
         assert!(read_frame(&mut Cursor::new(vec![b' '; MAX_FRAME_BYTES + 1])).is_err());
-        assert!(read_frame(&mut Cursor::new(b"{\"version\":2}")).is_err());
+        assert!(read_frame(&mut Cursor::new(b"{\"version\":3}")).is_err());
         assert!(
             read_frame(&mut Cursor::new(
-                b"{\"version\":2,\"version\":2,\"event\":{}}\n"
+                b"{\"version\":3,\"version\":3,\"event\":{}}\n"
             ))
             .is_err()
         );
@@ -918,7 +982,7 @@ mod tests {
 
     #[test]
     fn enforces_session_lifecycle_and_allows_switches() {
-        let end = serde_json::json!({"version":2,"event":{"event":"session_ended","pi_session_id":"pi-1"}});
+        let end = serde_json::json!({"version":3,"event":{"event":"session_ended","pi_session_id":"pi-1"}});
         let mut output = Vec::new();
         let mut count = 0;
         serve(

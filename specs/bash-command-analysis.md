@@ -35,8 +35,7 @@ describe the implemented behavior for administrators and operators.
    adding `$x`), so a stricter class policy would protect nothing.
 5. Supported backends: Bubblewrap, Seatbelt and direct. Direct mode is accepted
    with its documented residual risk (Section 6.3).
-6. Out of scope for this change, but designed for (Section 10): administrator
-   command sets, "allow similar for session" grants, explanatory approval
+6. Out of scope for this change, but designed for (Section 10): "allow similar for session" grants, explanatory approval
    summaries for unclassified commands, and advisory escalation rules.
 
 ## 2. Terminology
@@ -100,15 +99,15 @@ both modes are `ask`, `P.session_grant = offer` and `Q.session_grant = never`.
 
 ### 4.2 Evaluating a model `bash` call
 
-1. If the effective bash policy has no class policy, behavior is unchanged: no
+1. If the effective bash policy has neither a class policy nor command sets, behavior is unchanged: no
    analysis runs and the main policy decides.
 2. Otherwise the managed `authorize` path analyzes `arguments.command` of the
    same immutable argument snapshot that is approved and executed, with the
    analyzer for the current execution context (Section 6), before preparing the
-   approval request. The result (`known_read_only` or `unclassified`) is bound
+   approval request. The result (`known_read_only`, `configured_command` or `unclassified`) is bound
    into the frozen `ApprovalRequest` as `commandClass` and covered by its
-   fingerprint (request fingerprint version 2, which includes `commandClass`,
-   or `null` when absent, and is re-verified at evaluation). An analyzer
+   fingerprint (request fingerprint version 3, which includes `commandClass` and immutable
+   per-stage custom evidence, or `null` when absent, and is re-verified at evaluation). An analyzer
    exception, a result whose `version` differs from the analyzer's, or a
    malformed result makes the request `unclassified` with the issue
    `command analysis failed`. A class policy without an analyzer refuses session
@@ -174,9 +173,11 @@ policy so policy changes invalidate grants as today.
   with control and format characters replaced. This lets the model adjust instead of retrying blindly. Other denial
   reasons keep their ordinary messages.
 - Bash audit decision events (`tool_execution_intent`, `tool_denied`) carry
-  `command_class` (`known_read_only` | `unclassified`) and
+  `command_class` (`known_read_only` | `configured_command` | `unclassified`) and
   `known_read_only_version` whenever the effective bash policy has a class
-  policy. Both fields are absent otherwise, appear together, and are valid only
+  policy or command sets. Configured results also require bounded unique
+  `command_set_ids`; other classes forbid them. Audit wire 3/record schema 4
+  must be upgraded together. Both fields are absent otherwise, appear together, and are valid only
   for tool `bash`. The version is an integer from 1 through 4294967295 (the
   collector's unsigned 32-bit field), and the analyzer is rejected at startup
   when its version is outside that range. `approval_source` keeps its existing
@@ -191,6 +192,16 @@ policy so policy changes invalidate grants as today.
 ```ts
 type BashAnalysis =
   | { commandClass: "known_read_only"; version: number; commands: readonly string[] }
+  | {
+      commandClass: "configured_command";
+      version: number;
+      commands: readonly string[];
+      stages: readonly {
+        command: string;
+        knownReadOnly: boolean;
+        commandSets: readonly string[];
+      }[];
+    }
   | { commandClass: "unclassified"; version: number; issue: BashAnalysisIssue };
 ```
 
@@ -515,15 +526,41 @@ registry disagree and names the regeneration command.
   modules export pure environment helpers for the managed context, but neither
   the package entry points nor `SandboxExecutor` change.
 
+### Administrator command-set composition
+
+The main administrator may define `[tools.bash.command_sets.<id>]` using the
+strict [configuration contract](../docs/configuration.md#administrator-bash-command-sets).
+Each rule declares one external basename, exact flags, finite option values and
+operand counts, with only `allow`/`never`. Matching is independent of built-in
+read-only recognition. The analyzer snapshots rules and returns all matching IDs
+plus a `knownReadOnly` boolean for each stage. If no custom rule matches anywhere,
+it retains the ordinary built-in result. Any uncovered stage or unsupported shell
+syntax makes the whole invocation unclassified. Existing environment checks for a
+known executable apply even if it matches only a custom rule.
+
+For a configured result, the policy engine requires every stage to have a currently
+defined custom allow rule for that command, or to be recognized by the built-in
+registry with an effective built-in `allow` policy. Otherwise it evaluates the
+entire call under the main Bash policy, including its ordinary tool-scoped session
+grant behavior. A successful custom decision creates no session grant. Effective
+Bash `disabled` always wins. Base definitions remain inert under `disabled` and
+may provide exceptions under `deny`; user/group patches retain them but cannot
+supply their own definitions. No built-in read-tool precondition is attached to
+an administrator assertion, and the audit/UI must not imply one.
+
+Evidence is deep-frozen and fingerprinted with arguments. Policy revisions include
+the complete definitions, invalidating stale grants. Malformed evidence fails
+closed into the existing classification-failure path. The proof and audit bounds
+are independently checked; broker protocol/rule version 10 and main schema 13
+remain unchanged. This feature changes managed approval only, never standalone
+execution, user shell behavior or the selected confinement backend.
+
 ## 10. Extension points
 
 - **More classes:** add a name to `COMMAND_CLASSES`, a TOML table under
   `[tools.bash]`, and analyzer rules. The join, the monotonic rule and scoped
   grants already generalize. A stage covered by several classes takes the most
   permissive; a command takes the most restrictive of its stages.
-- **Administrator command sets:** a separate `command_sets` namespace for
-  identity-based matches defined by administrators, sharing the decision rules
-  but not the `known_read_only` guarantee or its read-tool precondition.
 - **Allow similar for session:** grants keyed on the structured parse (program,
   leading options, subcommand words) offered only for fully recognized
   commands; interpreters and wrappers get exact-command grants only.

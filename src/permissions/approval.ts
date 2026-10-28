@@ -16,6 +16,8 @@ export function commandClassLabel(commandClass: CommandClass): string {
 
 /** A classified request names its class, for example `bash (known read-only)`. */
 export function approvalSubjectLabel(subject: string, commandClass?: BashRequestClass): string {
+  // Configured calls only prompt when whole-call coverage failed; do not imply approval.
+  if (commandClass === "configured_command") return subject;
   return commandClass === undefined || commandClass === "unclassified"
     ? subject
     : `${subject} (${COMMAND_CLASS_LABELS[commandClass]})`;

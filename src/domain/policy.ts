@@ -100,7 +100,7 @@ export interface IdentityOverrides {
   readonly mcp?: {
     readonly servers: Readonly<Record<string, McpServerOverride>>;
   };
-  readonly tools: Readonly<Partial<Record<string, SubjectPolicy>>>;
+  readonly tools: Readonly<Partial<Record<string, Omit<SubjectPolicy, "commandSets">>>>;
 }
 
 export type EnvironmentVariables = Readonly<Record<string, string>>;

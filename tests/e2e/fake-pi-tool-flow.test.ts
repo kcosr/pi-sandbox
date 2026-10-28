@@ -433,6 +433,86 @@ describe.skipIf(!REAL_BWRAP_AVAILABLE)(
       "cd ~/ && pwd",
     ];
 
+    const commandSets = {
+      checksum_file: {
+        command: "sha256sum",
+        mode: "allow",
+        sessionGrant: "never",
+        requiredFlags: ["--binary"],
+        optionalFlags: [],
+        options: {},
+        operands: { min: 1, max: 1 },
+      },
+    } as const;
+
+    it("runs configured shapes and requires class approval for the remaining pipeline", async () => {
+      const fakePi = await start({
+        audit: false,
+        mode: "deny",
+        sessionGrant: "never",
+        commandSets,
+      });
+      const before = bashCommands().length;
+      try {
+        expect(
+          resultText(await invoke(fakePi, "bash", { command: "sha256sum --binary listed.txt" })),
+        ).toMatch(/^[a-f0-9]{64} \*listed\.txt\n$/u);
+        await expect(
+          invoke(fakePi, "bash", { command: "sha256sum --binary listed.txt | head -1" }),
+        ).rejects.toThrow("policy_denied");
+        expect(bashCommands().slice(before)).toEqual(["sha256sum --binary listed.txt"]);
+      } finally {
+        await fakePi.emit("session_shutdown", {}, nonInteractiveContext());
+      }
+    });
+
+    it("executes mixed configured pipelines but denies unsafe calls before native dispatch", async () => {
+      const fakePi = await start({
+        audit: false,
+        mode: "deny",
+        sessionGrant: "never",
+        commandSets,
+        commandClasses: { known_read_only: { mode: "allow", sessionGrant: "never" } },
+      });
+      const command = "sha256sum --binary listed.txt | head -1";
+      const before = bashCommands().length;
+      try {
+        expect(resultText(await invoke(fakePi, "bash", { command }))).toMatch(
+          /^[a-f0-9]{64} \*listed\.txt\n$/u,
+        );
+        for (const unsafe of [
+          "sha256sum --check listed.txt | head -1",
+          "sha256sum --binary listed.txt | head -1 > command-set-output",
+          "sha256sum --binary listed.txt; touch command-set-output",
+        ]) {
+          await expect(invoke(fakePi, "bash", { command: unsafe })).rejects.toThrow(
+            "policy_denied",
+          );
+        }
+        expect(bashCommands().slice(before)).toEqual([command]);
+        expect(existsSync(path.join(workspace, "command-set-output"))).toBe(false);
+      } finally {
+        await fakePi.emit("session_shutdown", {}, nonInteractiveContext());
+      }
+    });
+
+    it("does not expose disabled Bash even with configured allow shapes", async () => {
+      const fakePi = await start({
+        audit: false,
+        mode: "disabled",
+        sessionGrant: "never",
+        commandSets,
+      });
+      const before = bashCommands().length;
+      try {
+        expect(fakePi.activeTools).not.toContain("bash");
+        expect(fakePi.tools.has("bash")).toBe(false);
+        expect(bashCommands().length).toBe(before);
+      } finally {
+        await fakePi.emit("session_shutdown", {}, nonInteractiveContext());
+      }
+    });
+
     it("runs known read-only pipelines without a prompt and explains denied commands", async () => {
       const fakePi = await start({
         audit: false,

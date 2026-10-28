@@ -3,11 +3,13 @@
  * Classification only selects an approval policy; it never changes what executes.
  */
 
+import type { BashCommandSets } from "./command-set-contracts.js";
+
 export const COMMAND_CLASSES = Object.freeze(["known_read_only"] as const);
 export type CommandClass = (typeof COMMAND_CLASSES)[number];
 
 /** Result class bound into an approval request; `unclassified` uses the main policy. */
-export type BashRequestClass = CommandClass | "unclassified";
+export type BashRequestClass = CommandClass | "configured_command" | "unclassified";
 
 export const BASH_EXECUTION_BACKENDS = Object.freeze(["bubblewrap", "seatbelt", "direct"] as const);
 export type BashExecutionBackend = (typeof BASH_EXECUTION_BACKENDS)[number];
@@ -19,6 +21,8 @@ export interface BashExecutionContext {
   readonly cwd: string;
   /** Exact environment passed to `bash -c` children, including the effective PATH. */
   readonly environment: Readonly<Record<string, string>>;
+  /** Administrator-approved argument forms; never part of the reviewed read-only registry. */
+  readonly commandSets?: BashCommandSets;
 }
 
 /** Filesystem queries used by context checks; injectable for tests. */
@@ -52,12 +56,25 @@ export interface BashAnalysisIssue {
   readonly offset?: number;
 }
 
+/** Independent proof for one stage; all stages must qualify for automatic approval. */
+export interface BashStageCoverage {
+  readonly command: string;
+  readonly knownReadOnly: boolean;
+  readonly commandSets: readonly string[];
+}
+
 export type BashAnalysis =
   | {
       readonly commandClass: "known_read_only";
       readonly version: number;
       /** Command name of every stage, in source order. */
       readonly commands: readonly string[];
+    }
+  | {
+      readonly commandClass: "configured_command";
+      readonly version: number;
+      readonly commands: readonly string[];
+      readonly stages: readonly BashStageCoverage[];
     }
   | {
       readonly commandClass: "unclassified";
