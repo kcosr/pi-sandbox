@@ -17,8 +17,11 @@ import type {
 import type { PiToolExtension } from "../managed-extensions/sdk.js";
 import {
   COMMAND_CLASS_TOOL,
+  MAXIMUM_ANALYSIS_ISSUE_BYTES,
   PolicyEngine,
+  approvalPreview,
   approvalSubjectLabel,
+  approvalUi,
   boundedDisplayText,
   commandClassLabel,
   hasCommandClassPolicies,
@@ -48,11 +51,6 @@ import {
 } from "./diagnostics.js";
 import { createSandboxExtension } from "../../packages/sandbox-extension/src/factory.js";
 import type { ExtensionDependencies, SandboxExecutor } from "./types.js";
-import {
-  approvalUi,
-  approvalPreview,
-  MAXIMUM_ANALYSIS_ISSUE_BYTES,
-} from "../permissions/approval.js";
 import { ManagedMcpRuntime } from "../mcp/runtime.js";
 import { createManagedCodemodeExtension } from "../codemode/index.js";
 import { isManagedToolSelected, selectManagedActiveTools } from "../runtime/arguments.js";
