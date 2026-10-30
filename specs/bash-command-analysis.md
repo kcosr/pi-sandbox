@@ -164,7 +164,14 @@ policy so policy changes invalidate grants as today.
 ### 4.5 Prompts, denials and audit
 
 - Approval display for a `known_read_only` request uses the label
-  `bash (known read-only)`. Unclassified display is unchanged.
+  `bash (known read-only)`. An unclassified Bash approval prompt appends
+  `Automatic approval unavailable:` and the first analyzer issue after the
+  ordinary command preview. The reason is limited to 512 UTF-8 bytes, including
+  any ellipsis, with control and format characters replaced. Internal analysis
+  failures show `command analysis failed`. This is presentation-only metadata:
+  it does not alter request fingerprints, policy decisions, session grants,
+  command arguments or audit records. Requests without Bash analysis and
+  classified requests keep their existing prompts.
 - When an unclassified request is denied with reason `policy_denied` and a
   class policy exists, the error returned to the model names the first analyzer
   issue:

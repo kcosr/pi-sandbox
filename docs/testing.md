@@ -110,6 +110,8 @@ dependency.
 - mode and session-grant decisions;
 - memory-only grants scoped by approval subject;
 - no-UI, prompt cancellation, and prompt failure denial;
+- bounded, terminal-safe Bash classification reasons in approval prompts, with
+  unchanged choices, decisions and prompts for requests without a failed analysis;
 - managed-executable argument filtering;
 - rejection of Pi package-management commands;
 - build-gated configuration selection, rejection in managed builds, and absolute model-path resolution;

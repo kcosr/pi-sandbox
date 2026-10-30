@@ -692,7 +692,11 @@ describe.skipIf(!REAL_BWRAP_AVAILABLE)(
           title: "Allow bash (known read-only): ls | head?",
           choices: ["Allow once", "Allow known read-only commands for session", "Deny"],
         },
-        { title: "Allow bash: touch x?", choices: ["Allow once", "Deny"] },
+        {
+          title:
+            'Allow bash: touch x?\n\nAutomatic approval unavailable:\n"touch" is not a known read-only command',
+          choices: ["Allow once", "Deny"],
+        },
       ]);
       expect(bashCommands().slice(before)).toEqual(["ls | head", "ls -a", ...newReadOnlyCommands]);
       expect(existsSync(path.join(workspace, "x"))).toBe(false);

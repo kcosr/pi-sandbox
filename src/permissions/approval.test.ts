@@ -11,17 +11,23 @@ import {
   type SessionGrantScope,
 } from "./index.js";
 
-function prompting(answer: (choices: readonly string[]) => string | undefined) {
+function prompting(
+  answer: (choices: readonly string[]) => string | undefined,
+  analysisIssue?: string,
+) {
   const calls: Array<{ title: string; choices: readonly string[] }> = [];
-  const ui = approvalUi({
-    hasUI: true,
-    ui: {
-      select: (title: string, choices: string[]) => {
-        calls.push({ title, choices });
-        return Promise.resolve(answer(choices));
+  const ui = approvalUi(
+    {
+      hasUI: true,
+      ui: {
+        select: (title: string, choices: string[]) => {
+          calls.push({ title, choices });
+          return Promise.resolve(answer(choices));
+        },
       },
-    },
-  } as unknown as ExtensionContext)!;
+    } as unknown as ExtensionContext,
+    analysisIssue,
+  )!;
   return { ui, calls };
 }
 
@@ -58,6 +64,118 @@ describe("approval presentation", () => {
     expect(approvalPreview("bash", { command: `${"x".repeat(1023)}é` })).toBe(
       `bash: ${"x".repeat(1023)}…`,
     );
+  });
+
+  it.each([
+    ["Allow once", "allow_once"],
+    ["Allow for session", "allow_session"],
+    ["Deny", "deny"],
+    [undefined, "deny"],
+  ] as const)(
+    "explains an unclassified request without changing the %s choice",
+    async (answer, decision) => {
+      const request = prepareApprovalRequest({
+        subject: "bash",
+        display: "bash: sed -n '1p' input",
+        arguments: { command: "sed -n '1p' input" },
+        commandClass: "unclassified",
+      });
+      const before = JSON.stringify(request);
+      const { ui, calls } = prompting(() => answer, "sed was not found on PATH");
+      await expect(
+        ui.prompt(
+          { request, allowForSession: true, sessionGrantScope: "tool" },
+          new AbortController().signal,
+        ),
+      ).resolves.toBe(decision);
+      expect(calls).toEqual([
+        {
+          title:
+            "Allow bash: sed -n '1p' input?\n\nAutomatic approval unavailable:\nsed was not found on PATH",
+          choices: ["Allow once", "Allow for session", "Deny"],
+        },
+      ]);
+      expect(JSON.stringify(request)).toBe(before);
+    },
+  );
+
+  it("bounds and sanitizes the reason independently of the command preview", async () => {
+    const display = approvalPreview("bash", { command: "x".repeat(2_000) });
+    const request = prepareApprovalRequest({
+      subject: "bash",
+      display,
+      arguments: { command: "x".repeat(2_000) },
+      commandClass: "unclassified",
+    });
+    const issue = `bad\n\u001b\u202e${"é".repeat(400)}`;
+    const { ui, calls } = prompting(() => "Deny", issue);
+    await ui.prompt(
+      { request, allowForSession: false, sessionGrantScope: "tool" },
+      new AbortController().signal,
+    );
+    const prefix = `Allow ${display}?\n\nAutomatic approval unavailable:\n`;
+    expect(calls[0]?.title.startsWith(prefix)).toBe(true);
+    const shownIssue = calls[0]!.title.slice(prefix.length);
+    expect(shownIssue).toBe(`bad   ${"é".repeat(251)}…`);
+    expect(Buffer.byteLength(shownIssue)).toBeLessThanOrEqual(512);
+    expect(shownIssue).not.toMatch(/[\p{Cc}\p{Cf}]/u);
+    expect(calls[0]?.choices).toEqual(["Allow once", "Deny"]);
+  });
+
+  it("does not attach an issue to other request classes or tools", async () => {
+    const requests = [
+      prepareApprovalRequest({
+        subject: "bash",
+        display: "bash: ls",
+        arguments: { command: "ls" },
+      }),
+      prepareApprovalRequest({
+        subject: "bash",
+        display: "bash (known read-only): ls",
+        arguments: { command: "ls" },
+        commandClass: "known_read_only",
+      }),
+      prepareApprovalRequest({
+        subject: "bash",
+        display: "bash: utility --read",
+        arguments: { command: "utility --read" },
+        commandClass: "configured_command",
+        commandStages: [
+          { command: "utility", knownReadOnly: false, commandSets: ["utility_read"] },
+        ],
+      }),
+      prepareApprovalRequest({
+        subject: "write",
+        display: "write: file",
+        arguments: { path: "file" },
+        commandClass: "unclassified",
+      }),
+    ];
+    const { ui, calls } = prompting(() => "Deny", "irrelevant issue");
+    for (const request of requests) {
+      await ui.prompt(
+        { request, allowForSession: false, sessionGrantScope: "tool" },
+        new AbortController().signal,
+      );
+    }
+    expect(calls.map(({ title }) => title)).toEqual(
+      requests.map(({ display }) => `Allow ${display}?`),
+    );
+  });
+
+  it.each([undefined, ""])("omits the diagnostic when no issue is supplied: %s", async (issue) => {
+    const request = prepareApprovalRequest({
+      subject: "bash",
+      display: "bash: command",
+      arguments: { command: "command" },
+      commandClass: "unclassified",
+    });
+    const { ui, calls } = prompting(() => "Deny", issue);
+    await ui.prompt(
+      { request, allowForSession: false, sessionGrantScope: "tool" },
+      new AbortController().signal,
+    );
+    expect(calls[0]?.title).toBe("Allow bash: command?");
   });
 
   it.each([

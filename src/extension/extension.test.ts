@@ -2084,8 +2084,79 @@ describe("known read-only Bash commands", () => {
       /^Pi Sandbox denied bash: user_denied$/u,
     );
     expect(prompts).toEqual([
-      { title: "Allow bash: echo > out?", choices: ["Allow once", "Deny"] },
+      {
+        title: `Allow bash: echo > out?\n\nAutomatic approval unavailable:\n${REDIRECTION_ISSUE}`,
+        choices: ["Allow once", "Deny"],
+      },
     ]);
+  });
+
+  it.each(["Allow once", "Deny"])(
+    "explains a real executable lookup failure and preserves %s",
+    async (answer) => {
+      const command = "sed -n '87,115p' /tmp/input.ini";
+      const analyzer = createBashCommandAnalyzer(
+        { backend: "bubblewrap", cwd: "/work/project", environment: { PATH: "/usr/bin:/bin" } },
+        {
+          isExecutableFile: () => Promise.resolve(false),
+          realpath: (path) => Promise.resolve(path),
+        },
+      );
+      const { pi, executor } = await startClassified(
+        classConfig(
+          { mode: "ask", sessionGrant: "never" },
+          { mode: "allow", sessionGrant: "never" },
+        ),
+        analyzer,
+      );
+      const { ctx, prompts } = promptingContext(() => answer);
+      if (answer === "Allow once") await expect(runBash(pi, command, ctx)).resolves.toBeDefined();
+      else
+        await expect(runBash(pi, command, ctx)).rejects.toThrow(
+          /^Pi Sandbox denied bash: user_denied$/u,
+        );
+      expect(prompts).toEqual([
+        {
+          title: `Allow bash: ${command}?\n\nAutomatic approval unavailable:\n"sed" was not found on PATH`,
+          choices: ["Allow once", "Deny"],
+        },
+      ]);
+      expect(bashCalls(executor)).toEqual(answer === "Allow once" ? [command] : []);
+    },
+  );
+
+  it("shows the generic analysis failure without exposing an analyzer exception", async () => {
+    const { pi, executor } = await startClassified(
+      classConfig({ mode: "ask", sessionGrant: "never" }, { mode: "allow", sessionGrant: "never" }),
+      fakeAnalyzer(() => {
+        throw new Error("private error details");
+      }),
+    );
+    const { ctx, prompts } = promptingContext(() => "Deny");
+    await expect(runBash(pi, "ls", ctx)).rejects.toThrow(/^Pi Sandbox denied bash: user_denied$/u);
+    expect(prompts).toEqual([
+      {
+        title: "Allow bash: ls?\n\nAutomatic approval unavailable:\ncommand analysis failed",
+        choices: ["Allow once", "Deny"],
+      },
+    ]);
+    expect(bashCalls(executor)).toEqual([]);
+  });
+
+  it("bounds and sanitizes the issue passed through the managed approval prompt", async () => {
+    const { pi } = await startClassified(
+      classConfig({ mode: "ask", sessionGrant: "never" }, { mode: "allow", sessionGrant: "never" }),
+      fakeAnalyzer(() => ({
+        commandClass: "unclassified",
+        version: 7,
+        issue: { code: "unsupported_syntax", message: `bad\n\u001b\u202e${"é".repeat(400)}` },
+      })),
+    );
+    const { ctx, prompts } = promptingContext(() => "Deny");
+    await expect(runBash(pi, "x", ctx)).rejects.toThrow(/^Pi Sandbox denied bash: user_denied$/u);
+    expect(prompts[0]?.title).toBe(
+      `Allow bash: x?\n\nAutomatic approval unavailable:\nbad   ${"é".repeat(251)}…`,
+    );
   });
 
   it("uses the exact frozen command for analysis and execution", async () => {

@@ -57,6 +57,9 @@ export function boundedDisplayText(value: string, maximumBytes: number): string 
 /** Previews longer than 1024 bytes keep 1024 bytes and gain an ellipsis. */
 const APPROVAL_PREVIEW_BYTES = 1024;
 
+/** Shared display bound for the classifier's first issue in prompts and denials. */
+export const MAXIMUM_ANALYSIS_ISSUE_BYTES = 512;
+
 /** Nested tools have no independent TUI card: the prompt must identify the operation. */
 export function approvalPreview(label: string, args: JsonObject): string {
   const identifying =
@@ -73,7 +76,7 @@ export function approvalPreview(label: string, args: JsonObject): string {
   return `${label}: ${preview}`;
 }
 
-export function approvalUi(ctx: ExtensionContext): ApprovalUi | undefined {
+export function approvalUi(ctx: ExtensionContext, analysisIssue?: string): ApprovalUi | undefined {
   if (!ctx.hasUI) return undefined;
   return {
     async prompt(prompt, signal) {
@@ -81,7 +84,15 @@ export function approvalUi(ctx: ExtensionContext): ApprovalUi | undefined {
       const choices = prompt.allowForSession
         ? ["Allow once", session, "Deny"]
         : ["Allow once", "Deny"];
-      const selected = await ctx.ui.select(`Allow ${prompt.request.display}?`, choices, { signal });
+      let title = `Allow ${prompt.request.display}?`;
+      if (
+        prompt.request.subject === "bash" &&
+        prompt.request.commandClass === "unclassified" &&
+        analysisIssue !== undefined &&
+        analysisIssue !== ""
+      )
+        title += `\n\nAutomatic approval unavailable:\n${boundedDisplayText(analysisIssue, MAXIMUM_ANALYSIS_ISSUE_BYTES)}`;
+      const selected = await ctx.ui.select(title, choices, { signal });
       return selected === "Allow once"
         ? "allow_once"
         : selected === session
