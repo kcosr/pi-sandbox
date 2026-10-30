@@ -1251,6 +1251,15 @@ unclassified or direct execution.
 
 ### Known read-only diagnostics
 
+When Bash analysis cannot classify a command, an approval prompt includes
+`Automatic approval unavailable:` followed by the first classifier reason. For
+example, `"sed" was not found on PATH` identifies an executable lookup failure.
+The reason is limited to 512 UTF-8 bytes, with control and format characters
+replaced. An internal analysis failure shows `command analysis failed`.
+The diagnostic does not change approval choices, session grants or execution.
+Bash without configured command analysis, other tools and classified commands
+keep their existing prompts.
+
 `/sandbox policy` adds a `bash (known read-only)` row showing the class policy
 and its class-scoped grant:
 

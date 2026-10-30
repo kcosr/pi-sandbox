@@ -4,6 +4,8 @@
 
 ### Added
 
+- Show the first Bash classification failure in approval prompts to explain why automatic approval is unavailable. ([#47](https://github.com/kcosr/pi-sandbox/pull/47))
+
 - Support `{ any_literal = true }` for Bash command-set option values while retaining exact value lists. ([#46](https://github.com/kcosr/pi-sandbox/pull/46))
 
 - Allow Bash command sets to list basename and absolute-path alternatives with the same argument rule. ([#45](https://github.com/kcosr/pi-sandbox/pull/45))

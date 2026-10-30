@@ -40,6 +40,7 @@ export {
   joinPolicies,
 } from "./command-classes.js";
 export {
+  MAXIMUM_ANALYSIS_ISSUE_BYTES,
   approvalPreview,
   approvalSubjectLabel,
   approvalUi,

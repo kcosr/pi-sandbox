@@ -17,8 +17,11 @@ import type {
 import type { PiToolExtension } from "../managed-extensions/sdk.js";
 import {
   COMMAND_CLASS_TOOL,
+  MAXIMUM_ANALYSIS_ISSUE_BYTES,
   PolicyEngine,
+  approvalPreview,
   approvalSubjectLabel,
+  approvalUi,
   boundedDisplayText,
   commandClassLabel,
   hasCommandClassPolicies,
@@ -48,7 +51,6 @@ import {
 } from "./diagnostics.js";
 import { createSandboxExtension } from "../../packages/sandbox-extension/src/factory.js";
 import type { ExtensionDependencies, SandboxExecutor } from "./types.js";
-import { approvalUi, approvalPreview } from "../permissions/index.js";
 import { ManagedMcpRuntime } from "../mcp/runtime.js";
 import { createManagedCodemodeExtension } from "../codemode/index.js";
 import { isManagedToolSelected, selectManagedActiveTools } from "../runtime/arguments.js";
@@ -75,8 +77,6 @@ interface CommandClassification {
   /** Bounded first analyzer issue for an unclassified command. */
   readonly issue?: string;
 }
-
-const MAXIMUM_ANALYSIS_ISSUE_BYTES = 512;
 
 async function registerPiToolExtensions(
   pi: ExtensionAPI,
@@ -266,7 +266,10 @@ async function authorizeRequest(
   if (state.policy === undefined || state.stopped) {
     throw new Error("Pi Sandbox is not available");
   }
-  const ui = approvalUi(ctx);
+  const ui = approvalUi(
+    ctx,
+    classification?.commandClass === "unclassified" ? classification.issue : undefined,
+  );
   const decision = await state.policy.evaluate(request, {
     ...(ui === undefined ? {} : { ui }),
     ...(signal === undefined ? {} : { signal }),
