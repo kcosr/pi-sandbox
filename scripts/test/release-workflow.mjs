@@ -26,6 +26,11 @@ const expectedUpstreamSuites = [
   "packages/coding-agent/test/auth-check.test.ts",
   "packages/coding-agent/test/managed-model-runtime.test.ts",
   "packages/coding-agent/test/managed-main.test.ts",
+  "packages/coding-agent/test/default-skill-paths.test.ts",
+  "packages/coding-agent/test/managed-main-skills.test.ts",
+  "packages/coding-agent/test/skills.test.ts",
+  "packages/coding-agent/test/sdk-skills.test.ts",
+  "packages/coding-agent/test/package-manager.test.ts",
   "packages/coding-agent/test/managed-tools.test.ts",
   "packages/coding-agent/test/managed-version.test.ts",
   "packages/coding-agent/test/managed-tool-paths.test.ts",
@@ -174,7 +179,14 @@ test("source verification retains all contract, upstream and theme checks with i
   assert.equal(commands[1][2].cwd, sourceRoot);
   assert.deepEqual(commands[2].slice(0, 2), [
     "npm",
-    ["exec", "--", "vitest", "run", "test/resource-loader-theme.test.ts"],
+    [
+      "exec",
+      "--",
+      "vitest",
+      "run",
+      "test/resource-loader-theme.test.ts",
+      "test/resource-loader.test.ts",
+    ],
   ]);
   assert.equal(commands[2][2].cwd, join(sourceRoot, "packages/coding-agent"));
   for (const [, , options] of commands) {

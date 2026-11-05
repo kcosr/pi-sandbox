@@ -209,6 +209,7 @@ export function applyIdentityOverrides<PiValue extends AuthoredPiEnvironmentValu
     mcp,
     audit: base.audit,
     sessions: base.sessions,
+    skills: base.skills,
     exports: base.exports,
     modelsFile: overrides.modelsFile ?? base.modelsFile,
     execution: applyExecutionOverride(base.execution, overrides.execution),

@@ -76,6 +76,10 @@ export interface ExportsConfig {
   readonly enabled: boolean;
 }
 
+export interface SkillsConfig {
+  readonly directories: readonly string[];
+}
+
 export interface SessionsConfig {
   readonly retentionDays: number;
 }
@@ -137,6 +141,7 @@ export interface SandboxConfig<PiValue = string> {
   readonly audit: AuditConfig;
   readonly sessions: SessionsConfig;
   readonly exports: ExportsConfig;
+  readonly skills: SkillsConfig;
   readonly modelsFile: string;
   readonly execution: ExecutionConfig;
   readonly identity: IdentityConfig;

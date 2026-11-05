@@ -69,6 +69,13 @@ export function validateManagedArguments(args: readonly string[]): void {
       throw new UnsafeManagedArgumentError(argument);
     }
   }
+  if (args[0] !== "--validate-installation") {
+    for (const [argument] of managedArguments(args)) {
+      if (argument === "--candidate-payload" || argument.startsWith("--candidate-payload=")) {
+        throw new UnsafeManagedArgumentError(argument);
+      }
+    }
+  }
   managedToolSelection(args);
 }
 

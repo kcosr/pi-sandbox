@@ -81,6 +81,20 @@ Linux real-Bubblewrap tests also require Python 3 for offline socket-family and
 namespace probes. This is a test-host dependency, not an application runtime
 dependency.
 
+Shared-skill verification includes strict main-policy parsing, identity carry-through
+and broker rejection, invoking-user root checks, installation candidate checks,
+and prepared-tree/mode inventory validation. Both staged installers cover mode
+restoration, upgrade removal, retained-policy checks and malformed inventories.
+The patched-source checkpoint runs native skills, SDK, package-manager and
+resource-loader suites plus default-root and managed-main forwarding tests, and
+an API negative control for `defaultSkillPaths`. Compiled RPC smoke checks
+separate user-state directories, personal precedence, path filters, `--no-skills`,
+explicit skills, runtime recreation, and ordinary confined script execution.
+The same shared-skill smoke is wired into the native Seatbelt review build.
+The local fixture provider also exercises managed reads and approved Bash against
+shared assets without contacting a live provider. Staged macOS installer checks
+on Linux do not qualify native macOS execution.
+
 ## Test layers
 
 ### Unit

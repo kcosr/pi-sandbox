@@ -55,7 +55,9 @@ done
   exit 1
 }
 awk '
-  NF != 2 || $1 !~ /^[0-9a-f]{64}$/ || $2 !~ /^payload\/pi-sandbox\// || $2 ~ /(^|\/)\.\.(\/|$)/ { exit 1 }
+  NF != 2 || $0 != $1 "  " $2 || $1 !~ /^[0-9a-f]{64}$/ ||
+  $2 !~ /^payload\/pi-sandbox\// || $2 ~ /(^|\/)\.\.?($|\/)/ ||
+  $2 ~ /\/\// || $2 ~ /\/$/ || ++seen[$2] != 1 { exit 1 }
 ' "$checksums" || {
   echo "release SHA256SUMS has an invalid entry" >&2
   exit 1
@@ -70,6 +72,50 @@ checksum_count=$(wc -l < "$checksums")
   echo "release payload checksum verification failed" >&2
   exit 1
 }
+# Skill modes are trusted only after complete payload checksum verification.
+skills_present=0
+if [ -e "$payload/skills" ] || [ -e "$payload/skills-modes.txt" ]; then
+  [ -d "$payload/skills" ] && [ -f "$payload/skills-modes.txt" ] || {
+    echo "bundled skills require both skills/ and skills-modes.txt" >&2
+    exit 1
+  }
+  # Pass paths as argv: newline-containing empty directories must not evade checks.
+  (CDPATH= cd "$payload" && LC_ALL=C find skills -exec sh -c '
+    for skill_path do
+      case "$skill_path" in
+        *[!\ -~]*|*" "*|*\\*) exit 1 ;;
+      esac
+    done
+  ' sh {} +) || {
+    echo "bundled skill paths must use printable ASCII without spaces or backslashes" >&2
+    exit 1
+  }
+  LC_ALL=C awk '
+    NF != 2 || $0 != $1 " " $2 || ($1 != "0644" && $1 != "0755") ||
+    $2 !~ /^skills\/.+/ || $2 ~ /[^!-~]/ || $2 ~ /\\/ ||
+    $2 ~ /(^|\/)\.\.?($|\/)/ || $2 ~ /\/\// || $2 ~ /\/$/ ||
+    (NR > 1 && $2 <= previous) { exit 1 }
+    { previous = $2 }
+  ' "$payload/skills-modes.txt" || {
+    echo "bundled skill mode inventory is invalid" >&2
+    exit 1
+  }
+  while IFS=' ' read -r skill_mode skill_path; do
+    [ -f "$payload/$skill_path" ] && [ ! -L "$payload/$skill_path" ] || {
+      echo "bundled skill mode inventory names a missing regular file" >&2
+      exit 1
+    }
+  done < "$payload/skills-modes.txt"
+  skills_file_count=$(find "$payload/skills" -type f | wc -l)
+  skills_mode_count=$(awk 'END { print NR }' "$payload/skills-modes.txt")
+  skills_mode_lines=$(wc -l < "$payload/skills-modes.txt")
+  [ "$skills_file_count" -eq "$skills_mode_count" ] && [ "$skills_mode_count" -eq "$skills_mode_lines" ] || {
+    echo "bundled skill mode inventory does not cover every file" >&2
+    exit 1
+  }
+  skills_present=1
+fi
+
 for command in $bundled_commands; do
   [ -f "$payload/tools/bin/$command" ] && [ -x "$payload/tools/bin/$command" ] && [ ! -L "$payload/tools/bin/$command" ] || {
     echo "selected bundled executable is missing or invalid: $command" >&2; exit 1;
@@ -148,10 +194,10 @@ trap 'exit 1' HUP INT TERM
 
 if [ "$config_present" -eq 1 ] && [ "$replace_config" -eq 0 ]; then
   if [ -n "$destdir" ]; then
-    "$candidate" --validate-installation --root "$destdir"
+    "$candidate" --validate-installation --root "$destdir" --candidate-payload "$payload"
     execution_backend=$("$candidate" --print-execution-backend --root "$destdir")
   else
-    "$candidate" --validate-installation
+    "$candidate" --validate-installation --candidate-payload "$payload"
     execution_backend=$("$candidate" --print-execution-backend)
   fi
 else
@@ -159,7 +205,7 @@ else
   mkdir -p "$validation_root/etc/pi-sandbox"
   install -m 0644 "$defaults_config" "$validation_root/etc/pi-sandbox/config.toml"
   install -m 0644 "$defaults_models" "$validation_root/etc/pi-sandbox/models.json"
-  "$candidate" --validate-installation --root "$validation_root"
+  "$candidate" --validate-installation --root "$validation_root" --candidate-payload "$payload"
   execution_backend=$("$candidate" --print-execution-backend --root "$validation_root")
 fi
 case "$execution_backend" in
@@ -210,6 +256,12 @@ chmod 0755 "$stage/pi-sandbox"
 for native_dir in "$stage/tools/bin" "$stage/tools/lib"; do
   if [ -d "$native_dir" ]; then find "$native_dir" -type f -exec chmod 0755 {} \;; fi
 done
+if [ "$skills_present" -eq 1 ]; then
+  while IFS=' ' read -r skill_mode skill_path; do
+    chmod "$skill_mode" "$stage/$skill_path"
+  done < "$payload/skills-modes.txt"
+fi
+
 install_defaults=0
 if [ "$config_present" -eq 0 ] || [ "$replace_config" -eq 1 ]; then
   install_defaults=1

@@ -19,11 +19,17 @@ import { tmpdir } from "node:os";
 import { dirname, join, relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { renderLayoutText } from "../build/layout-render.mjs";
+import { skillCandidateFixture, verifySkillInstallation } from "./skill-install-fixtures.mjs";
 
 const repositoryRoot = resolve(dirname(fileURLToPath(import.meta.url)), "../..");
 const temporaryRoot = await mkdtemp(join(tmpdir(), "pi-sandbox-macos-install-"));
 
 try {
+  await verifySkillInstallation({
+    root: join(temporaryRoot, "shared-skills"),
+    createRelease,
+    libexecDir: "/usr/local/libexec/pi-sandbox",
+  });
   await verifyPayloadIntegrityChecks(temporaryRoot);
   await verifyExecutionBackends(temporaryRoot);
 
@@ -279,9 +285,19 @@ set -eu
 operation=\${1:-}
 shift
 root=
-if [ "\${1:-}" = --root ]; then root=$2; shift 2; fi
-[ "$#" -eq 0 ]
+candidate_payload=
+while [ "$#" -gt 0 ]; do
+  [ "$#" -ge 2 ] || exit 64
+  case "$1" in
+    --root) root=$2 ;;
+    --candidate-payload) [ "$operation" = --validate-installation ] || exit 64; candidate_payload=$2 ;;
+    *) exit 64 ;;
+  esac
+  shift 2
+done
 config_dir=${shellQuote(layout?.configDir ?? "/etc/pi-sandbox")}
+config="$root$config_dir/config.toml"
+${skillCandidateFixture(layout?.libexecDir ?? "/usr/local/libexec/pi-sandbox")}
 grep -q '^config_version = 14$' "$root$config_dir/config.toml"
 grep -q '"providers"' "$root$config_dir/models.json"
 case "$operation" in

@@ -95,6 +95,7 @@ function config(
 ): SandboxConfig {
   return {
     configVersion: 14,
+    skills: { directories: [] },
     exports: { enabled: false },
     codemode: { enabled: false, timeoutMs: 300000 },
     mcp: { servers: {} },

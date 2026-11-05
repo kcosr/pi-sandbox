@@ -271,6 +271,21 @@ The root check has no configuration override. Only the non-interactive
 system installers are admitted with effective UID `0`; they validate
 administrative inputs and never start Pi or an execution backend.
 
+## Shared skill discovery
+
+Main-policy `skills.directories` is carried unchanged through identity merging
+and validated at operational startup. The managed entry point passes those roots
+through Pi's generic `defaultSkillPaths` option to each runtime and resource
+loader, including session recreation. Pi's package manager uses native recursive
+skill collection and user settings filters, with default roots ranked after
+ordinary resources. The loader appends enabled defaults after explicit CLI skill
+paths, preserving personal name precedence and `--no-skills`.
+
+The optional distribution `skills_source` only supplies packaged files. Runtime
+discovery still requires the installed root in main policy. No broker policy,
+package installation machinery, user extension factory or resource-discovery
+hook is added. Shared resources use ordinary user-scope source presentation.
+
 ## Tool catalog and approvals
 
 The extension registers only configured, non-disabled model tools. The exact

@@ -85,6 +85,34 @@ test("release inventory ties source and executable identity to selected shipped 
       ),
     );
     assert.deepEqual(sbom.components.map((c) => c.name).sort(), ["bun", "chosen", "pi"]);
+    const withSkills = await createSbom({
+      ...args,
+      skillsBundle: {
+        source: { kind: "prepared-directory", sha256: "1".repeat(64) },
+        files: [
+          { path: "skills/review/SKILL.md", size: 123, sha256: "2".repeat(64), mode: "0644" },
+          {
+            path: "skills/review/scripts/check.sh",
+            size: 45,
+            sha256: "3".repeat(64),
+            mode: "0755",
+          },
+        ],
+      },
+    });
+    const skill = withSkills.components.find(
+      (component) => component["bom-ref"] === "skill-file:skills/review/scripts/check.sh",
+    );
+    assert.equal(skill.type, "file");
+    assert.deepEqual(skill.hashes, [{ alg: "SHA-256", content: "3".repeat(64) }]);
+    assert.ok(
+      skill.properties.some((item) => item.name === "pi-sandbox:mode" && item.value === "0755"),
+    );
+    assert.ok(
+      skill.properties.some(
+        (item) => item.name === "pi-sandbox:source-sha256" && item.value === "1".repeat(64),
+      ),
+    );
     await mkdir(join(root, "broker"));
     await mkdir(join(root, "audit-collector"));
     for (const crate of ["broker", "audit-collector"])

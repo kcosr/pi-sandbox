@@ -47,6 +47,7 @@ export async function createSbom({
   sourceDirty,
   bubblewrap,
   toolBundle,
+  skillsBundle,
   payload,
 }) {
   const components = new Map();
@@ -192,6 +193,23 @@ export async function createSbom({
         ],
       });
   }
+  if (skillsBundle) {
+    for (const file of skillsBundle.files) {
+      add({
+        type: "file",
+        "bom-ref": `skill-file:${file.path}`,
+        name: file.path,
+        hashes: [{ alg: "SHA-256", content: file.sha256 }],
+        properties: [
+          property("role", "administrator-provided-skill-asset"),
+          property("source-kind", skillsBundle.source.kind),
+          property("source-sha256", skillsBundle.source.sha256),
+          property("mode", file.mode),
+          property("size", file.size),
+        ],
+      });
+    }
+  }
   // Copied executable assets are outside the bundler graph. Inventory their
   // actual bytes and embedded package metadata without inventing versions.
   async function inventoryAssets(directory, prefix = "") {
@@ -288,7 +306,7 @@ export async function createSbom({
           property("source-dirty", sourceDirty),
           property(
             "coverage",
-            "Actual JavaScript bundle inputs, selected extensions, Bun runtime, native Cargo lock inventories and bundled Bubblewrap. System libraries and Bun internal third-party components are not enumerated.",
+            "Actual JavaScript bundle inputs, selected extensions, Bun runtime, native Cargo lock inventories, bundled Bubblewrap and administrator-provided skill assets. System libraries and Bun internal third-party components are not enumerated.",
           ),
         ],
       },

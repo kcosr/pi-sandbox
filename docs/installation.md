@@ -70,6 +70,8 @@ directory rather than wrapper generations:
   bwrap                         # bundled-provider releases only
   package.json
   sbom.cdx.json
+  skills/                       # optional bundled skill tree
+  skills-modes.txt               # checksum-covered per-file modes, when selected
   theme/
   assets/
   export-html/
@@ -377,6 +379,44 @@ extension sources are not included in the release archive.
 
 See [Pi integration and upgrade contract](../specs/pi-integration.md) for the
 authoritative upstream contract.
+
+### Bundling shared skills
+
+A version-3 distribution can select a prepared directory with a top-level input
+resolved relative to its manifest:
+
+```toml
+skills_source = "./shared-skills"
+```
+
+The builder copies the complete tree, including support files, into
+`payload/pi-sandbox/skills`. Installation places it at the selected platform's
+`libexec_dir/skills`. The selected default policy must explicitly include that
+exact installed root in `[skills].directories`; selecting a source does not
+silently activate an implicit runtime path. Conversely, defaults referencing
+that package-owned root or a descendant require a source containing the directory.
+Use platform-specific default policies when platform layouts differ.
+
+Prepared trees permit regular files and directories, including empty directories.
+Symlinks and special files are rejected. Packaged path components must use
+printable ASCII without spaces or backslashes; external skill roots have no such
+packaging restriction. Directories install as `0755`; files with any source execute
+bit install as `0755`, and other files as `0644`. The checksummed
+`skills-modes.txt` contains the sorted complete regular-file inventory. Installers
+validate it and restore those modes after ordinary payload normalization using
+existing shell/awk prerequisites. The release manifest and SBOM include the
+bundle's hashes, modes and prepared-tree provenance. A selected empty tree has
+an empty sidecar; an unselected bundle has neither directory nor sidecar.
+
+Upgrades preserve existing administrative configuration by default. The candidate
+validator checks the configuration actually selected for installation against the
+replacement payload before swapping it. Removing a bundle or a subdirectory still
+referenced by retained policy fails; update that policy first or explicitly select
+replacement defaults. Installation-only `--validate-installation` accepts
+`--candidate-payload DIR` alongside optional `--root DESTDIR` for this check.
+External roots are not opened during installation. Runtime startup still checks
+all configured roots as the invoking user. Rollback and uninstall follow ordinary
+payload handling; external skill trees are never copied, removed or rewritten.
 
 ## Installing and upgrading
 

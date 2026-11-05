@@ -2092,6 +2092,23 @@ session_grant = "offer"
     }
 
     #[test]
+    fn rejects_skills_in_user_and_group_records() {
+        for (kind, selector) in [
+            (RecordKind::User, "uid = 7"),
+            (RecordKind::Group, "gid = 7"),
+        ] {
+            for table in ["skills", "overrides.skills"] {
+                let source =
+                    format!("version = 10\n{selector}\n[{table}]\ndirectories = ['/srv/skills']\n");
+                assert!(matches!(
+                    parse_record(source.as_bytes(), kind),
+                    Err(LookupError::InvalidFile)
+                ));
+            }
+        }
+    }
+
+    #[test]
     fn rejects_session_retention_in_user_and_group_records() {
         for (kind, selector) in [
             (RecordKind::User, "uid = 7"),

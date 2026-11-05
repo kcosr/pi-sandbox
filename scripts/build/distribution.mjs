@@ -4,7 +4,13 @@ import { dirname, isAbsolute, normalize, resolve } from "node:path";
 import { parse as parseToml } from "@iarna/toml";
 import { loadToolBundle } from "./tool-bundle.mjs";
 
-const ROOT_KEYS = new Set(["version", "allow_config_override", "extension_manifests", "platforms"]);
+const ROOT_KEYS = new Set([
+  "version",
+  "allow_config_override",
+  "extension_manifests",
+  "skills_source",
+  "platforms",
+]);
 const PLATFORM_KEYS = new Set([
   "config_dir",
   "libexec_dir",
@@ -136,6 +142,10 @@ export async function loadDistribution(path, platform = process.platform) {
     throw new Error("distribution extension_manifests must be an array of paths");
   }
   const manifestDirectory = dirname(distributionPath);
+  const skillsSource =
+    root.skills_source === undefined
+      ? undefined
+      : inputPath(root.skills_source, "distribution skills_source", manifestDirectory);
   const extensionManifests = root.extension_manifests.map((entry) =>
     resolve(manifestDirectory, entry),
   );
@@ -195,6 +205,7 @@ export async function loadDistribution(path, platform = process.platform) {
   return Object.freeze({
     path: distributionPath,
     extensionManifests: Object.freeze(extensionManifests),
+    ...(skillsSource === undefined ? {} : { skillsSource }),
     ...(bubblewrap === undefined ? {} : { bubblewrap }),
     ...(toolBundle === undefined ? {} : { toolBundle }),
     layout: Object.freeze({

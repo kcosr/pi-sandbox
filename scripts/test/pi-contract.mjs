@@ -62,6 +62,14 @@ function changeManagementCallback(source) {
   );
 }
 
+function changeDefaultSkillPaths(source) {
+  const member = interfaceMember(source, "MainOptions", "defaultSkillPaths");
+  assert.ok(member.type !== undefined, "expected defaultSkillPaths' array type");
+  return (
+    source.slice(0, member.type.getStart()) + "readonly number[]" + source.slice(member.type.end)
+  );
+}
+
 async function expectContractFailure(label) {
   const result = await compilePiContract(fixtureRoot);
   assert.notEqual(result.code, 0, `${label}: unexpectedly accepted incompatible declarations`);
@@ -109,6 +117,12 @@ try {
       removeMember("MainOptions", "includeBuiltinTools"),
     ],
     ["missing display version", "main.d.ts", removeMember("MainOptions", "displayVersion")],
+    [
+      "missing default skill discovery roots",
+      "main.d.ts",
+      removeMember("MainOptions", "defaultSkillPaths"),
+    ],
+    ["changed default skill path type", "main.d.ts", changeDefaultSkillPaths],
     ["missing main hook", "main.d.ts", removeMember("MainOptions", "beforeRun")],
     ["missing mandatory startup hook", "main.d.ts", removeMember("MainOptions", "beforeInterface")],
     [

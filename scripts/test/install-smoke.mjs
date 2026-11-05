@@ -17,6 +17,7 @@ import {
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { skillCandidateFixture, verifySkillInstallation } from "./skill-install-fixtures.mjs";
 
 const repositoryRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../..");
 const temporaryRoot = await mkdtemp(
@@ -24,6 +25,11 @@ const temporaryRoot = await mkdtemp(
 );
 
 try {
+  await verifySkillInstallation({
+    root: path.join(temporaryRoot, "shared-skills"),
+    createRelease: (directory) => createRelease(directory, "skills"),
+    libexecDir: "/usr/libexec/pi-sandbox",
+  });
   const release1 = path.join(temporaryRoot, "release-1");
   const release2 = path.join(temporaryRoot, "release-2");
   const bundledRelease = path.join(temporaryRoot, "release-bundled");
@@ -367,13 +373,18 @@ operation=\${1:-}
 case "$operation" in --validate-installation|--print-execution-backend) ;; *) exit 64 ;; esac
 shift
 root=
-if [ "\${1:-}" = --root ]; then
-  [ "$#" -eq 2 ] || exit 64
-  root=$2
-elif [ "$#" -ne 0 ]; then
-  exit 64
-fi
+candidate_payload=
+while [ "$#" -gt 0 ]; do
+  [ "$#" -ge 2 ] || exit 64
+  case "$1" in
+    --root) root=$2 ;;
+    --candidate-payload) [ "$operation" = --validate-installation ] || exit 64; candidate_payload=$2 ;;
+    *) exit 64 ;;
+  esac
+  shift 2
+done
 config="$root/etc/pi-sandbox/config.toml"
+${skillCandidateFixture("/usr/libexec/pi-sandbox")}
 grep -q '^valid = true$' "$config"
 models_path=$(awk -F '"' '/^models_file = "/ { print $2; exit }' "$config")
 [ -n "$models_path" ]

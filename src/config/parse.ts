@@ -18,6 +18,7 @@ import {
   type SandboxConfig,
   type AuthoredPiEnvironmentValue,
   type SessionsConfig,
+  type SkillsConfig,
   type ExportsConfig,
   type CommandClassPolicies,
   type CommandClassPolicy,
@@ -374,6 +375,26 @@ function parseExports(value: unknown, issues: string[]): ExportsConfig | undefin
   return Object.freeze({ enabled: value.enabled });
 }
 
+function parseSkills(value: unknown, issues: string[]): SkillsConfig | undefined {
+  if (value === undefined) return Object.freeze({ directories: Object.freeze([]) });
+  if (!isRecord(value)) {
+    issues.push("config.skills must be a table");
+    return undefined;
+  }
+  inspectKeys(value, ["directories"], "config.skills", issues);
+  const directories = own(value, "directories");
+  if (!Array.isArray(directories) || !directories.every(isNormalizedAbsoluteFilePath)) {
+    issues.push(
+      "config.skills.directories must contain normalized absolute directory paths other than /",
+    );
+    return undefined;
+  }
+  if (new Set(directories).size !== directories.length) {
+    issues.push("config.skills.directories must not contain duplicate paths");
+  }
+  return Object.freeze({ directories: Object.freeze([...directories]) });
+}
+
 function parseSessions(value: unknown, issues: string[]): SessionsConfig | undefined {
   if (!isRecord(value)) {
     issues.push("config.sessions must be a table");
@@ -542,7 +563,7 @@ export function parseConfig(
   }
 
   const issues: string[] = [];
-  inspectKeys(parsed, ROOT_KEYS, "config", issues);
+  inspectKeys(parsed, ROOT_KEYS, "config", issues, ["skills"]);
 
   const configVersion = own(parsed, "config_version");
   if (configVersion !== 14) {
@@ -569,6 +590,7 @@ export function parseConfig(
   }
   const audit = parseAudit(own(parsed, "audit"), issues);
   const exports = parseExports(own(parsed, "exports"), issues);
+  const skills = parseSkills(own(parsed, "skills"), issues);
   const sessions = parseSessions(own(parsed, "sessions"), issues);
   const identity = parseIdentity(own(parsed, "identity"), issues);
   const execution = parseExecution(own(parsed, "execution"), issues);
@@ -643,6 +665,7 @@ export function parseConfig(
     mcp === undefined ||
     audit === undefined ||
     sessions === undefined ||
+    skills === undefined ||
     exports === undefined ||
     identity === undefined ||
     execution === undefined ||
@@ -661,6 +684,7 @@ export function parseConfig(
     mcp,
     audit,
     sessions,
+    skills,
     exports,
     modelsFile,
     execution,

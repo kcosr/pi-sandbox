@@ -117,6 +117,22 @@ Direct execution provides no filesystem protection for the package. Runtime
 configuration, environment and Pi's host-tool cache cannot replace a selected
 bundled executable, and a missing selected executable does not trigger fallback.
 
+Shared skill documents and assets are model input read by host-side Pi discovery.
+Administrator inclusion grants visibility, not execution authority or protection
+from prompt injection. Users may replace or filter shared skills. A skill script
+runs only through an admitted tool or user shell operation and retains that
+operation's approval, audit and execution boundary. Do not use skills as an
+access-control mechanism, or put secrets in the shared tree. Filesystem masks
+and denials govern tool reads; they do not hide skill text already loaded by the
+host Pi process. Direct mode retains ordinary user authority.
+
+Deployment owns the permissions of external roots and packaged assets. This
+feature adds no ownership check or new filesystem grant. Bundled skills follow
+the payload's checksums and mode inventory; symlinks and special files are not
+packaged. Administrative root accessibility is checked before interface startup,
+including when the user disables skills. Changes after startup use ordinary Pi
+best-effort reload behavior, without a content snapshot or watcher.
+
 ## MCP and code-mode authority
 
 Administrator-enabled HTTP MCP clients and stdio MCP servers run outside the
