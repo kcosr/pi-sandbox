@@ -1,5 +1,14 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { mkdtemp, mkdir, readFile, readdir, rm, symlink, writeFile } from "node:fs/promises";
+import {
+  mkdtemp,
+  mkdir,
+  readFile,
+  readdir,
+  realpath,
+  rm,
+  symlink,
+  writeFile,
+} from "node:fs/promises";
 import * as filesystem from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -16,7 +25,7 @@ vi.mock("node:fs/promises", async (original) => {
 describe("sandbox export host publication", () => {
   let directory: string;
   beforeEach(async () => {
-    directory = await mkdtemp(join(tmpdir(), "pi-user-export-"));
+    directory = await realpath(await mkdtemp(join(tmpdir(), "pi-user-export-")));
   });
   afterEach(async () => {
     vi.mocked(filesystem.link).mockReset();
