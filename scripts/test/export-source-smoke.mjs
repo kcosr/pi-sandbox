@@ -50,7 +50,7 @@ try {
   const controller=new AbortController();reader=await source.open(controller.signal);controller.abort();
   await assert.rejects(reader.list("home",""),/export_aborted/);
   await reader.close();reader=undefined;
-  assert.equal((await executor.execute({argv:["/bin/printf","peer-alive"]})).stdout.toString(),"peer-alive");
+  assert.equal((await executor.execute({argv:[executor.commands.sh,"-c","printf %s peer-alive"]})).stdout.toString(),"peer-alive");
   console.log("export-source-ok");
 } finally {await reader?.close();await executor.close();}
 // Exercise the shipped role and its lifecycle independently of native Seatbelt.

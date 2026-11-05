@@ -1,3 +1,4 @@
+import { selectedTestToolBundle } from "../../../../tests/support/tool-bundle.js";
 import { describe, expect, it, vi } from "vitest";
 import { spawnSync } from "node:child_process";
 import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
@@ -17,6 +18,8 @@ import {
   executeRead,
   executeWrite,
 } from "./executor-operations.js";
+
+const toolBundle = selectedTestToolBundle();
 
 function scriptedExecutor(
   handler: Parameters<typeof createExecutor>[0],
@@ -443,7 +446,10 @@ describe("extension-owned tool semantics", () => {
           stderr: executed.stderr,
         });
       });
-      Object.assign(executor, { cwd: root, commands: await resolveDirectToolCommands() });
+      Object.assign(executor, {
+        cwd: root,
+        commands: await resolveDirectToolCommands(process.platform, toolBundle),
+      });
       for (const [index, name] of ["normal.txt", "part:99:name.txt", "line\nbreak.txt"].entries()) {
         const directory = path.join(root, String(index));
         await mkdir(directory);
@@ -503,7 +509,10 @@ describe("extension-owned tool semantics", () => {
           stderr: executed.stderr,
         });
       });
-      Object.assign(executor, { cwd: root, commands: await resolveDirectToolCommands() });
+      Object.assign(executor, {
+        cwd: root,
+        commands: await resolveDirectToolCommands(process.platform, toolBundle),
+      });
       const file = path.join(root, "input.txt");
       await writeFile(file, "before\rprogress\nneedle\nafter");
       const context = await executeGrep(

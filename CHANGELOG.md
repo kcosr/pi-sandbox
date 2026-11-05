@@ -31,6 +31,8 @@
 
 ### Fixed
 
+- Fix macOS verification fixtures to use selected tool bundles, portable shell commands, and canonical temporary paths.
+
 - Preserve split UTF-8 characters when Bash stdout and stderr interleave, including user `!` commands. ([#49](https://github.com/kcosr/pi-sandbox/pull/49))
 - Enforce grep match limits for single-file searches and filenames containing line-number-like text; report bounded capture truncation explicitly. ([#49](https://github.com/kcosr/pi-sandbox/pull/49))
 

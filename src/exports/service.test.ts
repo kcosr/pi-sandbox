@@ -1,7 +1,7 @@
 import type { Component } from "@earendil-works/pi-tui";
 import type { ExtensionCommandContext } from "@earendil-works/pi-coding-agent";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { mkdtemp, readFile, readdir, rm } from "node:fs/promises";
+import { mkdtemp, readFile, readdir, realpath, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { dialogTheme, entry, readerFixture } from "./fixtures.test-support.js";
@@ -56,7 +56,7 @@ function context(mode = "tui", responses: unknown[] = []) {
 describe("user-only sandbox save coordinator", () => {
   let directory: string;
   beforeEach(async () => {
-    directory = await mkdtemp(join(tmpdir(), "pi-export-ui-"));
+    directory = await realpath(await mkdtemp(join(tmpdir(), "pi-export-ui-")));
   });
   afterEach(async () => {
     await rm(directory, { recursive: true, force: true });
