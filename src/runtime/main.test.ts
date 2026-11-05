@@ -132,7 +132,8 @@ describe("administrative configuration", () => {
 
   it("enforces the execution backend's platform contract", () => {
     const config = {
-      configVersion: 13,
+      configVersion: 14,
+      exports: { enabled: false },
       codemode: { enabled: false, timeoutMs: 300000 },
       mcp: { servers: {} },
       sessions: { retentionDays: 0 },
@@ -376,7 +377,8 @@ describe("administrative configuration", () => {
     ]);
     const allow = { audit: false, mode: "allow", sessionGrant: "never" } as const;
     const config = {
-      configVersion: 13,
+      configVersion: 14,
+      exports: { enabled: false },
       codemode: { enabled: false, timeoutMs: 300000 },
       mcp: { servers: {} },
       sessions: { retentionDays: 0 },
@@ -518,7 +520,7 @@ describe("administrative configuration", () => {
     await writeFile(rooted(root, "/etc/pi-sandbox/models.json"), '{"providers":{}}');
     // The fixture selects Linux, where resolving this macro would fail.
     const config = await validateAdministrativeConfiguration(root);
-    expect(config.configVersion).toBe(13);
+    expect(config.configVersion).toBe(14);
     expect(config.filesystem.hiddenPaths).toEqual(["/srv/{{machine_id}}"]);
     expect(config.environment.pi.PI_MACHINE_ID).toBe("{{machine_id}}");
   });

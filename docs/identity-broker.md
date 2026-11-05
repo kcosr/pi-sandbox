@@ -153,7 +153,7 @@ Protocol 10 distinguishes ordinary expandable strings from file-derived
 `{ "literal": "resolved value" }` values in the response's `environment.pi`.
 The latter is a wire-only shape: TOML accepts `{ file = "…" }`, not `literal`,
 and the application never accepts a file reference from the socket. Upgrade the
-application and broker together. Rule version 10 and main schema 13 are unchanged.
+application and broker together. Rule version 10 and main schema 14 are unchanged.
 
 ## User and group rules
 
@@ -334,7 +334,7 @@ The wire representation is deliberately different from authored TOML:
 `policy_layers` retains each matching file's ordered rules and optional default,
 without its identity or filename. Only the broker emits that representation.
 Upgrade the application and broker together for protocol 10 and update all
-preserved rule files to version 10; older versions are rejected. Main schema 13
+preserved rule files to version 10; older versions are rejected. Main schema 14
 is unchanged.
 
 ### Combining matching rules

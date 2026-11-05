@@ -54,6 +54,7 @@ import type { ExtensionDependencies, SandboxExecutor } from "./types.js";
 import { ManagedMcpRuntime } from "../mcp/runtime.js";
 import { createManagedCodemodeExtension } from "../codemode/index.js";
 import { isManagedToolSelected, selectManagedActiveTools } from "../runtime/arguments.js";
+import { createUserExportController } from "../exports/service.js";
 import { toolEnvironmentPrompt } from "./environment-prompt.js";
 
 interface ExtensionState {
@@ -161,7 +162,7 @@ function policyWrappedPiTool(definition: ToolDefinition, state: ExtensionState):
 const MANAGED_TOOL_CALL_SUMMARY_MAX_BYTES = 1024;
 function sandboxCommandUsage(config?: SandboxConfig): string {
   const subjects = config === undefined ? "<tool>" : diagnosticSubjects(config).join("|");
-  return `Usage: /sandbox [mounts | policy [${subjects}] | mcp [server]]`;
+  return `Usage: /sandbox [save | mounts | policy [${subjects}] | mcp [server]]`;
 }
 
 async function authorize<T extends JsonObject>(
@@ -515,10 +516,26 @@ export function createPiSandboxExtension(dependencies: ExtensionDependencies): E
       }),
     );
 
+    const userExports = createUserExportController({
+      cwd: dependencies.cwd,
+      ...(dependencies.accountHome === undefined ? {} : { accountHome: dependencies.accountHome }),
+      getSource: () => dependencies.getExportSource?.(),
+      admitted: () =>
+        state.config?.exports.enabled === true &&
+        state.config.filesystem.cwdWritable === false &&
+        state.config.execution.backend !== "direct" &&
+        state.executor !== undefined &&
+        !state.stopped,
+      ...(dependencies.exportAudit === undefined ? {} : { audit: dependencies.exportAudit }),
+    });
+    dependencies.registerBeforeInteractiveQuit?.((ctx, signal) =>
+      userExports.beforeQuit(ctx, signal),
+    );
+
     pi.registerCommand("sandbox", {
-      description: "Show Pi Sandbox status, mounts, or effective policy",
+      description: "Save private sandbox files or show status, mounts, and policy",
       getArgumentCompletions(argumentPrefix) {
-        const matches = sandboxCommandArguments(state.config).filter((argument) =>
+        const matches = ["save", ...sandboxCommandArguments(state.config)].filter((argument) =>
           argument.startsWith(argumentPrefix),
         );
         return matches.length === 0
@@ -539,6 +556,8 @@ export function createPiSandboxExtension(dependencies: ExtensionDependencies): E
           .trim()
           .split(/\s+/u)
           .filter((value) => value.length > 0);
+        if (argumentsList.length === 1 && argumentsList[0] === "save")
+          return userExports.run(ctx).then(() => undefined);
         if (argumentsList[0] === "mcp" && argumentsList.length <= 2)
           return notify(mcp?.diagnostics(argumentsList[1]) ?? "MCP servers (host execution)\nnone");
         if (argumentsList.length === 0) {
@@ -688,6 +707,7 @@ export function createPiSandboxExtension(dependencies: ExtensionDependencies): E
     pi.on("session_shutdown", async (event, ctx) => {
       state.stopped = true;
       try {
+        await userExports.close();
         const cleanup = await Promise.allSettled([
           mcp?.close() ?? Promise.resolve(),
           ...stops.map((stop) => Promise.resolve().then(() => stop(event, ctx))),

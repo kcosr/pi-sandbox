@@ -18,6 +18,7 @@ import {
   type SandboxConfig,
   type AuthoredPiEnvironmentValue,
   type SessionsConfig,
+  type ExportsConfig,
   type CommandClassPolicies,
   type CommandClassPolicy,
   type PolicyMode,
@@ -50,6 +51,7 @@ const ROOT_KEYS = [
   "mcp",
   "audit",
   "sessions",
+  "exports",
   "execution",
   "filesystem",
   "identity",
@@ -359,6 +361,19 @@ function parseAudit(value: unknown, issues: string[]): AuditConfig | undefined {
   return Object.freeze({ enabled, facility });
 }
 
+function parseExports(value: unknown, issues: string[]): ExportsConfig | undefined {
+  if (!isRecord(value)) {
+    issues.push("config.exports must be a table");
+    return undefined;
+  }
+  inspectKeys(value, ["enabled"], "config.exports", issues);
+  if (typeof value.enabled !== "boolean") {
+    issues.push("config.exports.enabled must be a boolean");
+    return undefined;
+  }
+  return Object.freeze({ enabled: value.enabled });
+}
+
 function parseSessions(value: unknown, issues: string[]): SessionsConfig | undefined {
   if (!isRecord(value)) {
     issues.push("config.sessions must be a table");
@@ -530,8 +545,8 @@ export function parseConfig(
   inspectKeys(parsed, ROOT_KEYS, "config", issues);
 
   const configVersion = own(parsed, "config_version");
-  if (configVersion !== 13) {
-    issues.push("config.config_version must be the integer 13");
+  if (configVersion !== 14) {
+    issues.push("config.config_version must be the integer 14");
   }
 
   const modelsFileValue = own(parsed, "models_file");
@@ -553,6 +568,7 @@ export function parseConfig(
     issues.push(error instanceof Error ? error.message : "config.mcp is invalid");
   }
   const audit = parseAudit(own(parsed, "audit"), issues);
+  const exports = parseExports(own(parsed, "exports"), issues);
   const sessions = parseSessions(own(parsed, "sessions"), issues);
   const identity = parseIdentity(own(parsed, "identity"), issues);
   const execution = parseExecution(own(parsed, "execution"), issues);
@@ -601,6 +617,11 @@ export function parseConfig(
         'config.network.mode must be "none" or "host" when config.execution.backend is "seatbelt"',
       );
   }
+  if (exports?.enabled && (execution?.backend === "direct" || filesystem?.cwdWritable !== false)) {
+    issues.push(
+      "config.exports.enabled requires a confined backend and filesystem.cwd_writable = false",
+    );
+  }
   const extensions = parseExtensions(own(parsed, "extensions"), catalog, issues);
   validateExtensionEnvironment(environment, extensions, catalog, issues);
   const selectedDefinitions =
@@ -622,6 +643,7 @@ export function parseConfig(
     mcp === undefined ||
     audit === undefined ||
     sessions === undefined ||
+    exports === undefined ||
     identity === undefined ||
     execution === undefined ||
     network === undefined ||
@@ -634,11 +656,12 @@ export function parseConfig(
   }
 
   return Object.freeze({
-    configVersion: 13,
+    configVersion: 14,
     codemode,
     mcp,
     audit,
     sessions,
+    exports,
     modelsFile,
     execution,
     identity,

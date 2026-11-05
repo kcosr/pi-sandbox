@@ -1,3 +1,4 @@
+import type { SandboxExportSource } from "./export/contracts.js";
 export const NETWORK_MODES = Object.freeze(["none", "local", "host"] as const);
 export type NetworkMode = (typeof NETWORK_MODES)[number];
 
@@ -63,6 +64,8 @@ export interface CreateBubblewrapExecutorOptions {
    * Managed self-contained builds may omit it to reenter their internal worker mode.
    */
   readonly workerCommand?: readonly [string, ...string[]];
+  /** Trusted host-only capability receiver. Never passed to tool contexts. */
+  readonly onExportSource?: (source: SandboxExportSource) => void;
 }
 
 export interface SandboxCommandRequest {

@@ -1,3 +1,8 @@
+import {
+  validExportAuditEvent,
+  EXPORT_AUDIT_EVENTS,
+  type UserExportAuditDetails,
+} from "./exports.js";
 import { isCommandSetId, MAXIMUM_COMMAND_SETS } from "../permissions/bash/command-set-contracts.js";
 import { lstat } from "node:fs/promises";
 import { createConnection } from "node:net";
@@ -10,7 +15,12 @@ export interface AuditEvent {
     | "tool_denied"
     | "tool_execution_intent"
     | "tool_completed"
-    | "session_ended";
+    | "session_ended"
+    | "export_intent"
+    | "export_complete"
+    | "export_replace_intent"
+    | "export_replace_complete";
+  user_export?: UserExportAuditDetails;
   pi_session_id: string;
   cwd?: string;
   invocation_id?: string;
@@ -69,6 +79,11 @@ export function auditCommand(value: string): Pick<AuditEvent, "command" | "comma
 }
 
 function validateEvent(event: AuditEvent): void {
+  if ((EXPORT_AUDIT_EVENTS as readonly string[]).includes(event.event)) {
+    if (!validExportAuditEvent(event, validAuditText)) throw new Error("Invalid audit event");
+    return;
+  }
+
   const toolEvent = [
     "tool_requested",
     "tool_denied",
@@ -270,7 +285,7 @@ export async function connectAuditClient(path: string): Promise<AuditClient> {
       }
       const record = response as Record<string, unknown>;
       const keys = Object.keys(record).sort().join(",");
-      if (record.version !== 3) throw new Error("Invalid audit collector version");
+      if (record.version !== 4) throw new Error("Invalid audit collector version");
       if (record.ok === false && keys === "code,ok,version") {
         if (
           !["protocol_error", "syslog_unavailable", "audit_disabled"].includes(String(record.code))
@@ -329,7 +344,7 @@ export async function connectAuditClient(path: string): Promise<AuditClient> {
         ) {
           throw new Error("Audit command exceeds size limit");
         }
-        request = `${JSON.stringify({ version: 3, event })}\n`;
+        request = `${JSON.stringify({ version: 4, event })}\n`;
         if (Buffer.byteLength(request) > MAX_REQUEST_BYTES) {
           throw new Error("Audit request exceeds size limit");
         }

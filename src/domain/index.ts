@@ -38,6 +38,7 @@ export type {
   PolicyMode,
   SandboxConfig,
   SessionsConfig,
+  ExportsConfig,
   SessionGrantPolicy,
   SubjectPolicy,
   ToolName,

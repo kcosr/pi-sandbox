@@ -94,7 +94,8 @@ function config(
   overrides: Partial<Record<ToolName, "allow" | "ask" | "deny" | "disabled">> = {},
 ): SandboxConfig {
   return {
-    configVersion: 13,
+    configVersion: 14,
+    exports: { enabled: false },
     codemode: { enabled: false, timeoutMs: 300000 },
     mcp: { servers: {} },
     sessions: { retentionDays: 0 },
@@ -979,7 +980,7 @@ describe("Pi Sandbox extension", () => {
     await command?.handler("mounts all", ctx as never);
     expect(notices.at(-1)).toEqual({
       message:
-        "Usage: /sandbox [mounts | policy [read|grep|find|ls|write|edit|bash|user_shell] | mcp [server]]",
+        "Usage: /sandbox [save | mounts | policy [read|grep|find|ls|write|edit|bash|user_shell] | mcp [server]]",
       type: "warning",
     });
   });

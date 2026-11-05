@@ -1,3 +1,4 @@
+import { createExportAudit } from "./exports.js";
 import type * as FsPromises from "node:fs/promises";
 import { mkdtemp, rm } from "node:fs/promises";
 import { createServer, type Server, type Socket } from "node:net";
@@ -13,7 +14,7 @@ import { lstat } from "node:fs/promises";
 import { connectAuditClient, type AuditClient, type AuditEvent } from "./client.js";
 
 const event = { event: "session_started", pi_session_id: "pi-1", cwd: "/workspace" } as const;
-const acknowledgment = `${JSON.stringify({ version: 3, ok: true, audit_session_id: "audit-1" })}\n`;
+const acknowledgment = `${JSON.stringify({ version: 4, ok: true, audit_session_id: "audit-1" })}\n`;
 let directory: string;
 let server: Server | undefined;
 let client: AuditClient | undefined;
@@ -53,6 +54,70 @@ async function listen(handler: (socket: Socket) => void) {
 }
 
 describe("audit client", () => {
+  it("transports bounded user export events independently of model tools", async () => {
+    const received: unknown[] = [];
+    const path = await listen((socket) =>
+      socket.on("data", (data) => {
+        received.push(JSON.parse(data.toString()));
+        socket.write(acknowledgment);
+      }),
+    );
+    client = await connectAuditClient(path);
+    const audit = createExportAudit(client);
+    const common = { operationId: "save-1", sessionId: "pi-1", destination: "/output" };
+    const prior = { dev: "1", ino: "2", size: "3", mtimeNs: "4", ctimeNs: "5" };
+    await audit({
+      ...common,
+      type: "export_intent",
+      roots: ["home"],
+      entryCount: 1,
+      fileCount: 1,
+      totalBytes: 3,
+      manifestDigest: "a".repeat(64),
+    });
+    await audit({ ...common, type: "export_replace_intent", path: "a.txt", prior });
+    await audit({
+      ...common,
+      type: "export_replace_complete",
+      path: "a.txt",
+      prior,
+      outcome: "saved",
+    });
+    await audit({
+      ...common,
+      type: "export_complete",
+      savedFiles: 1,
+      savedBytes: 3,
+      failedFiles: 0,
+      notSavedFiles: 0,
+      cancelled: false,
+    });
+    expect(received).toHaveLength(4);
+    const wire = received[0] as { version: number; event: AuditEvent };
+    expect(wire.version).toBe(4);
+    expect(wire.event).toMatchObject({
+      event: "export_intent",
+      pi_session_id: "pi-1",
+      user_export: { operationId: "save-1", destination: "/output" },
+    });
+    const bad = [
+      { ...wire.event, tool: "bash" },
+      { ...wire.event, event: "tool_completed" },
+      { ...wire.event, user_export: { ...wire.event.user_export, roots: ["host"] } },
+      { ...wire.event, user_export: { ...wire.event.user_export, totalBytes: 4 * 1024 ** 3 + 1 } },
+      { ...wire.event, user_export: { ...wire.event.user_export, fileContent: "secret" } },
+      {
+        event: "export_replace_intent",
+        pi_session_id: "pi-1",
+        user_export: { operationId: "s", destination: "/out", path: "../escape", prior },
+      },
+      { event: "export_complete", pi_session_id: "pi-1" },
+    ];
+    for (const invalid of bad)
+      await expect(client.submit(invalid as AuditEvent)).rejects.toThrow("Invalid audit event");
+    expect(received).toHaveLength(4);
+  });
+
   it.each([
     { path: "/bad\0path" },
     { path: "/bad\ud800path" },
@@ -79,7 +144,7 @@ describe("audit client", () => {
       }),
     ).rejects.toThrow("Invalid audit event");
     await client.submit(event);
-    expect(received).toEqual([{ version: 3, event }]);
+    expect(received).toEqual([{ version: 4, event }]);
   });
 
   it("preserves Bubblewrap as the tool execution boundary", async () => {
@@ -99,11 +164,11 @@ describe("audit client", () => {
       boundary: "bubblewrap",
     };
     await client.submit(call);
-    expect(received).toEqual([{ version: 3, event: call }]);
+    expect(received).toEqual([{ version: 4, event: call }]);
   });
 
   it.each(["http", "stdio"] as const)(
-    "sends typed %s MCP metadata and trusted parent correlation on wire version 3",
+    "sends typed %s MCP metadata and trusted parent correlation on wire version 4",
     async (transport) => {
       const requests: unknown[] = [];
       const path = await listen((socket) =>
@@ -125,7 +190,7 @@ describe("audit client", () => {
         parent_invocation_id: "script-1",
       };
       await client.submit(call);
-      expect(requests).toEqual([{ version: 3, event: call }]);
+      expect(requests).toEqual([{ version: 4, event: call }]);
     },
   );
 
@@ -165,7 +230,7 @@ describe("audit client", () => {
       } as AuditEvent;
       await expect(client.submit(call)).rejects.toThrow("Invalid audit event");
       await client.submit(event);
-      expect(requests).toEqual([{ version: 3, event }]);
+      expect(requests).toEqual([{ version: 4, event }]);
     },
   );
 
@@ -196,7 +261,7 @@ describe("audit client", () => {
         known_read_only_version: version,
       };
       await client.submit(call);
-      expect(requests).toEqual([{ version: 3, event: call }]);
+      expect(requests).toEqual([{ version: 4, event: call }]);
     },
   );
 
@@ -253,7 +318,7 @@ describe("audit client", () => {
     } as AuditEvent;
     await expect(client.submit(call)).rejects.toThrow("Invalid audit event");
     await client.submit(event);
-    expect(requests).toEqual([{ version: 3, event }]);
+    expect(requests).toEqual([{ version: 4, event }]);
   });
 
   it("sends configured command provenance separately from built-in safety", async () => {
@@ -277,7 +342,7 @@ describe("audit client", () => {
       command_set_ids: ["utility_read"],
     };
     await client.submit(call);
-    expect(requests).toEqual([{ version: 3, event: call }]);
+    expect(requests).toEqual([{ version: 4, event: call }]);
   });
 
   it("serializes submissions and waits for fragmented acknowledgments", async () => {
@@ -292,15 +357,15 @@ describe("audit client", () => {
     client = await connectAuditClient(path);
     await Promise.all([client.submit(event), client.submit(event)]);
     expect(requests).toEqual([
-      { version: 3, event },
-      { version: 3, event },
+      { version: 4, event },
+      { version: 4, event },
     ]);
   });
 
   it.each([
     '{"version":1,"ok":true,"audit_session_id":"a"}\n',
-    '{"version":3,"ok":false,"code":"syslog_unavailable"}\n',
-    '{"version":3,"ok":true,"audit_session_id":"a","extra":true}\n',
+    '{"version":4,"ok":false,"code":"syslog_unavailable"}\n',
+    '{"version":4,"ok":true,"audit_session_id":"a","extra":true}\n',
     "not json\n",
     acknowledgment + acknowledgment,
     "x".repeat(4097),

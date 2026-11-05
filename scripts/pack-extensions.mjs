@@ -34,7 +34,7 @@ for (const name of ["sandbox-extension", "git-extension"]) {
     "package/provenance.json",
     "package/dist/index.js",
     ...(name === "sandbox-extension"
-      ? ["package/dist/runtime/worker-entry.js"]
+      ? ["package/dist/runtime/worker-entry.js", "package/dist/runtime/export-reader-entry.js"]
       : ["package/dist/core.js", "package/dist/factory.js", "package/dist/config.js"]),
   ])
     assert(entries.includes(required), `Missing ${required}`);

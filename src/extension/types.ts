@@ -4,6 +4,9 @@ import type { ExecutionBackend, SandboxConfig } from "../domain/index.js";
 import type { HostCommandExecutor } from "../../packages/sandbox-extension/src/runtime/host-command/index.js";
 import type { ManagedExtensionInstance, PiToolExtension } from "../managed-extensions/sdk.js";
 import type { SandboxExecutor } from "../../packages/sandbox-extension/src/runtime/index.js";
+import type { SandboxExportSource } from "../../packages/sandbox-extension/src/runtime/export/contracts.js";
+import type { ExportAudit } from "../exports/contracts.js";
+import type { ExtensionCommandContext } from "@earendil-works/pi-coding-agent";
 import type { AuditClient } from "../audit/client.js";
 import type { BashCommandAnalyzer } from "../permissions/bash/contracts.js";
 
@@ -22,11 +25,18 @@ export interface ExtensionDependencies {
   readonly onSessionStart?: (file: string | undefined) => Promise<void>;
   /** Await process-owned cleanup before Pi's normal quit path can call process.exit. */
   readonly onProcessShutdown?: () => Promise<void>;
+  /** Runs while the TUI and private storage are still available, before normal quit. */
+  readonly registerBeforeInteractiveQuit?: (
+    handler: (ctx: ExtensionCommandContext, signal: AbortSignal) => Promise<boolean>,
+  ) => void;
   /** Managed application metadata; not part of the reusable executor interface. */
   readonly executionBackend?: ExecutionBackend;
   /** Canonical effective OS account home, supplied only by the managed application. */
   readonly accountHome?: string;
   readonly executor: SandboxExecutor;
+  /** Private user-command capability, never supplied to model tools. */
+  readonly getExportSource?: () => SandboxExportSource | undefined;
+  readonly exportAudit?: ExportAudit;
   /** Required exactly when the effective Bash policy has a command-class policy. */
   readonly bashAnalyzer?: BashCommandAnalyzer;
   readonly auditClient?: AuditClient;

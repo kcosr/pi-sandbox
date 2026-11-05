@@ -194,3 +194,13 @@ file-tool executables. The embedding application trusts every executable in thes
 directories and owns its approval policy. The standalone JSON schema does not
 expose this option. Managed Pi Sandbox supplies it through its main administrator
 `execution.command_path_prepend` setting.
+
+Trusted embedding applications may pass `onExportSource` to a Bubblewrap or
+Seatbelt constructor to capture a separate `SandboxExportSource`. Its paged
+inventory and bounded pull reader access only the executor's registered private
+Home/Temporary roots under the existing confinement. It is not a model tool and
+is deliberately absent from `SandboxExecutor`; host publication and user approval
+belong to the embedding application. Only one reader may be active, and callers
+must close it. Direct execution does not supply this capability. Standalone Pi
+does not register a save command. The packaged Seatbelt reader entry works with
+Node and Bun; a compiled embedding supplies its internal reader command explicitly.

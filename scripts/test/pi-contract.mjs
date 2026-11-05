@@ -112,6 +112,11 @@ try {
     ["missing main hook", "main.d.ts", removeMember("MainOptions", "beforeRun")],
     ["missing mandatory startup hook", "main.d.ts", removeMember("MainOptions", "beforeInterface")],
     [
+      "missing interactive quit hook",
+      "main.d.ts",
+      removeMember("MainOptions", "beforeInteractiveQuit"),
+    ],
+    [
       "missing model catalog switch",
       "core/model-runtime.d.ts",
       removeMember("CreateModelRuntimeOptions", "includeBuiltinCatalog"),

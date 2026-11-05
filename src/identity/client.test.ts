@@ -665,7 +665,8 @@ describe("identity overrides", () => {
   it("atomically replaces selected tools and inherits all omitted values", () => {
     const basePolicy = { audit: true, mode: "allow", sessionGrant: "never" } as const;
     const base = {
-      configVersion: 13,
+      configVersion: 14,
+      exports: { enabled: false },
       codemode: { enabled: false, timeoutMs: 300000 },
       mcp: { servers: {} },
       sessions: { retentionDays: 365 },
@@ -806,7 +807,8 @@ describe("identity MCP overrides", () => {
     codemode,
   );
   const base: SandboxConfig = {
-    configVersion: 13,
+    configVersion: 14,
+    exports: { enabled: false },
     codemode,
     mcp,
     sessions: { retentionDays: 365 },
@@ -820,6 +822,31 @@ describe("identity MCP overrides", () => {
     extensions: {},
     tools: {},
   };
+
+  it("keeps export admission main-only and rejects overrides that broaden writable host access", () => {
+    const exporting = {
+      ...base,
+      exports: { enabled: true },
+      filesystem: { ...base.filesystem, cwdWritable: false },
+    };
+    expect(applyIdentityOverrides(exporting, { tools: {} }).exports).toBe(exporting.exports);
+    expect(() =>
+      applyIdentityOverrides(exporting, { tools: {}, filesystem: { cwdWritable: true } }),
+    ).toThrow("exports.enabled");
+    expect(() =>
+      applyIdentityOverrides(exporting, { tools: {}, execution: { backend: "direct" } }),
+    ).toThrow("exports.enabled");
+    expect(() =>
+      parseBrokerResponse(
+        JSON.stringify({
+          version: 10,
+          status: "ok",
+          environment: { pi: {}, sandbox: {}, extensions: {} },
+          overrides: { exports: { enabled: true } },
+        }),
+      ),
+    ).toThrow();
+  });
 
   it("inherits omitted MCP admission and immutably overlays enabled flags only", () => {
     expect(applyIdentityOverrides(base, { tools: {} }).mcp).toBe(mcp);
@@ -904,7 +931,8 @@ describe("identity MCP overrides", () => {
 describe("identity command-class overrides", () => {
   const allow = { audit: true, mode: "allow", sessionGrant: "never" } as const;
   const base = {
-    configVersion: 13,
+    configVersion: 14,
+    exports: { enabled: false },
     codemode: { enabled: false, timeoutMs: 300000 },
     mcp: { servers: {} },
     sessions: { retentionDays: 365 },

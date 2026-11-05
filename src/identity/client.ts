@@ -194,12 +194,22 @@ export function applyIdentityOverrides<PiValue extends AuthoredPiEnvironmentValu
   assertEffectiveCommandClassPolicies(tools);
   const mcp = applyMcpOverrides(base.mcp, overrides.mcp);
   assertMcpCodeModeExposure(mcp, base.codemode);
+  if (
+    base.exports.enabled &&
+    ((overrides.execution?.backend ?? base.execution.backend) === "direct" ||
+      (overrides.filesystem?.cwdWritable ?? base.filesystem.cwdWritable))
+  ) {
+    throw new Error(
+      "exports.enabled requires a confined backend and filesystem.cwd_writable = false after identity overrides",
+    );
+  }
   return Object.freeze({
-    configVersion: 13,
+    configVersion: 14,
     codemode: base.codemode,
     mcp,
     audit: base.audit,
     sessions: base.sessions,
+    exports: base.exports,
     modelsFile: overrides.modelsFile ?? base.modelsFile,
     execution: applyExecutionOverride(base.execution, overrides.execution),
     identity: base.identity,

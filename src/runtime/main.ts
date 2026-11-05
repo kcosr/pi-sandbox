@@ -1,3 +1,5 @@
+import type { SandboxExportSource } from "../../packages/sandbox-extension/src/runtime/export/contracts.js";
+import { createExportAudit } from "../audit/exports.js";
 import { canonicalizeCommandPathPrepend } from "../../packages/sandbox-extension/src/runtime/command-path.js";
 import { readFile } from "node:fs/promises";
 import { isAbsolute, join, resolve } from "node:path";
@@ -9,6 +11,7 @@ import {
   ModelRuntime,
   type CreateModelRuntimeOptions,
   type ExtensionFactory,
+  type ExtensionCommandContext,
 } from "@earendil-works/pi-coding-agent";
 
 import { buildLayout } from "../build-layout/index.js";
@@ -47,6 +50,7 @@ import {
   createBubblewrapExecutor,
   createDirectExecutor,
   createSeatbeltExecutor,
+  INTERNAL_EXPORT_READER_ARGUMENT,
   type SandboxExecutor,
 } from "../../packages/sandbox-extension/src/runtime/index.js";
 import {
@@ -91,6 +95,10 @@ export interface ManagedMainOptions {
   readonly validateSessionCwd: (cwd: string) => void;
   readonly beforeRun: (context: SessionMaintenanceContext) => Promise<void>;
   readonly beforeInterface: () => Promise<void>;
+  readonly beforeInteractiveQuit: (
+    ctx: ExtensionCommandContext,
+    signal: AbortSignal,
+  ) => Promise<boolean>;
 }
 
 export type ManagedMain = (args: string[], options: ManagedMainOptions) => Promise<void>;
@@ -252,6 +260,7 @@ async function createProbedExecutor(
   environment: EnvironmentVariables,
   ambientEnvironment: NodeJS.ProcessEnv,
   commandPathPrepend: readonly string[],
+  onExportSource?: (source: SandboxExportSource) => void,
 ): Promise<SandboxExecutor> {
   let executor: SandboxExecutor;
   const limits =
@@ -270,6 +279,7 @@ async function createProbedExecutor(
         bubblewrapPath: bubblewrap.path,
         networkMode: config.network.mode,
         cwdWritable: config.filesystem.cwdWritable,
+        ...(onExportSource === undefined ? {} : { onExportSource }),
         hiddenPaths: config.filesystem.hiddenPaths,
         ...(buildLayout.toolBundle ? { toolBundle: buildLayout.toolBundle } : {}),
         environment,
@@ -280,8 +290,10 @@ async function createProbedExecutor(
         throw new Error("Seatbelt does not support local networking");
       executor = await createSeatbeltExecutor({
         cwd,
+        exportReaderCommand: [process.execPath, INTERNAL_EXPORT_READER_ARGUMENT],
         limits,
         cwdWritable: config.filesystem.cwdWritable,
+        ...(onExportSource === undefined ? {} : { onExportSource }),
         deniedPaths: config.filesystem.deniedPaths,
         ...(buildLayout.toolBundle ? { toolBundle: buildLayout.toolBundle } : {}),
         networkMode: config.network.mode,
@@ -545,6 +557,7 @@ export async function runPiSandbox({ piArgs: args, configPath }: SandboxArgument
     commandPathPrepend,
     ...(buildLayout.toolBundle ? { toolBundle: buildLayout.toolBundle } : {}),
   });
+  let exportSource: SandboxExportSource | undefined;
   const executor = createManagedExecutor({
     cwd,
     create: () =>
@@ -554,6 +567,11 @@ export async function runPiSandbox({ piArgs: args, configPath }: SandboxArgument
         identityEnvironment.sandbox,
         ambientHostEnvironment,
         commandPathPrepend,
+        config.exports.enabled
+          ? (source) => {
+              exportSource = source;
+            }
+          : undefined,
       ),
   });
   const hostExecutors: Record<string, HostCommandExecutor> = {};
@@ -587,6 +605,8 @@ export async function runPiSandbox({ piArgs: args, configPath }: SandboxArgument
       const mcpPreferences = servers.some((server) => server.status === "ready")
         ? await loadMcpPreferences(userStateDir)
         : undefined;
+      let beforeInteractiveQuit: ManagedMainOptions["beforeInteractiveQuit"] = () =>
+        Promise.resolve(true);
       const extension = createPiSandboxExtension({
         features: {
           config,
@@ -599,9 +619,14 @@ export async function runPiSandbox({ piArgs: args, configPath }: SandboxArgument
         userStateDir,
         ...(config.sessions.retentionDays === 0 ? {} : { onSessionStart: touchSessionFile }),
         onProcessShutdown: closeRuntime,
+        registerBeforeInteractiveQuit: (handler) => {
+          beforeInteractiveQuit = handler;
+        },
         toolArguments: args,
         loadConfig: () => Promise.resolve(config),
         executor,
+        getExportSource: () => exportSource,
+        ...(auditClient === undefined ? {} : { exportAudit: createExportAudit(auditClient) }),
         ...(accountHome === undefined ? {} : { accountHome }),
         ...(bashAnalyzer === undefined ? {} : { bashAnalyzer }),
         ...(auditClient === undefined ? {} : { auditClient }),
@@ -629,6 +654,7 @@ export async function runPiSandbox({ piArgs: args, configPath }: SandboxArgument
           },
         }),
         beforeInterface: () => executor.probe(),
+        beforeInteractiveQuit: (ctx, signal) => beforeInteractiveQuit(ctx, signal),
       });
     } finally {
       lease.restore();

@@ -7,6 +7,7 @@ import { fileURLToPath } from "node:url";
 import { setTimeout as delay } from "node:timers/promises";
 import { testParallelTools } from "./parallel-tools-smoke.mjs";
 import { installExtensionArtifacts } from "./extension-artifacts.mjs";
+import { testPackagedExportSource } from "./export-source-smoke.mjs";
 
 const root = dirname(dirname(dirname(fileURLToPath(import.meta.url))));
 const buildArgs = process.argv.slice(2);
@@ -178,6 +179,14 @@ try {
       modelsPath: join(home, "agent/models.json"),
       workspace,
     });
+    if (selected.kind !== "direct")
+      await testPackagedExportSource({
+        directory: packed.directory,
+        workspace,
+        deniedRoot: home,
+        kind: selected.kind,
+        runtime: selected.runtime ?? selected.piRuntime,
+      });
     console.log(`PASS ${selected.kind} ordinary Pi under ${selected.piRuntime}`);
   }
   console.log(
