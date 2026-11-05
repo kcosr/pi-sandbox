@@ -4,6 +4,7 @@ import type {
   SandboxExportEntry,
   SandboxExportReader,
 } from "../../packages/sandbox-extension/src/runtime/export/contracts.js";
+import { isExportEntry } from "../../packages/sandbox-extension/src/runtime/export/protocol.js";
 import { checkCancelled, EXPORT_LIMITS } from "./limits.js";
 
 export interface ExportManifestEntry {
@@ -65,24 +66,16 @@ export function normalizeSelections(entries: readonly SandboxExportEntry[]): San
 }
 
 export function validateExportEntry(entry: SandboxExportEntry, roots: ReadonlySet<string>): void {
-  validateRelativeExportPath(entry.path);
   if (
+    !isExportEntry(entry) ||
     !roots.has(entry.rootId) ||
-    entry.name !== posix.basename(entry.path) ||
-    !["file", "directory", "unsupported"].includes(entry.kind) ||
-    !Number.isSafeInteger(entry.size) ||
-    entry.size < 0 ||
-    Object.values(entry.identity).length !== 5 ||
-    ![
-      entry.identity.dev,
-      entry.identity.ino,
-      entry.identity.size,
-      entry.identity.mtimeNs,
-      entry.identity.ctimeNs,
-    ].every((value) => typeof value === "string" && /^-?\d{1,30}$/u.test(value))
+    entry.name !== posix.basename(entry.path)
   ) {
     throw new Error("Invalid sandbox export inventory entry");
   }
+  // Unsupported entries use display-only placeholders, which can expand beyond
+  // filesystem path limits. The wire bounds still apply; these cannot be saved.
+  if (entry.kind !== "unsupported") validateRelativeExportPath(entry.path);
   if (entry.kind === "file" && entry.identity.size !== String(entry.size))
     throw new Error("Inconsistent sandbox export file size");
 }

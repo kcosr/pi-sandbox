@@ -69,6 +69,45 @@ describe("sandbox save manifest", () => {
     await expect(inventoryExport(reader, [directory])).rejects.toThrow("unsupported");
   });
 
+  it.each([
+    { bytes: 119, parent: "" },
+    { bytes: 255, parent: "" },
+    { bytes: 119, parent: Array.from({ length: 16 }, () => "a".repeat(240)).join("/") },
+  ])(
+    "keeps long invalid-UTF8 placeholders from hiding valid files: %j",
+    async ({ bytes, parent }) => {
+      const name = `[invalid UTF-8: ${Buffer.alloc(bytes, 0xff).toString("hex")} ]`;
+      const prefix = parent ? `${parent}/` : "";
+      const unsupported = {
+        ...entry(`${prefix}${name}`, { kind: "unsupported" }),
+        problem: "export_invalid_utf8_name",
+      };
+      const valid = entry(`${prefix}report.txt`);
+      const { reader } = readerFixture([unsupported, valid]);
+      expect(Buffer.byteLength(name)).toBeGreaterThan(255);
+      if (parent) expect(Buffer.byteLength(unsupported.path)).toBeGreaterThan(4096);
+      expect(await listExportDirectory(reader, "home", parent)).toEqual([unsupported, valid]);
+      if (!parent) expect(await hasExportFiles(reader)).toBe(true);
+      expect((await inventoryExport(reader, [valid])).fileCount).toBe(1);
+      await expect(inventoryExport(reader, [unsupported])).rejects.toThrow(
+        "Cannot save selected entry",
+      );
+    },
+  );
+
+  it("retains wire bounds for unsupported entries and filesystem limits for selectable entries", async () => {
+    const { reader } = readerFixture([entry("a".repeat(5121), { kind: "unsupported" })]);
+    await expect(listExportDirectory(reader, "home", "")).rejects.toThrow(
+      "Invalid sandbox export inventory entry",
+    );
+    for (const kind of ["file", "directory"] as const) {
+      const { reader: selectableReader } = readerFixture([entry("a".repeat(256), { kind })]);
+      await expect(listExportDirectory(selectableReader, "home", "")).rejects.toThrow(
+        "Invalid sandbox export path",
+      );
+    }
+  });
+
   it("rejects injected descendants and repeated pagination cursors", async () => {
     const { reader } = readerFixture([]);
     reader.list = vi.fn().mockResolvedValue({ entries: [entry("elsewhere/file")] });

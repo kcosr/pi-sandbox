@@ -50,7 +50,7 @@ describe.skipIf(process.platform !== "linux" || !existsSync(bubblewrapPath))(
       });
       expect(created.exitCode).toBe(0);
       const invalidName = await executor.execute({
-        argv: ["/bin/bash", "-c", "touch \"$HOME\"/$'\\xff'"],
+        argv: ["/bin/bash", "-c", "name=$(printf '\\377%.0s' {1..255}); touch \"$HOME/$name\""],
       });
       expect(invalidName.exitCode).toBe(0);
       reader = await captured!.open();
@@ -59,9 +59,11 @@ describe.skipIf(process.platform !== "linux" || !existsSync(bubblewrapPath))(
         kind: "unsupported",
         problem: "export_symlink",
       });
-      expect(
-        inventory.entries.find((entry) => entry.problem === "export_invalid_utf8_name"),
-      ).toMatchObject({ kind: "unsupported" });
+      const unsupportedName = inventory.entries.find(
+        (entry) => entry.problem === "export_invalid_utf8_name",
+      );
+      expect(unsupportedName).toMatchObject({ kind: "unsupported" });
+      expect(Buffer.byteLength(unsupportedName!.name)).toBeGreaterThan(255);
       const temporary = await reader.list("tmp", "");
       expect(temporary.entries.map((entry) => entry.name)).toContain("private-report");
       expect(temporary.entries.map((entry) => entry.name)).not.toContain(path.basename(cwd));
