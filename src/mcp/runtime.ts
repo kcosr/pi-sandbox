@@ -6,7 +6,7 @@ import {
   type McpServerConfig,
   type ToolDefinition,
 } from "@earendil-works/pi-coding-agent";
-import type { TSchema } from "@earendil-works/pi-ai";
+import type { TSchema } from "typebox";
 import { Compile } from "typebox/compile";
 import {
   StdioTransport,

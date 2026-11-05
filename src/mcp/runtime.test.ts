@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
+import { validateToolArguments, type ToolCall } from "@earendil-works/pi-ai";
 import type { StreamableHttpTransport } from "@earendil-works/pi-mcp";
 import type { ToolDefinition } from "@earendil-works/pi-coding-agent";
 import type { McpServerConfig } from "../domain/index.js";
@@ -96,6 +97,159 @@ function invoke(
 }
 
 describe("managed MCP admission", () => {
+  it.each(["direct", "codemode"] as const)(
+    "authorizes and dispatches the same normalized snapshot with %s exposure",
+    async (exposure) => {
+      const submit = vi.fn(() => Promise.resolve());
+      const auditor = new ToolAuditor(
+        { submit, close: () => Promise.resolve() },
+        "/work",
+        "/home/test",
+      );
+      const { runtime, connection, policy } = setup(
+        { exposure, defaultPolicy: { ...allow, mode: "ask", audit: true } },
+        () => true,
+        undefined,
+        true,
+        auditor,
+      );
+      const evaluate = vi.spyOn(policy, "evaluate");
+      const source = item();
+      const [tool] = runtime.adaptTools(
+        "docs",
+        [
+          {
+            ...source,
+            tool: {
+              ...source.tool,
+              inputSchema: {
+                type: "object",
+                properties: {
+                  query: { type: "string" },
+                  count: { type: "integer", minimum: 1 },
+                  tags: { type: "array", items: { type: "string" } },
+                  optional: { type: "string" },
+                },
+                required: ["query", "count", "tags"],
+                additionalProperties: false,
+              },
+            },
+          },
+        ],
+        connection,
+      );
+      const original = { query: null, count: "3.5", tags: "one", optional: null };
+      // Exercise Pi's actual public validator before entering the managed wrapper.
+      const normalized = validateToolArguments(tool!, {
+        type: "toolCall",
+        id: "call",
+        name: tool!.name,
+        arguments: original,
+      }) as { query: string; count: number; tags: string[] };
+      const expected = { query: "null", count: 3, tags: ["one"] };
+      expect(normalized).toEqual(expected);
+      expect(original).toEqual({ query: null, count: "3.5", tags: "one", optional: null });
+      let approve!: (value: string) => void;
+      const select = vi.fn(
+        () =>
+          new Promise<string>((resolve) => {
+            approve = resolve;
+          }),
+      );
+      const work = tool!.execute("call", normalized, undefined, undefined, context(select));
+      await vi.waitFor(() => expect(select).toHaveBeenCalledOnce());
+      const request = evaluate.mock.calls[0]![0];
+      expect(request.arguments).toEqual(expected);
+      expect(Object.isFrozen(request.arguments)).toBe(true);
+      expect(Object.isFrozen(request.arguments.tags)).toBe(true);
+      expect(select).toHaveBeenCalledWith(
+        expect.stringContaining(JSON.stringify(request.arguments)),
+        ["Allow once", "Deny"],
+        expect.objectContaining({ signal: expect.any(AbortSignal) as AbortSignal }),
+      );
+      expect(source.execute).not.toHaveBeenCalled();
+      normalized.count = 99;
+      normalized.tags.push("changed while waiting");
+      original.tags = "changed transcript input";
+      approve("Allow once");
+      await work;
+      expect(source.execute).toHaveBeenCalledOnce();
+      expect(source.execute.mock.calls[0]![1]).toBe(request.arguments);
+      expect(source.execute.mock.calls[0]![1]).toEqual(expected);
+      expect(submit).toHaveBeenCalledWith(
+        expect.objectContaining({ event: "tool_execution_intent", approval_source: "prompt" }),
+      );
+      expect(submit).toHaveBeenCalledWith(
+        expect.objectContaining({ event: "tool_completed", outcome: "success" }),
+      );
+      await runtime.close();
+    },
+  );
+
+  it("keeps format, reference, and nullable schemas consistent with Pi validation", async () => {
+    const { runtime, connection } = setup({ defaultPolicy: { ...allow, mode: "ask" } });
+    const source = item();
+    const [tool] = runtime.adaptTools(
+      "docs",
+      [
+        {
+          ...source,
+          tool: {
+            ...source.tool,
+            inputSchema: {
+              type: "object",
+              properties: {
+                email: { type: "string", format: "email" },
+                nested: { $ref: "#/$defs/nested" },
+                nullable: { anyOf: [{ type: "string" }, { type: "null" }] },
+              },
+              required: ["email", "nested", "nullable"],
+              $defs: {
+                nested: {
+                  type: "object",
+                  properties: { count: { type: "integer" } },
+                  required: ["count"],
+                  additionalProperties: false,
+                },
+              },
+              additionalProperties: false,
+            },
+          },
+        },
+      ],
+      connection,
+    );
+    const valid = { email: "person@example.test", nested: { count: "2" }, nullable: null };
+    const normalize = (args: ToolCall["arguments"]): Record<string, unknown> =>
+      validateToolArguments(tool!, {
+        type: "toolCall",
+        id: "call",
+        name: tool!.name,
+        arguments: args,
+      }) as Record<string, unknown>;
+    const select = vi.fn(() => Promise.resolve("Allow once"));
+    await tool!.execute("call", normalize(valid), undefined, undefined, context(select));
+    expect(source.execute.mock.calls[0]![1]).toEqual({
+      email: "person@example.test",
+      nested: { count: 2 },
+      nullable: null,
+    });
+    for (const invalid of [
+      { ...valid, email: "invalid", nested: { count: 2 } },
+      { ...valid, nested: { count: "invalid" } },
+      { ...valid, nested: { count: 2, unknown: true } },
+    ]) {
+      expect(() => normalize(invalid)).toThrow("Validation failed");
+      // Calling the wrapper directly cannot evade the second, non-coercing gate.
+      await expect(
+        tool!.execute("call", invalid, undefined, undefined, context(select)),
+      ).rejects.toThrow("Invalid MCP tool arguments");
+    }
+    expect(select).toHaveBeenCalledOnce();
+    expect(source.execute).toHaveBeenCalledOnce();
+    await runtime.close();
+  });
+
   it("retains deferred discovery metadata through admission, approval and audit wrappers", async () => {
     const submit = vi.fn(() => Promise.resolve());
     const auditor = new ToolAuditor(

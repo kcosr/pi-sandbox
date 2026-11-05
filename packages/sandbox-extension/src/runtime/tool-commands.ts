@@ -11,7 +11,6 @@ export const LINUX_TOOL_COMMANDS: ToolCommandPaths = Object.freeze({
   grep: "/bin/grep",
   file: "/usr/bin/file",
   find: "/usr/bin/find",
-  awk: "/usr/bin/awk",
   head: "/usr/bin/head",
   sha256sum: "/usr/bin/sha256sum",
   sort: "/usr/bin/sort",

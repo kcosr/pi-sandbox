@@ -249,6 +249,14 @@ Neither the prompt note nor tool-card presentation changes path execution or
 access. Reusable file-tool renderers preserve absolute paths and label explicit
 tool-home arguments without resolving them against the host or a later executor.
 
+The reusable sandbox factory composes the pinned Pi tool definitions with local
+execution and path-call renderers. It retains upstream schemas, argument
+preparation, result renderers and shared helpers such as image resizing, subject
+to explicit managed overrides. Upstream improvements to those retained parts
+arrive with a Pi upgrade; changes to stock execution or overridden previews need
+separate review and adaptation. No call preview reads host target files before
+authorization.
+
 The distribution manifest fixes the config directory, libexec directory,
 launcher path, identity and event-collector sockets, Linux systemd unit directory, and Linux
 Bubblewrap provider and optional macOS tool bundle at build time. A system provider names an unmanaged
@@ -363,8 +371,8 @@ timeouts, cancellation, and descendant cleanup used for managed host commands
 apply. There is no mount, PID, network, seccomp, or filesystem containment.
 
 Linux uses the distribution's fixed GNU utility paths. macOS direct mode
-resolves a declared Homebrew GNU command profile (coreutils, findutils, grep,
-and gawk) plus system Bash, `sh`, and `file`, and fails startup if any command is
+resolves a declared Homebrew GNU command profile (coreutils, findutils,
+and grep) plus system Bash, `sh`, and `file`, and fails startup if any command is
 missing. This preserves one typed-tool implementation instead of silently
 changing semantics between GNU and BSD utilities.
 

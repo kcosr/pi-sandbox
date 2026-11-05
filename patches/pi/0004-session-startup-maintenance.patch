@@ -1,8 +1,8 @@
 diff --git a/packages/coding-agent/src/main.ts b/packages/coding-agent/src/main.ts
-index 8640361..89f9250 100644
+index 16e1456..2818a81 100644
 --- a/packages/coding-agent/src/main.ts
 +++ b/packages/coding-agent/src/main.ts
-@@ -575,6 +575,14 @@ export interface MainOptions {
+@@ -578,6 +578,14 @@ export interface MainOptions {
  	createModelRuntime?: ModelRuntimeFactory;
  	/** Reject a target workspace before reading its settings or resources. */
  	validateSessionCwd?: (cwd: string) => void;
@@ -17,7 +17,7 @@ index 8640361..89f9250 100644
  }
  
  export async function main(args: string[], options?: MainOptions) {
-@@ -908,6 +916,12 @@ export async function main(args: string[], options?: MainOptions) {
+@@ -926,6 +934,12 @@ export async function main(args: string[], options?: MainOptions) {
  		process.exit(0);
  	}
  
@@ -30,7 +30,7 @@ index 8640361..89f9250 100644
  	// Read piped stdin content (if any) - skip for RPC mode which uses stdin for JSON-RPC
  	let stdinContent: string | undefined;
  	if (appMode !== "rpc") {
-@@ -955,6 +969,8 @@ export async function main(args: string[], options?: MainOptions) {
+@@ -969,6 +983,8 @@ export async function main(args: string[], options?: MainOptions) {
  		process.exit(1);
  	}
  
@@ -41,6 +41,7 @@ index 8640361..89f9250 100644
  		const controller = new AbortController();
 diff --git a/packages/coding-agent/test/managed-session-maintenance.test.ts b/packages/coding-agent/test/managed-session-maintenance.test.ts
 new file mode 100644
+index 0000000..d5f5fb4
 --- /dev/null
 +++ b/packages/coding-agent/test/managed-session-maintenance.test.ts
 @@ -0,0 +1,248 @@

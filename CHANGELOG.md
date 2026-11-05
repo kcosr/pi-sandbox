@@ -4,6 +4,8 @@
 
 ### Breaking changes
 
+- Remove the unused typed-tool `awk` dependency and macOS `gawk` prerequisite; custom native bundles must remove `awk` and repin their inventories. ([#49](https://github.com/kcosr/pi-sandbox/pull/49))
+- Pi 1.5 normalizes tool arguments with JSON Schema coercion, including numeric strings and scalar-to-array values; managed MCP approval and validation still apply to the exact dispatched request. ([#49](https://github.com/kcosr/pi-sandbox/pull/49))
 - Require configuration schema 14 with explicit `[exports].enabled`; upgrade the application and collector together for audit wire 4 and record schema 5. ([#48](https://github.com/kcosr/pi-sandbox/pull/48))
 
 ### Added
@@ -21,7 +23,14 @@
 
 ### Changed
 
+- Upgrade pinned Pi and both reusable extension targets to 1.5.0, retaining managed Code Mode limits and incorporating upstream streaming, session, summary and terminal fixes. ([#49](https://github.com/kcosr/pi-sandbox/pull/49))
+- Cache repeated write-preview highlighting and use the active host's keybindings in expansion hints. ([#49](https://github.com/kcosr/pi-sandbox/pull/49))
 - Allow repeated value-taking options in Bash command sets, validating each occurrence; duplicate zero-value flags still fall back to ordinary policy. ([#46](https://github.com/kcosr/pi-sandbox/pull/46))
+
+### Fixed
+
+- Preserve split UTF-8 characters when Bash stdout and stderr interleave, including user `!` commands. ([#49](https://github.com/kcosr/pi-sandbox/pull/49))
+- Enforce grep match limits for single-file searches and filenames containing line-number-like text; report bounded capture truncation explicitly. ([#49](https://github.com/kcosr/pi-sandbox/pull/49))
 
 ## 0.11.0 - 2026-10-28
 

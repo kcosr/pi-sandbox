@@ -14,7 +14,7 @@ The build and installer validate required Bubblewrap options, including
 `--remount-ro` for directory masks and `--ro-bind-data` for empty file masks.
 
 By default, macOS direct and Seatbelt modes require Homebrew `coreutils`, `findutils`,
-`grep`, `gawk`, `fd`, and `ripgrep`, plus system Bash, `sh`, and `file`. The
+`grep`, `fd`, and `ripgrep`, plus system Bash, `sh`, and `file`. The
 runtime resolves the Homebrew prefix for Apple silicon or Intel and fails
 closed if a GNU command is missing. The macOS installer validates the selected
 administrative backend before checking these GNU prerequisites. Seatbelt also requires the fixed system `/usr/bin/sandbox-exec`. A macOS release build additionally requires
@@ -160,13 +160,13 @@ ownership and permissions.
 ## Building a release
 
 The product version is independent of the pinned Pi version. A clean build at
-product tag `v0.11.0` displays `1.3.0+ps.0.11.0` in `pi-sandbox --version` and
+the existing product tag `v0.11.0` displays `1.3.0+ps.0.11.0` in `pi-sandbox --version` and
 the TUI header. Untagged builds include a development suffix and Git revision;
 modified builds also include `.dirty`. Source execution and application builds
 without Git metadata use `.dev.source`; `npm run build:application` supports
 that case. The full release builder requires a Git checkout for source
-provenance. The release package retains product version `0.11.0`, and Pi's
-internal version stays `1.3.0`.
+provenance. This development checkout retains product version `0.11.0` until
+the next release bump and pins Pi's internal version to `1.5.0`.
 
 GitHub releases publish source and release notes without uploaded binaries.
 The following commands build deployment archives locally. See
@@ -190,7 +190,7 @@ Use `verify:release` with the same arguments when qualification is wanted: it
 runs the full repository suites, patched-Pi API/integration/theme tests and
 packaged-runtime smoke checks as well as the same build/package/integrity path.
 There is no test-skipping flag and no need to edit source to package a build.
-For example, `--pi-source-archive /path/to/pi-1.3.0-source.tar.gz` supplies the
+For example, `--pi-source-archive /path/to/pi-1.5.0-source.tar.gz` supplies the
 same checksum-verified source to either command.
 
 One strict TOML distribution manifest selects all extension manifests and the
@@ -253,16 +253,22 @@ macOS can additionally select a prepared native tool artifact:
 [platforms.darwin.tool_bundle]
 directory = "./build-inputs/tools-darwin-arm64"
 inventory_sha256 = "<lowercase SHA-256 of inventory.json>"
-commands = ["awk", "cat", "chmod", "fd", "find", "grep", "head", "mkdir", "mv", "rg", "rm", "sha256sum", "sort", "tail", "test", "wc"]
+commands = ["cat", "chmod", "fd", "find", "grep", "head", "mkdir", "mv", "rg", "rm", "sha256sum", "sort", "tail", "test", "wc"]
 ```
 
 This optional table contains exactly those three fields. Omitting it retains
 system command selection. `directory` resolves relative to the manifest and
 must be a canonical directory with no symlink components. Supported command
 names are `bash`, `sh`, `cat`, `chmod`, `mkdir`, `mv`, `rm`, `grep`, `file`,
-`find`, `awk`, `head`, `sha256sum`, `sort`, `tail`, `test`, `wc`, `fd`, and `rg`.
+`find`, `head`, `sha256sum`, `sort`, `tail`, `test`, `wc`, `fd`, and `rg`.
 The selection must exactly match its `bin/` entries. This first bundle validator
 supports native Darwin builds only; Linux continues using its existing providers.
+
+Typed tools no longer require GNU Awk. When upgrading a custom bundle that
+includes it, remove `awk` from the selection and `bin/awk` from the artifact and
+inventory, remove any dependencies and source/license entries used only by it,
+and repin `inventory_sha256`. The installers still use the host's ordinary
+`awk` to read package metadata; macOS supplies that command without Homebrew.
 
 The strict `inventory.json` has version `1`, platform `"darwin"`, architecture
 `"arm64"` or `"x64"`, `minimumOS` such as `"26.0"`, and `files` and `sources`
@@ -361,7 +367,7 @@ packaged default config must point `models_file` at that layout's
 
 The build produces a native archive for its current Linux or macOS architecture.
 It downloads, or accepts a locally supplied copy of, the official Pi
-1.3.0 source archive pinned in `pi-source.lock.json`. It verifies the recorded
+1.5.0 source archive pinned in `pi-source.lock.json`. It verifies the recorded
 SHA-256 digest, extracts the source into temporary or ignored build storage,
 applies the small patch series in `patches/pi`, compiles Pi plus the separate Pi
 Sandbox extension and selected modules into the Bun application, and
@@ -716,7 +722,7 @@ when using dependency scanners.
 
 The release build creates `kcosr-pi-sandbox-extension-0.8.0.tgz` and
 `kcosr-pi-git-extension-0.1.0.tgz`, each with a SHA256 sidecar. They are independent
-standard extensions for ordinary Pi 1.3.0. Sandbox includes its runtime and
+standard extensions for ordinary Pi 1.5.0. Sandbox includes its runtime and
 Bubblewrap worker; Git includes its bounded host runner. Neither needs a permissions
 package, the other extension package or an adjacent source checkout. See
 [sandbox configuration and usage](../packages/sandbox-extension/README.md) and

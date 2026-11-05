@@ -181,9 +181,12 @@ function fakeExecutor(): SandboxExecutor & {
       if (command === "/usr/bin/find") {
         stdout = Buffer.from(request.argv.includes("-type") ? "/work/project/a.ts\0" : "a.ts\0");
       }
-      if (command === "/bin/grep") stdout = Buffer.from("/work/project/a.ts:1:match\n");
       if (command === "/bin/bash") {
-        stdout = Buffer.from("shell output\n");
+        stdout = Buffer.from(
+          request.argv.includes("pi-sandbox-grep")
+            ? "/work/project/a.ts\x001:match\n"
+            : "shell output\n",
+        );
         options?.onStdout?.(stdout);
       }
       const stderr =

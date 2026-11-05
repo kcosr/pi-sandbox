@@ -4,7 +4,11 @@ import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 
-import { LINUX_TOOL_COMMANDS, type SandboxExecutor } from "../runtime/index.js";
+import {
+  LINUX_TOOL_COMMANDS,
+  resolveDirectToolCommands,
+  type SandboxExecutor,
+} from "../runtime/index.js";
 import {
   executeEdit,
   executeFind,
@@ -401,14 +405,130 @@ describe("extension-owned tool semantics", () => {
 
   it("limits grep by matches while retaining context lines", async () => {
     const executor = scriptedExecutor(() =>
-      result("a:1:first\na-2-context\n--\na:3:second\na-4-context\n--\na:5:third\n"),
+      result(
+        [
+          [1, ":first"],
+          [2, "-context"],
+          [4, ":second"],
+          [5, "-context"],
+          [7, ":third"],
+        ]
+          .map(([line, text]) => `a\0${line}${text}\n`)
+          .join(""),
+      ),
     );
     const grepped = await executeGrep(
       executor,
       { pattern: "x", context: 1, limit: 2 },
       executor.cwd,
     );
-    expect(grepped.content[0].text).toBe("a:1:first\na-2-context\n--\na:3:second\na-4-context\n--");
+    expect(grepped.content[0].text).toBe("a:1:first\na-2-context\n--\na:4:second\na-5-context");
     expect(grepped.details).toEqual({ matchLimitReached: 2 });
+  });
+  it("uses unambiguous native grep records for file limits and context across files", async () => {
+    const root = await mkdtemp(path.join(tmpdir(), "pi-grep-records-"));
+    try {
+      const executor = createExecutor((request) => {
+        const executed = spawnSync(request.argv[0], request.argv.slice(1), {
+          cwd: root,
+          env: { PATH: "/usr/bin:/bin", LC_ALL: "C" },
+          maxBuffer: 1024 * 1024,
+          timeout: 5000,
+        });
+        if (executed.error) throw executed.error;
+        return Promise.resolve({
+          exitCode: executed.status,
+          signal: executed.signal,
+          stdout: executed.stdout,
+          stderr: executed.stderr,
+        });
+      });
+      Object.assign(executor, { cwd: root, commands: await resolveDirectToolCommands() });
+      for (const [index, name] of ["normal.txt", "part:99:name.txt", "line\nbreak.txt"].entries()) {
+        const directory = path.join(root, String(index));
+        await mkdir(directory);
+        const file = path.join(directory, name);
+        await writeFile(file, "before:99:context\nneedle one\nafter\ngap\nneedle two\nlast\n");
+        for (const target of [file, directory]) {
+          const found = await executeGrep(
+            executor,
+            { path: target, pattern: "needle", context: 1, limit: 1 },
+            root,
+          );
+          expect(found.content[0].text).toContain(`${file}:2:needle one`);
+          expect(found.content[0].text).toContain(`${file}-1-before:99:context`);
+          expect(found.content[0].text).toContain(`${file}-3-after`);
+          expect(found.content[0].text).not.toContain("needle two");
+          expect(found.details).toEqual({ matchLimitReached: 1 });
+        }
+      }
+      const directory = path.join(root, "multiple-files");
+      await mkdir(directory);
+      const files = ["alpha.txt", "part:42:beta.txt"].map((name) => path.join(directory, name));
+      for (const file of files) await writeFile(file, "before\nneedle\nafter\n");
+      const found = await executeGrep(
+        executor,
+        { path: directory, pattern: "needle", context: 1 },
+        root,
+      );
+      // File traversal order is unspecified; each file must form one complete group.
+      const groups = found.content[0].text.split("\n--\n");
+      expect(groups).toHaveLength(2);
+      expect(new Set(groups)).toEqual(
+        new Set(files.map((file) => `${file}-1-before\n${file}:2:needle\n${file}-3-after`)),
+      );
+      expect(found.details).toBeUndefined();
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("keeps native lone-CR context numbering and ignores ripgrep configuration", async () => {
+    const root = await mkdtemp(path.join(tmpdir(), "pi-grep-context-"));
+    try {
+      const config = path.join(root, "rg-config");
+      await writeFile(config, "--fixed-strings\n");
+      const executor = createExecutor((request) => {
+        const executed = spawnSync(request.argv[0], request.argv.slice(1), {
+          cwd: root,
+          env: { PATH: "/usr/bin:/bin", LC_ALL: "C", RIPGREP_CONFIG_PATH: config },
+          maxBuffer: 1024 * 1024,
+          timeout: 5000,
+        });
+        if (executed.error) throw executed.error;
+        return Promise.resolve({
+          exitCode: executed.status,
+          signal: executed.signal,
+          stdout: executed.stdout,
+          stderr: executed.stderr,
+        });
+      });
+      Object.assign(executor, { cwd: root, commands: await resolveDirectToolCommands() });
+      const file = path.join(root, "input.txt");
+      await writeFile(file, "before\rprogress\nneedle\nafter");
+      const context = await executeGrep(
+        executor,
+        { path: file, pattern: "needle", context: 1 },
+        root,
+      );
+      expect(context.content[0].text).toBe(
+        `${file}-1-before\rprogress\n${file}:2:needle\n${file}-3-after`,
+      );
+      await writeFile(file, "aXb\na.b\n");
+      const regex = await executeGrep(executor, { path: file, pattern: "a.b" }, root);
+      expect(regex.content[0].text).toContain(":1:aXb");
+      expect(regex.content[0].text).toContain(":2:a.b");
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("reports a bounded partial grep capture without pretending the search completed", async () => {
+    const executor = scriptedExecutor(() => result(`file\0${1}:${"a".repeat(110_000)}`));
+    const found = await executeGrep(executor, { pattern: "a" }, executor.cwd);
+    expect(found.content[0].text).toContain("capture limit; refine the search");
+    expect(found.content[0].text).toContain("file:1:");
+    expect(found.content[0].text.length).toBeLessThan(1024);
+    expect(found.details).toMatchObject({ captureLimitReached: 102400, linesTruncated: true });
   });
 });

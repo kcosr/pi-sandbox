@@ -13,7 +13,6 @@ export const TOOL_COMMAND_NAMES = Object.freeze([
   "grep",
   "file",
   "find",
-  "awk",
   "head",
   "sha256sum",
   "sort",

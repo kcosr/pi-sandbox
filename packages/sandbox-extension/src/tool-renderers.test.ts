@@ -4,9 +4,15 @@ import { homedir } from "node:os";
 import { pathToFileURL } from "node:url";
 import { stripVTControlCharacters } from "node:util";
 import { initTheme } from "@earendil-works/pi-coding-agent";
+import * as piRendering from "@earendil-works/pi-coding-agent";
 import { getCapabilities, setCapabilities, Text } from "@earendil-works/pi-tui";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { pathToolCallRenderers } from "./tool-renderers.js";
+
+vi.mock("@earendil-works/pi-coding-agent", async (importOriginal) => {
+  const original = await importOriginal<typeof piRendering>();
+  return { ...original, highlightCode: vi.fn(original.highlightCode) };
+});
 
 type PathTool = keyof typeof pathToolCallRenderers;
 type RenderContext = Omit<
@@ -39,6 +45,8 @@ function render(tool: PathTool, args: unknown, overrides: Partial<RenderContext>
     isError: false,
     durationMs: undefined,
     outputPad: 0,
+    keyText: () => "ctrl+o",
+    keyHint: (_id, label) => `ctrl+o ${label}`,
     ...overrides,
   });
   const component = pathToolCallRenderers[tool](args, theme, context);
@@ -50,7 +58,10 @@ function render(tool: PathTool, args: unknown, overrides: Partial<RenderContext>
 }
 
 beforeAll(() => initTheme("dark"));
-beforeEach(() => setCapabilities({ images: null, trueColor: true, hyperlinks: false }));
+beforeEach(() => {
+  setCapabilities({ images: null, trueColor: true, hyperlinks: false });
+  vi.mocked(piRendering.highlightCode).mockReset();
+});
 afterEach(() => {
   setCapabilities(capabilities);
   vi.restoreAllMocks();
@@ -191,6 +202,60 @@ describe("sandbox tool call rendering", () => {
     expect(render("write", { path: "/plain", content: "a\tb\r\n\n" }).text).toBe(
       "write /plain\n\na   b",
     );
+  });
+
+  it("uses the caller's keybinding hints and reuses the visible write highlight", () => {
+    const highlight = vi.mocked(piRendering.highlightCode);
+    const prefix = Array.from({ length: 10 }, (_, i) => `const a${i} = ${i};`).join("\n");
+    const first = render("write", { path: "a.ts", content: `${prefix}\nhidden` });
+    const calls = highlight.mock.calls.length;
+    expect(calls).toBeGreaterThan(0);
+    const updated = render(
+      "write",
+      { path: "a.ts", content: `${prefix}\nhidden extension` },
+      {
+        lastComponent: first.component,
+        keyHint: (_id, label) => `F8 ${label}`,
+      },
+    );
+    expect(highlight).toHaveBeenCalledTimes(calls);
+    expect(updated.text).toContain("F8 to expand");
+    render(
+      "write",
+      { path: "a.ts", content: `${prefix}\nhidden extension` },
+      {
+        lastComponent: first.component,
+        expanded: true,
+      },
+    );
+    expect(highlight).toHaveBeenCalledTimes(calls + 1);
+    first.component.invalidate();
+    render(
+      "write",
+      { path: "a.ts", content: `${prefix}\nhidden extension` },
+      {
+        lastComponent: first.component,
+        expanded: true,
+      },
+    );
+    expect(highlight).toHaveBeenCalledTimes(calls + 2);
+    render(
+      "write",
+      { path: "a.py", content: `${prefix}\nhidden extension` },
+      {
+        lastComponent: first.component,
+        expanded: true,
+      },
+    );
+    expect(highlight).toHaveBeenCalledTimes(calls + 3);
+  });
+
+  it("does not retain oversized highlighted previews", () => {
+    const highlight = vi.mocked(piRendering.highlightCode).mockReturnValue(["x"]);
+    const args = { path: "a.ts", content: "x".repeat(128 * 1024 + 1) };
+    const first = render("write", args, { expanded: true });
+    render("write", args, { expanded: true, lastComponent: first.component });
+    expect(highlight).toHaveBeenCalledTimes(2);
   });
 
   it("handles invalid and streaming arguments without throwing or borrowing aliases", () => {

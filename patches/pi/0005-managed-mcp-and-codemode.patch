@@ -705,10 +705,10 @@ index 67ac4b2..567c524 100644
  		25000,
  	);
 diff --git a/packages/coding-agent/src/extensions/codemode/execute.ts b/packages/coding-agent/src/extensions/codemode/execute.ts
-index 2d3bfbe..b78e0da 100644
+index b363599..eb7082a 100644
 --- a/packages/coding-agent/src/extensions/codemode/execute.ts
 +++ b/packages/coding-agent/src/extensions/codemode/execute.ts
-@@ -397,6 +397,7 @@ async function saveImages(items: (TextContent | ImageContent)[]): Promise<(TextC
+@@ -449,6 +449,7 @@ async function saveImages(items: (TextContent | ImageContent)[]): Promise<(TextC
  async function truncateOutput(
  	items: (TextContent | ImageContent)[],
  	maxTokens: number,
@@ -716,7 +716,7 @@ index 2d3bfbe..b78e0da 100644
  ): Promise<{ items: (TextContent | ImageContent)[]; fullOutputPath?: string }> {
  	const texts = items.filter((item): item is TextContent => item.type === "text").map((item) => item.text);
  	const combined = texts.join("\n");
-@@ -408,7 +409,9 @@ async function truncateOutput(
+@@ -460,7 +461,9 @@ async function truncateOutput(
  	const head = combined.slice(0, headChars);
  	const tail = tailChars > 0 ? combined.slice(-tailChars) : "";
  	let text = `Warning: truncated output (original token count: ${Math.ceil(combined.length / CHARS_PER_TOKEN)})\nTotal output lines: ${combined.split("\n").length}\n\n${head}…${Math.ceil(removed / CHARS_PER_TOKEN)} tokens truncated…${tail}`;
@@ -727,7 +727,7 @@ index 2d3bfbe..b78e0da 100644
  	text +=
  		"path" in spilled
  			? `\n\n[Full output: ${spilled.path} (read with offset/limit)]`
-@@ -446,6 +449,9 @@ export async function executeCodemode(
+@@ -498,6 +501,9 @@ export async function executeCodemode(
  	options: CodemodeToolOptions = {},
  ): Promise<AgentToolResult<CodemodeToolDetails>> {
  	const startedAt = performance.now();
@@ -737,24 +737,60 @@ index 2d3bfbe..b78e0da 100644
  	const { code, options: sourceOptions } = parseCodemodeSource(input.code);
  	const calls: CodemodeNestedCall[] = [];
  	// Usage of the script's `models.*` calls. Nested tool calls report theirs through the session.
-@@ -507,7 +513,15 @@ export async function executeCodemode(
- 				? createModelGlobals(ctx.modelRegistry, toolCallId, calls, publish, addModelUsage, addGeneratedImages)
- 				: []),
- 		],
--		timeoutMs: sourceOptions.timeoutMs ?? Number.POSITIVE_INFINITY,
-+		timeoutMs: Math.min(
-+			sourceOptions.timeoutMs ?? Number.POSITIVE_INFINITY,
-+			limits?.timeoutMs ?? Number.POSITIVE_INFINITY,
-+		),
-+		awaitToolCleanup: limits !== undefined,
-+		rejectToolAliases: limits !== undefined,
-+		maxCalls: limits?.maxCalls,
-+		maxConcurrentCalls: limits?.maxConcurrentCalls,
-+		maxOutputBytes: limits?.maxOutputBytes,
- 		memoryLimitBytes: CODEMODE_MEMORY_LIMIT_BYTES,
- 		wasm: loadQuickJSWasm(getQuickJSWasmPath()),
- 		workerUrl: getCodemodeWorkerSpecifier(),
-@@ -557,13 +571,15 @@ export async function executeCodemode(
+@@ -552,9 +558,16 @@ export async function executeCodemode(
+ 	}));
+ 
+ 	// The wait for a worker counts toward the script's deadline.
+-	const deadline = sourceOptions.timeoutMs ?? Number.POSITIVE_INFINITY;
++	const deadline = Math.min(
++		sourceOptions.timeoutMs ?? Number.POSITIVE_INFINITY,
++		limits?.timeoutMs ?? Number.POSITIVE_INFINITY,
++	);
+ 	const waitStartedAt = performance.now();
+-	const admission = await reserveCodemodeWorker(signal, Math.min(deadline, CODEMODE_WORKER_WAIT_MS));
++	// Bounded embeddings admit at worker launch without queueing or ambient capacity overrides.
++	// Unbounded callers retain the ordinary queue and its configurable worker limit.
++	const admission = limits
++		? "reserved"
++		: await reserveCodemodeWorker(signal, Math.min(deadline, CODEMODE_WORKER_WAIT_MS));
+ 	const waitedMs = performance.now() - waitStartedAt;
+ 	if (admission !== "reserved") {
+ 		const waited = ((performance.now() - startedAt) / 1000).toFixed(1);
+@@ -576,7 +589,7 @@ export async function executeCodemode(
+ 	}
+ 	// The reservation covers the one worker this script starts. A launch that resumes after the result
+ 	// settled finds it released and starts no worker.
+-	let reserved = true;
++	let reserved = limits === undefined;
+ 
+ 	let sandbox: CodemodeSandbox | undefined;
+ 	let result: CodemodeResult;
+@@ -589,11 +602,23 @@ export async function executeCodemode(
+ 					? createModelGlobals(ctx.modelRegistry, toolCallId, calls, publish, addModelUsage, addGeneratedImages)
+ 					: []),
+ 			],
+-			timeoutMs: Math.max(1, Math.round(deadline - waitedMs)),
++			timeoutMs: limits ? deadline : Math.max(1, Math.round(deadline - waitedMs)),
++			awaitToolCleanup: limits !== undefined,
++			rejectToolAliases: limits !== undefined,
++			maxCalls: limits?.maxCalls,
++			maxConcurrentCalls: limits?.maxConcurrentCalls,
++			maxOutputBytes: limits?.maxOutputBytes,
+ 			memoryLimitBytes: CODEMODE_MEMORY_LIMIT_BYTES,
+ 			wasm: loadQuickJSWasm(getQuickJSWasmPath()),
+ 			workerUrl: getCodemodeWorkerSpecifier(),
+ 			acquireWorker: () => {
++				if (limits) {
++					if (activeCodemodeWorkers >= DEFAULT_MAX_CODEMODE_WORKERS) {
++						throw new Error(`Codemode worker limit reached (${DEFAULT_MAX_CODEMODE_WORKERS} active workers)`);
++					}
++					activeCodemodeWorkers++;
++					return releaseCodemodeWorker;
++				}
+ 				if (!reserved) throw new Error("The script already settled");
+ 				// From here the sandbox releases the slot when the worker actually exits.
+ 				reserved = false;
+@@ -635,13 +660,15 @@ export async function executeCodemode(
  	const truncated = await truncateOutput(
  		joinAdjacentText(items),
  		sourceOptions.maxOutputTokens ?? DEFAULT_MAX_OUTPUT_TOKENS,
@@ -835,13 +871,14 @@ index 67492b6..d83749d 100644
  	};
  }
 diff --git a/packages/coding-agent/src/extensions/codemode/tool.ts b/packages/coding-agent/src/extensions/codemode/tool.ts
-index b55a117..8b02996 100644
+index 648ba61..1f45ced 100644
 --- a/packages/coding-agent/src/extensions/codemode/tool.ts
 +++ b/packages/coding-agent/src/extensions/codemode/tool.ts
-@@ -52,7 +52,17 @@ export type CodemodeModelRuntime = Pick<
+@@ -52,7 +52,18 @@ export type CodemodeModelRuntime = Pick<
  	"getModelsOfType" | "getAvailableOfType" | "getModelOfType" | "classify" | "generateImages"
  >;
  
++/** Bounded execution also rejects launches above two live workers, independently of ambient settings. */
 +export interface CodemodeExecutionLimits {
 +	timeoutMs: number;
 +	maxSourceBytes: number;
@@ -856,7 +893,7 @@ index b55a117..8b02996 100644
  	/** Namespace of a tool, for `searchTools()` ranking and its `namespace` filter. */
  	getToolNamespace?: (toolName: string) => ToolNamespace | undefined;
  	/** Prompt guidelines of every tool, by tool name, shown with declarations by `describeTool()` and `ALL_TOOLS`. */
-@@ -100,6 +110,8 @@ export interface CodemodeNestedCall {
+@@ -100,6 +111,8 @@ export interface CodemodeNestedCall {
  }
  
  export interface CodemodeToolDetails {
@@ -2449,10 +2486,10 @@ index 0000000..48e8398
 +});
 diff --git a/packages/coding-agent/test/managed-worker-admission.test.ts b/packages/coding-agent/test/managed-worker-admission.test.ts
 new file mode 100644
-index 0000000..b99383f
+index 0000000..bd5fd27
 --- /dev/null
 +++ b/packages/coding-agent/test/managed-worker-admission.test.ts
-@@ -0,0 +1,104 @@
+@@ -0,0 +1,119 @@
 +import { Worker } from "node:worker_threads";
 +import * as codemode from "@earendil-works/pi-codemode";
 +import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -2470,6 +2507,7 @@ index 0000000..b99383f
 +
 +afterEach(async () => {
 +	vi.restoreAllMocks();
++	vi.unstubAllEnvs();
 +	await Promise.all([...terminations].map(async ([worker, resolve]) => resolve(await terminate.call(worker))));
 +	terminations.clear();
 +});
@@ -2487,6 +2525,20 @@ index 0000000..b99383f
 +	});
 +
 +describe("managed worker admission", () => {
++	it.each(["1", "100"])("ignores PI_CODEMODE_MAX_WORKERS=%s and rejects without waiting", async (limit) => {
++		vi.stubEnv("PI_CODEMODE_MAX_WORKERS", limit);
++		expect((await run("return 1")).isError).toBeUndefined();
++		expect((await run("return 2")).isError).toBeUndefined();
++		expect(terminations.size).toBe(2);
++		const blocked = await run("return 3");
++		expect(blocked).toMatchObject({ isError: true, details: { failureKind: "sandbox" } });
++		expect(blocked.content).toContainEqual({
++			type: "text",
++			text: expect.stringContaining("Codemode worker limit reached"),
++		});
++		expect(terminations.size).toBe(2);
++	});
++
 +	it.each(["timeout", "abort", "success"] as const)(
 +		"holds capacity after %s until actual worker exit",
 +		async (how) => {
@@ -2665,7 +2717,7 @@ index 26479ac..cd62fb4 100644
  			return;
  		}
 diff --git a/packages/mcp/src/transports/streamable-http.ts b/packages/mcp/src/transports/streamable-http.ts
-index af9c922..661690f 100644
+index 5ea7668..661690f 100644
 --- a/packages/mcp/src/transports/streamable-http.ts
 +++ b/packages/mcp/src/transports/streamable-http.ts
 @@ -253,7 +253,9 @@ export class StreamableHttpTransport extends TransportEvents implements McpTrans
@@ -2679,16 +2731,17 @@ index af9c922..661690f 100644
  			for (const item of Array.isArray(body) ? body : [body]) this.emitMessage(parseJsonRpcMessage(item));
  			return;
  		}
-@@ -338,7 +340,7 @@ export class StreamableHttpTransport extends TransportEvents implements McpTrans
+@@ -338,8 +340,7 @@ export class StreamableHttpTransport extends TransportEvents implements McpTrans
  
  	private async checkResponse(response: Response): Promise<void> {
  		if (response.ok) return;
--		const body = (await response.text().catch(() => "")).slice(0, MAX_ERROR_BODY_BYTES);
+-		// A copy, not a slice: V8 slices keep the whole body alive, and the error keeps this excerpt.
+-		const body = `${(await response.text().catch(() => "")).slice(0, MAX_ERROR_BODY_BYTES)} `.slice(0, -1);
 +		const body = await readBoundedBody(response, MAX_ERROR_BODY_BYTES, true).catch(() => "");
  		if (response.status === 401) throw new McpAuthRequiredError(response, body);
  		if (response.status === 404 && this.sessionIdValue) throw new McpSessionExpiredError(body);
  		throw new McpHttpError(response.status, describeHttpFailure(response.status, body), body);
-@@ -519,3 +521,35 @@ export class StreamableHttpTransport extends TransportEvents implements McpTrans
+@@ -520,3 +521,35 @@ export class StreamableHttpTransport extends TransportEvents implements McpTrans
  		});
  	}
  }

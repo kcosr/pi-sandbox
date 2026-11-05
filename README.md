@@ -187,9 +187,9 @@ A normal upgrade preserves the compiled configuration directory. Use
 only when intentionally deploying the configuration packaged with a release.
 See [installation and operation](docs/installation.md).
 
-Pi Sandbox has its own release version. A tagged `0.11.0` build using Pi `1.3.0`
-shows `1.3.0+ps.0.11.0` in `pi-sandbox --version` and the TUI header. Development
-builds add source identity. See [versions and releases](docs/releases.md) for
+Pi Sandbox has its own release version. The existing `v0.11.0` tag uses Pi `1.3.0`
+and shows `1.3.0+ps.0.11.0` in `pi-sandbox --version` and the TUI header. Current
+development builds use Pi `1.5.0` and add source identity. See [versions and releases](docs/releases.md) for
 the independent version numbers and source-only GitHub release process.
 
 `PI_CODING_AGENT_DIR` continues to select user-owned sessions, settings, skills,
@@ -274,7 +274,7 @@ Pi Sandbox builds on several open-source projects:
 Pi Sandbox incorporates a pinned, minimally modified build of
 [Pi](https://github.com/earendil-works/pi), Copyright (c) 2025 Mario Zechner,
 distributed under the
-[MIT License](https://github.com/earendil-works/pi/blob/v1.3.0/LICENSE). The
+[MIT License](https://github.com/earendil-works/pi/blob/v1.5.0/LICENSE). The
 exact upstream version, commit, and source archive are recorded in
 [`pi-source.lock.json`](pi-source.lock.json); Pi Sandbox's changes to that source
 are maintained in [`patches/pi`](patches/pi/).

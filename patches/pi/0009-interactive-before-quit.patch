@@ -1,7 +1,8 @@
 diff --git a/packages/coding-agent/src/main.ts b/packages/coding-agent/src/main.ts
+index d1ce68b..6dafa3e 100644
 --- a/packages/coding-agent/src/main.ts
 +++ b/packages/coding-agent/src/main.ts
-@@ -44,7 +44,7 @@
+@@ -44,7 +44,7 @@ import {
  import { formatNoModelsAvailableMessage } from "./core/auth-guidance.ts";
  import { AuthStorage, ReadOnlyAuthStorage } from "./core/auth-storage.ts";
  import { exportFromFile } from "./core/export-html/index.ts";
@@ -10,7 +11,7 @@ diff --git a/packages/coding-agent/src/main.ts b/packages/coding-agent/src/main.
  import { applyHttpProxySettings, configureHttpDispatcher } from "./core/http-dispatcher.ts";
  import { resolveCliModel, resolveModelScope, type ScopedModel } from "./core/model-resolver.ts";
  import { ModelRuntime, type ModelRuntimeFactory } from "./core/model-runtime.ts";
-@@ -572,6 +572,8 @@
+@@ -572,6 +572,8 @@ async function promptForMissingSessionCwd(
  }
  
  export interface MainOptions {
@@ -19,7 +20,7 @@ diff --git a/packages/coding-agent/src/main.ts b/packages/coding-agent/src/main.
  	/** Application identity shown by --version and the TUI; internal Pi version stays unchanged. */
  	displayVersion?: string;
  	extensionFactories?: InlineExtension[];
-@@ -992,6 +994,7 @@
+@@ -1002,6 +1004,7 @@ export async function main(args: string[], options?: MainOptions) {
  		await runRpcMode(runtime);
  	} else if (appMode === "interactive") {
  		const interactiveMode = new InteractiveMode(runtime, {
@@ -28,9 +29,10 @@ diff --git a/packages/coding-agent/src/main.ts b/packages/coding-agent/src/main.
  			migratedProviders,
  			startupDiagnostics,
 diff --git a/packages/coding-agent/src/modes/interactive/interactive-mode.ts b/packages/coding-agent/src/modes/interactive/interactive-mode.ts
+index 63d6ac4..f1d02c9 100644
 --- a/packages/coding-agent/src/modes/interactive/interactive-mode.ts
 +++ b/packages/coding-agent/src/modes/interactive/interactive-mode.ts
-@@ -423,6 +423,8 @@
+@@ -426,6 +426,8 @@ function formatLoginProviderCompletionDescription(provider: LoginProviderComplet
   * Options for InteractiveMode initialization.
   */
  export interface InteractiveModeOptions {
@@ -39,7 +41,7 @@ diff --git a/packages/coding-agent/src/modes/interactive/interactive-mode.ts b/p
  	/** Application identity for the header only; does not affect update or changelog comparisons. */
  	displayVersion?: string;
  	/** Providers that were migrated to auth.json (shows warning) */
-@@ -4303,9 +4305,36 @@
+@@ -4385,9 +4387,36 @@ export class InteractiveMode {
  	 * repaint the final frame while the process is exiting.
  	 */
  	private isShuttingDown = false;
@@ -77,9 +79,10 @@ diff --git a/packages/coding-agent/src/modes/interactive/interactive-mode.ts b/p
  		// Keep signal handlers registered until terminal cleanup has completed.
  		// `signal-exit` checks the listener list during the same SIGTERM/SIGHUP
 diff --git a/packages/coding-agent/test/managed-shutdown-status.test.ts b/packages/coding-agent/test/managed-shutdown-status.test.ts
+index 2a7bcdc..894799b 100644
 --- a/packages/coding-agent/test/managed-shutdown-status.test.ts
 +++ b/packages/coding-agent/test/managed-shutdown-status.test.ts
-@@ -64,6 +64,7 @@
+@@ -64,6 +64,7 @@ describe("graceful shutdown status", () => {
  		});
  		const instance = {
  			isShuttingDown: false,
@@ -87,7 +90,7 @@ diff --git a/packages/coding-agent/test/managed-shutdown-status.test.ts b/packag
  			runtimeHost: { dispose: disposed },
  			themeController: { disableAutoSync: () => {} },
  			ui: { terminal: { drainInput: async () => {} } },
-@@ -76,3 +77,79 @@
+@@ -76,3 +77,79 @@ describe("graceful shutdown status", () => {
  		expect(disposed).toHaveBeenCalledOnce();
  	});
  });

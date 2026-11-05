@@ -203,7 +203,6 @@ async function verifyExecutionBackends(root) {
     await expectMissing(join(layout.configDir, "config.toml"));
   }
   const toolNames = [
-    "awk",
     "cat",
     "chmod",
     "find",

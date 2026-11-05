@@ -180,7 +180,6 @@ $brew_prefix/opt/coreutils/libexec/gnubin/test
 $brew_prefix/opt/coreutils/libexec/gnubin/wc
 $brew_prefix/opt/findutils/libexec/gnubin/find
 $brew_prefix/opt/grep/libexec/gnubin/grep
-$brew_prefix/bin/gawk
 /bin/bash
 /bin/sh
 /usr/bin/file"
@@ -190,7 +189,6 @@ $brew_prefix/bin/gawk
   fi
   for executable in $required; do
     command=${executable##*/}
-    [ "$command" != gawk ] || command=awk
     if bundle_has "$command"; then executable="$payload/tools/bin/$command"; fi
     [ -x "$executable" ] || missing="$missing $executable"
   done
