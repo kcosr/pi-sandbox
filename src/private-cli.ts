@@ -5,36 +5,51 @@ import { assertRuntimeUser } from "./runtime/user.js";
 import { parseSandboxArguments, type SandboxArguments } from "./runtime/config-arguments.js";
 
 const args = process.argv.slice(2);
+const { INTERNAL_EXPORT_READER_ARGUMENT, parseExportReaderConfiguration } =
+  await import("../packages/sandbox-extension/src/runtime/export/protocol.js");
 
-let launch: SandboxArguments | undefined;
-try {
-  const parsed = parseSandboxArguments(args);
-  assertRuntimeUser(parsed.piArgs);
-  launch = parsed;
-} catch (error) {
-  console.error(`pi-sandbox: ${error instanceof Error ? error.message : String(error)}`);
-  process.exitCode = 1;
-}
-
-if (launch !== undefined && args.length === 1 && args[0] === INTERNAL_SANDBOX_WORKER_ARGUMENT) {
+if (args[0] === INTERNAL_EXPORT_READER_ARGUMENT) {
   try {
-    const { runSandboxWorker } =
-      await import("../packages/sandbox-extension/src/runtime/worker.js");
-    await runSandboxWorker();
-  } catch (error) {
-    console.error(`pi-sandbox-worker: ${error instanceof Error ? error.message : String(error)}`);
+    assertRuntimeUser(args);
+    if (args.length !== 2) throw new Error("export_reader_configuration_invalid");
+    const { runSandboxExportReader } =
+      await import("../packages/sandbox-extension/src/runtime/export/reader.js");
+    await runSandboxExportReader(parseExportReaderConfiguration(args[1]!));
+  } catch {
+    process.stderr.write("pi-sandbox-export-reader: startup failed\n");
     process.exitCode = 70;
   }
-} else if (launch !== undefined) {
-  const { sanitizeManagedEnvironment } = await import("./runtime/environment.js");
-
-  sanitizeManagedEnvironment();
-
+} else {
+  let launch: SandboxArguments | undefined;
   try {
-    const { runPiSandbox } = await import("./runtime/main.js");
-    await runPiSandbox(launch);
+    const parsed = parseSandboxArguments(args);
+    assertRuntimeUser(parsed.piArgs);
+    launch = parsed;
   } catch (error) {
     console.error(`pi-sandbox: ${error instanceof Error ? error.message : String(error)}`);
     process.exitCode = 1;
+  }
+
+  if (launch !== undefined && args.length === 1 && args[0] === INTERNAL_SANDBOX_WORKER_ARGUMENT) {
+    try {
+      const { runSandboxWorker } =
+        await import("../packages/sandbox-extension/src/runtime/worker.js");
+      await runSandboxWorker();
+    } catch (error) {
+      console.error(`pi-sandbox-worker: ${error instanceof Error ? error.message : String(error)}`);
+      process.exitCode = 70;
+    }
+  } else if (launch !== undefined) {
+    const { sanitizeManagedEnvironment } = await import("./runtime/environment.js");
+
+    sanitizeManagedEnvironment();
+
+    try {
+      const { runPiSandbox } = await import("./runtime/main.js");
+      await runPiSandbox(launch);
+    } catch (error) {
+      console.error(`pi-sandbox: ${error instanceof Error ? error.message : String(error)}`);
+      process.exitCode = 1;
+    }
   }
 }

@@ -29,3 +29,16 @@ export {
   type ToolCommandPaths,
   type ToolBundle,
 } from "./contracts.js";
+
+export {
+  EXPORT_LIMITS,
+  SandboxExportError,
+  type SandboxExportSource,
+  type SandboxExportReader,
+  type SandboxExportRoot,
+  type SandboxExportRootId,
+  type SandboxExportEntry,
+  type SandboxExportPage,
+  type SandboxExportIdentity,
+} from "./export/contracts.js";
+export { INTERNAL_EXPORT_READER_ARGUMENT } from "./export/protocol.js";

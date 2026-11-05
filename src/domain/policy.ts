@@ -72,6 +72,10 @@ export interface AuditConfig {
   readonly facility: AuditFacility;
 }
 
+export interface ExportsConfig {
+  readonly enabled: boolean;
+}
+
 export interface SessionsConfig {
   readonly retentionDays: number;
 }
@@ -127,11 +131,12 @@ export interface ManagedEnvironment<PiValue = string> {
 }
 
 export interface SandboxConfig<PiValue = string> {
-  readonly configVersion: 13;
+  readonly configVersion: 14;
   readonly codemode: CodeModeConfig;
   readonly mcp: McpConfig;
   readonly audit: AuditConfig;
   readonly sessions: SessionsConfig;
+  readonly exports: ExportsConfig;
   readonly modelsFile: string;
   readonly execution: ExecutionConfig;
   readonly identity: IdentityConfig;

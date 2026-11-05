@@ -1,4 +1,7 @@
 import { spawn, type ChildProcess } from "node:child_process";
+import { createExportSource } from "./export/source.js";
+import { SandboxExportError, type SandboxExportSource } from "./export/contracts.js";
+import { isExportOperation, type ExportOperation, type ExportReply } from "./export/protocol.js";
 import { closeSync, constants as fsConstants, openSync } from "node:fs";
 import { access, lstat, realpath, stat } from "node:fs/promises";
 import path from "node:path";
@@ -163,6 +166,7 @@ export async function createBubblewrapExecutor(
     throw new SandboxExecutionError("sandbox_start_failed", { cause });
   }
 
+  let exportSource: SandboxExportSource | undefined;
   const executor = new PersistentBubblewrapExecutor(
     cwd,
     bubblewrapPath,
@@ -175,9 +179,15 @@ export async function createBubblewrapExecutor(
     commands,
     toolBundle,
     commandPathPrepend,
+    options.onExportSource === undefined
+      ? undefined
+      : (source) => {
+          exportSource = source;
+        },
   );
   try {
     await executor.start(workerCommand);
+    if (exportSource !== undefined) options.onExportSource?.(exportSource);
     return executor;
   } catch (cause) {
     await executor.close().catch(() => undefined);
@@ -245,6 +255,17 @@ class PersistentBubblewrapExecutor implements SandboxExecutor {
   #startupTimer: NodeJS.Timeout | undefined;
   #startupResolve: (() => void) | undefined;
   #startupReject: ((error: SandboxExecutionError) => void) | undefined;
+  #exportPending:
+    | {
+        id: number;
+        operation: ExportOperation;
+        state: "queued" | "sent";
+        resolve: (reply: ExportReply) => void;
+        reject: (error: Error) => void;
+        abort: () => void;
+        signal: AbortSignal | undefined;
+      }
+    | undefined;
 
   public constructor(
     readonly cwd: string,
@@ -258,12 +279,67 @@ class PersistentBubblewrapExecutor implements SandboxExecutor {
     public readonly commands: ToolCommandPaths,
     private readonly toolBundle: ToolBundle | undefined,
     private readonly commandPathPrepend: readonly string[],
+    receiveExportSource?: (source: SandboxExportSource) => void,
   ) {
     let finish!: () => void;
     this.#finished = new Promise<void>((resolve) => {
       finish = resolve;
     });
     this.#finish = finish;
+    receiveExportSource?.(
+      createExportSource({
+        writableHostPaths: cwdWritable ? [cwd] : [],
+        connect: () => {
+          if (this.#closed || !this.#started) throw new SandboxExportError("export_closed");
+          return Promise.resolve({
+            request: (operation: ExportOperation, signal?: AbortSignal) =>
+              this.#requestExport(operation, signal),
+            close: () => Promise.resolve(),
+          });
+        },
+      }),
+    );
+  }
+
+  #settleExport(error?: Error, reply?: ExportReply): void {
+    const pending = this.#exportPending;
+    if (pending === undefined) return;
+    this.#exportPending = undefined;
+    pending.signal?.removeEventListener("abort", pending.abort);
+    if (error !== undefined) pending.reject(error);
+    else if (reply !== undefined) pending.resolve(reply);
+  }
+
+  #requestExport(operation: ExportOperation, signal?: AbortSignal): Promise<ExportReply> {
+    if (!isExportOperation(operation))
+      return Promise.reject(new SandboxExportError("export_invalid_request"));
+    const writer = this.#writer;
+    if (this.#closed || !this.#started || this.#settled || writer === undefined)
+      return Promise.reject(new SandboxExportError("export_closed"));
+    if (this.#exportPending !== undefined)
+      return Promise.reject(new SandboxExportError("export_request_already_active"));
+    if (signal?.aborted) return Promise.reject(new SandboxExportError("export_aborted"));
+    const id = this.#nextRequestId++;
+    return new Promise((resolve, reject) => {
+      const abort = () => {
+        if (this.#exportPending?.id !== id) return;
+        if (this.#exportPending.state === "queued")
+          this.#settleExport(new SandboxExportError("export_aborted"));
+        else
+          void this.send({ type: "cancel", id }).catch((cause: unknown) =>
+            this.workerFailed(cause),
+          );
+      };
+      this.#exportPending = { id, operation, state: "queued", resolve, reject, abort, signal };
+      signal?.addEventListener("abort", abort, { once: true });
+      void writer
+        .enqueue(() => {
+          if (this.#exportPending?.id !== id) return undefined;
+          this.#exportPending.state = "sent";
+          return encodeWorkerFrame({ type: "export", id, request: operation });
+        })
+        .catch((cause: unknown) => this.workerFailed(cause));
+    });
   }
 
   public async start(workerCommand: readonly [string, ...string[]]): Promise<void> {
@@ -446,6 +522,7 @@ class PersistentBubblewrapExecutor implements SandboxExecutor {
   public async close(): Promise<void> {
     if (!this.#closed) {
       this.#closed = true;
+      this.#settleExport(new SandboxExportError("export_closed"));
       for (const pending of this.#pending.values()) {
         this.failPending(pending.id, new SandboxExecutionError("sandbox_closed"));
       }
@@ -498,6 +575,24 @@ class PersistentBubblewrapExecutor implements SandboxExecutor {
     }
     if (!this.#workerReady) {
       this.workerFailed(new Error("sandbox_worker_not_ready"));
+      return;
+    }
+    if (response.type === "export-result" || response.type === "export-failure") {
+      const exporting = this.#exportPending;
+      if (exporting === undefined && this.#closed) return;
+      if (
+        exporting?.id !== response.id ||
+        (response.type === "export-result" &&
+          response.reply.operation !== exporting.operation.operation)
+      ) {
+        this.workerFailed(new Error("sandbox_export_response_invalid"));
+        return;
+      }
+      if (response.type === "export-failure")
+        this.#settleExport(new SandboxExportError(response.code));
+      else if (exporting.signal?.aborted)
+        this.#settleExport(new SandboxExportError("export_aborted"));
+      else this.#settleExport(undefined, response.reply);
       return;
     }
     const pending = this.#pending.get(response.id);
@@ -663,6 +758,7 @@ class PersistentBubblewrapExecutor implements SandboxExecutor {
       cause: diagnostic.length > 0 ? new Error(diagnostic, { cause }) : cause,
     });
     this.#fatalError = error;
+    this.#settleExport(new SandboxExportError("export_source_unavailable"));
     this.#writer?.fail(error);
     this.clearStartupTimer();
     this.#startupReject?.(error);
@@ -706,6 +802,7 @@ class PersistentBubblewrapExecutor implements SandboxExecutor {
         pending.failure ?? this.#fatalError ?? new SandboxExecutionError("sandbox_process_failed");
       this.settlePending(pending, () => pending.reject(error));
     }
+    this.#settleExport(new SandboxExportError("export_closed"));
     this.#settled = true;
     this.#writer?.fail(this.#fatalError ?? new SandboxExecutionError("sandbox_closed"));
     this.#finish();

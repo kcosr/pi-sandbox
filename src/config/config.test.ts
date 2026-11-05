@@ -29,7 +29,7 @@ function completeConfig(
     (toolName) =>
       `[tools.${toolName}]\naudit = false\n${overrides[toolName] ?? 'mode = "allow"\nsession_grant = "never"'}`,
   );
-  return `config_version = 13\nmodels_file = "/etc/pi-sandbox/models.json"\n\n[codemode]\nenabled = false\n\n[mcp.servers]\n\n[sessions]\nretention_days = 0\n\n[audit]\nenabled = false\nfacility = "local0"\n\n[filesystem]\ncwd_writable = true\nhidden_paths = []\ndenied_paths = []\n\n[execution]\nbackend = "bubblewrap"\n\n[identity]\nmode = "disabled"\n\n[network]\nmode = "none"\n\n[environment.pi]\n\n[environment.sandbox]\n\n[environment.extensions]\n\n[extensions]\n\n${sections.join("\n\n")}\n`;
+  return `config_version = 14\nmodels_file = "/etc/pi-sandbox/models.json"\n\n[codemode]\nenabled = false\n\n[mcp.servers]\n\n[exports]\nenabled = false\n\n[sessions]\nretention_days = 0\n\n[audit]\nenabled = false\nfacility = "local0"\n\n[filesystem]\ncwd_writable = true\nhidden_paths = []\ndenied_paths = []\n\n[execution]\nbackend = "bubblewrap"\n\n[identity]\nmode = "disabled"\n\n[network]\nmode = "none"\n\n[environment.pi]\n\n[environment.sandbox]\n\n[environment.extensions]\n\n[extensions]\n\n${sections.join("\n\n")}\n`;
 }
 
 function parseConfig(
@@ -41,6 +41,28 @@ function parseConfig(
 }
 
 describe("parseConfig", () => {
+  it("requires explicit main-only export admission and a confined read-only workspace", () => {
+    const source = completeConfig();
+    expect(parseConfig(source).exports).toEqual({ enabled: false });
+    const admitted = source
+      .replace("[exports]\nenabled = false", "[exports]\nenabled = true")
+      .replace("cwd_writable = true", "cwd_writable = false");
+    expect(parseConfig(admitted).exports.enabled).toBe(true);
+    expect(
+      parseConfig(admitted.replace('backend = "bubblewrap"', 'backend = "seatbelt"')).exports
+        .enabled,
+    ).toBe(true);
+    for (const invalid of [
+      source.replace("[exports]\nenabled = false\n\n", ""),
+      source.replace("[exports]\nenabled = false", "[exports]\nenabled = 1"),
+      source.replace("[exports]\nenabled = false", "[exports]\nenabled = false\npath = '/'"),
+      source.replace("[exports]\nenabled = false", "[exports]\nenabled = true"),
+      admitted.replace('backend = "bubblewrap"', 'backend = "direct"'),
+      source.replace("config_version = 14", "config_version = 13"),
+    ])
+      expect(() => parseConfig(invalid)).toThrow();
+  });
+
   it("admits main-only Bash command sets without changing ordinary tool policy", () => {
     const entry = `\n[tools.bash.command_sets.utility_read]\ncommand = "utility"\nmode = "allow"\nsession_grant = "never"\nrequired_flags = ["--read"]\noptions = { "--format" = ["text", "json"] }\noperands = { min = 1, max = 1 }\n`;
     for (const mode of ["ask", "allow", "deny", "disabled"]) {
@@ -126,7 +148,7 @@ operands = { min = 0, max = 0 }
         "denied_paths = []",
         `denied_paths = ${JSON.stringify(Array.from({ length: 64 }, (_, i) => `/private/${i}`))}`,
       ),
-      seatbelt.replace("config_version = 13", "config_version = 11"),
+      seatbelt.replace("config_version = 14", "config_version = 11"),
       completeConfig().replace("denied_paths = []", 'denied_paths = ["/Users/private"]'),
     ])
       expect(() => parseConfig(source)).toThrow();
@@ -145,7 +167,8 @@ operands = { min = 0, max = 0 }
     );
 
     expect(config).toEqual({
-      configVersion: 13,
+      configVersion: 14,
+      exports: { enabled: false },
       codemode: { enabled: false, timeoutMs: 300000 },
       mcp: { servers: {} },
       sessions: { retentionDays: 0 },
@@ -186,14 +209,21 @@ operands = { min = 0, max = 0 }
         parseConfig(source.replace("retention_days = 0", `retention_days = ${retentionDays}`)),
       ).toThrow("config.sessions.retention_days must be an integer between 0 and 36500");
     }
-    expect(() => parseConfig(source.replace("[sessions]\nretention_days = 0\n\n", ""))).toThrow(
-      "config.sessions is required",
-    );
+    expect(() =>
+      parseConfig(
+        source.replace("[exports]\nenabled = false\n\n[sessions]\nretention_days = 0\n\n", ""),
+      ),
+    ).toThrow("config.sessions is required");
     expect(() => parseConfig(source.replace("retention_days = 0", ""))).toThrow(
       "config.sessions.retention_days is required",
     );
     expect(() =>
-      parseConfig(source.replace("[sessions]\nretention_days = 0", "sessions = false")),
+      parseConfig(
+        source.replace(
+          "[exports]\nenabled = false\n\n[sessions]\nretention_days = 0",
+          "sessions = false",
+        ),
+      ),
     ).toThrow("config.sessions must be a table");
     expect(() =>
       parseConfig(source.replace("retention_days = 0", "retention_days = 0\nextra = true")),
@@ -304,8 +334,8 @@ operands = { min = 0, max = 0 }
           .replace('mode = "none"', 'mode = "host"'),
       ),
     ).toThrow("config.filesystem.hidden_paths must be empty");
-    expect(() => parseConfig(source.replace("config_version = 13", "config_version = 8"))).toThrow(
-      "integer 13",
+    expect(() => parseConfig(source.replace("config_version = 14", "config_version = 8"))).toThrow(
+      "integer 14",
     );
   });
 
@@ -370,11 +400,11 @@ operands = { min = 0, max = 0 }
 
   it("rejects unsupported config versions and types", () => {
     expect(() =>
-      parseConfig(completeConfig().replace("config_version = 13", 'config_version = "9"')),
-    ).toThrow("config.config_version must be the integer 13");
+      parseConfig(completeConfig().replace("config_version = 14", 'config_version = "9"')),
+    ).toThrow("config.config_version must be the integer 14");
     expect(() =>
-      parseConfig(completeConfig().replace("config_version = 13", "config_version = 4")),
-    ).toThrow("config.config_version must be the integer 13");
+      parseConfig(completeConfig().replace("config_version = 14", "config_version = 4")),
+    ).toThrow("config.config_version must be the integer 14");
   });
 
   it("requires models_file to be a normalized absolute file path", () => {
@@ -407,7 +437,7 @@ operands = { min = 0, max = 0 }
   it("rejects unknown fields at every schema level", () => {
     expect(() =>
       parseConfig(
-        completeConfig().replace("config_version = 13", "config_version = 13\nunexpected = true"),
+        completeConfig().replace("config_version = 14", "config_version = 14\nunexpected = true"),
       ),
     ).toThrow("config.unexpected is not a recognized field");
     expect(() =>
@@ -572,12 +602,12 @@ operands = { min = 0, max = 0 }
   });
 
   it("rejects missing root fields and tables with the wrong shape", () => {
-    expect(() => parseConfig(completeConfig().replace("config_version = 13\n", ""))).toThrow(
+    expect(() => parseConfig(completeConfig().replace("config_version = 14\n", ""))).toThrow(
       "config.config_version is required",
     );
     expect(() =>
       parseConfig(
-        'config_version = 13\nmodels_file = "/etc/pi-sandbox/models.json"\nexecution = "direct"\nidentity = "disabled"\nnetwork = "none"\nextensions = "none"\ntools = "all"\n',
+        'config_version = 14\nmodels_file = "/etc/pi-sandbox/models.json"\nexecution = "direct"\nidentity = "disabled"\nnetwork = "none"\nextensions = "none"\ntools = "all"\n',
       ),
     ).toThrow("config.tools must be a table");
     expect(() =>
@@ -662,8 +692,8 @@ operands = { min = 0, max = 0 }
       ).toThrow("process_lifetime is not a recognized field");
     }
     expect(() =>
-      parseConfig(completeConfig().replace("config_version = 13", "config_version = 12")),
-    ).toThrow("must be the integer 13");
+      parseConfig(completeConfig().replace("config_version = 14", "config_version = 12")),
+    ).toThrow("must be the integer 14");
   });
 
   it("accepts ordered literal main command paths without reading the installation filesystem", () => {
@@ -959,7 +989,8 @@ describe("loadConfig", () => {
     await writeFile(path, completeConfig(), "utf8");
 
     await expect(loadConfig(path, EMPTY_EXTENSION_CATALOG)).resolves.toMatchObject({
-      configVersion: 13,
+      configVersion: 14,
+      exports: { enabled: false },
       codemode: { enabled: false, timeoutMs: 300000 },
       mcp: { servers: {} },
       sessions: { retentionDays: 0 },

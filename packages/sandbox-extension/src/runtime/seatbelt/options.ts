@@ -1,3 +1,4 @@
+import type { SandboxExportSource } from "../export/contracts.js";
 import { assertCommandPathPlacement, snapshotCommandPathPrepend } from "../command-path.js";
 import {
   SandboxExecutionError,
@@ -29,6 +30,10 @@ export interface CreateSeatbeltExecutorOptions {
   readonly toolBundle?: ToolBundle;
   /** Trusted canonical searchable directories; aliases must be resolved before construction. */
   readonly commandPathPrepend?: readonly string[];
+  /** Host/UI capability only; absent from the executor and tool contexts. */
+  readonly onExportSource?: (source: SandboxExportSource) => void;
+  /** Trusted packaged internal read-only role, excluding its configuration argument. */
+  readonly exportReaderCommand?: readonly [string, ...string[]];
 }
 
 export const SEATBELT_LAUNCHER = "/usr/bin/sandbox-exec";
@@ -74,8 +79,22 @@ export function validateSeatbeltOptions(options: CreateSeatbeltExecutorOptions):
           "limits",
           "toolBundle",
           "commandPathPrepend",
+          "onExportSource",
+          "exportReaderCommand",
         ].includes(key),
     )
+  )
+    throw new Error("sandbox_seatbelt_options_invalid");
+  if (
+    (options.onExportSource !== undefined && typeof options.onExportSource !== "function") ||
+    (options.exportReaderCommand !== undefined &&
+      (!Array.isArray(options.exportReaderCommand) ||
+        options.exportReaderCommand.length === 0 ||
+        !options.exportReaderCommand[0]?.startsWith("/") ||
+        options.exportReaderCommand.some(
+          (value) => typeof value !== "string" || value.includes("\0"),
+        ) ||
+        Buffer.byteLength(JSON.stringify(options.exportReaderCommand)) > 16_384))
   )
     throw new Error("sandbox_seatbelt_options_invalid");
   if (options.cwdWritable !== undefined && typeof options.cwdWritable !== "boolean")

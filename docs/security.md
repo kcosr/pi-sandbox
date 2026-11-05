@@ -355,8 +355,8 @@ in Bubblewrap; Seatbelt uses writable real host scratch directories.
 
 ## Audit correlation
 
-The application and collector use strict audit wire version 3; the collector emits
-record schema version 4 and requires configuration version 13. They must be
+The application and collector use strict audit wire version 4; the collector emits
+record schema version 5 and requires configuration version 14. They must be
 installed from the same release. MCP records carry the configured server ID,
 original tool name, and `http` or `stdio` transport. Nested audited calls carry
 `parent_invocation_id` from trusted execution context, never from script arguments.
@@ -827,3 +827,46 @@ searchable canonical directories outside writable CWD and incompatible sandbox
 mounts/denials; it does not grant extra access. Secure the directory through
 deployment controls, particularly with direct execution. Bundled commands remain
 first on PATH, and typed file tools keep their fixed executable selection.
+
+## User-directed sandbox file export
+
+When main policy enables exports with a read-only CWD, the managed terminal offers
+`/sandbox save` or the normal interactive exit prompt. Only an actual TUI command context may invoke it. No export capability
+is registered as a model tool or attached to the public command executor. Selection,
+destination and replacement approval belong to the user. No agent-chosen destination
+is executed automatically, and ordinary host extensions keep their existing policy.
+
+Source listing and reads execute with sandbox authority. Bubblewrap uses its existing
+worker and pinned directory handles; it rejects symlinks, special files, filesystem
+crossings and restored CWD overlays in private temporary storage. Seatbelt uses a
+transient internal read-only role in the application/runtime under the same profile
+as ordinary sandbox commands, with no execution operation or namespace shutdown
+sweep. Host authority is used only for publishing the reviewed output. Source roots
+are startup-registered; the parent independently validates every relative mapping.
+Reads use bounded pull requests with one outstanding 256 KiB chunk, awaiting each
+host write before requesting more.
+
+The picker hides dot entries only for display. A selected directory includes them.
+Source identity and metadata are rechecked through open/read completion. Background
+writers may survive foreground idle and can change files; this is not a frozen
+snapshot or proof of inode provenance. In particular, Seatbelt path checks do not
+promise a portable atomic subtree boundary. Its confined reader cannot acquire more
+read authority than the agent already has. Agents can copy sandbox-readable content
+into scratch; saving does not certify that content as newly authored or safe to run.
+
+Destinations cannot overlap live agent-writable host grants. The publisher rejects
+observed symlink traversal and incompatible types, checks filename collisions using
+the destination filesystem, and revalidates reviewed directories and replacements.
+It writes fresh host-owned staging inodes, then publishes new files with no-replace
+hard links or explicitly approved replacements by rename. It never truncates an
+existing inode, so other hard-link aliases keep their contents. Unsupported no-replace
+publication fails without an overwrite fallback. Trusted concurrent host writers can
+still race the final identity check and rename; these checks are not an atomic
+compare-and-swap guarantee. Publication is per file, with no destructive rollback or
+whole-export crash/power-loss guarantee.
+
+When audit is enabled, wire 4/record schema 5 carries typed user export summaries
+and per-replacement intent/outcome events, separately from model-tool events. An
+acknowledged intent precedes publication. Audit failure stops further publication;
+the UI retains exact already-saved results. Events contain bounded metadata and a
+manifest digest, not file contents. macOS audit remains disabled.

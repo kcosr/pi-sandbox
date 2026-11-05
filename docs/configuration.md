@@ -180,7 +180,7 @@ targets to exist. Operational startup validates expanded paths before masking.
 ## Complete example
 
 ```toml
-config_version = 13
+config_version = 14
 models_file = "/etc/pi-sandbox/models.json"
 
 [codemode]
@@ -191,6 +191,9 @@ enabled = false
 [audit]
 enabled = false
 facility = "local0"
+
+[exports]
+enabled = false
 
 [sessions]
 retention_days = 365
@@ -313,7 +316,14 @@ without a suitable dedicated tool. This is refreshed before each agent run and
 preserves user system-prompt replacements and additions.
 
 Managed Bubblewrap and Seatbelt runs also receive a short environment note
-identifying the tools' actual home directory. Direct execution adds no home
+identifying the tools' actual home directory and effective CWD write access.
+Scratch scripts, intermediate files and temporary build output belong in a new
+subdirectory of the tool home. With a read-only CWD, the agent should copy needed
+source files there before modifying them and report the paths of generated
+deliverables. Temporary-file guidance uses `/tmp` on Bubblewrap and `$TMPDIR` on
+Seatbelt. The note explains that scratch can survive conversation switches within
+the process but must not be relied on after exit. It does not mention the user-only
+save command. Direct execution adds no home
 note. `$HOME` in Bash and leading `~` in file-tool arguments refer to
 that tool home, which can differ from the user's home. When available, the user's
 home comes from the effective OS account rather than ambient `HOME` or `USER`.
@@ -439,7 +449,7 @@ configuration. Unknown fields and malformed dormant configurations are errors.
 
 ## Launch directory access
 
-Configuration schema 13 requires all three keys in `[filesystem]`:
+Configuration schema 14 requires all three keys in `[filesystem]`:
 
 ```toml
 [filesystem]
@@ -550,7 +560,7 @@ hidden directory.
 ### Denied directories (Seatbelt)
 
 Seatbelt is the macOS packaged default. Start with
-`config/default/config.seatbelt.toml`, or use these fields in a complete schema-13
+`config/default/config.seatbelt.toml`, or use these fields in a complete schema-14
 configuration:
 
 ```toml
@@ -566,7 +576,7 @@ hidden_paths = []
 denied_paths = ["~/.ssh"]
 ```
 
-`denied_paths` is required in every schema-13 configuration and must be empty
+`denied_paths` is required in every schema-14 configuration and must be empty
 for Bubblewrap and direct execution. Seatbelt requires empty `hidden_paths`.
 It accepts up to 63 unique normalized directory paths, with the same account
 macros and home expansion as hidden paths. Every expanded target must exist and
@@ -764,7 +774,7 @@ boundary; fatal worker/transport failure may abort the executor. Direct and
 Seatbelt cleanup is best effort. Seatbelt survivors retain their original grants
 after close or owner death; no watcher, helper or grant revocation is provided.
 
-The removed `process_lifetime` field is rejected by managed schema 13. There is
+The removed `process_lifetime` field is rejected by managed schema 14. There is
 one lifecycle contract rather than separate command and sandbox modes.
 
 ## Compiled extensions
@@ -979,7 +989,7 @@ command with an unlisted option, is unclassified and uses the main policy.
 
 ### Class policy validation
 
-The table is an additive optional field of configuration schema 13. It accepts
+The table is an additive optional field of configuration schema 14. It accepts
 exactly `mode` (`allow`, `ask` or `deny`) and `session_grant` (`never` or
 `offer`). Availability remains tool-level: `disabled` is not a class mode, and
 `audit` stays on `[tools.bash]`. Each violation is reported in the ordinary
@@ -1398,8 +1408,8 @@ scope. Restart after changing definitions.
 audit records use `command_class = "configured_command"` and the matching
 `command_set_ids`; `known_read_only_version` still identifies the built-in registry,
 not a safety certification of custom utilities. Upgrade application and collector
-together for audit wire version 3 and record schema 4. Main schema 13 and broker
-protocol/rule version 10 are unchanged.
+together for audit wire version 4 and record schema 5. The current main schema is
+14; broker protocol/rule version 10 is unchanged.
 
 An administrator must review the executable's behavior, plugins, configuration,
 response-file syntax and environment dependencies. Configured value-taking options
@@ -1461,3 +1471,60 @@ that selects only an absolute `path` and/or repository locator from the same
 immutable arguments used for execution. The Git clone tool records its validated
 repository locator and derived destination. Other compiled tools without this
 function record tool identity, permission decisions, and outcomes only.
+
+## User-controlled saving of private files
+
+Configuration schema 14 requires this main-only section:
+
+```toml
+[exports]
+enabled = false
+```
+
+Packaged policies keep it disabled. To enable `/sandbox save`, set `enabled = true`
+and `filesystem.cwd_writable = false` with Bubblewrap or Seatbelt. Startup rejects
+an incompatible base or effective broker policy; user/group rules cannot enable or
+change exports. This does not change tool invocation policy. Administrators may
+enable saving even when the agent's write tool is `ask`, `deny` or `disabled`;
+the user command is independent of all model-tool invocation policies. They may
+separately set `tools.bash`, `tools.write`, and `tools.edit` to `mode = "allow"`
+with `session_grant = "never"` when unrestricted work in private scratch is desired.
+The read-only CWD remains protected by the backend for every sandbox tool and user
+shell command. Host MCP and other host extensions retain their separate authority.
+
+In the interactive terminal, `/sandbox save` waits for foreground activity, then
+opens a themed overlay with Home and Temporary roots, highlighted rows and
+checkboxes. Space selects a file or whole directory; Right
+enters a directory, Left returns to its parent, and Enter reviews the selection.
+Press Tab to switch roots, h to toggle hidden entries, and a to select visible entries.
+The Open hint appears only for a highlighted directory; Back appears inside a directory.
+Hidden entries start hidden. Selecting a directory always
+includes hidden descendants, and hiding entries does not discard selections.
+This command is unavailable to models, RPC, print and JSON interfaces.
+
+The destination defaults to `sandbox-saved/<timestamp>-<id>` under the launch CWD
+and can be edited to another host directory, including an existing one. Single-root
+exports retain root-relative paths; selecting both roots adds `home/` and `tmp/`
+prefixes. The review lists the mapping and all existing regular files requiring
+replacement. Tab selects Save (or Replace listed files), Change directory, or
+Cancel; Enter activates the selected action. Existing directories
+merge without deleting unrelated entries. Use Left/Right or Home/End in the review
+to inspect long paths. Symlinks and incompatible file types are rejected. New files require a filesystem supporting atomic hard-link publication.
+
+Saving copies files and leaves scratch intact. When saving is enabled, normal
+interactive exit (Ctrl+D, double Ctrl+C, or `/quit`) checks the private home and temporary
+directories for regular files, including hidden descendants. Empty directories and
+unsupported entries do not trigger a prompt. If files exist, it asks whether to save
+first. If the bounded check fails or takes more than two seconds, it also offers
+to save rather than assuming there is nothing to keep.
+Yes opens the same picker and exits after a successful save; No or Ctrl+C on this
+prompt exits immediately without saving.
+Escape, cancelling the picker, or a failed save keeps the session open. The prompt
+also appears if you already saved, since scratch files may have changed. Signals,
+terminal loss, and noninteractive exits do not prompt. There is no automatic
+preservation. Private
+scratch lasts for the process, including logical conversation switches. Each save
+is limited to 100,000 entries, depth 64, 32 MiB of inventory, 4 GiB of data and
+1,000 replacements. Progress and completion report partial results; Escape cancels an active copy and retains already published files. File contents are copied into fresh files with
+mode 0600 and new directories with mode 0700; ownership, permissions, timestamps,
+ACLs, extended attributes, hard links, and special files are not preserved.

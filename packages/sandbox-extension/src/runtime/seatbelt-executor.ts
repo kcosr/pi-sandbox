@@ -7,6 +7,12 @@ import { constants } from "node:fs";
 import { access, lstat, mkdir, mkdtemp, realpath, rmdir, stat, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { randomUUID } from "node:crypto";
+import { spawn } from "node:child_process";
+import { fileURLToPath } from "node:url";
+import { createExportSource, type ExportConnection } from "./export/source.js";
+import { connectExportReader } from "./export/connection.js";
+import { exportIdentity } from "./export/files.js";
+import type { SandboxExportSource } from "./export/contracts.js";
 import {
   SandboxExecutionError,
   type SandboxCommandRequest,
@@ -175,6 +181,61 @@ export async function createSeatbeltExecutor(
       deniedDirectories: [...denied, await canonicalizeSeatbeltDirectory(control)],
     };
     const profile = buildSeatbeltProfile(policy);
+    let exportSource: SandboxExportSource | undefined;
+    let exportCleanup: (() => Promise<void>) | undefined;
+    if (options.onExportSource !== undefined) {
+      const roots = await Promise.all(
+        (["home", "tmp"] as const).map(async (id) => {
+          const directory = path.join(root, id);
+          return {
+            id,
+            path: directory,
+            identity: exportIdentity(await lstat(directory, { bigint: true })),
+          };
+        }),
+      );
+      const command = options.exportReaderCommand ?? [
+        process.execPath,
+        fileURLToPath(new URL("./export-reader-entry.js", import.meta.url)),
+      ];
+      const connections = new Set<ExportConnection>();
+      let exportsClosed = false;
+      exportSource = createExportSource({
+        writableHostPaths: [root, ...(basePolicy.workspaceWritable ? [cwd] : [])],
+        connect: async () => {
+          if (exportsClosed) throw new Error("export_closed");
+          const child = spawn(
+            SEATBELT_LAUNCHER,
+            profileArguments(profile, [...command, JSON.stringify({ roots })]),
+            {
+              cwd,
+              env: { ...environment, HOME: writable[0]!, TMPDIR: writable[1]! },
+              stdio: ["pipe", "pipe", "pipe"],
+            },
+          );
+          const connection = await connectExportReader(child);
+          if (exportsClosed) {
+            await connection.close();
+            throw new Error("export_closed");
+          }
+          connections.add(connection);
+          return {
+            request: connection.request.bind(connection),
+            close: async () => {
+              try {
+                await connection.close();
+              } finally {
+                connections.delete(connection);
+              }
+            },
+          };
+        },
+      });
+      exportCleanup = async () => {
+        exportsClosed = true;
+        await Promise.all([...connections].map((connection) => connection.close()));
+      };
+    }
     executor = new SeatbeltExecutor(
       policy,
       profile,
@@ -193,8 +254,10 @@ export async function createSeatbeltExecutor(
         XDG_CONFIG_HOME: writable[3]!,
         XDG_STATE_HOME: writable[4]!,
       }),
+      exportCleanup,
     );
     await executor.probe();
+    if (exportSource !== undefined) options.onExportSource?.(exportSource);
     return executor;
   } catch (cause) {
     if (executor) await executor.close().catch(() => undefined);
@@ -220,6 +283,7 @@ class SeatbeltExecutor implements SandboxExecutor {
     readonly commands: ToolCommandPaths,
     private readonly requiredExecutables: readonly string[],
     private readonly environment: Readonly<Record<string, string>>,
+    private readonly exportCleanup?: () => Promise<void>,
   ) {
     this.cwd = policy.workspace;
     this.home = environment.HOME!;
@@ -335,6 +399,7 @@ class SeatbeltExecutor implements SandboxExecutor {
     if (!this.#closing) {
       this.#closed = true;
       this.#closing = (async () => {
+        await this.exportCleanup?.();
         await this.#commands.close();
         await cleanupRuntime(this.runtime);
       })();

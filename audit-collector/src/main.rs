@@ -71,6 +71,129 @@ struct Event {
     known_read_only_version: Option<u32>,
     #[serde(skip_serializing_if = "Option::is_none")]
     command_set_ids: Option<Vec<String>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    user_export: Option<ExportDetails>,
+}
+
+#[derive(Debug, Deserialize, Serialize)]
+#[serde(untagged)]
+enum ExportDetails {
+    Intent(ExportIntent),
+    Complete(ExportComplete),
+    ReplaceIntent(ExportReplaceIntent),
+    ReplaceComplete(ExportReplaceComplete),
+}
+#[derive(Debug, Deserialize, Serialize)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+struct ExportIntent {
+    operation_id: String,
+    destination: String,
+    roots: Vec<String>,
+    entry_count: u64,
+    file_count: u64,
+    total_bytes: u64,
+    manifest_digest: String,
+}
+#[derive(Debug, Deserialize, Serialize)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+struct ExportComplete {
+    operation_id: String,
+    destination: String,
+    saved_files: u64,
+    saved_bytes: u64,
+    failed_files: u64,
+    not_saved_files: u64,
+    cancelled: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    error: Option<String>,
+}
+#[derive(Debug, Deserialize, Serialize)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+struct ExportPrior {
+    dev: String,
+    ino: String,
+    size: String,
+    mtime_ns: String,
+    ctime_ns: String,
+}
+#[derive(Debug, Deserialize, Serialize)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+struct ExportReplaceIntent {
+    operation_id: String,
+    destination: String,
+    path: String,
+    prior: ExportPrior,
+}
+#[derive(Debug, Deserialize, Serialize)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+struct ExportReplaceComplete {
+    operation_id: String,
+    destination: String,
+    path: String,
+    prior: ExportPrior,
+    outcome: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    error: Option<String>,
+}
+fn valid_export_details(kind: &str, details: &ExportDetails) -> bool {
+    let base =
+        |id: &str, path: &str| bounded(id, 256) && bounded(path, 4096) && path.starts_with('/');
+    let error = |e: &Option<String>| e.as_ref().is_none_or(|s| bounded(s, 1024));
+    let prior = |p: &ExportPrior| {
+        [&p.dev, &p.ino, &p.size]
+            .iter()
+            .all(|s| !s.starts_with('-'))
+            && [&p.dev, &p.ino, &p.size, &p.mtime_ns, &p.ctime_ns]
+                .iter()
+                .all(|s| {
+                    let digits = s.strip_prefix('-').unwrap_or(s);
+                    !digits.is_empty()
+                        && digits.len() <= 30
+                        && digits.bytes().all(|b| b.is_ascii_digit())
+                })
+    };
+    let relative =
+        |p: &str| bounded(p, 4096) && p.split('/').all(|s| !s.is_empty() && s != "." && s != "..");
+    match details {
+        ExportDetails::Intent(e) => {
+            kind == "export_intent"
+                && base(&e.operation_id, &e.destination)
+                && !e.roots.is_empty()
+                && e.roots.len() <= 2
+                && e.roots.iter().all(|r| r == "home" || r == "tmp")
+                && (e.roots.len() != 2 || e.roots[0] != e.roots[1])
+                && e.entry_count <= 100_000
+                && e.file_count <= e.entry_count
+                && e.total_bytes <= 4 * 1024_u64.pow(3)
+                && e.manifest_digest.len() == 64
+                && e.manifest_digest
+                    .bytes()
+                    .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
+        }
+        ExportDetails::Complete(e) => {
+            kind == "export_complete"
+                && base(&e.operation_id, &e.destination)
+                && e.saved_files <= 100_000
+                && e.failed_files <= 100_000
+                && e.not_saved_files <= 100_000
+                && e.saved_bytes <= 4 * 1024_u64.pow(3)
+                && error(&e.error)
+        }
+        ExportDetails::ReplaceIntent(e) => {
+            kind == "export_replace_intent"
+                && base(&e.operation_id, &e.destination)
+                && relative(&e.path)
+                && prior(&e.prior)
+        }
+        ExportDetails::ReplaceComplete(e) => {
+            kind == "export_replace_complete"
+                && base(&e.operation_id, &e.destination)
+                && relative(&e.path)
+                && prior(&e.prior)
+                && matches!(e.outcome.as_str(), "saved" | "failed")
+                && error(&e.error)
+        }
+    }
 }
 
 #[derive(Deserialize)]
@@ -101,7 +224,7 @@ fn facility(config: &str) -> io::Result<Option<u32>> {
     if value
         .get("config_version")
         .and_then(toml::Value::as_integer)
-        != Some(13)
+        != Some(14)
     {
         return Err(invalid());
     }
@@ -206,7 +329,7 @@ fn read_frame(reader: &mut impl BufRead) -> io::Result<Option<Request>> {
         }
     }
     let request: Request = serde_json::from_slice(&bytes).map_err(|_| invalid())?;
-    if request.version != 3 || !valid_event(&request.event) {
+    if request.version != 4 || !valid_event(&request.event) {
         return Err(invalid());
     }
     Ok(Some(request))
@@ -219,6 +342,19 @@ fn one_of(value: &Option<String>, choices: &[&str]) -> bool {
     value.as_ref().is_none_or(|s| choices.contains(&s.as_str()))
 }
 fn valid_event(e: &Event) -> bool {
+    if let Some(details) = &e.user_export {
+        return bounded(&e.pi_session_id, 256)
+            && valid_export_details(&e.event, details)
+            && serde_json::to_value(e)
+                .ok()
+                .and_then(|v| v.as_object().cloned())
+                .is_some_and(|v| {
+                    v.keys().all(|key| {
+                        matches!(key.as_str(), "event" | "pi_session_id" | "user_export")
+                    })
+                });
+    }
+
     let tool_event = matches!(
         e.event.as_str(),
         "tool_requested" | "tool_denied" | "tool_execution_intent" | "tool_completed"
@@ -388,7 +524,7 @@ fn serve(
             Err(_) => {
                 return reply(
                     output,
-                    serde_json::json!({"version":3,"ok":false,"code":"protocol_error"}),
+                    serde_json::json!({"version":4,"ok":false,"code":"protocol_error"}),
                 );
             }
         };
@@ -398,12 +534,12 @@ fn serve(
         {
             return reply(
                 output,
-                serde_json::json!({"version":3,"ok":false,"code":"protocol_error"}),
+                serde_json::json!({"version":4,"ok":false,"code":"protocol_error"}),
             );
         }
         sequence = sequence.checked_add(1).ok_or_else(invalid)?;
         let record = Record {
-            schema_version: 4,
+            schema_version: 5,
             principal_uid: credentials.uid,
             principal_user: principal_user.as_deref(),
             principal_pid: credentials.pid,
@@ -417,12 +553,12 @@ fn serve(
         if submit(&message).is_err() {
             return reply(
                 output,
-                serde_json::json!({"version":3,"ok":false,"code":"syslog_unavailable"}),
+                serde_json::json!({"version":4,"ok":false,"code":"syslog_unavailable"}),
             );
         }
         reply(
             output,
-            serde_json::json!({"version":3,"ok":true,"audit_session_id":session}),
+            serde_json::json!({"version":4,"ok":true,"audit_session_id":session}),
         )?;
         if request.event.event == "session_started" {
             active_session = Some(request.event.pi_session_id);
@@ -452,7 +588,7 @@ fn run() -> io::Result<()> {
     else {
         return reply(
             &mut io::stdout().lock(),
-            serde_json::json!({"version":3,"ok":false,"code":"audit_disabled"}),
+            serde_json::json!({"version":4,"ok":false,"code":"audit_disabled"}),
         );
     };
     let credentials = peer_credentials(0)?;
@@ -520,11 +656,69 @@ mod tests {
     use std::os::unix::net::UnixStream;
 
     fn start(id: &str) -> serde_json::Value {
-        serde_json::json!({"version":3,"event":{"event":"session_started","pi_session_id":id,"cwd":"/workspace"}})
+        serde_json::json!({"version":4,"event":{"event":"session_started","pi_session_id":id,"cwd":"/workspace"}})
     }
     fn tool() -> serde_json::Value {
-        serde_json::json!({"version":3,"event":{"event":"tool_execution_intent","pi_session_id":"pi-1","tool":"bash","invocation_id":"call-1","boundary":"bubblewrap","approval_source":"prompt","command":"printf 'hello\\n'","command_truncated":false}})
+        serde_json::json!({"version":4,"event":{"event":"tool_execution_intent","pi_session_id":"pi-1","tool":"bash","invocation_id":"call-1","boundary":"bubblewrap","approval_source":"prompt","command":"printf 'hello\\n'","command_truncated":false}})
     }
+    #[test]
+    fn user_export_events_are_typed_bounded_and_separate_from_tools() {
+        let prior = serde_json::json!({"dev":"1","ino":"2","size":"3","mtimeNs":"4","ctimeNs":"5"});
+        let events = [
+            (
+                "export_intent",
+                serde_json::json!({"roots":["home"],"entryCount":1,"fileCount":1,"totalBytes":3,"manifestDigest":"a".repeat(64)}),
+            ),
+            (
+                "export_complete",
+                serde_json::json!({"savedFiles":1,"savedBytes":3,"failedFiles":0,"notSavedFiles":0,"cancelled":false}),
+            ),
+            (
+                "export_replace_intent",
+                serde_json::json!({"path":"a.txt","prior":prior}),
+            ),
+            (
+                "export_replace_complete",
+                serde_json::json!({"path":"a.txt","prior":prior,"outcome":"saved"}),
+            ),
+        ];
+        for (kind, mut details) in events {
+            details["operationId"] = serde_json::json!("save-1");
+            details["destination"] = serde_json::json!("/output");
+            let valid = serde_json::json!({"version":4,"event":{"event":kind,"pi_session_id":"pi-1","user_export":details}});
+            assert!(read_frame(&mut Cursor::new(format!("{}\n", valid))).is_ok());
+            for bad in [
+                {
+                    let mut v = valid.clone();
+                    v["version"] = serde_json::json!(3);
+                    v
+                },
+                {
+                    let mut v = valid.clone();
+                    v["event"]["tool"] = serde_json::json!("bash");
+                    v
+                },
+                {
+                    let mut v = valid.clone();
+                    v["event"]["event"] = serde_json::json!("tool_completed");
+                    v
+                },
+                {
+                    let mut v = valid.clone();
+                    v["event"]["user_export"]["fileContent"] = serde_json::json!("secret");
+                    v
+                },
+                {
+                    let mut v = valid.clone();
+                    v["event"]["user_export"]["destination"] = serde_json::json!("relative");
+                    v
+                },
+            ] {
+                assert!(read_frame(&mut Cursor::new(format!("{}\n", bad))).is_err());
+            }
+        }
+    }
+
     #[test]
     fn rejects_removed_vm_boundary() {
         let mut request = tool();
@@ -536,7 +730,7 @@ mod tests {
     }
 
     fn mcp(transport: &str) -> serde_json::Value {
-        serde_json::json!({"version":3,"event":{
+        serde_json::json!({"version":4,"event":{
             "event":"tool_execution_intent","pi_session_id":"pi-1",
             "tool":"mcp__docs__search","invocation_id":"nested-1","boundary":"host",
             "mcp_server":"docs","mcp_tool":"search/raw","mcp_transport":transport,
@@ -582,7 +776,7 @@ mod tests {
         let record: serde_json::Value =
             serde_json::from_str(line.split_once(": ").unwrap().1).unwrap();
         assert_eq!(record["principal_uid"], 1001);
-        assert_eq!(record["schema_version"], 4);
+        assert_eq!(record["schema_version"], 5);
         assert_eq!(record["principal_user"], "alice");
         assert!(record.get("principal_gid").is_none());
         assert_eq!(record["principal_pid"], 42);
@@ -598,7 +792,7 @@ mod tests {
     }
 
     #[test]
-    fn preserves_typed_mcp_metadata_and_parent_in_schema_four_records() {
+    fn preserves_typed_mcp_metadata_and_parent_in_schema_five_records() {
         for transport in ["http", "stdio"] {
             let mut output = Vec::new();
             let mut messages = Vec::new();
@@ -619,7 +813,7 @@ mod tests {
             let line = std::str::from_utf8(&messages[1]).unwrap();
             let record: serde_json::Value =
                 serde_json::from_str(line.split_once(": ").unwrap().1).unwrap();
-            assert_eq!(record["schema_version"], 4);
+            assert_eq!(record["schema_version"], 5);
             assert_eq!(record["mcp_server"], "docs");
             assert_eq!(record["mcp_tool"], "search/raw");
             assert_eq!(record["mcp_transport"], transport);
@@ -627,7 +821,7 @@ mod tests {
             assert_eq!(record["principal_uid"], 1001);
             for ack in String::from_utf8(output).unwrap().lines() {
                 let ack: serde_json::Value = serde_json::from_str(ack).unwrap();
-                assert_eq!(ack["version"], 3);
+                assert_eq!(ack["version"], 4);
                 assert_eq!(ack["ok"], true);
             }
         }
@@ -827,7 +1021,7 @@ mod tests {
         let mut base = classified("tool_execution_intent", "configured_command", 2);
         base["event"]["command_set_ids"] = serde_json::json!(["Utility-Read", "a".repeat(64)]);
         let record = forwarded(base.clone());
-        assert_eq!(record["schema_version"], 4);
+        assert_eq!(record["schema_version"], 5);
         assert_eq!(record["command_set_ids"], base["event"]["command_set_ids"]);
         let accepted = |request: &serde_json::Value| {
             read_frame(&mut Cursor::new(lines(std::slice::from_ref(request)))).is_ok()
@@ -912,7 +1106,7 @@ mod tests {
         let mut completed = tool();
         completed["event"]["event"] = serde_json::json!("tool_completed");
         completed["event"]["outcome"] = serde_json::json!("success");
-        let ended = serde_json::json!({"version":3,"event":{"event":"session_ended","pi_session_id":"pi-1"}});
+        let ended = serde_json::json!({"version":4,"event":{"event":"session_ended","pi_session_id":"pi-1"}});
         for unclassified in [
             read,
             requested,
@@ -982,7 +1176,7 @@ mod tests {
 
     #[test]
     fn enforces_session_lifecycle_and_allows_switches() {
-        let end = serde_json::json!({"version":3,"event":{"event":"session_ended","pi_session_id":"pi-1"}});
+        let end = serde_json::json!({"version":4,"event":{"event":"session_ended","pi_session_id":"pi-1"}});
         let mut output = Vec::new();
         let mut count = 0;
         serve(
@@ -1038,19 +1232,19 @@ mod tests {
     #[test]
     fn configuration_owns_facility_and_requires_current_schema() {
         assert_eq!(
-            facility("config_version=13\n[audit]\nenabled=true\nfacility='local7'").unwrap(),
+            facility("config_version=14\n[audit]\nenabled=true\nfacility='local7'").unwrap(),
             Some(23)
         );
         assert_eq!(
-            facility("config_version=13\n[audit]\nenabled=false\nfacility='local0'").unwrap(),
+            facility("config_version=14\n[audit]\nenabled=false\nfacility='local0'").unwrap(),
             None
         );
         for text in [
             "config_version=10\n[audit]\nenabled=true\nfacility='local0'",
             "config_version=11\n[audit]\nenabled=true\nfacility='local0'",
             "config_version=12\n[audit]\nenabled=true\nfacility='local0'",
-            "config_version=13\n[audit]\nenabled=true\nfacility='auth'",
-            "config_version=13\n[audit]\nenabled=true\nfacility='local0'\npath='/tmp/log'",
+            "config_version=14\n[audit]\nenabled=true\nfacility='auth'",
+            "config_version=14\n[audit]\nenabled=true\nfacility='local0'\npath='/tmp/log'",
         ] {
             assert!(facility(text).is_err());
         }

@@ -34,6 +34,22 @@ export function toolEnvironmentPrompt(options: {
   const parts = [
     `Tool home: $HOME in Bash and ~ in tool paths resolve to ${quoted(options.home)}.`,
   ];
+  const workspace = safePath(options.cwd)
+    ? `Workspace CWD ${quoted(options.cwd)}`
+    : "The workspace CWD";
+  parts.push(
+    options.filesystem.cwdWritable
+      ? `${workspace} is writable under the execution policy, subject to filesystem exclusions and OS permissions. Apply requested project edits there.`
+      : `${workspace} is read-only for sandboxed tools, including Bash, write and edit. Approval cannot make it writable. Use CWD as input; copy needed source files into the tool home before modifying them.`,
+    "Use a new subdirectory of the tool home for scratch scripts, intermediate files and temporary build output.",
+    options.backend === "bubblewrap"
+      ? "Use mktemp under /tmp for disposable temporary files."
+      : "Use mktemp under $TMPDIR for disposable temporary files; literal /tmp is not private sandbox storage.",
+    "Scratch can persist across conversation switches in this process; do not rely on it surviving application exit.",
+  );
+  if (!options.filesystem.cwdWritable) {
+    parts.push("Put generated deliverables in the tool home and report their paths.");
+  }
   const home = options.accountHome;
   if (home === undefined || !safePath(home)) return parts.join(" ");
 

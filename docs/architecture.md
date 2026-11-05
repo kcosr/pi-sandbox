@@ -234,7 +234,12 @@ Expanded values retain the existing environment bounds and filesystem checks.
 Installation validation checks syntax without expanding the installer's home.
 
 Managed Bubblewrap and Seatbelt system-prompt context distinguishes the executor's
-tool home from the invoking account's home. Direct execution adds no home note
+tool home from the invoking account's home. It states effective CWD write access,
+directs scratch scripts and build output into a new tool-home subdirectory, and
+explains scratch lifetime across conversation switches and process exit. Read-only
+workspaces are source inputs; generated deliverables belong in the tool home and
+their paths should be reported. The user-only save command is not advertised to
+the agent. Direct execution adds no home note
 and does not request the optional account-home context. Optional account-home
 context uses the same trusted OS
 identity lookup before scoped environment changes and is qualified by the
@@ -561,3 +566,26 @@ structured records to local syslog and acknowledges successful submission.
 Server logging infrastructure owns persistence, rotation, retention, and
 forwarding. This service is independent of user/group configuration resolution;
 it is not an execution backend and does not run tool operations.
+
+## Explicit private-file saving
+
+Normal interactive exit offers the same save workflow before terminal and sandbox
+teardown when exports are enabled and a bounded sandbox inventory finds regular
+files, including hidden descendants, or cannot complete the check. Empty scratch
+skips the prompt. The application-owned `beforeInteractiveQuit`
+callback can cancel exit; signals abort that callback and continue cleanup.
+
+The managed `/sandbox save` command lives alongside diagnostics in the forced
+application extension. Its application-owned controller handles the terminal picker,
+manifest review, host destination validation and publication. The reusable sandbox
+runtime supplies a separate export-source capability through a trusted constructor
+callback; it is absent from `SandboxExecutor` and model-tool contexts.
+
+Bubblewrap worker protocol 5 carries paged inventory and bounded pull reads within
+the existing namespace. Seatbelt starts a transient restricted reader role under
+its existing profile, packaged for both the compiled application and stock Node/Bun
+extension consumers. Direct execution exposes no private export source. Export
+cancellation closes only its reader resources; it does not stop unrelated commands.
+Logical session shutdown cancels the active picker/copy before executor and audit
+teardown. Saving is manual, and neither session switching nor quitting preserves
+private scratch automatically.

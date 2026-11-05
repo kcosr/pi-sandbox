@@ -100,7 +100,7 @@ describe("sandbox worker protocol", () => {
     expect(isWorkerRequest({ type: "retire", id: 2 })).toBe(false);
     expect(isWorkerRequest({ type: "retire", id: 0 })).toBe(false);
     expect(isWorkerRequest({ type: "retire", id: 2, extra: true })).toBe(false);
-    expect(isWorkerResponse({ type: "ready", protocolVersion: 4 })).toBe(true);
+    expect(isWorkerResponse({ type: "ready", protocolVersion: 5 })).toBe(true);
     expect(isWorkerResponse({ type: "started", id: 2 })).toBe(true);
     expect(isWorkerResponse({ type: "started", id: 0 })).toBe(false);
     expect(isWorkerResponse({ type: "started", id: 2, exitCode: 0 })).toBe(false);

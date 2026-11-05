@@ -9,5 +9,10 @@
     "types": ["node"]
   },
   "include": ["src/**/*.ts", "packages/*/src/**/*.ts"],
-  "exclude": ["src/**/*.test.ts", "packages/**/*.test.ts", "packages/**/src/test-support/**"]
+  "exclude": [
+    "src/**/*.test.ts",
+    "src/**/*.test-support.ts",
+    "packages/**/*.test.ts",
+    "packages/**/src/test-support/**"
+  ]
 }

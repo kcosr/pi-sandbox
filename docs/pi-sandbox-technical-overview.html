@@ -1316,7 +1316,7 @@
               class="compact"
               aria-label="Example global Pi Sandbox configuration"
             ><code># /etc/pi-sandbox/config.toml — excerpt
-config_version = 13
+config_version = 14
 models_file = "/etc/pi-sandbox/models.json"
 
 [codemode]
@@ -1325,6 +1325,9 @@ enabled = false
 [mcp.servers]
 audit = { enabled = false, facility = "local0" }
 filesystem = { cwd_writable = true, hidden_paths = [], denied_paths = [] }
+[exports]
+enabled = false
+
 [sessions]
 retention_days = 365
 [execution]

@@ -35,7 +35,7 @@ const send = value => {
 };
 fs.writeSync(3, JSON.stringify({"child-pid": process.pid}) + "\\n");
 fs.createReadStream(null, {fd:4}).resume();
-send({type:"ready",protocolVersion:4});
+send({type:"ready",protocolVersion:5});
 let input = Buffer.alloc(0);
 const active = new Map();
 let released = false;

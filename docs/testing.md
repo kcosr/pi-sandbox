@@ -577,8 +577,8 @@ coverage. Diagnostics show authored enum/any-literal forms rather than internal 
 Direct evidence tests exercise the 256-stage/64-ID bounds, malformed or duplicate
 IDs, missing custom matches, and oversized-result fallback to ordinary policy.
 Broker tests retain main definitions across overrides and reject command-set
-definitions in rule/wire inputs. Audit client and collector tests require wire 3,
-record schema 4, separate configured-command IDs and strict older-wire rejection.
+definitions in rule/wire inputs. Audit client and collector tests require wire 4,
+record schema 5, separate configured-command IDs and strict older-wire rejection.
 
 `tests/integration/bash-command-sets.test.ts` compares real Bash argv and pipeline
 behavior with the declared shapes using an owned offline executable; injection
@@ -595,3 +595,16 @@ all backends. Real Bubblewrap coverage must invoke a configured helper through
 both basename and absolute path and retain fixed typed-tool executable selection.
 Ordinary package checks must preserve omitted-option behavior and reject the
 managed-only setting in standalone JSON.
+
+## Private-file saving
+
+Export tests cover main-only admission, effective read-only CWD enforcement, TUI-only
+entry, selection/hidden-entry semantics, cancellation, manifest validation and bounded
+inventory. Host publisher tests use disposable destinations and prove explicit conflict
+review, hard-link alias safety, symlink/type rejection, late conflicts, source changes,
+partial results and audit failure before and after publication. Reader tests exercise
+paging, bounded pulls, invalid names, source identity changes, special files and
+root/path substitution. Real Bubblewrap coverage must prove host CWD remains read-only
+and private files can be exported through the worker. Seatbelt native tests must run
+on each supported macOS architecture before release qualification; Linux tests cannot
+establish its native enforcement or packaged reader behavior.

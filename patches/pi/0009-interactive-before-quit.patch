@@ -1,0 +1,169 @@
+diff --git a/packages/coding-agent/src/main.ts b/packages/coding-agent/src/main.ts
+--- a/packages/coding-agent/src/main.ts
++++ b/packages/coding-agent/src/main.ts
+@@ -44,7 +44,7 @@
+ import { formatNoModelsAvailableMessage } from "./core/auth-guidance.ts";
+ import { AuthStorage, ReadOnlyAuthStorage } from "./core/auth-storage.ts";
+ import { exportFromFile } from "./core/export-html/index.ts";
+-import type { InlineExtension } from "./core/extensions/types.ts";
++import type { ExtensionCommandContext, InlineExtension } from "./core/extensions/types.ts";
+ import { applyHttpProxySettings, configureHttpDispatcher } from "./core/http-dispatcher.ts";
+ import { resolveCliModel, resolveModelScope, type ScopedModel } from "./core/model-resolver.ts";
+ import { ModelRuntime, type ModelRuntimeFactory } from "./core/model-runtime.ts";
+@@ -572,6 +572,8 @@
+ }
+ 
+ export interface MainOptions {
++	/** Return false to cancel ordinary interactive quit while the TUI remains available. */
++	beforeInteractiveQuit?: (context: ExtensionCommandContext, signal: AbortSignal) => Promise<boolean>;
+ 	/** Application identity shown by --version and the TUI; internal Pi version stays unchanged. */
+ 	displayVersion?: string;
+ 	extensionFactories?: InlineExtension[];
+@@ -992,6 +994,7 @@
+ 		await runRpcMode(runtime);
+ 	} else if (appMode === "interactive") {
+ 		const interactiveMode = new InteractiveMode(runtime, {
++			beforeInteractiveQuit: options?.beforeInteractiveQuit,
+ 			displayVersion: options?.displayVersion,
+ 			migratedProviders,
+ 			startupDiagnostics,
+diff --git a/packages/coding-agent/src/modes/interactive/interactive-mode.ts b/packages/coding-agent/src/modes/interactive/interactive-mode.ts
+--- a/packages/coding-agent/src/modes/interactive/interactive-mode.ts
++++ b/packages/coding-agent/src/modes/interactive/interactive-mode.ts
+@@ -423,6 +423,8 @@
+  * Options for InteractiveMode initialization.
+  */
+ export interface InteractiveModeOptions {
++	/** Return false to cancel ordinary quit. Signals abort this hook and continue shutdown. */
++	beforeInteractiveQuit?: (context: ExtensionCommandContext, signal: AbortSignal) => Promise<boolean>;
+ 	/** Application identity for the header only; does not affect update or changelog comparisons. */
+ 	displayVersion?: string;
+ 	/** Providers that were migrated to auth.json (shows warning) */
+@@ -4303,9 +4305,36 @@
+ 	 * repaint the final frame while the process is exiting.
+ 	 */
+ 	private isShuttingDown = false;
++	private beforeQuitController?: AbortController;
+ 
+ 	private async shutdown(options?: { fromSignal?: boolean }): Promise<void> {
+ 		if (this.isShuttingDown) return;
++		if (options?.fromSignal) {
++			this.beforeQuitController?.abort();
++		} else if (this.beforeQuitController) {
++			return;
++		} else if (this.options.beforeInteractiveQuit) {
++			const controller = new AbortController();
++			this.beforeQuitController = controller;
++			try {
++				const proceed = await this.options.beforeInteractiveQuit(
++					this.session.extensionRunner.createCommandContext(), controller.signal,
++				);
++				if (controller.signal.aborted || this.isShuttingDown) return;
++				if (!proceed) {
++					this.shutdownRequested = false;
++					return;
++				}
++			} catch {
++				if (!controller.signal.aborted) {
++					this.shutdownRequested = false;
++					this.showError("Could not complete exit. The session is still open.");
++				}
++				return;
++			} finally {
++				if (this.beforeQuitController === controller) this.beforeQuitController = undefined;
++			}
++		}
+ 		this.isShuttingDown = true;
+ 		// Keep signal handlers registered until terminal cleanup has completed.
+ 		// `signal-exit` checks the listener list during the same SIGTERM/SIGHUP
+diff --git a/packages/coding-agent/test/managed-shutdown-status.test.ts b/packages/coding-agent/test/managed-shutdown-status.test.ts
+--- a/packages/coding-agent/test/managed-shutdown-status.test.ts
++++ b/packages/coding-agent/test/managed-shutdown-status.test.ts
+@@ -64,6 +64,7 @@
+ 		});
+ 		const instance = {
+ 			isShuttingDown: false,
++			options: {},
+ 			runtimeHost: { dispose: disposed },
+ 			themeController: { disableAutoSync: () => {} },
+ 			ui: { terminal: { drainInput: async () => {} } },
+@@ -76,3 +77,79 @@
+ 		expect(disposed).toHaveBeenCalledOnce();
+ 	});
+ });
++
++describe("interactive before-quit hook", () => {
++	function instance(hook: (context: unknown, signal: AbortSignal) => Promise<boolean>) {
++		const order: string[] = [];
++		const context = {};
++		return {
++			order, context,
++			isShuttingDown: false,
++			shutdownRequested: true,
++			options: { beforeInteractiveQuit: hook },
++			session: { extensionRunner: { createCommandContext: () => context } },
++			runtimeHost: { dispose: vi.fn(async () => { order.push("dispose"); }) },
++			themeController: { disableAutoSync: () => {} },
++			ui: { terminal: { drainInput: async () => { order.push("drain"); } } },
++			stop: vi.fn(() => { order.push("stop"); }),
++			showError: vi.fn(),
++			sessionManager: { isPersisted: () => false },
++		};
++	}
++	const shutdown = (InteractiveMode.prototype as unknown as {
++		shutdown(options?: { fromSignal?: boolean }): Promise<void>;
++	}).shutdown;
++
++	test("awaits the hook before terminal or runtime teardown", async () => {
++		const exited = new Error("test exit");
++		vi.spyOn(process, "exit").mockImplementation(() => { throw exited; });
++		const hook = vi.fn(async () => true);
++		const state = instance(hook);
++		hook.mockImplementation(async () => { state.order.push("hook"); return true; });
++		await expect(shutdown.call(state)).rejects.toBe(exited);
++		expect(hook).toHaveBeenCalledWith(state.context, expect.any(AbortSignal));
++		expect(state.order).toEqual(["hook", "drain", "stop", "dispose"]);
++	});
++
++	test.each([false, "reject"])("keeps the session alive when the hook returns %s", async (answer) => {
++		const exit = vi.spyOn(process, "exit").mockImplementation(() => undefined as never);
++		const state = instance(async () => {
++			if (answer === "reject") throw new Error("test failure");
++			return false;
++		});
++		await shutdown.call(state);
++		expect(state.isShuttingDown).toBe(false);
++		expect(state.shutdownRequested).toBe(false);
++		expect(state.order).toEqual([]);
++		expect(exit).not.toHaveBeenCalled();
++	});
++
++	test("signals bypass the prompt", async () => {
++		const exited = new Error("test exit");
++		vi.spyOn(process, "exit").mockImplementation(() => { throw exited; });
++		const hook = vi.fn(async () => true);
++		const state = instance(hook);
++		await expect(shutdown.call(state, { fromSignal: true })).rejects.toBe(exited);
++		expect(hook).not.toHaveBeenCalled();
++		expect(state.runtimeHost.dispose).toHaveBeenCalledOnce();
++	});
++
++	test("a signal aborts a pending prompt; repeated quit cannot open a second prompt", async () => {
++		const exited = new Error("test exit");
++		vi.spyOn(process, "exit").mockImplementation(() => { throw exited; });
++		let signal: AbortSignal | undefined;
++		const hook = vi.fn((_context: unknown, pending: AbortSignal) => {
++			signal = pending;
++			return new Promise<boolean>((resolve) => pending.addEventListener("abort", () => resolve(false), { once: true }));
++		});
++		const state = instance(hook);
++		const pending = shutdown.call(state);
++		await shutdown.call(state);
++		expect(hook).toHaveBeenCalledOnce();
++		await expect(shutdown.call(state, { fromSignal: true })).rejects.toBe(exited);
++		await pending;
++		expect(signal?.aborted).toBe(true);
++		expect(state.runtimeHost.dispose).toHaveBeenCalledOnce();
++		expect(state.isShuttingDown).toBe(true);
++	});
++});

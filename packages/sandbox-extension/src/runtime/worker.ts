@@ -1,5 +1,8 @@
 import { readdir } from "node:fs/promises";
 import path from "node:path";
+import { ExportFileService } from "./export/files.js";
+import { SandboxExportError } from "./export/contracts.js";
+import { runExportOperation } from "./export/protocol.js";
 
 import { SandboxExecutionError, type SandboxExecutionErrorCode } from "./contracts.js";
 import { startSandboxProcess } from "./command-process.js";
@@ -33,8 +36,24 @@ class SandboxWorker {
   #lastRequestId = 0;
   #shuttingDown = false;
   #failed = false;
+  #exportService: ExportFileService | undefined;
+  #exportTask: Promise<void> | undefined;
+  #exportRequestId: number | undefined;
 
   public async run(): Promise<void> {
+    const cwd = process.cwd();
+    this.#exportService = await ExportFileService.create("linux", [
+      { id: "home", path: "/run/pi-sandbox/home" },
+      ...(cwd === "/tmp"
+        ? []
+        : [
+            {
+              id: "tmp" as const,
+              path: "/tmp",
+              excludedPaths: cwd.startsWith("/tmp/") ? [cwd.slice(5)] : [],
+            },
+          ]),
+    ]);
     process.stdin.on("data", (chunk: Buffer) => this.receive(chunk));
     process.stdin.once("end", () => this.shutdown());
     process.stdin.once("error", (cause) => this.fatal(cause));
@@ -70,6 +89,7 @@ class SandboxWorker {
       // A result may already be in transit. Its ID is never reused, and a late
       // cancellation cannot affect another execution or a reaped process group.
       this.#executions.get(request.id)?.process.abort(new SandboxExecutionError("sandbox_aborted"));
+      if (request.id === this.#exportRequestId) this.#exportService?.cancel();
       return;
     }
     if (request.id <= this.#lastRequestId) {
@@ -77,6 +97,31 @@ class SandboxWorker {
       return;
     }
     this.#lastRequestId = request.id;
+    if (request.type === "export") {
+      const service = this.#exportService;
+      if (this.#shuttingDown || service === undefined || this.#exportTask !== undefined) {
+        void this.send({ type: "export-failure", id: request.id, code: "export_unavailable" });
+        return;
+      }
+      this.#exportRequestId = request.id;
+      const task = runExportOperation(service, request.request)
+        .then(
+          (reply) => this.send({ type: "export-result", id: request.id, reply }),
+          (error: unknown) =>
+            this.send({
+              type: "export-failure",
+              id: request.id,
+              code: error instanceof SandboxExportError ? error.code : "export_source_unavailable",
+            }),
+        )
+        .finally(() => {
+          this.#exportTask = undefined;
+          this.#exportRequestId = undefined;
+        });
+      this.#exportTask = task;
+      void task.catch((cause: unknown) => this.fatal(cause));
+      return;
+    }
     if (this.#shuttingDown || !path.isAbsolute(request.argv[0] ?? "")) {
       void this.send(
         failure(request.id, this.#shuttingDown ? "sandbox_closed" : "sandbox_invalid_request"),
@@ -126,10 +171,12 @@ class SandboxWorker {
   private shutdown(): void {
     if (this.#shuttingDown) return;
     this.#shuttingDown = true;
+    this.#exportService?.cancel();
     const executions = [...this.#executions.values()];
     for (const execution of executions)
       execution.process.abort(new SandboxExecutionError("sandbox_closed"));
-    void Promise.all(executions.map(({ task }) => task))
+    void Promise.all([...executions.map(({ task }) => task), this.#exportTask])
+      .then(() => this.#exportService?.close())
       .then(() => this.killOtherSandboxProcesses())
       .then(() => {
         process.exitCode = 0;
@@ -181,6 +228,8 @@ class SandboxWorker {
       process.exitCode = 70;
       process.stdin.pause();
     };
+    this.#exportService?.cancel();
+    void this.#exportService?.close().catch(() => undefined);
     void this.killOtherSandboxProcesses().then(finish, finish);
   }
 }

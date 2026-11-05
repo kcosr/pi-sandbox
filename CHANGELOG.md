@@ -2,7 +2,15 @@
 
 ## Unreleased
 
+### Breaking changes
+
+- Require configuration schema 14 with explicit `[exports].enabled`; upgrade the application and collector together for audit wire 4 and record schema 5. ([#48](https://github.com/kcosr/pi-sandbox/pull/48))
+
 ### Added
+
+- Add an opt-in, user-only `/sandbox save` picker with themed menus to copy private sandbox files to a reviewed host destination with explicit replacement approval. ([#48](https://github.com/kcosr/pi-sandbox/pull/48))
+- Offer to save sandbox files before interactive exit when private scratch contains files, keeping the session open if saving is cancelled or fails. ([#48](https://github.com/kcosr/pi-sandbox/pull/48))
+- Tell the agent whether CWD is writable and direct scratch work into its tool home. ([#48](https://github.com/kcosr/pi-sandbox/pull/48))
 
 - Show the first Bash classification failure in approval prompts to explain why automatic approval is unavailable. ([#47](https://github.com/kcosr/pi-sandbox/pull/47))
 

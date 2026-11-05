@@ -229,8 +229,8 @@ Disabled servers skip their executable, identity, credential-reference, and
 transport work; independently configured scoped environment still applies.
 User saved preferences may narrow admission but cannot enable an effectively
 disabled server. Administrative changes require restart. Broker support remains
-Linux-only; main configuration schema 13 is unchanged. The current audit contract uses
-wire 3/record 4 for configured Bash command provenance.
+Linux-only; main configuration schema 14 is unchanged. The current audit contract uses
+wire 4/record 5 for configured Bash command provenance.
 
 Host lookups are bounded to four seconds, the client deadline is ten seconds,
 and the service lifetime is fifteen seconds. Local accounts and SSSD via local
@@ -367,7 +367,12 @@ output-token limit. Test these upstream behaviors against the patched source.
 
 Managed Bubblewrap and Seatbelt environment guidance distinguishes the executor's
 actual tool home from the invoking OS account's home, without changing either
-environment. Direct execution adds no home note or optional account-home lookup.
+environment. Include effective CWD write access and tool-home scratch guidance
+even when optional account-home metadata is unavailable. For read-only CWD, direct
+source modifications and generated deliverables into the tool home and explain
+that tool approval cannot override the filesystem boundary. Describe temporary
+storage and its lifetime accurately for each backend; do not advertise the user-only
+save command to the agent. Direct execution adds no home note or optional account-home lookup.
 Keep the
 account-home hint optional, independent of ambient identity variables, and
 qualified by effective filesystem restrictions. Refresh the named prompt section
@@ -440,7 +445,7 @@ write/edit coordination across complete mutations and bounded transport frames,
 arguments, input and output. Backpressure must not eagerly encode arbitrarily many
 requests, and whole-frame control priority must keep cancellation/close responsive.
 
-Managed schema 13 removes `process_lifetime`; standalone schema 6 removes
+Managed schema 14 removes `process_lifetime`; standalone schema 6 removes
 `processLifetime`. One lifecycle permits background descendants to survive normal
 completion and logical session changes. Per-request cancellation, timeout,
 overflow, callback/spawn failure affect only that request; nonzero exit is normal.
@@ -498,7 +503,7 @@ bind would mask private `/tmp`. Existing root and private-system-path overlap
 rejections remain enforced. The setting applies to built-ins and user shell;
 managed host tools retain their declared host authority.
 
-Managed schema 13 additionally requires `[filesystem].denied_paths`, empty for
+Managed schema 14 additionally requires `[filesystem].denied_paths`, empty for
 Bubblewrap/direct. macOS Seatbelt rejects hidden paths
 and local networking, and accepts canonical existing directory denials. A denied
 ancestor admits only CWD; explicit interior denials remain effective. Denials are
@@ -604,3 +609,25 @@ embedded-WASM path is visible to code mode. Check the bundle metadata for that
 single runtime and its embedded QuickJS asset; the packaged smoke test must
 execute a real script. Disable Bun's project `bunfig.toml` and `.env` autoload
 in the compiled application; project files cannot inject startup environment.
+
+## User-only sandbox saving
+
+The forced extension owns `/sandbox save`. Admit it only for `ctx.mode === "tui"`
+and enabled effective main export policy with a confined, read-only CWD. Await
+`ctx.waitForIdle()` before listing; this does not stop background descendants. Never
+register a model tool, use `hasUI` as the admission check, or expose the export-source
+capability through `SandboxExecutor`. RPC dispatch must not acquire host publication.
+
+Cancel and await an active picker or copy on the outgoing `session_shutdown`, before
+ending its audit session or releasing the process executor. Recreated logical-session
+extensions get fresh controllers while the process-owned source keeps its existing
+private roots. `0009-interactive-before-quit.patch` adds an awaited
+`beforeInteractiveQuit(context, signal)` callback to `main()` and interactive mode.
+It runs before the terminal stops or session teardown begins, only for ordinary
+interactive exits. False or rejection keeps the session open and clears any queued
+shutdown request. Concurrent quit requests share the pending decision. Signals
+abort the pending callback and proceed with the existing shutdown path; crashes
+and terminal loss retain their emergency paths. RPC and print never invoke it.
+The managed application binds the current extension's user export controller to
+this callback. With saving enabled, Yes opens the picker, No permits exit, and
+Escape or an incomplete/failed save cancels exit. No automatic preservation occurs.

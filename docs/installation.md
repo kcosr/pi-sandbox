@@ -430,7 +430,7 @@ There is no implicit configuration replacement. This supports both complete
 archive deployments and systems where Salt or another configuration manager
 owns `/etc/pi-sandbox`.
 
-The installed configuration uses `config_version = 13` and must include the
+The installed configuration uses `config_version = 14` and must include the
 `[audit]`, `[sessions]`, `[codemode]`, `[mcp.servers]`, `[execution]`, `[filesystem]`, and `[extensions]` tables, an `audit` boolean on every
 base tool policy, explicit `filesystem.hidden_paths` and `filesystem.denied_paths` (both empty by default), and explicit `[environment.pi]`,
 `[environment.sandbox]`, and `[environment.extensions]` tables, even when the
@@ -455,7 +455,7 @@ schema 8 also need the required session policy. Alternatively, explicitly
 replace configuration with the packaged defaults.
 
 To migrate schema 11 or 12, remove `process_lifetime` from `[execution]` and set
-`config_version = 13`. Schema 11 also needs `denied_paths = []` in `[filesystem]`.
+`config_version = 14`. Schema 11 also needs `denied_paths = []` in `[filesystem]`.
 Commands now complete independently; background descendants may survive until
 executor shutdown, with best-effort cleanup outside Linux's namespace boundary.
 No default command timeout is imposed. Set the optional base-policy
@@ -471,9 +471,10 @@ pairs omit `audit`, which stays global. See the
 Rules older than version 8 must also remove
 `overrides.execution.process_lifetime` and an empty `[overrides.execution]`
 table if no backend override remains. The installer does not rewrite these
-rule files, including with `--replace-config`. Main configuration schema 13 is unchanged. Upgrade the application and audit
-collector together: audit wire version 3/record schema 4 adds configured Bash
-command provenance and rejects older wire versions. Restart Pi processes after
+rule files, including with `--replace-config`. Main configuration now requires schema 14
+and an explicit exports section. Upgrade the application and audit collector together:
+audit wire version 4/record schema 5 includes configured Bash command provenance and
+user export events, and rejects older wire versions. Restart Pi processes after
 updating administrative rules; an already running process retains its policy.
 
 The macOS packaged default selects Seatbelt with networking
@@ -722,3 +723,13 @@ package, the other extension package or an adjacent source checkout. See
 [Git configuration and usage](../packages/git-extension/README.md).
 The managed executable embeds the reusable implementations through its own
 adapters and preserves administrator-selected permissions and audit controls.
+
+### Export-policy schema upgrade
+
+This version requires `config_version = 14` and an explicit `[exports]` table with
+`enabled = false` unless user-directed private-file saving is intended. Existing
+version-13 files are rejected; update the administrative file during upgrade.
+Enabling exports also requires a confined backend and `filesystem.cwd_writable = false`.
+Upgrade the Linux application and audit collector together for audit wire 4 and
+record schema 5. Broker protocol and rule version remain 10. No persistent private
+home or new service is installed.
