@@ -10,7 +10,7 @@
 
 ### Added
 
-- Add administrator-provided shared skill directories and optional packaged skill trees, preserving personal overrides and Pi filtering in schema 14.
+- Add administrator-provided shared skill directories and optional packaged skill trees, preserving personal overrides and Pi filtering in schema 14. ([#50](https://github.com/kcosr/pi-sandbox/pull/50))
 
 - Add an opt-in, user-only `/sandbox save` picker with themed menus to copy private sandbox files to a reviewed host destination with explicit replacement approval. ([#48](https://github.com/kcosr/pi-sandbox/pull/48))
 - Offer to save sandbox files before interactive exit when private scratch contains files, keeping the session open if saving is cancelled or fails. ([#48](https://github.com/kcosr/pi-sandbox/pull/48))
