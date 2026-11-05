@@ -187,10 +187,10 @@ A normal upgrade preserves the compiled configuration directory. Use
 only when intentionally deploying the configuration packaged with a release.
 See [installation and operation](docs/installation.md).
 
-Pi Sandbox has its own release version. The existing `v0.11.0` tag uses Pi `1.3.0`
-and shows `1.3.0+ps.0.11.0` in `pi-sandbox --version` and the TUI header. Current
-development builds use Pi `1.5.0` and add source identity. See [versions and releases](docs/releases.md) for
-the independent version numbers and source-only GitHub release process.
+Pi Sandbox has its own release version. A clean checkout at `v0.12.0` uses Pi
+`1.5.0` and shows `1.5.0+ps.0.12.0` in `pi-sandbox --version` and the TUI header.
+Development builds add source identity. See [versions and releases](docs/releases.md)
+for the independent version numbers and source-only GitHub release process.
 
 `PI_CODING_AGENT_DIR` continues to select user-owned sessions, settings, skills,
 themes, and logs. It does not redirect policy, the selected model catalog, or

@@ -162,13 +162,12 @@ ownership and permissions.
 ## Building a release
 
 The product version is independent of the pinned Pi version. A clean build at
-the existing product tag `v0.11.0` displays `1.3.0+ps.0.11.0` in `pi-sandbox --version` and
+product tag `v0.12.0` displays `1.5.0+ps.0.12.0` in `pi-sandbox --version` and
 the TUI header. Untagged builds include a development suffix and Git revision;
 modified builds also include `.dirty`. Source execution and application builds
 without Git metadata use `.dev.source`; `npm run build:application` supports
 that case. The full release builder requires a Git checkout for source
-provenance. This development checkout retains product version `0.11.0` until
-the next release bump and pins Pi's internal version to `1.5.0`.
+provenance. Product version `0.12.0` pins Pi's internal version to `1.5.0`.
 
 GitHub releases publish source and release notes without uploaded binaries.
 The following commands build deployment archives locally. See
@@ -760,8 +759,8 @@ when using dependency scanners.
 
 ## Ordinary Pi extension packages
 
-The release build creates `kcosr-pi-sandbox-extension-0.8.0.tgz` and
-`kcosr-pi-git-extension-0.1.0.tgz`, each with a SHA256 sidecar. They are independent
+The release build creates `kcosr-pi-sandbox-extension-0.9.0.tgz` and
+`kcosr-pi-git-extension-0.2.0.tgz`, each with a SHA256 sidecar. They are independent
 standard extensions for ordinary Pi 1.5.0. Sandbox includes its runtime and
 Bubblewrap worker; Git includes its bounded host runner. Neither needs a permissions
 package, the other extension package or an adjacent source checkout. See

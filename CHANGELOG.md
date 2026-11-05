@@ -2,29 +2,28 @@
 
 ## Unreleased
 
+## 0.12.0 - 2026-11-05
+
 ### Breaking changes
 
+- Require configuration schema 14 with explicit `[exports].enabled`; upgrade the application and collector together for audit wire 4 and record schema 5. ([#48](https://github.com/kcosr/pi-sandbox/pull/48))
 - Remove the unused typed-tool `awk` dependency and macOS `gawk` prerequisite; custom native bundles must remove `awk` and repin their inventories. ([#49](https://github.com/kcosr/pi-sandbox/pull/49))
 - Pi 1.5 normalizes tool arguments with JSON Schema coercion, including numeric strings and scalar-to-array values; managed MCP approval and validation still apply to the exact dispatched request. ([#49](https://github.com/kcosr/pi-sandbox/pull/49))
-- Require configuration schema 14 with explicit `[exports].enabled`; upgrade the application and collector together for audit wire 4 and record schema 5. ([#48](https://github.com/kcosr/pi-sandbox/pull/48))
 
 ### Added
 
 - Add administrator-provided shared skill directories and optional packaged skill trees, preserving personal overrides and Pi filtering in schema 14. ([#50](https://github.com/kcosr/pi-sandbox/pull/50))
-
 - Add an opt-in, user-only `/sandbox save` picker with themed menus to copy private sandbox files to a reviewed host destination with explicit replacement approval. ([#48](https://github.com/kcosr/pi-sandbox/pull/48))
 - Offer to save sandbox files before interactive exit when private scratch contains files, keeping the session open if saving is cancelled or fails. ([#48](https://github.com/kcosr/pi-sandbox/pull/48))
 - Tell the agent whether CWD is writable and direct scratch work into its tool home. ([#48](https://github.com/kcosr/pi-sandbox/pull/48))
-
 - Show the first Bash classification failure in approval prompts to explain why automatic approval is unavailable. ([#47](https://github.com/kcosr/pi-sandbox/pull/47))
-
 - Support `{ any_literal = true }` for Bash command-set option values while retaining exact value lists. ([#46](https://github.com/kcosr/pi-sandbox/pull/46))
-
 - Allow Bash command sets to list basename and absolute-path alternatives with the same argument rule. ([#45](https://github.com/kcosr/pi-sandbox/pull/45))
 - Support administrator `execution.command_path_prepend` for additional command directories, keeping bundled tools first and approval lookup aligned with execution. ([#45](https://github.com/kcosr/pi-sandbox/pull/45))
 
 ### Changed
 
+- Version the reusable sandbox extension as `0.9.0` and Git extension as `0.2.0`; both require Pi `1.5.0`.
 - Upgrade pinned Pi and both reusable extension targets to 1.5.0, retaining managed Code Mode limits and incorporating upstream streaming, session, summary and terminal fixes. ([#49](https://github.com/kcosr/pi-sandbox/pull/49))
 - Cache repeated write-preview highlighting and use the active host's keybindings in expansion hints. ([#49](https://github.com/kcosr/pi-sandbox/pull/49))
 - Allow repeated value-taking options in Bash command sets, validating each occurrence; duplicate zero-value flags still fall back to ordinary policy. ([#46](https://github.com/kcosr/pi-sandbox/pull/46))
@@ -32,7 +31,6 @@
 ### Fixed
 
 - Fix macOS verification fixtures to use selected tool bundles, portable shell commands, and canonical temporary paths. ([#51](https://github.com/kcosr/pi-sandbox/pull/51))
-
 - Preserve split UTF-8 characters when Bash stdout and stderr interleave, including user `!` commands. ([#49](https://github.com/kcosr/pi-sandbox/pull/49))
 - Enforce grep match limits for single-file searches and filenames containing line-number-like text; report bounded capture truncation explicitly. ([#49](https://github.com/kcosr/pi-sandbox/pull/49))
 

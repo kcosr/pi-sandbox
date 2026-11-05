@@ -129,8 +129,8 @@ user's agent directory. `--no-skills` removes discovered skills, while explicit
 flag or user/group policy override. `/reload` refreshes contents and preferences;
 restart the application after changing the administrative root list.
 
-This optional field is part of the unreleased schema 14. Upgrade the application
-before adding it to policy; older binaries reject unknown fields.
+This optional field is part of schema 14, introduced in Pi Sandbox 0.12.0. Upgrade
+the application before adding it to policy; older binaries reject unknown fields.
 
 ### File-backed Pi environment values
 
