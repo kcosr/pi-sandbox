@@ -58,6 +58,14 @@ const expectedUpstreamSuites = [
   "packages/ai/test/json-parse.test.ts",
   "packages/ai/test/validation.test.ts",
   "packages/ai/test/transform-messages-cross-model-thinking.test.ts",
+  "packages/ai/test/streaming-json.test.ts",
+  "packages/coding-agent/test/compaction-summary-reasoning.test.ts",
+  "packages/coding-agent/test/interactive-mode-extension-dialogs.test.ts",
+  "packages/coding-agent/test/tool-execution-component.test.ts",
+  "packages/coding-agent/test/login-dialog-device-code.test.ts",
+  "packages/coding-agent/test/session-manager/file-operations.test.ts",
+  "packages/coding-agent/test/session-manager/save-entry.test.ts",
+  "packages/coding-agent/test/suite/regressions/11520-sdk-summary-oauth-auth.test.ts",
 ];
 
 test("release entrypoints import without launching builds or verification", async () => {

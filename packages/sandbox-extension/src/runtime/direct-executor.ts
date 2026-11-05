@@ -47,7 +47,6 @@ function darwinCandidates(name: ToolCommandName): readonly string[] {
     return DARWIN_PREFIXES.map((prefix) => `${prefix}/opt/findutils/libexec/gnubin/find`);
   if (name === "grep")
     return DARWIN_PREFIXES.map((prefix) => `${prefix}/opt/grep/libexec/gnubin/grep`);
-  if (name === "awk") return DARWIN_PREFIXES.map((prefix) => `${prefix}/bin/gawk`);
   return DARWIN_PREFIXES.map((prefix) => `${prefix}/opt/coreutils/libexec/gnubin/${name}`);
 }
 
@@ -94,7 +93,7 @@ export async function resolveDirectToolCommands(
   if (missing.length > 0) {
     throw new SandboxExecutionError("sandbox_start_failed", {
       cause: new Error(
-        `Missing macOS direct-execution prerequisites: ${missing.join(", ")}. Install Homebrew bash, coreutils, findutils, grep, and gawk.`,
+        `Missing macOS direct-execution prerequisites: ${missing.join(", ")}. Install Homebrew coreutils, findutils, and grep.`,
       ),
     });
   }

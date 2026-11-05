@@ -88,6 +88,7 @@ describe("trusted build-selected tool bundle", () => {
       { root: "/tools:other", commands: { cat: "/tools:other/bin/cat" } },
       { root: "/tools", commands: { cat: "/bin/cat" } },
       { root: "/tools", commands: { other: "/tools/bin/other" } },
+      { root: "/tools", commands: { awk: "/tools/bin/awk" } },
       { root: "/tools", commands: { cat: "/tools/../cat" } },
       { root: "/tools", commands: { cat: "/tools/bin/cat" }, source: "runtime" },
     ])

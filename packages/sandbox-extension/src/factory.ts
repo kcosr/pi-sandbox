@@ -1,3 +1,4 @@
+import { StringDecoder } from "node:string_decoder";
 import {
   createBashToolDefinition,
   createEditToolDefinition,
@@ -60,29 +61,49 @@ interface ShellSnapshot {
 }
 
 class ShellOutputCollector {
-  private readonly chunks: Buffer[] = [];
+  private readonly chunks: string[] = [];
+  private readonly decoders = {
+    stdout: new StringDecoder("utf8"),
+    stderr: new StringDecoder("utf8"),
+  };
+  private receivedOutput = false;
+  private finished = false;
   private timer: NodeJS.Timeout | undefined;
   private dirty = false;
   private lastUpdateAt = 0;
 
   public constructor(private readonly update?: (snapshot: ShellSnapshot) => void) {}
 
-  public append(chunk: Buffer): void {
-    this.chunks.push(Buffer.from(chunk));
+  public append(chunk: Buffer, stream: "stdout" | "stderr"): void {
+    if (chunk.length === 0 || this.finished) return;
+    this.receivedOutput = true;
+    const text = this.decoders[stream].write(chunk);
+    if (text.length === 0) return;
+    this.chunks.push(text);
     this.scheduleUpdate();
   }
 
   public hasOutput(): boolean {
-    return this.chunks.length > 0;
+    return this.receivedOutput;
   }
 
   public appendFallback(stdout: Buffer, stderr: Buffer): void {
     if (this.hasOutput()) return;
-    if (stdout.length > 0) this.chunks.push(Buffer.from(stdout));
-    if (stderr.length > 0) this.chunks.push(Buffer.from(stderr));
+    this.append(stdout, "stdout");
+    this.append(stderr, "stderr");
   }
 
   public finish(): ShellSnapshot {
+    if (!this.finished) {
+      this.finished = true;
+      for (const decoder of Object.values(this.decoders)) {
+        const final = decoder.end();
+        if (final.length > 0) {
+          this.chunks.push(final);
+          this.dirty = true;
+        }
+      }
+    }
     if (this.timer !== undefined) clearTimeout(this.timer);
     this.timer = undefined;
     const snapshot = this.snapshot();
@@ -92,9 +113,7 @@ class ShellOutputCollector {
   }
 
   private snapshot(): ShellSnapshot {
-    const truncation = truncateTail(
-      sanitizeShellOutput(Buffer.concat(this.chunks).toString("utf8")),
-    );
+    const truncation = truncateTail(sanitizeShellOutput(this.chunks.join("")));
     const notice = truncation.truncated
       ? `\n\n[Showing the bounded tail of command output; earlier output was discarded.]`
       : "";
@@ -347,8 +366,8 @@ function registerTools(pi: ExtensionAPI, options: SandboxExtensionOptions): void
             },
             {
               ...(signal === undefined ? {} : { signal }),
-              onStdout: (chunk) => output.append(chunk),
-              onStderr: (chunk) => output.append(chunk),
+              onStdout: (chunk) => output.append(chunk, "stdout"),
+              onStderr: (chunk) => output.append(chunk, "stderr"),
             },
           );
         } catch (error) {
@@ -461,8 +480,8 @@ export function createSandboxExtension(input: SandboxExtensionOptions): Extensio
             },
             {
               ...(signal === undefined ? {} : { signal }),
-              onStdout: (chunk) => output.append(chunk),
-              onStderr: (chunk) => output.append(chunk),
+              onStdout: (chunk) => output.append(chunk, "stdout"),
+              onStderr: (chunk) => output.append(chunk, "stderr"),
             },
           );
         } catch (error) {

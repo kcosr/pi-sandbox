@@ -78,7 +78,7 @@ configuration path or `models_file`.
 Provider definitions and API-key resolution are documented separately in
 [Models and authentication](models.md).
 
-Pi 1.3.0 preserves ordinary user settings while validating custom themes at
+Pi 1.5.0 preserves ordinary user settings while validating custom themes at
 startup. Theme files must follow `https://pi.dev/schemas/theme.schema.json`;
 reusable colors belong in `vars`. For SSH or multiplexer clipboard support,
 set `PI_CLIPBOARD_OSC52 = "1"` in `environment.pi` to enable Pi's terminal

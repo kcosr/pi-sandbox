@@ -1,8 +1,8 @@
 diff --git a/packages/coding-agent/src/main.ts b/packages/coding-agent/src/main.ts
-index eb8f0a0..7d46a99 100644
+index 2818a81..d1ce68b 100644
 --- a/packages/coding-agent/src/main.ts
 +++ b/packages/coding-agent/src/main.ts
-@@ -571,8 +571,10 @@ async function promptForMissingSessionCwd(
+@@ -572,6 +572,8 @@ async function promptForMissingSessionCwd(
  }
  
  export interface MainOptions {
@@ -11,9 +11,7 @@ index eb8f0a0..7d46a99 100644
  	extensionFactories?: InlineExtension[];
  	/** Register stock tool definitions. False leaves only extension/custom tools. Defaults to true. */
  	includeBuiltinTools?: boolean;
- 	createModelRuntime?: ModelRuntimeFactory;
- 	/** Reject a target workspace before reading its settings or resources. */
-@@ -647,7 +649,7 @@ export async function main(args: string[], options?: MainOptions) {
+@@ -661,7 +663,7 @@ export async function main(args: string[], options?: MainOptions) {
  	time("parseArgs");
  
  	if (parsed.version) {
@@ -22,7 +20,7 @@ index eb8f0a0..7d46a99 100644
  		process.exit(0);
  	}
  
-@@ -986,6 +988,7 @@ export async function main(args: string[], options?: MainOptions) {
+@@ -1000,6 +1002,7 @@ export async function main(args: string[], options?: MainOptions) {
  		await runRpcMode(runtime);
  	} else if (appMode === "interactive") {
  		const interactiveMode = new InteractiveMode(runtime, {
@@ -31,10 +29,10 @@ index eb8f0a0..7d46a99 100644
  			startupDiagnostics,
  			modelFallbackMessage,
 diff --git a/packages/coding-agent/src/modes/interactive/interactive-mode.ts b/packages/coding-agent/src/modes/interactive/interactive-mode.ts
-index 1a91e62..2d0f5d3 100644
+index 3df3a75..63d6ac4 100644
 --- a/packages/coding-agent/src/modes/interactive/interactive-mode.ts
 +++ b/packages/coding-agent/src/modes/interactive/interactive-mode.ts
-@@ -423,6 +423,8 @@ function formatLoginProviderCompletionDescription(provider: LoginProviderComplet
+@@ -426,6 +426,8 @@ function formatLoginProviderCompletionDescription(provider: LoginProviderComplet
   * Options for InteractiveMode initialization.
   */
  export interface InteractiveModeOptions {
@@ -43,7 +41,7 @@ index 1a91e62..2d0f5d3 100644
  	/** Providers that were migrated to auth.json (shows warning) */
  	migratedProviders?: string[];
  	/** Diagnostics collected before the interactive TUI was initialized. */
-@@ -1012,9 +1014,10 @@ export class InteractiveMode {
+@@ -1036,9 +1038,10 @@ export class InteractiveMode {
  			// "Pi vX" line instead, with the key hints below it.
  			const showLogo = supportsPiLogo();
  			const withLogo = (hints: string) => {
@@ -58,7 +56,7 @@ index 1a91e62..2d0f5d3 100644
  			// Build startup instructions using keybinding hint helpers
 diff --git a/packages/coding-agent/test/managed-version.test.ts b/packages/coding-agent/test/managed-version.test.ts
 new file mode 100644
-index 0000000..f85417c
+index 0000000..1bf3015
 --- /dev/null
 +++ b/packages/coding-agent/test/managed-version.test.ts
 @@ -0,0 +1,30 @@
@@ -82,13 +80,13 @@ index 0000000..f85417c
 +	vi.unstubAllEnvs();
 +	rmSync(agentDir, { recursive: true, force: true });
 +});
-+test.each([undefined, "1.3.0+ps.0.6.0", "1.3.0+ps.0.6.0.dev.g1234567"])(
++test.each([undefined, "1.5.0+ps.0.6.0", "1.5.0+ps.0.6.0.dev.g1234567"])(
 +	"version output accepts a presentation override: %s", async (displayVersion) => {
 +		const log = vi.spyOn(console, "log").mockImplementation(() => {});
 +		const exit = new Error("version exit");
 +		vi.spyOn(process, "exit").mockImplementation(() => { throw exit; });
 +		await expect(main(["--version"], displayVersion === undefined ? {} : { displayVersion })).rejects.toBe(exit);
 +		expect(log).toHaveBeenCalledExactlyOnceWith(displayVersion ?? VERSION);
-+		expect(VERSION).toBe("1.3.0");
++		expect(VERSION).toBe("1.5.0");
 +	},
 +);

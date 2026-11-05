@@ -45,10 +45,10 @@ index 9673ba6..104830a 100644
  		sessionStartEvent: options.sessionStartEvent,
  	});
 diff --git a/packages/coding-agent/src/core/model-runtime.ts b/packages/coding-agent/src/core/model-runtime.ts
-index 7c1dc82..256de7a 100644
+index 8e03f4d..97ab06a 100644
 --- a/packages/coding-agent/src/core/model-runtime.ts
 +++ b/packages/coding-agent/src/core/model-runtime.ts
-@@ -122,8 +122,12 @@ export interface CreateModelRuntimeOptions {
+@@ -123,8 +123,12 @@ export interface CreateModelRuntimeOptions {
  	signal?: AbortSignal;
  	/** Skip initial catalog and availability refresh. Static models remain available. */
  	refreshOnCreate?: boolean;
@@ -61,7 +61,7 @@ index 7c1dc82..256de7a 100644
  export interface ModelRuntimeAuthOverrides extends AuthOperationOptions {
  	apiKey?: string;
  	env?: Record<string, string>;
-@@ -182,6 +186,7 @@ export class ModelRuntime implements Models {
+@@ -183,6 +187,7 @@ export class ModelRuntime implements Models {
  	private readonly compositionErrors = new Map<string, string>();
  	private readonly modelsPath: string | undefined;
  	private readonly modelNetworkEnabled: boolean;
@@ -69,7 +69,7 @@ index 7c1dc82..256de7a 100644
  	private config: ModelConfig;
  	private snapshot: ModelRuntimeSnapshot = {
  		all: [],
-@@ -203,11 +208,13 @@ export class ModelRuntime implements Models {
+@@ -204,11 +209,13 @@ export class ModelRuntime implements Models {
  		modelsStore: ModelsStore,
  		providers: readonly Provider[],
  		modelNetworkEnabled: boolean,
@@ -83,7 +83,7 @@ index 7c1dc82..256de7a 100644
  		this.defaultBuiltins = new Map(providers.map((provider) => [provider.id, provider]));
  		for (const [providerId, provider] of this.defaultBuiltins) this.builtins.set(providerId, provider);
  		this.models = createModels({ credentials, modelsStore });
-@@ -226,7 +233,7 @@ export class ModelRuntime implements Models {
+@@ -227,7 +234,7 @@ export class ModelRuntime implements Models {
  				: new InMemoryCodingAgentModelsStore());
  		const builtinModelDataGeneratedAt = builtinProviderCatalog.getBuiltinModelDataGeneratedAt();
  		const providers = builtinProviderCatalog.builtinProviders().map((provider) => {
@@ -92,7 +92,7 @@ index 7c1dc82..256de7a 100644
  			// OpenRouter narrows the catalog to the models, limits and prices of the user's key.
  			if (provider.id === "openrouter") {
  				return withPersonalizedCatalog(
-@@ -245,6 +252,7 @@ export class ModelRuntime implements Models {
+@@ -246,6 +253,7 @@ export class ModelRuntime implements Models {
  			modelsStore,
  			providers,
  			process.env.PI_OFFLINE === undefined,
@@ -100,7 +100,7 @@ index 7c1dc82..256de7a 100644
  		);
  		runtime.configureRadiusProviders();
  		runtime.rebuildProviders();
-@@ -286,7 +294,7 @@ export class ModelRuntime implements Models {
+@@ -287,7 +295,7 @@ export class ModelRuntime implements Models {
  
  	private providerIds(): Set<string> {
  		return new Set([
@@ -109,7 +109,7 @@ index 7c1dc82..256de7a 100644
  			...this.nativeExtensionProviders.keys(),
  			...this.config.getProviderIds(),
  			...this.extensionProviders.keys(),
-@@ -306,20 +314,24 @@ export class ModelRuntime implements Models {
+@@ -307,20 +315,24 @@ export class ModelRuntime implements Models {
  
  	/** The provider without virtual models, or undefined when nothing defines it. */
  	private composeProvider(providerId: string): Provider | undefined {
@@ -139,10 +139,10 @@ index 7c1dc82..256de7a 100644
  	}
  
 diff --git a/packages/coding-agent/src/core/provider-composer.ts b/packages/coding-agent/src/core/provider-composer.ts
-index 94bd2ba..4ebef63 100644
+index f7f5c4c..d1e9f7e 100644
 --- a/packages/coding-agent/src/core/provider-composer.ts
 +++ b/packages/coding-agent/src/core/provider-composer.ts
-@@ -544,20 +544,19 @@ export function composeModelProvider(
+@@ -549,20 +549,19 @@ export function composeModelProvider(
  	base: Provider | undefined,
  	modelConfig: ModelConfig,
  	extension: ProviderConfigInput | undefined,
@@ -167,7 +167,7 @@ index 94bd2ba..4ebef63 100644
  		if (extensionOAuthCredential && extension?.oauth?.modifyModels) {
  			// The extension hook is chat-only; other model types pass through untouched.
  			models = [
-@@ -611,9 +610,9 @@ export function composeModelProvider(
+@@ -616,9 +615,9 @@ export function composeModelProvider(
  		getModels: () => getAllModels().filter((model) => isModelType(model, "chat")),
  		getAllModels,
  		refreshModels:
@@ -179,7 +179,7 @@ index 94bd2ba..4ebef63 100644
  						let refreshed: NonNullable<ProviderConfigInput["models"]> | undefined;
  						if (extension?.refreshModels) refreshed = await extension.refreshModels(context);
  						if (context.signal.aborted) return;
-@@ -622,7 +621,7 @@ export function composeModelProvider(
+@@ -627,7 +626,7 @@ export function composeModelProvider(
  							update: () => {
  								if (refreshed) {
  									// Validate before publishing the new synchronous list.
@@ -189,7 +189,7 @@ index 94bd2ba..4ebef63 100644
  										models: refreshed,
  									});
 diff --git a/packages/coding-agent/src/core/sdk.ts b/packages/coding-agent/src/core/sdk.ts
-index f678ba4..5d2c421 100644
+index dbab1d1..275157c 100644
 --- a/packages/coding-agent/src/core/sdk.ts
 +++ b/packages/coding-agent/src/core/sdk.ts
 @@ -69,6 +69,8 @@ export interface CreateAgentSessionOptions {
@@ -201,7 +201,7 @@ index f678ba4..5d2c421 100644
  	/**
  	 * Optional allowlist of tool names or patterns, where `*` matches any characters.
  	 *
-@@ -466,6 +468,7 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
+@@ -460,6 +462,7 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
  		scopedModels: options.scopedModels,
  		resourceLoader,
  		customTools: options.customTools,
@@ -210,19 +210,19 @@ index f678ba4..5d2c421 100644
  		cacheWarmer,
  		initialActiveToolNames,
 diff --git a/packages/coding-agent/src/index.ts b/packages/coding-agent/src/index.ts
-index 0b8fb1d..6f99d32 100644
+index 7e25c2c..9b84fbe 100644
 --- a/packages/coding-agent/src/index.ts
 +++ b/packages/coding-agent/src/index.ts
-@@ -234,6 +234,7 @@ export {
+@@ -235,6 +235,7 @@ export {
  	type CredentialSynchronizationOperation,
  	ModelRuntime,
  	type ModelRuntimeAuthOverrides,
 +	type ModelRuntimeFactory,
  } from "./core/model-runtime.ts";
  export type {
- 	PackageManager,
+ 	PackageInstallFailure,
 diff --git a/packages/coding-agent/src/main.ts b/packages/coding-agent/src/main.ts
-index 51df447..87348a1 100644
+index 88aa3c5..d07f2e4 100644
 --- a/packages/coding-agent/src/main.ts
 +++ b/packages/coding-agent/src/main.ts
 @@ -5,6 +5,7 @@
@@ -291,9 +291,9 @@ index 51df447..87348a1 100644
  		return;
  	}
  
-@@ -749,10 +756,18 @@ export async function main(args: string[], options?: MainOptions) {
- 				parsed.projectTrustOverride ??
- 				(!hasTrustRequiringResources || trustStore.get(cwd) === true));
+@@ -758,10 +765,18 @@ export async function main(args: string[], options?: MainOptions) {
+ 			? false
+ 			: (cachedProjectTrust ?? parsed.projectTrustOverride ?? trustStore.get(cwd) ?? !hasTrustRequiringResources);
  		const runtimeSettingsManager = SettingsManager.create(cwd, agentDir, { projectTrusted });
 +		const managedModelRuntime = options?.createModelRuntime
 +			? await options.createModelRuntime({
@@ -310,7 +310,7 @@ index 51df447..87348a1 100644
  			modelRuntimeSignal: AbortSignal.timeout(15_000),
  			extensionFlagValues: parsed.unknownFlags,
  			resourceLoaderReloadOptions: shouldResolveProjectTrust
-@@ -849,6 +864,7 @@ export async function main(args: string[], options?: MainOptions) {
+@@ -858,6 +873,7 @@ export async function main(args: string[], options?: MainOptions) {
  			tools: sessionOptions.tools,
  			excludeTools: sessionOptions.excludeTools,
  			noTools: sessionOptions.noTools,

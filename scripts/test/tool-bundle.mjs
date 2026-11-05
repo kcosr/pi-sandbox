@@ -155,6 +155,8 @@ test("bundle admission fails closed for changed inputs, unlisted files, symlinks
 
 test("strict inventory rejects traversal, omitted selection, unknown keys, and missing licenses", () =>
   fixture(async ({ inventory, selection, pin, load }) => {
+    selection.commands = ["grep", "rg", "awk"];
+    await assert.rejects(load(), /commands/u);
     selection.commands = ["grep"];
     await assert.rejects(load(), /exactly select/u);
     selection.commands = ["grep", "rg"];

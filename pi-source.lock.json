@@ -1,7 +1,7 @@
 {
-  "version": "1.3.0",
-  "tag": "v1.3.0",
-  "commit": "71023aec1546d6d677a65669c5665c0927ce0dd0",
-  "sourceArchive": "https://github.com/earendil-works/pi/releases/download/v1.3.0/pi-1.3.0-source.tar.gz",
-  "sourceArchiveSha256": "7761ae59cb6d84c1e162d3d638f81816c66d3f75862e941432ea2d7a8e3bf40f"
+  "version": "1.5.0",
+  "tag": "v1.5.0",
+  "commit": "f9a26365568127461c47a07a37dcb42c140a3ac5",
+  "sourceArchive": "https://github.com/earendil-works/pi/releases/download/v1.5.0/pi-1.5.0-source.tar.gz",
+  "sourceArchiveSha256": "577ace662a466326d1a4b41f813579aeb5957679e796c577bae65820faea5d9a"
 }

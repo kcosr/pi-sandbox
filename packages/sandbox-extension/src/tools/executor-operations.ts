@@ -46,7 +46,6 @@ const CANONICAL_COMMANDS: Readonly<Record<string, ToolCommandName>> = Object.fre
   "/bin/grep": "grep",
   "/usr/bin/file": "file",
   "/usr/bin/find": "find",
-  "/usr/bin/awk": "awk",
   "/usr/bin/head": "head",
   "/usr/bin/sha256sum": "sha256sum",
   "/usr/bin/sort": "sort",
@@ -549,12 +548,24 @@ export async function executeGrep(
   const limit = input.limit ?? 100;
   if (!Number.isSafeInteger(limit) || limit < 1)
     throw new Error("grep limit must be a positive integer");
-  const argv: [string, ...string[]] = ["/bin/grep", "-R", "-n", "-I", "--exclude-dir=.git"];
+  // A filename may contain colons, digits and newlines. NUL separates it from the
+  // line-number prefix; grep owns context calculation, and only that prefix identifies a match.
+  const argv: [string, ...string[]] = [
+    "/bin/grep",
+    "-H",
+    "-Z",
+    "-R",
+    "-n",
+    "-I",
+    "--no-group-separator",
+    "--exclude-dir=.git",
+  ];
   if (input.ignoreCase === true) argv.push("-i");
   if (input.literal === true) argv.push("-F");
   if (input.context !== undefined) argv.push("-C", String(input.context));
   if (input.glob !== undefined) argv.push(`--include=${input.glob}`);
   argv.push("--", input.pattern, path);
+  const captureLimit = DEFAULT_MAX_BYTES * 2;
   const result = await execute(
     executor,
     [
@@ -562,31 +573,62 @@ export async function executeGrep(
       "-o",
       "pipefail",
       "-c",
-      `set +e; /bin/grep "\${@:3}" | /usr/bin/awk -v limit="$1" 'BEGIN { matches=0 } /:[0-9]+:/ { matches++; if (matches > limit) { print "PI_SANDBOX_MATCH_LIMIT=1" > "/dev/stderr"; exit 0 } } { if (length($0) > 10000) { print substr($0,1,10000) "... [line truncated]"; print "PI_SANDBOX_LINES_TRUNCATED=1" > "/dev/stderr" } else print }' | /usr/bin/head -c "$2"; codes=("\${PIPESTATUS[@]}"); grep_code=\${codes[0]}; for code in "\${codes[@]:1}"; do if [ "$code" -ne 0 ] && [ "$code" -ne 141 ]; then exit "$code"; fi; done; if [ "$grep_code" -ne 0 ] && [ "$grep_code" -ne 1 ] && [ "$grep_code" -ne 141 ]; then exit "$grep_code"; fi; exit 0`,
+      'set +e; /bin/grep "${@:2}" | /usr/bin/head -c "$1"; codes=("${PIPESTATUS[@]}"); grep_code=${codes[0]}; head_code=${codes[1]}; if [ "$head_code" -ne 0 ]; then exit "$head_code"; fi; if [ "$grep_code" -ne 0 ] && [ "$grep_code" -ne 1 ] && [ "$grep_code" -ne 141 ]; then exit "$grep_code"; fi; exit 0',
       "pi-sandbox-grep",
-      String(limit),
-      String(DEFAULT_MAX_BYTES * 2),
+      String(captureLimit + 1),
       ...argv.slice(1),
     ],
     signal,
-    { maxOutputBytes: DEFAULT_MAX_BYTES * 2 + 4096 },
+    { maxOutputBytes: captureLimit + 4096 },
   );
   if (result.exitCode !== 0) throw failure(result, "grep");
-  const lines = result.stdout.toString("utf8").split("\n");
-  if (lines.at(-1) === "") lines.pop();
+  const captureLimitReached = result.stdout.length > captureLimit;
+  // A byte cap can split the final UTF-8 character. Keep complete characters only in that case.
+  const captured = new TextDecoder().decode(result.stdout.subarray(0, captureLimit), {
+    stream: captureLimitReached,
+  });
   const kept: string[] = [];
   let matchCount = 0;
-  let matchLimitReached = result.stderr.toString("utf8").includes("PI_SANDBOX_MATCH_LIMIT=1");
-  for (const line of lines) {
-    const isMatch = /:\d+:/.test(line);
-    if (isMatch) {
-      matchCount += 1;
-      if (matchCount > limit) {
+  let matchLimitReached = false;
+  let partialLine = false;
+  let previous: { file: string; line: number } | undefined;
+  let offset = 0;
+  while (offset < captured.length) {
+    const separator = captured.indexOf("\0", offset);
+    if (separator < 0) {
+      if (captureLimitReached) break;
+      throw new Error("Invalid grep output record");
+    }
+    const file = captured.slice(offset, separator);
+    const newline = captured.indexOf("\n", separator + 1);
+    if (newline < 0 && !captureLimitReached) throw new Error("Incomplete grep output record");
+    const record = captured.slice(separator + 1, newline < 0 ? undefined : newline);
+    const prefix = /^(\d+)([:-])/.exec(record);
+    if (prefix === null) {
+      if (captureLimitReached && newline < 0) break;
+      throw new Error("Invalid grep output prefix");
+    }
+    const line = Number(prefix[1]);
+    if (prefix[2] === ":") {
+      if (matchCount === limit) {
         matchLimitReached = true;
         break;
       }
+      matchCount++;
     }
-    kept.push(line);
+    if (
+      (input.context ?? 0) > 0 &&
+      previous !== undefined &&
+      (previous.file !== file || line > previous.line + 1)
+    )
+      kept.push("--");
+    kept.push(`${file}${prefix[2]}${record}`);
+    previous = { file, line };
+    if (newline < 0) {
+      partialLine = true;
+      break;
+    }
+    offset = newline + 1;
   }
   const lineResults = kept.map((line) => truncateLine(line));
   const boundedLines = lineResults.map((line) => line.text);
@@ -594,14 +636,14 @@ export async function executeGrep(
     maxLines: Number.MAX_SAFE_INTEGER,
     maxBytes: DEFAULT_MAX_BYTES,
   });
-  const output = truncation.content;
+  let output = truncation.content;
   const details: Record<string, unknown> = {};
+  if (captureLimitReached && !matchLimitReached) {
+    details.captureLimitReached = captureLimit;
+    output += `\n\n[Search output exceeded the ${formatSize(captureLimit)} capture limit; refine the search.]`;
+  }
   if (matchLimitReached) details.matchLimitReached = limit;
-  if (
-    lineResults.some((line) => line.wasTruncated) ||
-    result.stderr.toString("utf8").includes("PI_SANDBOX_LINES_TRUNCATED=1")
-  )
-    details.linesTruncated = true;
+  if (lineResults.some((line) => line.wasTruncated) || partialLine) details.linesTruncated = true;
   if (truncation.truncated) details.truncation = truncation;
   return {
     content: [{ type: "text", text: output.length === 0 ? "No matches found" : output }],

@@ -245,4 +245,85 @@ describe("reusable sandbox factory", () => {
     expect(f.execute).toHaveBeenCalledTimes(1);
     expect(f.handlers.has("session_shutdown")).toBe(false);
   });
+  it.each(["bash", "user"] as const)(
+    "decodes interleaved split UTF-8 independently for %s",
+    async (kind) => {
+      const f = fixture();
+      await createSandboxExtension({ ...f.options, userBash: true })(f.pi);
+      const euro = Buffer.from("€");
+      const emoji = Buffer.from("😀");
+      f.execute.mockImplementationOnce((_request, options) => {
+        options?.onStdout?.(euro.subarray(0, 1));
+        options?.onStderr?.(emoji.subarray(0, 2));
+        options?.onStdout?.(euro.subarray(1));
+        options?.onStderr?.(emoji.subarray(2));
+        return Promise.resolve({ exitCode: 0, signal: null, stdout: euro, stderr: emoji });
+      });
+      const updates: string[] = [];
+      if (kind === "bash") {
+        const result = await f.tools.get("bash")!.execute(
+          "call",
+          { command: "ignored" },
+          undefined,
+          (partial) => {
+            updates.push(
+              partial.content.map((item) => (item.type === "text" ? item.text : "")).join(""),
+            );
+          },
+          f.context,
+        );
+        expect(result.content).toEqual([{ type: "text", text: "€😀" }]);
+        expect(updates.join("")).not.toContain("�");
+      } else {
+        const result = (await f.handlers.get("user_bash")!(
+          { command: "ignored" } as never,
+          f.context,
+        )) as UserBashEventResult;
+        expect(result.result?.output).toBe("€😀");
+      }
+      expect(f.execute.mock.calls[0]?.[0].maxOutputBytes).toBe(8 * 1024 * 1024);
+    },
+  );
+
+  it.each(["bash", "user"] as const)(
+    "flushes partial UTF-8 once after a %s failure",
+    async (kind) => {
+      const f = fixture();
+      await createSandboxExtension({ ...f.options, userBash: true })(f.pi);
+      f.execute.mockImplementationOnce((_request, options) => {
+        options?.onStdout?.(Buffer.from([0xe2]));
+        options?.onStderr?.(Buffer.from("stderr"));
+        throw new Error("failed command");
+      });
+      if (kind === "bash") {
+        await expect(f.invoke("bash", { command: "ignored" })).rejects.toThrow(
+          "stderr�\n\nfailed command",
+        );
+      } else {
+        const result = (await f.handlers.get("user_bash")!(
+          { command: "ignored" } as never,
+          f.context,
+        )) as UserBashEventResult;
+        expect(result.result?.output).toBe("stderr�\n\nfailed command");
+        expect(result.result?.exitCode).toBe(1);
+      }
+    },
+  );
+
+  it("does not append fallback output after a callback contains only an incomplete code point", async () => {
+    const f = fixture();
+    await createSandboxExtension(f.options)(f.pi);
+    f.execute.mockImplementationOnce((_request, options) => {
+      options?.onStdout?.(Buffer.from([0xe2]));
+      return Promise.resolve({
+        exitCode: 0,
+        signal: null,
+        stdout: Buffer.from([0xe2]),
+        stderr: Buffer.alloc(0),
+      });
+    });
+    expect((await f.invoke("bash", { command: "ignored" })).content).toEqual([
+      { type: "text", text: "�" },
+    ]);
+  });
 });

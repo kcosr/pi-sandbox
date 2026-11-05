@@ -1,8 +1,8 @@
 diff --git a/packages/coding-agent/src/modes/interactive/interactive-mode.ts b/packages/coding-agent/src/modes/interactive/interactive-mode.ts
-index ddbcc5a..9d0caf3 100644
+index 4256cca..3df3a75 100644
 --- a/packages/coding-agent/src/modes/interactive/interactive-mode.ts
 +++ b/packages/coding-agent/src/modes/interactive/interactive-mode.ts
-@@ -4325,7 +4325,7 @@ export class InteractiveMode {
+@@ -4421,7 +4421,7 @@ export class InteractiveMode {
  			process.stdout.write(`${chalk.dim("To resume this session:")} ${resumeCommand}\n`);
  		}
  
@@ -35,6 +35,7 @@ index 262a55b..8978ecc 100644
  	async function checkShutdownRequested(): Promise<void> {
 diff --git a/packages/coding-agent/test/managed-shutdown-status.test.ts b/packages/coding-agent/test/managed-shutdown-status.test.ts
 new file mode 100644
+index 0000000..2a7bcdc
 --- /dev/null
 +++ b/packages/coding-agent/test/managed-shutdown-status.test.ts
 @@ -0,0 +1,78 @@

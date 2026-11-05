@@ -4,7 +4,6 @@ import {
   formatReadLineRange,
   getLanguageFromPath,
   highlightCode,
-  keyHint,
   type Theme,
   type ToolRenderers,
 } from "@earendil-works/pi-coding-agent";
@@ -58,24 +57,58 @@ function numberArgument(value: unknown): value is number {
   return typeof value === "number" && Number.isFinite(value);
 }
 
-function writePreview(args: Record<string, unknown>, theme: Theme, expanded: boolean): string {
+// Keep one visible highlighted prefix per row, never an unbounded transcript-wide cache.
+const MAX_HIGHLIGHT_SOURCE_CHARS = 128 * 1024;
+const MAX_HIGHLIGHT_RESULT_CHARS = 512 * 1024;
+class WriteCallComponent extends Text {
+  private highlighted: { source: string; language: string; theme: Theme; text: string } | undefined;
+
+  public constructor() {
+    super("", 0, 0);
+  }
+
+  public highlight(source: string, language: string, theme: Theme): string {
+    const cached = this.highlighted;
+    if (cached?.source === source && cached.language === language && cached.theme === theme)
+      return cached.text;
+    const text = highlightCode(source, language).join("\n");
+    this.highlighted =
+      source.length <= MAX_HIGHLIGHT_SOURCE_CHARS && text.length <= MAX_HIGHLIGHT_RESULT_CHARS
+        ? { source, language, theme, text }
+        : undefined;
+    return text;
+  }
+
+  public override invalidate(): void {
+    // Pi invalidates components on theme/resource changes; the public theme proxy itself is stable.
+    this.highlighted = undefined;
+    super.invalidate();
+  }
+}
+
+function writePreview(
+  args: Record<string, unknown>,
+  theme: Theme,
+  context: Parameters<CallRenderer>[2],
+  component: WriteCallComponent,
+): string {
   const content = stringArgument(args.content);
   if (content === null)
     return `\n\n${theme.fg("error", "[invalid content arg - expected string]")}`;
   if (!content) return "";
   const lines = content.replace(/\r/g, "").replace(/\t/g, "   ").split("\n");
   while (lines.at(-1) === "") lines.pop();
-  const displayed = expanded ? lines : lines.slice(0, 10);
+  const displayed = context.expanded ? lines : lines.slice(0, 10);
   const language = typeof args.path === "string" ? getLanguageFromPath(args.path) : undefined;
   // Highlight the visible prefix as a unit, retaining multiline syntax and bounded work while
   // collapsed arguments stream in. Expanded calls show the complete supplied content.
   const preview = language
-    ? highlightCode(displayed.join("\n"), language).join("\n")
+    ? component.highlight(displayed.join("\n"), language, theme)
     : theme.fg("toolOutput", displayed.join("\n"));
   const remaining = lines.length - displayed.length;
   const hint =
     remaining > 0
-      ? `${theme.fg("muted", `\n... (${remaining} more lines, ${lines.length} total,`)} ${keyHint("app.tools.expand", "to expand")}${theme.fg("muted", ")")}`
+      ? `${theme.fg("muted", `\n... (${remaining} more lines, ${lines.length} total,`)} ${context.keyHint("app.tools.expand", "to expand")}${theme.fg("muted", ")")}`
       : "";
   return `\n\n${preview}${hint}`;
 }
@@ -108,11 +141,18 @@ function createCallRenderer(tool: PathTool): CallRenderer {
     } else if ((tool === "ls" || tool === "find") && numberArgument(args.limit)) {
       text += theme.fg("toolOutput", ` (limit ${args.limit})`);
     }
-    if (tool === "write") text += writePreview(args, theme, context.expanded);
+    const component =
+      tool === "write"
+        ? context.lastComponent instanceof WriteCallComponent
+          ? context.lastComponent
+          : new WriteCallComponent()
+        : context.lastComponent instanceof Text
+          ? context.lastComponent
+          : new Text("", 0, 0);
+    if (component instanceof WriteCallComponent)
+      text += writePreview(args, theme, context, component);
     // In particular, never invoke Pi's edit call renderer: its diff preview reads host files
     // before authorization, including for disabled tools displayed in historical sessions.
-    const component =
-      context.lastComponent instanceof Text ? context.lastComponent : new Text("", 0, 0);
     component.setText(text);
     return component;
   };
