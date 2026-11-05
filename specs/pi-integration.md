@@ -341,6 +341,20 @@ provides these seams:
     option may replace a build-selected path. Qualify conflicting cache/PATH tools,
     missing selections and relocated package paths containing spaces.
 
+11. `0010-shared-skill-discovery.patch` accepts optional readonly
+    `defaultSkillPaths` through `main()`, resource loaders and package managers.
+    These roots use native auto-skill traversal and user settings filters with
+    the agent directory as the pattern base. Top-level `source: "default"`
+    resources have lower priority than ordinary user/project/package resources;
+    identify them using both source and origin so a package named `default`
+    remains ordinary. Preserve disabled first entries during literal/canonical
+    path deduplication using Pi 1.5.0's `getResourcePathKey`. Load enabled defaults
+    after explicit `additionalSkillPaths`, so personal names win. `noSkills`
+    suppresses defaults while explicit paths keep native behavior. Retain roots
+    on reload and every session recreation without changing project trust.
+    Metadata keeps the authored root as `baseDir`, user scope, and top-level
+    origin. Absence of the option preserves stock Pi behavior.
+
 Pi 1.0's resource loader separates built-in factories from ordinary inline
 factories. The forced `--no-extensions` flag disables the built-in factories and
 user/project discovery while retaining the mandatory Pi Sandbox inline factory.

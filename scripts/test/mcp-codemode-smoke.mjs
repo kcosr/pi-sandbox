@@ -44,6 +44,7 @@ export async function testManagedMcpCodemode({
   userState,
   username,
   uid,
+  sharedSkill,
 }) {
   const httpPath = "/mcp/shared%FF?tenant=shared%2Bteam&literal=a%2fb&tag=one&tag=two";
   const httpToken = "Bearer http-specific-{{uid}}";
@@ -57,7 +58,17 @@ export async function testManagedMcpCodemode({
   await writeFile(serverScript, stdioFixture());
   await writeFile(join(workspace, "input.txt"), "nested-read-marker");
   const counts = new Map();
-  let providerScenario = { marker: "MCP_ENABLED_SMOKE", codemode: true, directMcp: true, script };
+  const initialScript =
+    sharedSkill === undefined
+      ? script
+      : script +
+        `\ntext(await tools.read({path:${JSON.stringify(sharedSkill.support)}}));\ntext(await tools.bash({command:${JSON.stringify("'" + sharedSkill.script.replaceAll("'", "'\\''") + "'")}}));`;
+  let providerScenario = {
+    marker: "MCP_ENABLED_SMOKE",
+    codemode: true,
+    directMcp: true,
+    script: initialScript,
+  };
   let serverFailure;
   const server = createServer(async (request, response) => {
     try {
@@ -92,6 +103,12 @@ export async function testManagedMcpCodemode({
             (message) => message.role === "system" || message.role === "developer",
           ),
         );
+        if (sharedSkill !== undefined && marker === "MCP_ENABLED_SMOKE") {
+          assert(
+            systemPrompt.includes(sharedSkill.name),
+            "shared skills must reach the real model prompt",
+          );
+        }
         assert.equal(
           systemPrompt.split("Tool home: $HOME in Bash and ~ in tool paths resolve to").length - 1,
           1,
@@ -228,6 +245,7 @@ export async function testManagedMcpCodemode({
   try {
     const config = parseToml(await readFile(configPath, "utf8"));
     config.audit.enabled = false;
+    if (sharedSkill !== undefined) config.skills = { directories: [sharedSkill.directory] };
     config.sessions.retention_days = 0;
     config.codemode = { enabled: true, timeout_ms: 30000 };
     config.tools.write = toolPolicy("ask");
@@ -332,10 +350,16 @@ export async function testManagedMcpCodemode({
     assert.equal(await readFile(join(workspace, "written.txt"), "utf8"), "approved nested write");
     assert.deepEqual(
       prompts.map((title) => title.split(":")[0]),
-      ["Allow write", "Allow bash", "Allow docs/mutate_record"],
+      [
+        "Allow write",
+        "Allow bash",
+        "Allow docs/mutate_record",
+        ...(sharedSkill === undefined ? [] : ["Allow bash"]),
+      ],
     );
     const content = JSON.stringify(codeResult.result);
     for (const expected of [
+      ...(sharedSkill === undefined ? [] : ["SHARED_SKILL_READ_OK", "SHARED_SKILL_SCRIPT_OK"]),
       "nested-read-marker",
       "smoke-bash",
       "HTTP_search_allowed_OK",

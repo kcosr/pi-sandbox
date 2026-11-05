@@ -9,6 +9,10 @@ enabled = false
 [exports]
 enabled = false
 
+[skills]
+# Additional shared roots; personal skills and Pi settings retain precedence.
+directories = []
+
 [sessions]
 retention_days = 365
 

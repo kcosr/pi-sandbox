@@ -44,6 +44,7 @@ export type ManagedPiContract = [
   Assert<Assignable<typeof main, ManagedMain>>,
   Assert<Assignable<ManagedMainOptions, PiMain>>,
   Assert<KeysKnown<ManagedMainOptions, PiMain>>,
+  Assert<Assignable<readonly string[], NonNullable<PiMain["defaultSkillPaths"]>>>,
   Assert<KeysKnown<ManagedMainOptions["extensionFactories"][number], PiInlineExtension>>,
   Assert<
     KeysKnown<

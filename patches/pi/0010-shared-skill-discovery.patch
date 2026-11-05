@@ -1,0 +1,613 @@
+diff --git a/packages/coding-agent/src/core/package-manager.ts b/packages/coding-agent/src/core/package-manager.ts
+--- a/packages/coding-agent/src/core/package-manager.ts
++++ b/packages/coding-agent/src/core/package-manager.ts
+@@ -154,6 +154,8 @@
+ 	settingsManager: SettingsManager;
+ 	/** Names of built-in extensions, resolved as `builtin:<name>` extension resources. */
+ 	builtinExtensions?: string[];
++	/** Additional default skill discovery roots; ordinary resources retain precedence. */
++	defaultSkillPaths?: readonly string[];
+ }
+ 
+ type SourceScope = "user" | "project" | "temporary";
+@@ -211,8 +213,11 @@
+  *   2  user + settings entry (source: "local", scope: "user")
+  *   3  user + auto-discovered (source: "auto", scope: "user")
+  *   4  package resource (origin: "package")
++ *   5  built-in extension (source: "builtin")
++ *   6  embedding default (source: "default", origin: "top-level")
+  */
+ function resourcePrecedenceRank(m: PathMetadata): number {
++	if (m.source === "default" && m.origin === "top-level") return 6;
+ 	// Built-in extensions load after file and package extensions, whichever scope enables them.
+ 	if (m.source === "builtin") return 5;
+ 	if (m.origin === "package") return 4;
+@@ -868,6 +873,7 @@
+ 	private agentDir: string;
+ 	private settingsManager: SettingsManager;
+ 	private builtinExtensions: string[];
++	private readonly defaultSkillPaths: readonly string[];
+ 	private globalNpmRoot: string | undefined;
+ 	private globalNpmRootCommandKey: string | undefined;
+ 	private progressCallback: ProgressCallback | undefined;
+@@ -877,6 +883,7 @@
+ 		this.agentDir = resolvePath(options.agentDir);
+ 		this.settingsManager = options.settingsManager;
+ 		this.builtinExtensions = options.builtinExtensions ?? [];
++		this.defaultSkillPaths = [...(options.defaultSkillPaths ?? [])];
+ 	}
+ 
+ 	setProgressCallback(callback: ProgressCallback | undefined): void {
+@@ -1021,6 +1028,16 @@
+ 		}
+ 
+ 		this.addAutoDiscoveredResources(accumulator, globalSettings, projectSettings, globalBaseDir, projectBaseDir);
++		for (const root of this.defaultSkillPaths) {
++			for (const path of collectAutoSkillEntries(root, "pi")) {
++				this.addResource(
++					accumulator.skills,
++					path,
++					{ source: "default", scope: "user", origin: "top-level", baseDir: root },
++					isEnabledByOverrides(path, globalSettings.skills ?? [], globalBaseDir),
++				);
++			}
++		}
+ 
+ 		// Built-in extensions are enabled unless the user `extensions` setting excludes them, for example
+ 		// with `-builtin:mcp`. A matching `+`, `-`, or `!` entry in the project setting overrides that.
+diff --git a/packages/coding-agent/src/core/resource-loader.ts b/packages/coding-agent/src/core/resource-loader.ts
+--- a/packages/coding-agent/src/core/resource-loader.ts
++++ b/packages/coding-agent/src/core/resource-loader.ts
+@@ -308,6 +308,8 @@
+ 	eventBus?: EventBus;
+ 	additionalExtensionPaths?: string[];
+ 	additionalSkillPaths?: string[];
++	/** Default discovery roots, subject to user skill filters and noSkills. */
++	defaultSkillPaths?: readonly string[];
+ 	additionalPromptTemplatePaths?: string[];
+ 	additionalThemePaths?: string[];
+ 	extensionFactories?: InlineExtension[];
+@@ -413,6 +415,7 @@
+ 			agentDir: this.agentDir,
+ 			settingsManager: this.settingsManager,
+ 			builtinExtensions: [...this.builtinExtensions.keys()],
++			defaultSkillPaths: options.defaultSkillPaths,
+ 		});
+ 		this.additionalExtensionPaths = options.additionalExtensionPaths ?? [];
+ 		this.additionalSkillPaths = options.additionalSkillPaths ?? [];
+@@ -587,7 +590,15 @@
+ 		const enabledPrompts = getEnabledPaths(resolvedPaths.prompts);
+ 		const enabledThemes = getEnabledPaths(resolvedPaths.themes);
+ 
+-		const enabledSkills = enabledSkillResources.map((resource) => this.mapSkillPath(resource, metadataByPath));
++		const enabledSkills: string[] = [];
++		const defaultSkills: string[] = [];
++		for (const resource of enabledSkillResources) {
++			const paths =
++				resource.metadata.source === "default" && resource.metadata.origin === "top-level"
++					? defaultSkills
++					: enabledSkills;
++			paths.push(this.mapSkillPath(resource, metadataByPath));
++		}
+ 
+ 		// Add CLI paths metadata
+ 		for (const r of cliExtensionPaths.extensions) {
+@@ -630,7 +641,10 @@
+ 
+ 		const skillPaths = this.noSkills
+ 			? this.mergePaths(cliEnabledSkills, this.additionalSkillPaths)
+-			: this.mergePaths([...cliEnabledSkills, ...enabledSkills], this.additionalSkillPaths);
++			: this.mergePaths(
++					this.mergePaths([...cliEnabledSkills, ...enabledSkills], this.additionalSkillPaths),
++					defaultSkills,
++				);
+ 
+ 		this.lastSkillPaths = skillPaths;
+ 		this.updateSkillsFromPaths(skillPaths, metadataByPath);
+diff --git a/packages/coding-agent/src/main.ts b/packages/coding-agent/src/main.ts
+--- a/packages/coding-agent/src/main.ts
++++ b/packages/coding-agent/src/main.ts
+@@ -577,6 +577,8 @@
+ 	/** Application identity shown by --version and the TUI; internal Pi version stays unchanged. */
+ 	displayVersion?: string;
+ 	extensionFactories?: InlineExtension[];
++	/** Default skill discovery roots, filtered by user settings and disabled by --no-skills. */
++	defaultSkillPaths?: readonly string[];
+ 	/** Register stock tool definitions. False leaves only extension/custom tools. Defaults to true. */
+ 	includeBuiltinTools?: boolean;
+ 	createModelRuntime?: ModelRuntimeFactory;
+@@ -823,6 +825,7 @@
+ 			resourceLoaderOptions: {
+ 				additionalExtensionPaths: resolvedExtensionPaths,
+ 				additionalSkillPaths: resolvedSkillPaths,
++				defaultSkillPaths: options?.defaultSkillPaths,
+ 				additionalPromptTemplatePaths: resolvedPromptTemplatePaths,
+ 				additionalThemePaths: resolvedThemePaths,
+ 				noExtensions: parsed.noExtensions,
+diff --git a/packages/coding-agent/test/default-skill-paths.test.ts b/packages/coding-agent/test/default-skill-paths.test.ts
+new file mode 100644
+--- /dev/null
++++ b/packages/coding-agent/test/default-skill-paths.test.ts
+@@ -0,0 +1,317 @@
++import { mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
++import { tmpdir } from "node:os";
++import { dirname, join, relative } from "node:path";
++import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
++import { DefaultPackageManager } from "../src/core/package-manager.ts";
++import { DefaultResourceLoader, type DefaultResourceLoaderOptions } from "../src/core/resource-loader.ts";
++import { type Settings, SettingsManager } from "../src/core/settings-manager.ts";
++import { formatSkillsForPrompt } from "../src/core/skills.ts";
++
++describe("embedding default skill discovery", () => {
++	let root: string;
++	let cwd: string;
++	let agentDir: string;
++	let shared: string;
++
++	beforeEach(() => {
++		root = mkdtempSync(join(tmpdir(), "pi-default-skills-"));
++		cwd = join(root, "workspace");
++		agentDir = join(root, "state");
++		shared = join(root, "shared");
++		for (const path of [cwd, agentDir, shared, join(cwd, ".git")]) mkdirSync(path, { recursive: true });
++		vi.stubEnv("HOME", root);
++		vi.stubEnv("PI_OFFLINE", "1");
++	});
++
++	afterEach(() => {
++		vi.restoreAllMocks();
++		vi.unstubAllEnvs();
++		rmSync(root, { recursive: true, force: true });
++	});
++
++	function skill(directory: string, name: string, description = name, extra = ""): string {
++		mkdirSync(directory, { recursive: true });
++		const file = join(directory, "SKILL.md");
++		writeFileSync(file, `---\nname: ${name}\ndescription: ${description}\n${extra}---\nSkill body\n`);
++		return file;
++	}
++
++	function settings(value: Settings, project = false): void {
++		const directory = project ? join(cwd, ".pi") : agentDir;
++		mkdirSync(directory, { recursive: true });
++		writeFileSync(join(directory, "settings.json"), JSON.stringify(value));
++	}
++
++	function loader(options: Partial<DefaultResourceLoaderOptions> = {}): DefaultResourceLoader {
++		return new DefaultResourceLoader({
++			cwd,
++			agentDir,
++			defaultSkillPaths: [shared],
++			noExtensions: true,
++			noThemes: true,
++			noPromptTemplates: true,
++			noContextFiles: true,
++			...options,
++		});
++	}
++
++	test("discovers shared skills without user setup and retains their authored source", async () => {
++		const file = skill(join(shared, "group", "review"), "review");
++		const resources = loader();
++		await resources.reload();
++		expect(resources.getSkills().skills).toEqual([
++			expect.objectContaining({
++				name: "review",
++				filePath: file,
++				sourceInfo: { path: file, source: "default", scope: "user", origin: "top-level", baseDir: shared },
++			}),
++		]);
++		expect(resources.getExtensions().extensions).toEqual([]);
++	});
++
++	test("uses native recursion, leaf boundaries, ignore files, and Markdown discovery", async () => {
++		const leaf = join(shared, "group", "review");
++		skill(leaf, "review");
++		skill(join(leaf, "scripts", "nested"), "not-discovered");
++		skill(join(shared, "ignored", "ignored"), "ignored");
++		skill(join(shared, ".private", "hidden"), "hidden");
++		skill(join(shared, "node_modules", "package"), "package");
++		writeFileSync(join(shared, ".gitignore"), "ignored/\n");
++		writeFileSync(join(leaf, "reference.md"), "Supporting documentation, not a skill.");
++		writeFileSync(join(shared, "standalone.md"), "---\nname: standalone\ndescription: Standalone skill\n---\nBody");
++		const resources = loader();
++		await resources.reload();
++		expect(
++			resources
++				.getSkills()
++				.skills.map((entry) => entry.name)
++				.sort(),
++		).toEqual(["review", "standalone"]);
++	});
++
++	test("keeps ordinary malformed-skill diagnostics and model-invocation metadata", async () => {
++		skill(join(shared, "manual"), "manual", "Manual skill", "disable-model-invocation: true\n");
++		const malformed = skill(join(shared, "malformed"), "malformed");
++		writeFileSync(malformed, "---\nname: malformed\n---\nMissing description");
++		const resources = loader();
++		await resources.reload();
++		expect(resources.getSkills().skills.map((entry) => entry.name)).toEqual(["manual"]);
++		expect(resources.getSkills().skills[0].disableModelInvocation).toBe(true);
++		expect(formatSkillsForPrompt(resources.getSkills().skills)).toBe("");
++		expect(resources.getSkills().diagnostics.some((entry) => entry.path === malformed)).toBe(true);
++	});
++
++	test.each([false, true])("user paths add sources without replacing defaults (empty=%s)", async (empty) => {
++		skill(join(shared, "shared"), "shared");
++		const personal = skill(join(root, "personal"), "personal");
++		settings({ skills: empty ? [] : [personal] });
++		const resources = loader();
++		await resources.reload();
++		expect(
++			resources
++				.getSkills()
++				.skills.map((entry) => entry.name)
++				.sort(),
++		).toEqual(empty ? ["shared"] : ["personal", "shared"]);
++	});
++
++	test.each(["directory", "subtree", "exact", "relative", "include", "exclude-wins"])(
++		"applies the ordinary global %s filter with the agent directory as base",
++		async (kind) => {
++			const file = skill(join(shared, "group", "directory-name"), "different-name");
++			const patterns: Record<string, string[]> = {
++				directory: ["!directory-name"],
++				subtree: [`!${join(shared, "group", "**")}`],
++				exact: [`-${file}`],
++				relative: [`-${relative(agentDir, file)}`],
++				include: ["!**", `+${file}`],
++				"exclude-wins": ["!**", `+${file}`, `-${file}`],
++			};
++			settings({ skills: patterns[kind] });
++			const resources = loader();
++			await resources.reload();
++			expect(resources.getSkills().skills.map((entry) => entry.filePath)).toEqual(kind === "include" ? [file] : []);
++		},
++	);
++
++	test("does not match YAML names or use the shared root as the relative filter base", async () => {
++		const file = skill(join(shared, "group", "directory-name"), "semantic-name");
++		settings({ skills: ["!semantic-name", `-${relative(shared, file)}`] });
++		const resources = loader();
++		await resources.reload();
++		expect(resources.getSkills().skills.map((entry) => entry.filePath)).toEqual([file]);
++	});
++
++	test("exact shared-file exclusion leaves a personal same-name skill available", async () => {
++		const file = skill(join(shared, "review"), "review");
++		const personal = skill(join(agentDir, "skills", "review"), "review");
++		settings({ skills: [`-${file}`] });
++		const resources = loader();
++		await resources.reload();
++		expect(resources.getSkills().skills.map((entry) => entry.filePath)).toEqual([personal]);
++		expect(resources.getSkills().diagnostics.filter((entry) => entry.type === "collision")).toEqual([]);
++	});
++
++	test.each([
++		"user-auto",
++		"user-settings",
++		"project-auto",
++		"project-settings",
++		"user-package",
++		"project-package",
++		"cli",
++	])("gives %s skills precedence over same-name shared defaults", async (source) => {
++		const sharedFile = skill(join(shared, "review"), "review");
++		let personal: string;
++		if (source === "user-auto") personal = skill(join(agentDir, "skills", "review"), "review");
++		else if (source === "project-auto") personal = skill(join(cwd, ".pi", "skills", "review"), "review");
++		else if (source.endsWith("package")) {
++			const pkg = join(root, "package");
++			personal = skill(join(pkg, "skills", "review"), "review");
++			writeFileSync(join(pkg, "package.json"), JSON.stringify({ pi: { skills: ["skills/review"] } }));
++			settings({ packages: [pkg] }, source === "project-package");
++		} else {
++			personal = skill(join(root, "personal", "review"), "review");
++			if (source !== "cli") settings({ skills: [personal] }, source === "project-settings");
++		}
++		const resources = loader({ additionalSkillPaths: source === "cli" ? [personal] : [] });
++		await resources.reload();
++		expect(resources.getSkills().skills.map((entry) => entry.filePath)).toEqual([personal]);
++		expect(resources.getSkills().diagnostics).toContainEqual(
++			expect.objectContaining({
++				type: "collision",
++				collision: expect.objectContaining({ winnerPath: personal, loserPath: sharedFile }),
++			}),
++		);
++	});
++
++	test("preserves all native sources' relative precedence", async () => {
++		const project = skill(join(cwd, ".pi", "skills", "review"), "review");
++		const user = skill(join(agentDir, "skills", "review"), "review");
++		const pkg = join(root, "package");
++		const packaged = skill(join(pkg, "skills", "review"), "review");
++		writeFileSync(join(pkg, "package.json"), JSON.stringify({ pi: { skills: ["skills/review"] } }));
++		settings({ packages: [pkg] });
++		const cli = skill(join(root, "cli", "review"), "review");
++		const defaultFile = skill(join(shared, "review"), "review");
++		const resources = loader({ additionalSkillPaths: [cli] });
++		for (const winner of [project, user, packaged, cli, defaultFile]) {
++			await resources.reload();
++			expect(resources.getSkills().skills.map((entry) => entry.filePath)).toEqual([winner]);
++			rmSync(dirname(winner), { recursive: true });
++		}
++	});
++
++	test("does not classify a package named default as a shared discovery source", async () => {
++		const pkg = join(agentDir, "default");
++		const packaged = skill(join(pkg, "skills", "review"), "review");
++		writeFileSync(join(pkg, "package.json"), JSON.stringify({ pi: { skills: ["skills/review"] } }));
++		settings({ packages: ["default"] });
++		const cli = skill(join(root, "cli", "review"), "review");
++		skill(join(shared, "review"), "review");
++		const resources = loader({ additionalSkillPaths: [cli] });
++		await resources.reload();
++		expect(resources.getSkills().skills).toEqual([
++			expect.objectContaining({
++				filePath: packaged,
++				sourceInfo: expect.objectContaining({ source: "default", origin: "package" }),
++			}),
++		]);
++	});
++
++	test.each([false, true])("does not revive an earlier disabled same-file occurrence (alias=%s)", async (alias) => {
++		const file = skill(join(shared, "review"), "review");
++		const earlier = alias ? join(root, "alias.md") : file;
++		if (alias) symlinkSync(file, earlier);
++		settings({ skills: [earlier, `-${earlier}`] }, true);
++		const manager = new DefaultPackageManager({
++			cwd,
++			agentDir,
++			settingsManager: SettingsManager.create(cwd, agentDir),
++			defaultSkillPaths: [shared],
++		});
++		expect((await manager.resolve()).skills).toEqual([
++			expect.objectContaining({
++				path: earlier,
++				enabled: false,
++				metadata: expect.objectContaining({ source: "local", scope: "project" }),
++			}),
++		]);
++		const resources = loader();
++		await resources.reload();
++		expect(resources.getSkills().skills).toEqual([]);
++	});
++
++	test("honors root order and deduplicates nested and aliased roots", async () => {
++		const first = join(shared, "first");
++		const winner = skill(join(first, "review"), "review");
++		const second = join(shared, "second");
++		skill(join(second, "review"), "review");
++		const alias = join(root, "alias");
++		symlinkSync(first, alias, "dir");
++		const resources = loader({ defaultSkillPaths: [alias, shared, first, second] });
++		await resources.reload();
++		expect(resources.getSkills().skills.map((entry) => entry.filePath)).toEqual([join(alias, "review", "SKILL.md")]);
++		expect(resources.getSkills().diagnostics.filter((entry) => entry.type === "collision")).toHaveLength(1);
++		expect(resources.getSkills().skills[0].sourceInfo?.baseDir).toBe(alias);
++		expect(winner).not.toBe(resources.getSkills().skills[0].filePath);
++	});
++
++	test("noSkills omits defaults and ordinary discovery but preserves explicit paths", async () => {
++		skill(join(shared, "shared"), "shared");
++		skill(join(agentDir, "skills", "personal"), "personal");
++		const cli = skill(join(root, "cli"), "explicit");
++		settings({ skills: ["!**"] });
++		const disabled = loader({ noSkills: true });
++		await disabled.reload();
++		expect(disabled.getSkills().skills).toEqual([]);
++		const explicit = loader({ noSkills: true, additionalSkillPaths: [cli] });
++		await explicit.reload();
++		expect(explicit.getSkills().skills.map((entry) => entry.filePath)).toEqual([cli]);
++	});
++
++	test("reload refreshes skill contents and filters while keeping the captured root list", async () => {
++		const file = skill(join(shared, "review"), "review", "Original");
++		const paths = [shared];
++		const resources = loader({ defaultSkillPaths: paths });
++		paths.length = 0;
++		await resources.reload();
++		expect(resources.getSkills().skills[0].description).toBe("Original");
++		skill(dirname(file), "review", "Updated");
++		const added = skill(join(shared, "added"), "added");
++		await resources.reload();
++		expect(resources.getSkills().skills.find((entry) => entry.name === "review")?.description).toBe("Updated");
++		settings({ skills: [`-${file}`] });
++		await resources.reload();
++		expect(resources.getSkills().skills.map((entry) => entry.filePath)).toEqual([added]);
++		rmSync(dirname(added), { recursive: true });
++		await resources.reload();
++		expect(resources.getSkills().skills).toEqual([]);
++	});
++
++	test("shared defaults do not depend on project trust or project filtering", async () => {
++		const file = skill(join(shared, "shared"), "shared");
++		skill(join(cwd, ".pi", "skills", "project"), "project");
++		settings({ skills: ["!**"], defaultTools: ["bash"] }, true);
++		const untrustedSettings = SettingsManager.create(cwd, agentDir, { projectTrusted: false });
++		const untrusted = loader({ settingsManager: untrustedSettings });
++		await untrusted.reload();
++		expect(untrusted.getSkills().skills.map((entry) => entry.filePath)).toEqual([file]);
++		expect(untrustedSettings.isProjectTrusted()).toBe(false);
++		expect(untrustedSettings.getProjectSettings()).toEqual({});
++		const trusted = loader({ settingsManager: SettingsManager.create(cwd, agentDir, { projectTrusted: true }) });
++		await trusted.reload();
++		expect(trusted.getSkills().skills.map((entry) => entry.filePath)).toEqual([file]);
++	});
++
++	test("omitting the embedding option preserves ordinary Pi behavior", async () => {
++		const personal = skill(join(agentDir, "skills", "review"), "review");
++		skill(join(shared, "shared"), "shared");
++		const ordinary = loader({ defaultSkillPaths: undefined });
++		const empty = loader({ defaultSkillPaths: [] });
++		await ordinary.reload();
++		await empty.reload();
++		expect(ordinary.getSkills()).toEqual(empty.getSkills());
++		expect(ordinary.getSkills().skills.map((entry) => entry.filePath)).toEqual([personal]);
++	});
++});
+diff --git a/packages/coding-agent/test/managed-main-skills.test.ts b/packages/coding-agent/test/managed-main-skills.test.ts
+new file mode 100644
+--- /dev/null
++++ b/packages/coding-agent/test/managed-main-skills.test.ts
+@@ -0,0 +1,160 @@
++import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
++import { tmpdir } from "node:os";
++import { join } from "node:path";
++import { InMemoryModelsStore } from "@earendil-works/pi-ai";
++import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
++import type { AgentSessionRuntime } from "../src/core/agent-session-runtime.ts";
++import { AuthStorage } from "../src/core/auth-storage.ts";
++import { ModelRuntime, type ModelRuntimeFactory } from "../src/core/model-runtime.ts";
++import { restoreStdout } from "../src/core/output-guard.ts";
++import { ProjectTrustStore } from "../src/core/trust-manager.ts";
++import { main } from "../src/main.ts";
++import * as theme from "../src/modes/interactive/theme/theme.ts";
++
++const modes = vi.hoisted(() => ({ rpc: vi.fn() }));
++vi.mock("../src/modes/index.ts", () => ({
++	InteractiveMode: class {},
++	runPrintMode: vi.fn(),
++	runRpcMode: modes.rpc,
++}));
++
++describe("main default skill roots", () => {
++	let root: string;
++	let cwd: string;
++	let agentDir: string;
++	let shared: string;
++	let sharedFile: string;
++	let createModelRuntime: ModelRuntimeFactory;
++	let originalExitCode: typeof process.exitCode;
++	const args = [
++		"--mode",
++		"rpc",
++		"--no-session",
++		"--no-extensions",
++		"--no-context-files",
++		"--no-prompt-templates",
++		"--no-themes",
++	];
++
++	beforeEach(() => {
++		root = mkdtempSync(join(tmpdir(), "pi-main-skills-"));
++		cwd = join(root, "workspace");
++		agentDir = join(root, "relocated-agent-state");
++		shared = join(root, "shared");
++		for (const path of [cwd, agentDir, shared, join(cwd, ".git")]) mkdirSync(path, { recursive: true });
++		sharedFile = join(shared, "SKILL.md");
++		writeFileSync(sharedFile, "---\nname: shared\ndescription: Shared fixture\n---\nBody");
++		writeFileSync(join(agentDir, "settings.json"), JSON.stringify({ setupComplete: true }));
++		const modelsPath = join(root, "models.json");
++		writeFileSync(
++			modelsPath,
++			JSON.stringify({
++				providers: {
++					openai: { api: "openai-responses", baseUrl: "https://example.invalid/v1", models: [{ id: "fixture" }] },
++				},
++			}),
++		);
++		createModelRuntime = (options) =>
++			ModelRuntime.create({
++				...options,
++				credentials: AuthStorage.inMemory({ openai: { type: "api_key", key: "unused" } }),
++				modelsPath,
++				modelsStore: new InMemoryModelsStore(),
++				includeBuiltinCatalog: false,
++				allowModelNetwork: false,
++				refreshOnCreate: false,
++			});
++		vi.stubEnv("HOME", root);
++		vi.stubEnv("PI_CODING_AGENT_DIR", agentDir);
++		vi.stubEnv("PI_OFFLINE", "1");
++		vi.spyOn(process, "cwd").mockReturnValue(cwd);
++		vi.spyOn(theme, "initTheme").mockImplementation(() => {});
++		vi.spyOn(process.stdout, "write").mockReturnValue(true);
++		originalExitCode = process.exitCode;
++		process.exitCode = undefined;
++		modes.rpc.mockReset();
++	});
++
++	afterEach(() => {
++		restoreStdout();
++		process.exitCode = originalExitCode;
++		vi.restoreAllMocks();
++		vi.unstubAllEnvs();
++		rmSync(root, { recursive: true, force: true });
++	});
++
++	test("retains roots across new sessions and reload without activating distrusted project settings", async () => {
++		new ProjectTrustStore(agentDir).set(cwd, false);
++		modes.rpc.mockImplementation(async (runtime: AgentSessionRuntime) => {
++			try {
++				expect(runtime.services.agentDir).toBe(agentDir);
++				expect(runtime.services.settingsManager.isProjectTrusted()).toBe(false);
++				expect(runtime.services.resourceLoader.getSkills().skills.map((entry) => entry.filePath)).toEqual([
++					sharedFile,
++				]);
++				const projectSkill = join(cwd, ".pi", "skills", "project");
++				mkdirSync(projectSkill, { recursive: true });
++				writeFileSync(join(projectSkill, "SKILL.md"), "---\nname: project\ndescription: Untrusted\n---\nBody");
++				writeFileSync(join(cwd, ".pi", "settings.json"), JSON.stringify({ skills: ["!**"], defaultTools: [] }));
++				const original = runtime.session;
++				expect(await runtime.newSession()).toEqual({ cancelled: false });
++				expect(runtime.session).not.toBe(original);
++				expect(runtime.services.settingsManager.isProjectTrusted()).toBe(false);
++				expect(runtime.services.settingsManager.getProjectSettings()).toEqual({});
++				expect(runtime.services.resourceLoader.getSkills().skills.map((entry) => entry.filePath)).toEqual([
++					sharedFile,
++				]);
++				await runtime.session.reload();
++				expect(runtime.services.settingsManager.isProjectTrusted()).toBe(false);
++				expect(runtime.services.resourceLoader.getSkills().skills.map((entry) => entry.filePath)).toEqual([
++					sharedFile,
++				]);
++			} finally {
++				await runtime.dispose();
++			}
++		});
++		await main(args, { createModelRuntime, defaultSkillPaths: Object.freeze([shared]) });
++		expect(modes.rpc).toHaveBeenCalledOnce();
++	});
++
++	test("forwards the same defaults when switching to a different session workspace", async () => {
++		const other = join(root, "other-workspace");
++		mkdirSync(other);
++		const session = join(root, "other.jsonl");
++		writeFileSync(
++			session,
++			`${JSON.stringify({ type: "session", version: 3, id: "12345678-1234-4123-8123-123456789abc", timestamp: new Date().toISOString(), cwd: other })}\n`,
++		);
++		modes.rpc.mockImplementation(async (runtime: AgentSessionRuntime) => {
++			try {
++				expect(await runtime.switchSession(session)).toEqual({ cancelled: false });
++				expect(runtime.cwd).toBe(other);
++				expect(runtime.services.resourceLoader.getSkills().skills.map((entry) => entry.filePath)).toEqual([
++					sharedFile,
++				]);
++			} finally {
++				await runtime.dispose();
++			}
++		});
++		await main(args, { createModelRuntime, defaultSkillPaths: Object.freeze([shared]) });
++		expect(modes.rpc).toHaveBeenCalledOnce();
++	});
++
++	test.each([false, true])("keeps native --no-skills behavior with explicit selection=%s", async (explicit) => {
++		writeFileSync(join(agentDir, "settings.json"), JSON.stringify({ setupComplete: true, skills: ["!**"] }));
++		modes.rpc.mockImplementation(async (runtime: AgentSessionRuntime) => {
++			try {
++				expect(runtime.services.resourceLoader.getSkills().skills.map((entry) => entry.filePath)).toEqual(
++					explicit ? [sharedFile] : [],
++				);
++			} finally {
++				await runtime.dispose();
++			}
++		});
++		await main([...args, "--no-skills", ...(explicit ? ["--skill", sharedFile] : [])], {
++			createModelRuntime,
++			defaultSkillPaths: Object.freeze([shared]),
++		});
++		expect(modes.rpc).toHaveBeenCalledOnce();
++	});
++});

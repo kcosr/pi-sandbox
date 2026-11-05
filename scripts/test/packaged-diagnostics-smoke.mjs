@@ -24,6 +24,7 @@ import { parse as parseToml, stringify as stringifyToml } from "@iarna/toml";
 
 import { testManagedMcpCodemode } from "./mcp-codemode-smoke.mjs";
 import { testLocalProcessLifetime } from "./local-processes-smoke.mjs";
+import { testSharedSkills } from "./skills-smoke.mjs";
 import { testRpcSessionLifecycle } from "./rpc-lifecycle-smoke.mjs";
 
 import { prepareHostIndependentSmokeConfig } from "./packaged-smoke-config.mjs";
@@ -344,7 +345,17 @@ try {
       : join(defaultsDirectory, "config.toml"),
     workspace,
   });
+  const sharedSkill = await testSharedSkills({
+    launch,
+    configPath: releaseManifest.layout.allowConfigOverride
+      ? overridePath
+      : join(defaultsDirectory, "config.toml"),
+    userState,
+    sharedDirectory: join(runtimeDirectory, "shared-skills-smoke"),
+    visibleSharedDirectory: join(compiledLibexecDirectory, "shared-skills-smoke"),
+  });
   await testManagedMcpCodemode({
+    sharedSkill,
     launch,
     configPath: releaseManifest.layout.allowConfigOverride
       ? overridePath
@@ -359,7 +370,7 @@ try {
   });
   await assert.rejects(lstat(dotenvSessionDir), { code: "ENOENT" });
   console.log(
-    "packaged diagnostics, RPC lifecycle, local processes, MCP and code-mode smoke tests passed",
+    "packaged diagnostics, RPC lifecycle, local processes, shared skills, MCP and code-mode smoke tests passed",
   );
 } finally {
   if (child !== undefined && child.exitCode === null && child.signalCode === null) {

@@ -27,6 +27,12 @@ import { createSbom } from "./build/sbom.mjs";
 import { loadDistribution } from "./build/distribution.mjs";
 import { renderLayoutText } from "./build/layout-render.mjs";
 import { copyToolBundle, validateNativeToolBundle } from "./build/tool-bundle.mjs";
+import {
+  copySkillsBundle,
+  loadSkillsBundle,
+  validatePackagedSkills,
+  validateSkillsConfiguration,
+} from "./build/skills.mjs";
 
 const repositoryRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const defaultDistribution = join(repositoryRoot, "config/default/distribution.toml");
@@ -462,6 +468,7 @@ async function inspectReleaseArchive(
     identityBroker: expectedRelease.identityBroker,
     bubblewrap: expectedRelease.bubblewrap,
     toolBundle: expectedRelease.toolBundle,
+    skillsBundle: expectedRelease.skillsBundle,
     pi: expectedRelease.pi,
     extensions: expectedRelease.extensions,
     layout: expectedRelease.layout,
@@ -478,6 +485,7 @@ async function inspectReleaseArchive(
     identityBroker: manifest.identityBroker,
     bubblewrap: manifest.bubblewrap,
     toolBundle: manifest.toolBundle,
+    skillsBundle: manifest.skillsBundle,
     pi: manifest.pi,
     extensions: manifest.extensions,
     layout: manifest.layout,
@@ -492,6 +500,7 @@ async function inspectReleaseArchive(
   if (JSON.stringify(manifest.files) !== JSON.stringify(payloadInventory)) {
     throw new Error("release manifest does not inventory the packaged payload");
   }
+  await validatePackagedSkills(payloadRoot, manifest.skillsBundle);
   return extractedRoot;
 }
 
@@ -509,6 +518,7 @@ export async function buildRelease(argv, { verifyPatchedSource, verifyPackagedRe
   const packageJson = JSON.parse(await readFile(packagePath, "utf8"));
   const target = hostPlatform();
   const distribution = await loadDistribution(options.distribution, target.os);
+  const skillsBundle = await loadSkillsBundle(distribution.skillsSource);
   validateNativeToolBundle(distribution.toolBundle, target.os, process.arch);
   options.config ??= join(
     repositoryRoot,
@@ -518,6 +528,7 @@ export async function buildRelease(argv, { verifyPatchedSource, verifyPackagedRe
   await assertRegularFile(options.config, "default configuration");
   await assertRegularFile(options.models, "default models catalog");
   const packagedConfig = parseToml(await readFile(options.config, "utf8"));
+  validateSkillsConfiguration(skillsBundle, packagedConfig, distribution.layout);
   if (packagedConfig.models_file !== distribution.layout.defaultModelsPath) {
     throw new Error(
       `default configuration models_file must be ${distribution.layout.defaultModelsPath}`,
@@ -717,6 +728,7 @@ export async function buildRelease(argv, { verifyPatchedSource, verifyPackagedRe
 
     const defaults = join(payload, "defaults");
     await copyToolBundle(distribution.toolBundle, join(payload, "tools"));
+    await copySkillsBundle(skillsBundle, payload);
     await mkdir(defaults);
     await copyFile(options.config, join(defaults, "config.toml"));
     await copyFile(options.models, join(defaults, "models.json"));
@@ -733,9 +745,11 @@ export async function buildRelease(argv, { verifyPatchedSource, verifyPackagedRe
       throw new Error("compiled executable does not report the captured build version");
     }
     process.stdout.write("Validating the compiled executable and packaged defaults\n");
-    await run(join(payload, "pi-sandbox"), ["--validate-installation", "--root", validationRoot], {
-      env: cleanEnvironment,
-    });
+    await run(
+      join(payload, "pi-sandbox"),
+      ["--validate-installation", "--root", validationRoot, "--candidate-payload", payload],
+      { env: cleanEnvironment },
+    );
 
     for (const [name, source] of [
       [
@@ -771,6 +785,7 @@ export async function buildRelease(argv, { verifyPatchedSource, verifyPackagedRe
       sourceDirty: (await capture("git", ["status", "--porcelain"])).trim().length > 0,
       bubblewrap: os === "linux" ? distribution.bubblewrap.release : null,
       toolBundle: distribution.toolBundle,
+      skillsBundle: skillsBundle?.release,
       payload,
     });
     await writeFile(join(payload, "sbom.cdx.json"), `${JSON.stringify(sbom, null, 2)}\n`, {
@@ -789,6 +804,7 @@ export async function buildRelease(argv, { verifyPatchedSource, verifyPackagedRe
       identityBroker: os === "linux",
       bubblewrap: os === "linux" ? distribution.bubblewrap.release : null,
       toolBundle: distribution.toolBundle?.release ?? null,
+      skillsBundle: skillsBundle?.release ?? null,
       pi: {
         version: lock.version,
         tag: lock.tag,
@@ -845,6 +861,7 @@ export async function buildRelease(argv, { verifyPatchedSource, verifyPackagedRe
         identityBroker: os === "linux",
         bubblewrap: os === "linux" ? distribution.bubblewrap.release : null,
         toolBundle: distribution.toolBundle?.release ?? null,
+        skillsBundle: skillsBundle?.release ?? null,
         pi: {
           version: lock.version,
           tag: lock.tag,

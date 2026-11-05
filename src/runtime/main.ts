@@ -58,6 +58,7 @@ import {
   isManagedMcpSelected,
   isManagedToolSelected,
 } from "./arguments.js";
+import { validateCandidateSkillDirectories, validateSharedSkillDirectories } from "./skills.js";
 import { applyManagedEnvironment } from "./environment.js";
 import { resolveEnvironmentFiles } from "./environment-files.js";
 import { assertExecutionPrerequisites } from "./prerequisites.js";
@@ -90,6 +91,7 @@ export type ManagedModelRuntimeFactory = (
 export interface ManagedMainOptions {
   readonly includeBuiltinTools: false;
   readonly displayVersion: string;
+  readonly defaultSkillPaths: readonly string[];
   readonly extensionFactories: Array<{ readonly name: string; readonly factory: ExtensionFactory }>;
   readonly createModelRuntime: ManagedModelRuntimeFactory;
   readonly validateSessionCwd: (cwd: string) => void;
@@ -192,9 +194,17 @@ async function readAdministrativeModels(
 export async function validateAdministrativeConfiguration(
   root = "/",
   configPath = SYSTEM_CONFIG_PATH,
+  candidatePayload?: string,
 ): Promise<SandboxConfig<AuthoredPiEnvironmentValue>> {
   const config = await loadAdministrativeConfig(root, configPath);
   assertExecutionPlatform(config);
+  if (candidatePayload !== undefined) {
+    await validateCandidateSkillDirectories(
+      config.skills.directories,
+      buildLayout.libexecDir,
+      candidatePayload,
+    );
+  }
   const modelsPath = await readAdministrativeModels(config, root);
   await createConfiguredModelRuntime(modelsPath, { refreshOnCreate: false });
   return config;
@@ -483,11 +493,32 @@ export function resolveManagedExtensionHostEnvironments(
   return Object.freeze(resolved);
 }
 
-function parseValidationRoot(args: readonly string[]): string | undefined {
+function parseInstallationValidation(
+  args: readonly string[],
+): { root: string; candidatePayload?: string } | undefined {
   if (args[0] !== "--validate-installation") return undefined;
-  if (args.length === 1) return "/";
-  if (args.length === 3 && args[1] === "--root" && args[2] !== undefined) return args[2];
-  throw new Error("usage: pi-sandbox --validate-installation [--root DESTDIR]");
+  const usage =
+    "usage: pi-sandbox --validate-installation [--root DESTDIR] [--candidate-payload DIR]";
+  const options = new Map<string, string>();
+  for (let index = 1; index < args.length; index += 2) {
+    const flag = args[index]!;
+    const value = args[index + 1];
+    if (
+      (flag !== "--root" && flag !== "--candidate-payload") ||
+      options.has(flag) ||
+      value === undefined ||
+      !isAbsolute(value) ||
+      value.includes("\0")
+    )
+      throw new Error(usage);
+    options.set(flag, value);
+  }
+  return {
+    root: options.get("--root") ?? "/",
+    ...(options.has("--candidate-payload")
+      ? { candidatePayload: options.get("--candidate-payload")! }
+      : {}),
+  };
 }
 
 function parseBackendQueryRoot(args: readonly string[]): string | undefined {
@@ -503,9 +534,13 @@ export async function runPiSandbox({ piArgs: args, configPath }: SandboxArgument
     process.stdout.write(`${DISPLAY_VERSION}\n`);
     return;
   }
-  const validationRoot = parseValidationRoot(args);
-  if (validationRoot !== undefined) {
-    await validateAdministrativeConfiguration(validationRoot, configPath);
+  const validation = parseInstallationValidation(args);
+  if (validation !== undefined) {
+    await validateAdministrativeConfiguration(
+      validation.root,
+      configPath,
+      validation.candidatePayload,
+    );
     return;
   }
   const backendQueryRoot = parseBackendQueryRoot(args);
@@ -527,6 +562,7 @@ export async function runPiSandbox({ piArgs: args, configPath }: SandboxArgument
       getAccountIdentity,
       getMachineId,
     );
+  await validateSharedSkillDirectories(config.skills.directories);
   const { cwd, validateSessionCwd } = createWorkspaceBoundary(process.cwd());
   const managedExtensions = instantiateConfiguredManagedExtensions(config);
   const piToolExtensions = selectConfiguredPiToolExtensions(config);
@@ -643,6 +679,7 @@ export async function runPiSandbox({ piArgs: args, configPath }: SandboxArgument
       await managedMain(createManagedPiArguments(args), {
         includeBuiltinTools: false,
         displayVersion: DISPLAY_VERSION,
+        defaultSkillPaths: config.skills.directories,
         extensionFactories: [{ name: "pi-sandbox", factory: extension }],
         createModelRuntime: createManagedModelRuntimeFactory(modelsPath),
         validateSessionCwd,

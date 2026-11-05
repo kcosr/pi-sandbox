@@ -41,6 +41,47 @@ function parseConfig(
 }
 
 describe("parseConfig", () => {
+  it("adds optional shared roots without rewriting aliases, overlapping roots, or literal syntax", () => {
+    expect(parseConfig(completeConfig()).skills).toEqual({ directories: [] });
+    for (const directories of [
+      [],
+      ["/etc/skills", "/private/etc/skills", "/etc/skills/nested"],
+      ["/srv/$USER/{{username}}/*"],
+    ]) {
+      const parsed = parseConfig(
+        completeConfig() + `\n[skills]\ndirectories = ${JSON.stringify(directories)}\n`,
+      ).skills;
+      expect(parsed.directories).toEqual(directories);
+      expect(Object.isFrozen(parsed)).toBe(true);
+      expect(Object.isFrozen(parsed.directories)).toBe(true);
+    }
+  });
+
+  it("rejects invalid administrative skill roots and unknown fields", () => {
+    for (const value of [
+      '"/srv/skills"',
+      "[1]",
+      '[""]',
+      '["/"]',
+      '["relative"]',
+      '["~/skills"]',
+      '["/a/../b"]',
+      '["/a/./b"]',
+      '["/a//b"]',
+      '["/a/"]',
+      '["/a", "/a"]',
+      '["/a\\u0000b"]',
+    ]) {
+      expect(() => parseConfig(completeConfig() + `\n[skills]\ndirectories = ${value}\n`)).toThrow(
+        ConfigError,
+      );
+    }
+    for (const table of ["[skills]", "[skills]\ndirectories = []\nextra = true"]) {
+      expect(() => parseConfig(completeConfig() + `\n${table}\n`)).toThrow(ConfigError);
+    }
+    expect(() => parseConfig("skills = []\n" + completeConfig())).toThrow(ConfigError);
+  });
+
   it("requires explicit main-only export admission and a confined read-only workspace", () => {
     const source = completeConfig();
     expect(parseConfig(source).exports).toEqual({ enabled: false });
@@ -168,6 +209,7 @@ operands = { min = 0, max = 0 }
 
     expect(config).toEqual({
       configVersion: 14,
+      skills: { directories: [] },
       exports: { enabled: false },
       codemode: { enabled: false, timeoutMs: 300000 },
       mcp: { servers: {} },
@@ -990,6 +1032,7 @@ describe("loadConfig", () => {
 
     await expect(loadConfig(path, EMPTY_EXTENSION_CATALOG)).resolves.toMatchObject({
       configVersion: 14,
+      skills: { directories: [] },
       exports: { enabled: false },
       codemode: { enabled: false, timeoutMs: 300000 },
       mcp: { servers: {} },

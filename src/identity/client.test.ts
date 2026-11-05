@@ -666,6 +666,7 @@ describe("identity overrides", () => {
     const basePolicy = { audit: true, mode: "allow", sessionGrant: "never" } as const;
     const base = {
       configVersion: 14,
+      skills: { directories: [] },
       exports: { enabled: false },
       codemode: { enabled: false, timeoutMs: 300000 },
       mcp: { servers: {} },
@@ -808,6 +809,7 @@ describe("identity MCP overrides", () => {
   );
   const base: SandboxConfig = {
     configVersion: 14,
+    skills: { directories: [] },
     exports: { enabled: false },
     codemode,
     mcp,
@@ -822,6 +824,23 @@ describe("identity MCP overrides", () => {
     extensions: {},
     tools: {},
   };
+
+  it("preserves shared roots through identity overlays and rejects broker skill overrides", () => {
+    const configured = { ...base, skills: { directories: ["/srv/shared/skills"] } };
+    expect(
+      applyIdentityOverrides(configured, { tools: {}, network: { mode: "host" } }).skills,
+    ).toBe(configured.skills);
+    expect(() =>
+      parseBrokerResponse(
+        JSON.stringify({
+          version: 10,
+          status: "ok",
+          environment: { pi: {}, sandbox: {}, extensions: {} },
+          overrides: { skills: { directories: [] } },
+        }),
+      ),
+    ).toThrow();
+  });
 
   it("keeps export admission main-only and rejects overrides that broaden writable host access", () => {
     const exporting = {
@@ -932,6 +951,7 @@ describe("identity command-class overrides", () => {
   const allow = { audit: true, mode: "allow", sessionGrant: "never" } as const;
   const base = {
     configVersion: 14,
+    skills: { directories: [] },
     exports: { enabled: false },
     codemode: { enabled: false, timeoutMs: 300000 },
     mcp: { servers: {} },

@@ -85,6 +85,53 @@ set `PI_CLIPBOARD_OSC52 = "1"` in `environment.pi` to enable Pi's terminal
 clipboard escape sequence. This host-side setting does not require or grant
 sandbox networking.
 
+### Shared skills
+
+Optional main-policy `[skills]` adds ordered roots to every user's Pi discovery,
+independently of `PI_CODING_AGENT_DIR` and their configured skill paths:
+
+```toml
+[skills]
+directories = ["/etc/pi-sandbox/skills"]
+```
+
+Omission or `directories = []` adds none. The table accepts only `directories`,
+a required array when the table is present. Paths must be normalized absolute
+paths other than `/`, without duplicates or control characters. They are literal:
+no glob, home, environment or account macro expansion occurs. Overlapping roots
+and symlink aliases are allowed; the authored spelling is retained for filters.
+At startup each root must be an existing readable, traversable directory for the
+invoking user, even with `--no-skills`. Invalid roots stop startup before the UI.
+Use stable local directories unless dependence on a network mount is intentional.
+Installation validation checks external paths structurally without opening them.
+
+Pi recursively discovers skills, including nested groups. It stops descending
+once it finds a directory's `SKILL.md`, so that skill's supporting files are not
+independent skills. Pi's ordinary ignore rules and malformed-skill diagnostics
+apply. Personal, project, configured, package and explicit `--skill` resources
+precede shared skills when their skill names collide. Shared roots retain their
+configured order. Canonical resource deduplication preserves a previously
+disabled user entry rather than rediscovering it through a shared alias.
+
+Users can filter these additional resources using the ordinary `skills` array in
+user `settings.json`. For example:
+
+```json
+{
+  "skills": ["!/etc/pi-sandbox/skills/operations/**"]
+}
+```
+
+These are path filters, not skill-name switches. Pi supports `!pattern` exclusions
+and `-path` / `+path` disabling and enabling; relative patterns resolve from the
+user's agent directory. `--no-skills` removes discovered skills, while explicit
+`--skill PATH` retains Pi's normal exception. There is no additional per-skill CLI
+flag or user/group policy override. `/reload` refreshes contents and preferences;
+restart the application after changing the administrative root list.
+
+This optional field is part of the unreleased schema 14. Upgrade the application
+before adding it to policy; older binaries reject unknown fields.
+
 ### File-backed Pi environment values
 
 Pi-scoped variables can read a value from a separate file instead of embedding

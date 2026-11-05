@@ -32,6 +32,24 @@ path = "/opt/example/bin/bwrap"
 `,
   );
   const validManifest = await readFile(path, "utf8");
+  assert.equal((await loadDistribution(path, "linux")).skillsSource, undefined);
+  await writeFile(path, `skills_source = "./company-skills"\n${validManifest}`);
+  assert.equal(
+    (await loadDistribution(path, "linux")).skillsSource,
+    join(temporaryDirectory, "company-skills"),
+  );
+  for (const invalid of ['""', "false", "[]", "{}", '"bad\\u0000path"']) {
+    await writeFile(path, `skills_source = ${invalid}\n${validManifest}`);
+    await assert.rejects(loadDistribution(path, "linux"), /skills_source|valid TOML/u);
+  }
+  await writeFile(
+    path,
+    validManifest.replace(
+      "[platforms.linux]",
+      '[platforms.linux]\nskills_source = "./wrong-scope"',
+    ),
+  );
+  await assert.rejects(loadDistribution(path, "linux"), /skills_source is not recognized/u);
   await writeFile(path, validManifest.replace("version = 3", "version = 1"));
   await assert.rejects(loadDistribution(path, "linux"), /version must be 3/);
   await writeFile(path, validManifest.replace("version = 3", "version = 2"));

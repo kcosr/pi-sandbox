@@ -737,6 +737,7 @@ function allowAllConfig(): SandboxConfig {
   const allow = { audit: false, mode: "allow", sessionGrant: "never" } as const;
   return {
     configVersion: 14,
+    skills: { directories: [] },
     exports: { enabled: false },
     codemode: { enabled: false, timeoutMs: 300000 },
     mcp: { servers: {} },

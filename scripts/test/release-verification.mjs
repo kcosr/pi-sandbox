@@ -28,6 +28,11 @@ export function createReleaseVerification(environment, runCommand = runVerificat
           "packages/coding-agent/test/auth-check.test.ts",
           "packages/coding-agent/test/managed-model-runtime.test.ts",
           "packages/coding-agent/test/managed-main.test.ts",
+          "packages/coding-agent/test/default-skill-paths.test.ts",
+          "packages/coding-agent/test/managed-main-skills.test.ts",
+          "packages/coding-agent/test/skills.test.ts",
+          "packages/coding-agent/test/sdk-skills.test.ts",
+          "packages/coding-agent/test/package-manager.test.ts",
           "packages/coding-agent/test/managed-tools.test.ts",
           "packages/coding-agent/test/managed-version.test.ts",
           "packages/coding-agent/test/managed-tool-paths.test.ts",
@@ -72,10 +77,17 @@ export function createReleaseVerification(environment, runCommand = runVerificat
         { cwd: sourceRoot, env: { ...verificationEnvironment, PI_OFFLINE: "1" } },
       );
 
-      // This upstream fixture resolves bundled themes from its package CWD.
+      // These upstream fixtures resolve bundled themes from their package CWD.
       await runCommand(
         "npm",
-        ["exec", "--", "vitest", "run", "test/resource-loader-theme.test.ts"],
+        [
+          "exec",
+          "--",
+          "vitest",
+          "run",
+          "test/resource-loader-theme.test.ts",
+          "test/resource-loader.test.ts",
+        ],
         {
           cwd: join(sourceRoot, "packages/coding-agent"),
           env: { ...verificationEnvironment, PI_OFFLINE: "1" },

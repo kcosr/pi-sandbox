@@ -133,6 +133,7 @@ describe("administrative configuration", () => {
   it("enforces the execution backend's platform contract", () => {
     const config = {
       configVersion: 14,
+      skills: { directories: [] },
       exports: { enabled: false },
       codemode: { enabled: false, timeoutMs: 300000 },
       mcp: { servers: {} },
@@ -378,6 +379,7 @@ describe("administrative configuration", () => {
     const allow = { audit: false, mode: "allow", sessionGrant: "never" } as const;
     const config = {
       configVersion: 14,
+      skills: { directories: [] },
       exports: { enabled: false },
       codemode: { enabled: false, timeoutMs: 300000 },
       mcp: { servers: {} },
@@ -424,6 +426,80 @@ describe("administrative configuration", () => {
     await expect(validateAdministrativeConfiguration(root)).resolves.toMatchObject({
       modelsFile: "/srv/pi-models/managed.json",
     });
+  });
+
+  it("keeps external skill roots structural during installation validation and checks candidate bundled roots", async () => {
+    const root = await createRoot();
+    const configPath = rooted(root, SYSTEM_CONFIG_PATH);
+    const source = await readFile(configPath, "utf8");
+    await writeFile(rooted(root, "/etc/pi-sandbox/models.json"), '{"providers":{}}');
+    await writeFile(
+      configPath,
+      source +
+        '\n[skills]\ndirectories = ["/absent/shared-skills", "/usr/libexec/pi-sandbox/skills/team"]\n',
+    );
+    await expect(validateAdministrativeConfiguration(root)).resolves.toMatchObject({
+      skills: { directories: ["/absent/shared-skills", "/usr/libexec/pi-sandbox/skills/team"] },
+    });
+    const candidate = join(root, "candidate");
+    await mkdir(candidate);
+    await expect(
+      validateAdministrativeConfiguration(root, SYSTEM_CONFIG_PATH, candidate),
+    ).rejects.toThrow("candidate payload");
+    await mkdir(join(candidate, "skills", "team"), { recursive: true });
+    for (const flags of [
+      ["--root", root, "--candidate-payload", candidate],
+      ["--candidate-payload", candidate, "--root", root],
+    ]) {
+      await expect(
+        runPiSandbox({
+          piArgs: ["--validate-installation", ...flags],
+          configPath: SYSTEM_CONFIG_PATH,
+        }),
+      ).resolves.toBeUndefined();
+    }
+  });
+
+  it("does not permit candidate payload arguments to bypass ordinary startup", async () => {
+    for (const args of [
+      ["--candidate-payload", "/tmp/candidate"],
+      ["--candidate-payload=/tmp/candidate"],
+      ["--no-skills", "--candidate-payload", "/tmp/candidate"],
+      ["--print-execution-backend", "--candidate-payload", "/tmp/candidate"],
+    ]) {
+      expect(() => parseSandboxArguments(args)).toThrow("--candidate-payload");
+    }
+    for (const flags of [
+      ["--candidate-payload"],
+      ["--candidate-payload", "relative"],
+      ["--root", "/", "--root", "/"],
+      ["--candidate-payload", "/", "--candidate-payload", "/"],
+    ]) {
+      await expect(
+        runPiSandbox({
+          piArgs: ["--validate-installation", ...flags],
+          configPath: SYSTEM_CONFIG_PATH,
+        }),
+      ).rejects.toThrow("usage:");
+    }
+  });
+
+  it("rejects an inaccessible shared root before interface startup even with --no-skills", async () => {
+    const root = await createRoot();
+    const configPath = rooted(root, SYSTEM_CONFIG_PATH);
+    const modelsPath = rooted(root, "/etc/pi-sandbox/models.json");
+    await writeFile(modelsPath, '{"providers":{}}');
+    const source = (await readFile(configPath, "utf8")).replace(
+      "/etc/pi-sandbox/models.json",
+      modelsPath,
+    );
+    const absent = join(root, "absent-shared-skills");
+    await writeFile(configPath, source + `\n[skills]\ndirectories = [${JSON.stringify(absent)}]\n`);
+    for (const piArgs of [["--help"], ["--no-skills", "--help"]]) {
+      await expect(runPiSandbox({ piArgs, configPath })).rejects.toThrow(
+        `shared skill root must be a readable, traversable directory: ${absent}`,
+      );
+    }
   });
 
   it("fails closed when the selected models file is missing", async () => {

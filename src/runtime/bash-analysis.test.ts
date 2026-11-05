@@ -31,6 +31,7 @@ function runtime(
   return {
     config: {
       configVersion: 14,
+      skills: { directories: [] },
       exports: { enabled: false },
       codemode: { enabled: false, timeoutMs: 300000 },
       mcp: { servers: {} },

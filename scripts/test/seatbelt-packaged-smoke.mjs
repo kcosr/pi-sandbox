@@ -9,6 +9,7 @@ import { createInterface } from "node:readline";
 import { setTimeout as delay } from "node:timers/promises";
 import { parse, stringify } from "@iarna/toml";
 import { testRpcSessionLifecycle } from "./rpc-lifecycle-smoke.mjs";
+import { testSharedSkills } from "./skills-smoke.mjs";
 import { testManagedMcpCodemode } from "./mcp-codemode-smoke.mjs";
 
 if (process.platform !== "darwin" || process.argv.length !== 3) {
@@ -41,6 +42,7 @@ try {
   config.identity = { mode: "disabled" };
   config.audit.enabled = false;
   config.sessions.retention_days = 365;
+  config.skills = { directories: [] };
   config.environment = {
     pi: { PI_CODING_AGENT_DIR: state },
     sandbox: { HOME_EXPANSION_CHECK: join(temporary, "cache") },
@@ -121,7 +123,15 @@ try {
   child.stdin.end();
   await exited;
   const account = userInfo();
+  const sharedSkill = await testSharedSkills({
+    launch,
+    configPath,
+    userState: state,
+    sharedDirectory: join(temporary, "shared-skills"),
+    visibleSharedDirectory: join(temporary, "shared-skills"),
+  });
   await testManagedMcpCodemode({
+    sharedSkill,
     launch,
     configPath,
     modelsPath,
@@ -132,7 +142,7 @@ try {
   });
   assert.equal(await readFile(secret, "utf8"), "DENIED_MARKER");
   console.log(
-    "PASS compiled Seatbelt confinement, diagnostics, sessions, EOF, MCP, approvals and Code Mode",
+    "PASS compiled Seatbelt confinement, diagnostics, sessions, shared skills, EOF, MCP, approvals and Code Mode",
   );
 } finally {
   for (const child of children) {
