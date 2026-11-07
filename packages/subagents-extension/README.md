@@ -128,6 +128,10 @@ while its children continue running. The check stops when the wait ends or is
 aborted; child completion still wakes the parent immediately through controller
 notifications. These are local queue checks, not model requests.
 
+Withdrawing queued input (`clear_queue` or the TUI dequeue key) after it wakes the
+parent but before Pi consumes it can trigger the final-settlement guard, aborting
+the run and cancelling active children.
+
 In this mode, explicit parent abort cancels existing children and suppresses their
 callbacks; shutdown likewise requests cleanup. This differs from the default
 background behavior described above. A child still cleaning up retains capacity.
