@@ -319,6 +319,26 @@ describe("opt-in parent completion", () => {
     expect(f.abortParent).not.toHaveBeenCalled();
   });
 
+  it("preserves settled results across a parent provider failure for the next prompt", async () => {
+    const f = fixture();
+    f.pending = [result("one"), result("two", "Outcome: failed")];
+    await f.fire("turn_end", { outcome: "error" });
+    await f.fire("agent_before_settle", { outcome: "error" });
+    await f.fire("agent_settled", { aborted: false });
+    expect(f.quiesce).not.toHaveBeenCalled();
+    expect(f.acknowledge).not.toHaveBeenCalled();
+    await f.newRun();
+    const output = await f.fire("turn_end");
+    expect(output?.continue).toBe(true);
+    expect(output?.entries).toHaveLength(2);
+    f.commit(output);
+    await f.fire("turn_start");
+    expect(f.acknowledge.mock.calls).toEqual([["one"], ["two"]]);
+    expect(await f.fire("turn_end")).toBeUndefined();
+    await f.fire("agent_before_settle");
+    expect(f.abortParent).not.toHaveBeenCalled();
+  });
+
   it("does not reclassify an unrelated provider failure as a subagent abort", async () => {
     const f = fixture();
     await f.fire("turn_end", { outcome: "error" });

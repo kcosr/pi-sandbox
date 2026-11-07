@@ -60,6 +60,7 @@ async function scenario({ root, directory, runtime, artifact, waitForChildren })
   let spawnedC = false;
   let resumeTarget;
   let terminatedBatch = false;
+  let releaseSettledParentFailure;
   let failure;
   let sequence = 0;
   const held = new Map();
@@ -130,8 +131,22 @@ async function scenario({ root, directory, runtime, artifact, waitForChildren })
       const consumedCancellation =
         messages.includes("Subagent cancelled by user:") &&
         messages.includes("Do not automatically restart or replace this task.");
-      parentCalls.push({ phase, consumed, consumedFailure, consumedCancellation });
-      if (phase === "parenterror" || (phase === "activeerror" && !first)) {
+      const settledResultCount = body.messages.filter((message) =>
+        JSON.stringify(message).includes(resultMarker("SETTLEDERROR")),
+      ).length;
+      parentCalls.push({
+        phase,
+        consumed,
+        consumedFailure,
+        consumedCancellation,
+        settledResultCount,
+      });
+      if (phase === "parenterror" || (["activeerror", "settlederror"].includes(phase) && !first)) {
+        if (phase === "settlederror") {
+          await new Promise((resolve) => {
+            releaseSettledParentFailure = resolve;
+          });
+        }
         if (phase === "activeerror") {
           const deadline = Date.now() + 5000;
           while (!held.has("ACTIVEERROR") && Date.now() < deadline) await delay(10);
@@ -526,6 +541,46 @@ async function scenario({ root, directory, runtime, artifact, waitForChildren })
         "Parent provider failure must close the child provider request",
       );
       await assertRecovery("recovery-active");
+
+      const beforeSettledError = await observe("snapshot");
+      const settledError = await startPhase("settlederror");
+      await waitFor(
+        () => held.has("SETTLEDERROR") && releaseSettledParentFailure,
+        "parent provider request held while its child finishes",
+      );
+      release("SETTLEDERROR");
+      const settledErrorTotal = beforeSettledError.total + 1;
+      await waitFor(
+        () =>
+          entries("pi-subagents:state", settledError).some(
+            (entry) => entry.total === settledErrorTotal && entry.active === 0,
+          ),
+        "child finishes before parent provider failure",
+      );
+      const completedBeforeError = await observe("snapshot");
+      assert.equal(completedBeforeError.active, 0);
+      assert.equal(completedBeforeError.total, settledErrorTotal);
+      assert.equal(
+        completedBeforeError.agents.find(
+          (agent) => agent.label === "WAIT_FIXTURE_CHILD_SETTLEDERROR",
+        )?.status,
+        "completed",
+      );
+      assert.equal(settled(settledError).length, 0);
+      assert.equal(parentCalls.at(-1).settledResultCount, 0);
+      releaseSettledParentFailure();
+      await assertProviderFailure(settledError, "WAIT_PARENT_PROVIDER_SETTLEDERROR");
+      await assertRecovery("recovery-settled");
+      assert.equal(
+        parentCalls.at(-1).settledResultCount,
+        1,
+        "Recovery must consume the completed child's callback exactly once",
+      );
+      assert.equal(
+        (await observe("snapshot")).total,
+        settledErrorTotal,
+        "Delivering a completed callback after failure must not consume spawn allowance",
+      );
 
       const aborted = await startPhase("abort");
       await waitFor(

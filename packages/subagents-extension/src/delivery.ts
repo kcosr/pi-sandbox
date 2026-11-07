@@ -390,9 +390,10 @@ export function installDelivery(pi: ExtensionAPI, adapters: DeliveryAdapters): D
       releaseUncommittedBoundaries();
       const unfinished = completion!.active() > 0 || pending().length > 0 || awaitingResultTurn;
       if (event.outcome === "error") {
-        // Preserve Pi's ordinary provider-error outcome. Remaining delegated work
-        // must still be stopped, but a failed request is not an infrastructure fault.
-        if (unfinished) await stopChildren();
+        // Preserve Pi's ordinary provider-error outcome. Cancel a still-active
+        // delegation tree; already-settled results remain eligible for the next
+        // prompt when no active work needs cancellation.
+        if (completion!.active() > 0) await stopChildren();
         return;
       }
       if (unfinished)
