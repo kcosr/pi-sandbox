@@ -31,6 +31,7 @@ export async function prepareHostIndependentSmokeConfig(configPath, hiddenFile, 
     extensions: {},
   };
   config.extensions = {};
+  delete config.subagents;
   config.tools = Object.fromEntries(
     SANDBOX_TOOL_NAMES.map((name) => {
       const policy = tools[name];

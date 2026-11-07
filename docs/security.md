@@ -382,12 +382,17 @@ in Bubblewrap; Seatbelt uses writable real host scratch directories.
 
 ## Audit correlation
 
-The application and collector use strict audit wire version 4; the collector emits
-record schema version 5 and requires configuration version 14. They must be
+The application and collector use strict audit wire version 5; the collector emits
+record schema version 6 and requires configuration version 14. They must be
 installed from the same release. MCP records carry the configured server ID,
 original tool name, and `http` or `stdio` transport. Nested audited calls carry
 `parent_invocation_id` from trusted execution context, never from script arguments.
 An unaudited nested tool does not produce decision records for its parent.
+
+Child tool records remain attached to the root audit session and carry the complete
+`child_id`, `child_session_id`, `child_task_id` trio. These values come from trusted
+invocation context, including nested Code Mode/MCP calls. The collector rejects
+partial child identities. Task text and preview content are not audit fields.
 
 With a Bash class policy, Bash decision records carry the paired
 `command_class` and `known_read_only_version` fields. Both the application and
@@ -406,6 +411,28 @@ outcomes, not the server's internal actions or rollback of remote effects.
 
 ## Session retention
 
+Subagent conversations execute in the trusted Pi process. Separate conversations
+are not separate OS security boundaries: they share files, the selected executor
+and the parent's admitted tool authority. Managed children receive no stock host
+tools or general extension loader. Per-call authorization uses the shared root
+policy engine, including MCP revision checks and nested Code Mode calls. A child
+label never creates or broadens a grant. User preview controls cannot enable tools
+or approve work implicitly.
+
+User optional-extension preferences only narrow admitted tool availability. Disabled
+extensions remain trusted installed code but cannot dispatch new model calls;
+pending approvals recheck the preference before dispatch. Existing operations are
+not revoked. Preferences cannot disable the mandatory sandbox or approval engine,
+load custom code, or supply administrator prompt guidance.
+
+The main-only concurrent and new-spawn limits prevent unbounded replacement
+children within a session. Resuming an existing child consumes concurrent capacity
+without consuming another new-spawn allowance. These are not provider-spend limits or a defense against
+the trusted account owner editing their own session state. Cancellation is
+cooperative: an unsettled child retains its concurrent slot. Existing executor
+cleanup and descendant-survival limitations still apply. Child sessions do not
+introduce a new process watcher or make stronger termination guarantees.
+
 The administrator controls conversation cleanup through the required main
 `[sessions]` policy; user/group rules cannot replace it. Cleanup runs as the
 invoking user on the host, outside the tool namespace, and may delete expired
@@ -423,6 +450,17 @@ This is best-effort housekeeping. The trusted account owner controls session
 files, modification times, and scheduling state; malformed files and cleanup
 failures are skipped. It does not guarantee deletion by a deadline or override
 host filesystem permissions. Zero retention disables the maintenance entirely.
+
+Managed child transcripts and previews use the same retention age in a separate
+bounded, shallow sweep. The current root and directories with an owner record are
+skipped. Expired child conversations are removed while a small spawn-count
+ledger remains; housekeeping must never refund the total quota. This ledger and
+parent spawn entries also protect counts across ordinary reload/resume. A saved
+child whose transcript has expired can no longer be resumed.
+Quota recovery reads version-2 child state and `pi-subagents:spawn` parent entries;
+earlier development `pi-subagents:attempt` entries are ignored. Version-1 child
+state fails initialization and leaves managed tools unavailable. These development
+formats are not migrated; start a new parent conversation.
 
 ## Network details
 
@@ -892,7 +930,7 @@ still race the final identity check and rename; these checks are not an atomic
 compare-and-swap guarantee. Publication is per file, with no destructive rollback or
 whole-export crash/power-loss guarantee.
 
-When audit is enabled, wire 4/record schema 5 carries typed user export summaries
+When audit is enabled, wire 5/record schema 6 carries typed user export summaries
 and per-replacement intent/outcome events, separately from model-tool events. An
 acknowledged intent precedes publication. Audit failure stops further publication;
 the UI retains exact already-saved results. Events contain bounded metadata and a

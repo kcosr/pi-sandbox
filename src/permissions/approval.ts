@@ -1,6 +1,8 @@
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 import type { BashRequestClass, CommandClass } from "./bash/contracts.js";
 import type { ApprovalUi, JsonObject, SessionGrantScope } from "./policy-engine.js";
+import { currentManagedChild, assertCurrentManagedChild } from "../subagents/invocation.js";
+import { SUBAGENTS_POLICY_SUBJECT } from "../domain/subagents.js";
 
 const COMMAND_CLASS_LABELS: Readonly<Record<CommandClass, string>> = Object.freeze({
   known_read_only: "known read-only",
@@ -76,15 +78,29 @@ export function approvalPreview(label: string, args: JsonObject): string {
   return `${label}: ${preview}`;
 }
 
-export function approvalUi(ctx: ExtensionContext, analysisIssue?: string): ApprovalUi | undefined {
+export function approvalUi(
+  ctx: ExtensionContext,
+  analysisIssue?: string,
+  beforePrompt?: () => void,
+): ApprovalUi | undefined {
+  const child = currentManagedChild();
+  ctx = child?.rootContext ?? ctx;
   if (!ctx.hasUI) return undefined;
   return {
     async prompt(prompt, signal) {
+      assertCurrentManagedChild();
+      child?.setActivity("awaiting approval");
+      beforePrompt?.();
+      child?.beforeApproval?.();
       const session = sessionGrantChoice(prompt.sessionGrantScope);
       const choices = prompt.allowForSession
         ? ["Allow once", session, "Deny"]
         : ["Allow once", "Deny"];
       let title = `Allow ${prompt.request.display}?`;
+      if (prompt.request.subject === SUBAGENTS_POLICY_SUBJECT && prompt.allowForSession)
+        title += "\nAllow for session covers all subagent management operations.";
+      if (child !== undefined)
+        title = `Subagent ${boundedDisplayText(child.childId, 64)} — ${boundedDisplayText(child.label, 160)}\n${title}\nSession choices apply to the main agent and all subagents.`;
       if (
         prompt.request.subject === "bash" &&
         prompt.request.commandClass === "unclassified" &&
@@ -93,6 +109,8 @@ export function approvalUi(ctx: ExtensionContext, analysisIssue?: string): Appro
       )
         title += `\n\nAutomatic approval unavailable:\n${boundedDisplayText(analysisIssue, MAXIMUM_ANALYSIS_ISSUE_BYTES)}`;
       const selected = await ctx.ui.select(title, choices, { signal });
+      assertCurrentManagedChild();
+      child?.setActivity("running tools");
       return selected === "Allow once"
         ? "allow_once"
         : selected === session

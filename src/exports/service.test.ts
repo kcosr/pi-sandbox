@@ -85,14 +85,41 @@ describe("user-only sandbox save coordinator", () => {
 
   it("denies disabled or unsupported configurations before opening private storage", async () => {
     const getSource = vi.fn();
+    const beforeCapture = vi.fn(() => Promise.resolve());
     const controller = createUserExportController({
       cwd: directory,
       getSource,
       admitted: () => false,
+      beforeCapture,
     });
     await controller.run(context().ctx);
     expect(getSource).not.toHaveBeenCalled();
+    expect(beforeCapture).not.toHaveBeenCalled();
     expect(await readdir(directory)).toEqual([]);
+  });
+
+  it("settles background work after foreground idle and before reading export sources", async () => {
+    const order: string[] = [];
+    const { source } = readerFixture([entry("file")]);
+    const fixture = context("tui", [undefined]);
+    fixture.waitForIdle.mockImplementation(() => {
+      order.push("idle");
+      return Promise.resolve();
+    });
+    const controller = createUserExportController({
+      cwd: directory,
+      admitted: () => true,
+      beforeCapture: () => {
+        order.push("children");
+        return Promise.resolve();
+      },
+      getSource: () => {
+        order.push("source");
+        return source;
+      },
+    });
+    await controller.run(fixture.ctx);
+    expect(order).toEqual(["idle", "children", "source"]);
   });
 
   it("inventories and inspects without writes when final confirmation is cancelled", async () => {

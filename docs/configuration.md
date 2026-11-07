@@ -331,6 +331,53 @@ user/group rule may replace it; no user environment, CLI argument, Pi setting, o
 project file can do so. `--model` may select only a model present in the
 effective file.
 
+## Subagents
+
+The optional main-only table defaults to disabled. Enabling it requires one
+`[tools.subagents]` policy for all five management operations:
+
+```toml
+[subagents]
+enabled = true
+max_concurrent = 4
+max_total = 32
+
+[tools.subagents]
+mode = "allow"
+session_grant = "never"
+audit = true
+```
+
+`max_concurrent` accepts integers from 1 through 32; `max_total` accepts 1 through 1024. Their defaults are 4 and 32. Both apply across all children of one parent
+session. Every accepted new spawn consumes one total attempt before startup;
+failed startup, cancellation and completion do not refund it. Invalid requests and
+requests rejected at the limit do not consume attempts. Resuming an existing child
+does not consume the total and remains possible after the total is exhausted; it
+still requires concurrent capacity. There is no waiting queue
+at the concurrency limit. The total survives reloading or reopening the saved
+parent. A new parent session starts with its own allowance. These limits bound
+delegated tasks, not model turns or provider tokens within one task.
+
+When disabled, `[tools.subagents]` must be absent. Separate policies such as
+`[tools.spawn_agent]` are rejected. User/group rules cannot enable subagents or
+replace their limits; they may override the single admitted `subagents` policy.
+Its `mode`, session-grant choice and `audit` flag apply to spawn, steer, cancel,
+resume and inspect together. Approval dialogs and audit events still name the
+actual operation. A management session grant covers all five operations; it
+does not grant the tools used inside a child. `disabled` removes all five tools,
+while `deny` keeps them visible and rejects their invocations. User preview and
+cancellation controls remain available independently of model-tool permission.
+The shared approval engine continues to enforce each actual child tool's policy.
+`Allow for session` applies to the main agent and its children, retaining ordinary
+subject scoping; `Allow once` authorizes only the individual invocation.
+
+Managed Pi ignores the ordinary extension's `.pi/subagents.json` and
+`PI_SUBAGENTS_CONFIG`. Its limits come exclusively from administrative policy.
+The standalone extension additionally offers opt-in `waitForChildren` completion
+for ordinary Pi and SDK hosts; managed Pi retains background completion and does
+not expose that option in administrative TOML.
+The optional table is additive within main schema 14; broker protocol/rules remain 10. Audit child provenance requires the paired application/collector update below.
+
 ## Code mode and MCP servers
 
 The required `[codemode]` table has `enabled` and optional `timeout_ms` (default
@@ -948,6 +995,46 @@ the exact configured model-tool set plus `user_shell`. Diagnostics distinguish
 sandbox, direct, and managed-host execution scopes and list the selected
 compiled extensions.
 
+## Optional extension preferences
+
+`/extensions` opens the user menu for optional compiled extensions, including
+Subagents and configured Git. `/extensions list`, `/extensions enable ID`, and
+`/extensions disable ID` also work as user commands in RPC mode. MCP server
+preferences remain in `/mcp`; mandatory sandbox and approval components cannot
+be disabled.
+
+Preferences are saved in `extensions.json` under `PI_CODING_AGENT_DIR` and apply
+on subsequent starts. `--disable-extension ID` and `--enable-extension ID`
+override that preference for the current process; repeat switches for multiple
+extensions, with the last switch for each ID winning. Command-line overrides
+lock that entry in the menu. Administrator selection, disabled tool policies,
+and tool-exclusion flags remain ceilings. No preference loads new extension code
+or broadens policy. A policy of `deny` still leaves a tool available with every
+invocation denied.
+
+Disabling an extension hides its tools and blocks new invocations, including
+calls that were awaiting approval. Already executing operations can complete.
+Subagent tasks already running continue, and `/subagents` remains available for
+inspection and cancellation. Disabling Git controls `git_clone`; Git commands
+through Bash remain subject to Bash policy. Re-enabling restores the extension's
+prior active-tool selection. Running processes do not watch another process's
+preference edits.
+
+Optional main-only guidance can follow those tools:
+
+```toml
+[extension_guidance]
+subagents = "Delegate independent tasks and summarize the evidence returned."
+git = "Use the approved repository mirror for company projects."
+```
+
+Keys must name `subagents` or a compiled optional extension. Values are nonempty
+text, up to 16 KiB each and 64 KiB total. Guidance is appended to the system prompt
+only when that extension is enabled and at least one of its tools is active.
+Child prompts use their own narrower tool set. Guidance is plain trusted text;
+it does not expand templates, load files, or change invocation policy. User/group
+rules and user preferences cannot supply or replace it.
+
 ## Prompt behavior
 
 The extension freezes an exact request snapshot before policy evaluation and
@@ -1455,7 +1542,7 @@ scope. Restart after changing definitions.
 audit records use `command_class = "configured_command"` and the matching
 `command_set_ids`; `known_read_only_version` still identifies the built-in registry,
 not a safety certification of custom utilities. Upgrade application and collector
-together for audit wire version 4 and record schema 5. The current main schema is
+together for audit wire version 5 and record schema 6. The current main schema is
 14; broker protocol/rule version 10 is unchanged.
 
 An administrator must review the executable's behavior, plugins, configuration,

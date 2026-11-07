@@ -4,12 +4,45 @@ import {
   createManagedPiArguments,
   isManagedMcpSelected,
   isManagedToolSelected,
+  managedExtensionSelection,
   selectManagedActiveTools,
   UnsafeManagedArgumentError,
   validateManagedArguments,
 } from "./arguments.js";
 
 describe("managed Pi arguments", () => {
+  it("consumes optional-extension overrides without interpreting prompts as switches", () => {
+    const args = [
+      "--disable-extension",
+      "git",
+      "--enable-extension=git",
+      "--disable-extension=subagents",
+      "--system-prompt",
+      "--enable-extension",
+      "--",
+      "--disable-extension",
+      "git",
+    ];
+    const selection = managedExtensionSelection(args);
+    expect([...selection.overrides]).toEqual([
+      ["git", true],
+      ["subagents", false],
+    ]);
+    expect(createManagedPiArguments(args)).toEqual([
+      "--offline",
+      "--no-extensions",
+      "--no-builtin-tools",
+      "--system-prompt",
+      "--enable-extension",
+      "--",
+      "--disable-extension",
+      "git",
+    ]);
+    for (const value of [[], [""], ["--model"], ["../git"], ["git,subagents"]])
+      expect(() => validateManagedArguments(["--disable-extension", ...value])).toThrow(
+        "requires an optional extension ID",
+      );
+  });
   it("forces offline startup, disables discovery, and disables stock tools", () => {
     expect(createManagedPiArguments(["--model", "managed/example"])).toEqual([
       "--offline",

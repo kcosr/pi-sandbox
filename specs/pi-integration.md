@@ -230,7 +230,7 @@ transport work; independently configured scoped environment still applies.
 User saved preferences may narrow admission but cannot enable an effectively
 disabled server. Administrative changes require restart. Broker support remains
 Linux-only; main configuration schema 14 is unchanged. The current audit contract uses
-wire 4/record 5 for configured Bash command provenance.
+wire 5/record 6 for configured Bash command provenance and child invocation identity.
 
 Host lookups are bounded to four seconds, the client deadline is ten seconds,
 and the service lifetime is fifteen seconds. Local accounts and SSSD via local
@@ -354,6 +354,21 @@ provides these seams:
     Metadata keeps the authored root as `baseDir`, user scope, and top-level
     origin. Absence of the option preserves stock Pi behavior.
 
+12. `0011-inline-extension-status.patch` places ordinary `ui.setStatus` text
+    between the native token/context stats and model information when the full
+    text fits in their existing padding. Keep the native stats, provider, model,
+    reasoning and routing decisions unchanged; retain at least two spaces on
+    either side of inline status text. Sort and normalize statuses as before,
+    measure terminal columns rather than string length, and preserve each
+    status's ANSI styling. End ANSI-formatted inline statuses with a full SGR
+    reset before independently applying the native model dim color, including
+    when the extension leaves foreground, bold or background styling open.
+    When all status text cannot fit, keep the
+    existing dedicated, width-bounded status row. Status updates/removal and
+    terminal resize take effect on ordinary footer rendering, without another
+    API, repaint timer, custom footer or feature-specific rendering logic.
+    Ordinary unpatched Pi extensions continue using the same public status API.
+
 Pi 1.0's resource loader separates built-in factories from ordinary inline
 factories. The forced `--no-extensions` flag disables the built-in factories and
 user/project discovery while retaining the mandatory Pi Sandbox inline factory.
@@ -366,6 +381,10 @@ sharing without accessing session content. They also prove that disabling
 extensions keeps the mandatory inline factory while omitting built-in and
 discovered factories. Pi Sandbox tests separately prove the forced
 private-entry-point policy.
+
+The mandatory upstream `footer-width.test.ts` suite proves inline placement,
+native information and color preservation, exact fit boundaries with ANSI and
+wide Unicode text, narrow-terminal fallback, and live status updates/removal.
 
 Startup-hook tests must prove the awaited ordering for TUI, print, JSON, and
 RPC, before stdin consumption and theme initialization, as well as the absence
@@ -655,3 +674,27 @@ and terminal loss retain their emergency paths. RPC and print never invoke it.
 The managed application binds the current extension's user export controller to
 this callback. With saving enabled, Yes opens the picker, No permits exit, and
 Escape or an incomplete/failed save cancels exit. No automatic preservation occurs.
+
+## SDK subagents
+
+The reusable subagent package uses public Pi 1.5 SDK sessions for both ordinary
+and managed parents; it does not launch a child CLI or use internal RPC transport.
+The managed host must pass `includeBuiltinTools: false`, bind only wrapped tools
+and use the application-owned `ModelRuntime`. The existing patched SDK option
+remains authoritative across refresh and resume. No ordinary package code may
+depend on that option or import managed application code.
+
+Each child has its own tool/Code Mode context, transcript and cancellation signal.
+Approval and audit ownership remain with the root logical session. Child identity
+is trusted invocation metadata, never a new grant scope. Live MCP revisions,
+disabled tools, user exclusions and nested tool authorization must remain enforced
+in child sessions. Closing or replacing the root revokes old child admission and
+disarms completion delivery before releasing shared resources.
+
+Keep observation compatible with stock Pi: discover `/subagents-rpc` through
+`get_commands`, send strict versioned control envelopes via `prompt`, and return
+correlated custom entries through `entry_appended`/`get_entries`. A handled prompt
+does not itself confirm control success. Rebind observer epochs after replacement;
+old task IDs cannot control a resumed task. Do not add managed RPC commands or
+inject observation records into the model conversation. Qualify ordinary Node/Bun
+RPC parents and the compiled managed parent with offline providers.

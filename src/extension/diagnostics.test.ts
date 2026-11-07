@@ -33,6 +33,30 @@ function diagnosticConfig(): SandboxConfig {
 }
 
 describe("sandbox diagnostics", () => {
+  it("reports one subagent management policy and the actual operations sharing its grant", () => {
+    const config = {
+      ...diagnosticConfig(),
+      subagents: { enabled: true, maxConcurrent: 4, maxTotal: 32 },
+      tools: {
+        ...diagnosticConfig().tools,
+        subagents: { mode: "ask", sessionGrant: "offer", audit: false },
+      },
+    } satisfies SandboxConfig;
+    const input = {
+      config,
+      hasSessionGrant: (name: string) => name === "subagents",
+      isToolActive: (name: string) => name === "inspect_agent",
+    };
+    const detail = formatSandboxPolicy(input, "subagents");
+    expect(detail).toContain("Policy: subagents");
+    expect(detail).toMatch(/Execution:\s+host/);
+    expect(detail).toMatch(/Advertised:\s+yes/);
+    expect(detail).toContain("session grant active");
+    expect(detail).toContain("spawn_agent, steer_agent, cancel_agent, resume_agent, inspect_agent");
+    expect(() => formatSandboxPolicy(input, "spawn_agent")).toThrow(
+      "Unknown diagnostic policy subject",
+    );
+  });
   it("describes Seatbelt denials, host scratch and best-effort lifecycle without namespace claims", () => {
     const config = {
       ...diagnosticConfig(),

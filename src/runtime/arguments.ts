@@ -22,6 +22,8 @@ const RESERVED_PREFIXES = ["--extension=", "--no-extensions=", "--no-builtin-too
 
 // Pinned Pi options that consume the next argument even when it starts with '-'.
 const VALUE_ARGUMENTS = new Set([
+  "--enable-extension",
+  "--disable-extension",
   "--provider",
   "--model",
   "--api-key",
@@ -77,14 +79,44 @@ export function validateManagedArguments(args: readonly string[]): void {
     }
   }
   managedToolSelection(args);
+  managedExtensionSelection(args);
 }
 
 export function createManagedPiArguments(args: readonly string[]): string[] {
   validateManagedArguments(args);
+  args = managedExtensionSelection(args).piArguments;
   if (args[0] === "auth") {
     return ["auth", ...args.slice(1), "--offline", "--no-extensions", "--no-builtin-tools"];
   }
   return ["--offline", "--no-extensions", "--no-builtin-tools", ...args];
+}
+
+/** Consume only managed feature switches, respecting Pi option values and `--`. */
+export function managedExtensionSelection(args: readonly string[]): {
+  readonly overrides: ReadonlyMap<string, boolean>;
+  readonly piArguments: string[];
+} {
+  const overrides = new Map<string, boolean>();
+  const piArguments: string[] = [];
+  for (let index = 0; index < args.length; index += 1) {
+    const argument = args[index]!;
+    if (argument === "--") {
+      piArguments.push(...args.slice(index));
+      break;
+    }
+    const match = /^(--enable-extension|--disable-extension)(?:=(.*))?$/u.exec(argument);
+    if (match !== null) {
+      const id = match[2] ?? args[++index];
+      if (id === undefined || !/^[a-z][a-z0-9-]{0,63}$/u.test(id))
+        throw new Error(`${match[1]} requires an optional extension ID`);
+      overrides.set(id, match[1] === "--enable-extension");
+    } else {
+      piArguments.push(argument);
+      if (VALUE_ARGUMENTS.has(argument) && index + 1 < args.length)
+        piArguments.push(args[++index]!);
+    }
+  }
+  return { overrides, piArguments };
 }
 
 function* managedArguments(

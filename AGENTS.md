@@ -45,7 +45,13 @@ reimplemented rather than mechanically reapplied.
 - On macOS, Seatbelt uses fixed `/usr/bin/sandbox-exec` with ordinary host paths, read-only host access except writable CWD and real host scratch directories, and base-policy `filesystem.denied_paths` for canonical existing directory denials. Denied entries are not empty masks. Reject `hidden_paths`, `network.mode = "local"`, in Seatbelt mode; other backends reject denied paths. No private `/tmp` or PID/network/mount namespaces are claimed. Concurrent command execution uses best-effort process-group cleanup only. Background descendants may survive ordinary completion, cancellation, close, or owner death with their original grants; cleanup attempts signal only a still-active direct child's process group. Add no watcher, guardian, observer, Python helper, or new service. Keep macOS broker and audit disabled.
 - Build one precompiled Bun `pi-sandbox` application from pinned Pi source and the separately maintained Pi Sandbox extension. Force that extension through Pi's inline factory API, disable Pi's built-in extension factories, and permit no user/project extensions or package-management commands. Package the optional user/group resolver as a separate static Rust broker; it is never a wrapper or sandbox backend.
 - Keep reusable tools and execution backends in `packages/sandbox-extension`,
-  and reusable Git clone in `packages/git-extension`. Keep permissions and approval
+  reusable Git clone in `packages/git-extension`, and the generic SDK subagent
+  runner in `packages/subagents-extension`. Keep managed child composition in
+  `src/subagents` and one root approval/grant scope across all children. Main-only
+  subagent enablement, concurrent capacity and persistent new-spawn quotas
+  cannot be broadened by project configuration or child lifecycle changes. One
+  `tools.subagents` policy governs all five management operations; preserve actual
+  operation names for display and audit. Keep permissions and approval
   UI internal to the managed application in `src/permissions`; standard entries
   provide no managed approvals. Preserve the application-owned managed/`pi-tool`
   composition and mandatory authorization/audit adapters.
@@ -73,6 +79,7 @@ reimplemented rather than mechanically reapplied.
 - Permit administrator-configured host HTTP/stdio MCP through the managed adapter, with original-tool wildcard policies, typed catalog revisions and the shared approval engine. Code mode is an administrator-permitted QuickJS feature with ordinary Pi activation settings; all nested tools retain ordinary policy and execution boundaries. The MCP menu may persist enabled/exposure preferences for admitted servers only. Never accept user/project MCP connection definitions or general extension factories.
 - Linux broker rules may override `mcp.servers.<id>.enabled`, `default_policy`, and ordered `tool_rules` for globally defined servers. Enabled flags use explicit true-wins independently of policy. Resolve each matching file's first rule or explicit default, then join complete invocation pairs with least restrictive wins; if no layer contributes, inherit global policy. Keep global first-match/default audit unchanged. Preserve per-file layers on the wire and deduplicate only whole layers, never flatten ordered rules. Validate every file structurally and matching server IDs against the active main inventory. Keep connection definitions, credential mappings, exposure, timeouts and code-mode availability main-only. Recheck code-mode exposure after merging. Disabled servers skip server-specific resolution/startup; user preferences cannot enable them. Use broker protocol 10 and rule version 10; main schema 14 is unchanged. Enforce aggregate limits and serialize/bound the complete response before writing.
 - Keep `build:release` a build/package/integrity workflow without behavioral suites or test skip flags. `verify:release` must retain all source/API negative controls, upstream/theme suites, native/package/install checks and packaged-runtime smoke through both builder verification checkpoints. Temporary smoke policy disables both broker and audit without changing production inputs. Preserve truthful clean/dev/dirty version stamping.
+- User optional-extension preferences may only narrow administrator admission. Keep mandatory sandbox and approvals untoggleable; main-only conditional guidance follows active extension tools.
 - Keep tool availability separate from invocation approval. Support strict `allow`, `ask`, `deny`, and `disabled` modes.
 - Configure whether `Allow for session` is offered independently for every
   model-tool approval subject. Session grants are memory-only, narrowly
@@ -95,5 +102,5 @@ reimplemented rather than mechanically reapplied.
 - Main-only `tools.bash.command_sets` defines narrow administrator allow assertions,
   not product-certified read-only commands. Preserve per-stage whole-call policy
   composition, disabled-tool precedence, immutable evidence and main definitions
-  across broker overrides. Audit configured decisions separately with wire 4 and
-  record schema 5; neither broker rules nor wire patches may redefine the grammar.
+  across broker overrides. Audit configured decisions separately with wire 5 and
+  record schema 6; neither broker rules nor wire patches may redefine the grammar.

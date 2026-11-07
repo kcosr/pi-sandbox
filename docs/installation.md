@@ -1,5 +1,21 @@
 # Installation and operation
 
+The application includes optional subagent support; enable it through the main
+`[subagents]` settings and the single `[tools.subagents]` permission policy. Ordinary Pi distributions
+can instead package `@kcosr/pi-subagents-extension`, built and packed alongside the
+sandbox and Git packages. Its normal entry needs no Pi Sandbox patches or managed
+approval components. See the [package documentation](../packages/subagents-extension/README.md)
+for configuration, SDK embedding and the RPC observation contract.
+
+Managed users can disable admitted optional extensions through `/extensions` or
+process-only `--disable-extension ID` overrides. Administrators can append
+conditional tool guidance through `[extension_guidance]`; see
+[optional extension preferences](configuration.md#optional-extension-preferences).
+
+Subagent tool provenance uses audit wire 5 and record schema 6. Upgrade the Linux
+application and collector together. Main configuration schema 14 and broker/rule
+version 10 are unchanged.
+
 ## Requirements
 
 Installed hosts require x86-64 or arm64 Linux, or x86-64 or arm64 macOS.
@@ -518,7 +534,7 @@ Rules older than version 8 must also remove
 table if no backend override remains. The installer does not rewrite these
 rule files, including with `--replace-config`. Main configuration now requires schema 14
 and an explicit exports section. Upgrade the application and audit collector together:
-audit wire version 4/record schema 5 includes configured Bash command provenance and
+audit wire version 5/record schema 6 includes configured Bash command provenance and
 user export events, and rejects older wire versions. Restart Pi processes after
 updating administrative rules; an already running process retains its policy.
 
@@ -759,13 +775,15 @@ when using dependency scanners.
 
 ## Ordinary Pi extension packages
 
-The release build creates `kcosr-pi-sandbox-extension-0.9.0.tgz` and
-`kcosr-pi-git-extension-0.2.0.tgz`, each with a SHA256 sidecar. They are independent
+The release build creates `kcosr-pi-sandbox-extension-0.9.0.tgz`,
+`kcosr-pi-git-extension-0.2.0.tgz` and `kcosr-pi-subagents-extension-0.1.0.tgz`,
+each with a SHA256 sidecar. They are independent
 standard extensions for ordinary Pi 1.5.0. Sandbox includes its runtime and
-Bubblewrap worker; Git includes its bounded host runner. Neither needs a permissions
-package, the other extension package or an adjacent source checkout. See
-[sandbox configuration and usage](../packages/sandbox-extension/README.md) and
-[Git configuration and usage](../packages/git-extension/README.md).
+Bubblewrap worker; Git includes its bounded host runner; subagents use public SDK
+sessions. None needs a permissions package, another extension package or an
+adjacent source checkout. See [sandbox configuration and usage](../packages/sandbox-extension/README.md),
+[Git configuration and usage](../packages/git-extension/README.md) and
+[subagent configuration and usage](../packages/subagents-extension/README.md).
 The managed executable embeds the reusable implementations through its own
 adapters and preserves administrator-selected permissions and audit controls.
 
@@ -775,6 +793,6 @@ This version requires `config_version = 14` and an explicit `[exports]` table wi
 `enabled = false` unless user-directed private-file saving is intended. Existing
 version-13 files are rejected; update the administrative file during upgrade.
 Enabling exports also requires a confined backend and `filesystem.cwd_writable = false`.
-Upgrade the Linux application and audit collector together for audit wire 4 and
-record schema 5. Broker protocol and rule version remain 10. No persistent private
+Upgrade the Linux application and audit collector together for audit wire 5 and
+record schema 6. Broker protocol and rule version remain 10. No persistent private
 home or new service is installed.

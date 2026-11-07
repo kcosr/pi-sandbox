@@ -502,6 +502,27 @@ describe("administrative configuration", () => {
     }
   });
 
+  it("rejects unknown optional extension overrides before interface or execution startup", async () => {
+    const root = await createRoot();
+    const configPath = rooted(root, SYSTEM_CONFIG_PATH);
+    const modelsPath = rooted(root, "/etc/pi-sandbox/models.json");
+    await writeFile(modelsPath, '{"providers":{}}');
+    const source = (await readFile(configPath, "utf8")).replace(
+      "/etc/pi-sandbox/models.json",
+      modelsPath,
+    );
+    const absent = join(root, "absent-shared-skills");
+    await writeFile(configPath, source + `\n[skills]\ndirectories = [${JSON.stringify(absent)}]\n`);
+    for (const flag of ["--disable-extension", "--enable-extension"]) {
+      await expect(runPiSandbox({ piArgs: [flag, "typo"], configPath })).rejects.toThrow(
+        `Unknown optional extension "typo" for ${flag}. Available IDs: subagents`,
+      );
+    }
+    await expect(
+      runPiSandbox({ piArgs: ["--disable-extension", "subagents"], configPath }),
+    ).rejects.toThrow(`shared skill root must be a readable, traversable directory: ${absent}`);
+  });
+
   it("fails closed when the selected models file is missing", async () => {
     const root = await createRoot();
 

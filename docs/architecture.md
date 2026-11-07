@@ -5,6 +5,9 @@
 `packages/sandbox-extension` contains the filesystem/shell tool adapters,
 Bubblewrap, Seatbelt and direct executors and worker assets. `packages/git-extension`
 contains the reusable clone implementation and its standard Pi entry point.
+`packages/subagents-extension` contains a reusable in-process Pi SDK task runner,
+its ordinary Pi entry point and its TUI/RPC presentation. The managed host in
+`src/subagents` supplies child sessions with application-owned tools and models.
 Each package installs independently. The managed application keeps its permission
 engine and approval UI in `src/permissions`, together with administrator TOML,
 identity resolution, admitted MCP connections, model restrictions and audit.
@@ -122,6 +125,72 @@ inline; no host temporary output files are presented as sandbox-readable paths.
 
 ## RPC and session lifecycle
 
+### Subagent sessions
+
+When enabled by main policy, five model-only tools (`spawn_agent`, `steer_agent`,
+`cancel_agent`, `resume_agent`, `inspect_agent`) delegate bounded work. Every child
+has a separate SDK conversation and transcript, with the parent's current model
+and reasoning setting captured at spawn or resume. Children share the launch
+workspace and execution backend. They cannot delegate recursively. There are no
+child RPC processes or extra execution services. An RPC parent and an interactive
+parent use the same child-session implementation.
+
+The generic runner owns admission, state, progress, result delivery and cancellation.
+The managed host supplies only live, wrapped tools, the administrative model
+runtime and a child-local Code Mode registry. It excludes all stock Pi tools.
+Standard children use admitted read/bash/edit/write tools; extended children also
+use the parent's admitted extension and MCP tools. A stale or withdrawn definition
+fails before dispatch. Child execution retains its actual child context while
+the root owns approval dialogs, grants, audit identity and shared resources.
+
+All children share the parent's in-memory approval engine. A remembered choice
+applies in both directions across that logical session, with the existing subject,
+command-class and catalog-revision boundaries. Child identity annotates the dialog
+and audit event; it is not part of the grant key. A new parent session clears grants.
+
+The runner reserves concurrent capacity and a spawn allowance before asynchronous
+startup. Accepted new spawns consume the total even when startup fails. Resumes
+consume concurrent capacity but no additional total allowance. Completion or cancellation releases only concurrent capacity. A child still
+stopping holds its slot until its SDK session settles and is disposed. Cancellation
+does not undo file changes. Shutdown disarms callbacks and attempts to settle
+children before the parent releases shared resources. Interactive export checks
+first quiesce child work. If stopping or cleanup cannot finish, interactive quit
+offers an explicit exit without saving; it never inventories or copies unsettled
+private files. When saving is not admitted, the confirmation simply offers to exit
+anyway. Escape or keeping the session open cancels that exit; signals interrupt
+the confirmation and continue process cleanup.
+
+Aborting the parent run suppresses automatic result delivery for **all existing
+children**, including children still running. It does not cancel their work.
+Inspect their status and results in `/subagents`, and explicitly cancel a task there
+when needed. Children created after that abort can deliver results normally.
+
+Cancelling through `/subagents` or its RPC observation command preserves a single
+parent notification after the subagent actually settles. It identifies the user's
+cancellation and tells the parent not to restart that work automatically.
+Cancellation through the model's `cancel_agent` tool suppresses that notification
+because the tool already returns the cancellation result. User cancellation does
+not rearm notifications suppressed by parent abort or shutdown.
+
+After the first accepted spawn, a compact `Subagents active/capacity` indicator appears.
+Managed Pi places extension status beside the native footer stats when it fits,
+using a separate status row on narrow terminals. The indicator uses the current
+theme; approval prompts take focus and detailed status stays in `/subagents`.
+`/subagents` opens a modal selectable list with quota totals and a bounded
+read-only preview with Markdown-rendered agent output; arrows navigate,
+Enter opens a preview, Escape returns or closes, and `c` requests cancellation.
+An approval dismisses the preview to take focus. The ordinary package provides the
+same view without managed approvals. RPC clients use the versioned observation
+command documented in the [package README](../packages/subagents-extension/README.md).
+Observation entries do not become model messages; completion results do.
+
+Spawn-only quotas use version-2 subagent state and `pi-subagents:spawn` parent
+journal entries. Earlier development version-1 state is rejected during session
+initialization, leaving managed tools unavailable; start a new parent conversation.
+Old `pi-subagents:attempt` journal entries do not contribute to quota recovery.
+
+### Parent replacement
+
 The same managed executable accepts Pi's `--mode rpc`. A supervisor selects its
 workspace using the operating-system CWD when spawning the process; Sandbox
 adds no CWD flag or RPC parameter. The canonical launch path, effective policy,
@@ -170,6 +239,19 @@ extension's session-start callback. All maintenance failures are nonfatal and
 silent. Duplicate concurrent sweeps are tolerated without locks or a process
 registry. Disabling retention skips both sweeping and timestamp updates. This
 maintenance is independent of host-managed audit-log retention.
+
+Managed child transcripts and bounded preview records use the same retention
+age. The shared store resolves its parent-session directory before deriving
+ownership, state and transcript paths, so aliased user-state directories share
+one identity across creation, resume and retention. Their daily pass streams the
+shallow child-root directory and selects at most 4096 roots in name order,
+resuming from a persisted cursor on the next due
+pass. Memory and the roots receiving metadata checks, state reads and cleanup
+are bounded; listing the root directory is streamed in full. This prevents an
+accumulating set of retained roots from starving later transcripts. The current
+parent, owned roots and recently updated state are protected. Cleanup preserves
+the small spawn-count ledger even after deleting transcripts, so retention
+never refunds a charged task allowance.
 
 ## Managed application and identity broker
 

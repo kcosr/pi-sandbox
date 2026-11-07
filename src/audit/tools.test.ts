@@ -4,6 +4,7 @@ import { ManagedToolExecutionError } from "../runtime/tool-error.js";
 import { SandboxExecutionError } from "../../packages/sandbox-extension/src/runtime/index.js";
 import type { AuditClient, AuditEvent } from "./client.js";
 import { ToolAuditor, toolAuditMetadata } from "./tools.js";
+import { withManagedChild } from "../subagents/invocation.js";
 
 const success = { content: [], details: {} };
 function fixture(submit?: (event: AuditEvent) => Promise<void>) {
@@ -88,6 +89,49 @@ describe("tool audit metadata", () => {
 });
 
 describe("ToolAuditor", () => {
+  it("keeps child invocations under root audit ownership with distinct provenance", async () => {
+    const f = fixture();
+    const childContext = {
+      ...f.ctx,
+      sessionManager: { getSessionId: () => "child-session" },
+    } as unknown as ExtensionToolContext;
+    const tool = f.definition(() => Promise.resolve(success));
+    await f.auditor.start(f.ctx);
+    const spawn = f.definition(
+      () =>
+        withManagedChild(
+          {
+            childId: "a-one",
+            childTaskId: "task-one",
+            childSessionId: "child-session",
+            label: "inspect code",
+            rootContext: f.ctx,
+            isCurrent: () => true,
+            setActivity: () => undefined,
+          },
+          () => tool.execute("child-call", {}, undefined, undefined, childContext),
+        ),
+      "spawn_agent",
+    );
+    await spawn.execute("spawn-call", {}, undefined, undefined, f.ctx);
+    await f.invoke(tool);
+    expect(f.events.filter((event) => event.event === "session_started")).toEqual([
+      { event: "session_started", pi_session_id: "pi-1", cwd: "/workspace" },
+    ]);
+    expect(f.events.find((event) => event.invocation_id === "child-call")).toMatchObject({
+      pi_session_id: "pi-1",
+      child_id: "a-one",
+      child_session_id: "child-session",
+      child_task_id: "task-one",
+    });
+    expect(f.events.find((event) => event.invocation_id === "child-call")).not.toHaveProperty(
+      "parent_invocation_id",
+    );
+    expect(f.events.find((event) => event.invocation_id === "call-1")).not.toHaveProperty(
+      "child_id",
+    );
+    expect(f.events.some((event) => event.event === "session_ended")).toBe(false);
+  });
   it.each(["\0", "\ud800", "x".repeat(5000)])(
     "keeps logging usable after invalid path metadata",
     async (path) => {

@@ -3,9 +3,10 @@
 ## Reusable extension acceptance
 
 Shared package unit tests run with `npm run test:unit`. `npm run test:extension`
-builds and inspects both tarballs, checks their emitted JS/declaration imports,
+builds and inspects all three extension tarballs, checks their emitted JS/declaration imports,
 and starts stock Pi 1.5.0 against independently extracted artifacts. Sandbox is
 installed without Git or permissions; Git is installed alone and with sandbox.
+Subagents are installed independently of both other extensions.
 No workspace package links are admitted. Provenance includes Git's bundled runner.
 
 To exercise a bundle-bearing artifact, run each package script with the same
@@ -14,6 +15,7 @@ build input:
 ```sh
 node scripts/test/sandbox-extension-package.mjs --distribution /path/to/distribution.toml
 node scripts/test/git-extension-package.mjs --distribution /path/to/distribution.toml
+node scripts/test/subagents-extension-package.mjs --distribution /path/to/distribution.toml
 ```
 
 `verify:release -- --distribution FILE` propagates that selection to both
@@ -36,6 +38,43 @@ without requiring Bubblewrap and preserves output, cancellation and tool renderi
 
 Pi Sandbox tests are offline. They never invoke a live model provider and never
 depend on provider credentials.
+
+Subagent package acceptance runs a stock Pi RPC parent and real SDK children
+against an offline scripted provider under Node and Bun. It covers real file
+reads, transcript resume, observations outside model messages, enabled/disabled
+configuration and new-spawn quota rejection with resumes allowed at the limit. SDK tests additionally exercise
+function-backed provider credentials, repository context, file-backed extended
+tools and a real local stdio MCP fixture. Controller tests cover concurrent
+admission, cancellation, startup failure, timers and durable quotas. Cancellation
+tests distinguish user notifications from tool-requested suppression and retain
+parent-abort, shutdown and stale-task guards; UI tests cover
+bounded terminal-safe Markdown previews, modal navigation, initial status hiding,
+stale controls and approval focus. Optional-extension tests cover persisted user
+choices, CLI precedence, administrator ceilings, hidden definitions, calls disabled
+while awaiting approval, startup failures, and guidance following effective tool selection.
+The mandatory upstream footer-width suite covers inline extension status, ANSI
+width handling, and narrow-terminal placement without losing native stats/model text.
+
+The opt-in standalone `waitForChildren` policy is exercised against unpatched Pi
+RPC: staggered child completion, parent continuations that delegate again,
+resuming children without consuming another spawn allowance, child failures,
+user cancellation, queued steering and follow-up input during a child wait,
+parent abort and shutdown during the wait. The default background policy remains
+a separate control.
+Delivery/controller tests cover cleanup and persistence failures, suppressed and
+duplicate callbacks, stale generations, final-settlement guards, recovery after
+parent errors (including recovery of settled results), cancellation beyond its
+wait limit, terminating tool batches, and queue-check timer cleanup. These checks
+must not replace the existing managed or standalone acceptance suites.
+
+The packaged Linux and native Seatbelt smoke entry points include
+`subagents-smoke.mjs`: real managed children, CLI override visibility/guidance and
+menu locking without changing saved preferences, user cancellation callbacks,
+parent-to-child and child-to-parent
+session grants, disabled-tool exclusion, shared file operations, child previews
+and new-spawn limits. Host and policy tests retain live-definition checks, child
+invocation/audit context and cleanup. All providers in these tests are local
+fixtures; do not invoke live model providers.
 
 ## Verification sequence
 
@@ -601,8 +640,8 @@ coverage. Diagnostics show authored enum/any-literal forms rather than internal 
 Direct evidence tests exercise the 256-stage/64-ID bounds, malformed or duplicate
 IDs, missing custom matches, and oversized-result fallback to ordinary policy.
 Broker tests retain main definitions across overrides and reject command-set
-definitions in rule/wire inputs. Audit client and collector tests require wire 4,
-record schema 5, separate configured-command IDs and strict older-wire rejection.
+definitions in rule/wire inputs. Audit client and collector tests require wire 5,
+record schema 6, separate configured-command IDs and strict older-wire rejection.
 
 `tests/integration/bash-command-sets.test.ts` compares real Bash argv and pipeline
 behavior with the declared shapes using an owned offline executable; injection

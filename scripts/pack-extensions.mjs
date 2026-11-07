@@ -17,7 +17,7 @@ await mkdir(out, { recursive: true });
 execFileSync(process.execPath, [join(root, "scripts/build-extensions.mjs"), ...buildArgs], {
   stdio: "inherit",
 });
-for (const name of ["sandbox-extension", "git-extension"]) {
+for (const name of ["sandbox-extension", "git-extension", "subagents-extension"]) {
   const result = JSON.parse(
     execFileSync(
       "npm",
@@ -35,7 +35,9 @@ for (const name of ["sandbox-extension", "git-extension"]) {
     "package/dist/index.js",
     ...(name === "sandbox-extension"
       ? ["package/dist/runtime/worker-entry.js", "package/dist/runtime/export-reader-entry.js"]
-      : ["package/dist/core.js", "package/dist/factory.js", "package/dist/config.js"]),
+      : name === "git-extension"
+        ? ["package/dist/core.js", "package/dist/factory.js", "package/dist/config.js"]
+        : ["package/dist/factory.js", "package/dist/contracts.js"]),
   ])
     assert(entries.includes(required), `Missing ${required}`);
   assert(

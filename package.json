@@ -32,7 +32,7 @@
     "test:watch": "vitest",
     "typecheck": "tsc --noEmit",
     "verify:release": "node scripts/verify-release.mjs",
-    "test:extension": "node scripts/test/sandbox-extension-package.mjs && node scripts/test/git-extension-package.mjs",
+    "test:extension": "node scripts/test/sandbox-extension-package.mjs && node scripts/test/git-extension-package.mjs && node scripts/test/subagents-extension-package.mjs",
     "test:version": "node --test scripts/test/version.mjs",
     "build:extensions": "node scripts/build-extensions.mjs"
   },

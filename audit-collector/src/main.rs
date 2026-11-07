@@ -48,6 +48,12 @@ struct Event {
     #[serde(skip_serializing_if = "Option::is_none")]
     parent_invocation_id: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    child_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    child_session_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    child_task_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     boundary: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     approval_source: Option<String>,
@@ -329,7 +335,7 @@ fn read_frame(reader: &mut impl BufRead) -> io::Result<Option<Request>> {
         }
     }
     let request: Request = serde_json::from_slice(&bytes).map_err(|_| invalid())?;
-    if request.version != 4 || !valid_event(&request.event) {
+    if request.version != 5 || !valid_event(&request.event) {
         return Err(invalid());
     }
     Ok(Some(request))
@@ -373,6 +379,9 @@ fn valid_event(e: &Event) -> bool {
         (&e.mcp_server, 32),
         (&e.mcp_tool, 128),
         (&e.parent_invocation_id, 256),
+        (&e.child_id, 128),
+        (&e.child_session_id, 256),
+        (&e.child_task_id, 128),
         (&e.path, 4096),
         (&e.repository, 8192),
     ] {
@@ -404,6 +413,9 @@ fn valid_event(e: &Event) -> bool {
             || e.mcp_tool.is_some()
             || e.mcp_transport.is_some()
             || e.parent_invocation_id.is_some()
+            || e.child_id.is_some()
+            || e.child_session_id.is_some()
+            || e.child_task_id.is_some()
             || e.approval_source.is_some()
             || e.reason.is_some()
             || e.outcome.is_some()
@@ -438,6 +450,11 @@ fn valid_event(e: &Event) -> bool {
         }
     }
     if e.parent_invocation_id.is_some() && e.parent_invocation_id == e.invocation_id {
+        return false;
+    }
+    if e.child_id.is_some() != e.child_session_id.is_some()
+        || e.child_id.is_some() != e.child_task_id.is_some()
+    {
         return false;
     }
     if e.repository.is_some() && e.extension.is_none() {
@@ -524,7 +541,7 @@ fn serve(
             Err(_) => {
                 return reply(
                     output,
-                    serde_json::json!({"version":4,"ok":false,"code":"protocol_error"}),
+                    serde_json::json!({"version":5,"ok":false,"code":"protocol_error"}),
                 );
             }
         };
@@ -534,12 +551,12 @@ fn serve(
         {
             return reply(
                 output,
-                serde_json::json!({"version":4,"ok":false,"code":"protocol_error"}),
+                serde_json::json!({"version":5,"ok":false,"code":"protocol_error"}),
             );
         }
         sequence = sequence.checked_add(1).ok_or_else(invalid)?;
         let record = Record {
-            schema_version: 5,
+            schema_version: 6,
             principal_uid: credentials.uid,
             principal_user: principal_user.as_deref(),
             principal_pid: credentials.pid,
@@ -553,12 +570,12 @@ fn serve(
         if submit(&message).is_err() {
             return reply(
                 output,
-                serde_json::json!({"version":4,"ok":false,"code":"syslog_unavailable"}),
+                serde_json::json!({"version":5,"ok":false,"code":"syslog_unavailable"}),
             );
         }
         reply(
             output,
-            serde_json::json!({"version":4,"ok":true,"audit_session_id":session}),
+            serde_json::json!({"version":5,"ok":true,"audit_session_id":session}),
         )?;
         if request.event.event == "session_started" {
             active_session = Some(request.event.pi_session_id);
@@ -588,7 +605,7 @@ fn run() -> io::Result<()> {
     else {
         return reply(
             &mut io::stdout().lock(),
-            serde_json::json!({"version":4,"ok":false,"code":"audit_disabled"}),
+            serde_json::json!({"version":5,"ok":false,"code":"audit_disabled"}),
         );
     };
     let credentials = peer_credentials(0)?;
@@ -656,10 +673,33 @@ mod tests {
     use std::os::unix::net::UnixStream;
 
     fn start(id: &str) -> serde_json::Value {
-        serde_json::json!({"version":4,"event":{"event":"session_started","pi_session_id":id,"cwd":"/workspace"}})
+        serde_json::json!({"version":5,"event":{"event":"session_started","pi_session_id":id,"cwd":"/workspace"}})
     }
     fn tool() -> serde_json::Value {
-        serde_json::json!({"version":4,"event":{"event":"tool_execution_intent","pi_session_id":"pi-1","tool":"bash","invocation_id":"call-1","boundary":"bubblewrap","approval_source":"prompt","command":"printf 'hello\\n'","command_truncated":false}})
+        serde_json::json!({"version":5,"event":{"event":"tool_execution_intent","pi_session_id":"pi-1","tool":"bash","invocation_id":"call-1","boundary":"bubblewrap","approval_source":"prompt","command":"printf 'hello\\n'","command_truncated":false}})
+    }
+    #[test]
+    fn child_provenance_is_complete_bounded_and_tool_only() {
+        let mut request = tool();
+        request["event"]["child_id"] = serde_json::json!("a-one");
+        assert!(read_frame(&mut Cursor::new(format!("{}\n", request))).is_err());
+        request["event"]["child_session_id"] = serde_json::json!("child-session");
+        request["event"]["child_task_id"] = serde_json::json!("task-one");
+        assert!(read_frame(&mut Cursor::new(format!("{}\n", request))).is_ok());
+        for (key, maximum) in [
+            ("child_id", 128),
+            ("child_session_id", 256),
+            ("child_task_id", 128),
+        ] {
+            let mut oversized = request.clone();
+            oversized["event"][key] = serde_json::json!("x".repeat(maximum + 1));
+            assert!(read_frame(&mut Cursor::new(format!("{}\n", oversized))).is_err());
+        }
+        let mut session = start("root-session");
+        for key in ["child_id", "child_session_id", "child_task_id"] {
+            session["event"][key] = request["event"][key].clone();
+        }
+        assert!(read_frame(&mut Cursor::new(format!("{}\n", session))).is_err());
     }
     #[test]
     fn user_export_events_are_typed_bounded_and_separate_from_tools() {
@@ -685,7 +725,7 @@ mod tests {
         for (kind, mut details) in events {
             details["operationId"] = serde_json::json!("save-1");
             details["destination"] = serde_json::json!("/output");
-            let valid = serde_json::json!({"version":4,"event":{"event":kind,"pi_session_id":"pi-1","user_export":details}});
+            let valid = serde_json::json!({"version":5,"event":{"event":kind,"pi_session_id":"pi-1","user_export":details}});
             assert!(read_frame(&mut Cursor::new(format!("{}\n", valid))).is_ok());
             for bad in [
                 {
@@ -730,7 +770,7 @@ mod tests {
     }
 
     fn mcp(transport: &str) -> serde_json::Value {
-        serde_json::json!({"version":4,"event":{
+        serde_json::json!({"version":5,"event":{
             "event":"tool_execution_intent","pi_session_id":"pi-1",
             "tool":"mcp__docs__search","invocation_id":"nested-1","boundary":"host",
             "mcp_server":"docs","mcp_tool":"search/raw","mcp_transport":transport,
@@ -776,7 +816,7 @@ mod tests {
         let record: serde_json::Value =
             serde_json::from_str(line.split_once(": ").unwrap().1).unwrap();
         assert_eq!(record["principal_uid"], 1001);
-        assert_eq!(record["schema_version"], 5);
+        assert_eq!(record["schema_version"], 6);
         assert_eq!(record["principal_user"], "alice");
         assert!(record.get("principal_gid").is_none());
         assert_eq!(record["principal_pid"], 42);
@@ -792,7 +832,7 @@ mod tests {
     }
 
     #[test]
-    fn preserves_typed_mcp_metadata_and_parent_in_schema_five_records() {
+    fn preserves_typed_mcp_metadata_and_parent_in_schema_six_records() {
         for transport in ["http", "stdio"] {
             let mut output = Vec::new();
             let mut messages = Vec::new();
@@ -813,7 +853,7 @@ mod tests {
             let line = std::str::from_utf8(&messages[1]).unwrap();
             let record: serde_json::Value =
                 serde_json::from_str(line.split_once(": ").unwrap().1).unwrap();
-            assert_eq!(record["schema_version"], 5);
+            assert_eq!(record["schema_version"], 6);
             assert_eq!(record["mcp_server"], "docs");
             assert_eq!(record["mcp_tool"], "search/raw");
             assert_eq!(record["mcp_transport"], transport);
@@ -821,7 +861,7 @@ mod tests {
             assert_eq!(record["principal_uid"], 1001);
             for ack in String::from_utf8(output).unwrap().lines() {
                 let ack: serde_json::Value = serde_json::from_str(ack).unwrap();
-                assert_eq!(ack["version"], 4);
+                assert_eq!(ack["version"], 5);
                 assert_eq!(ack["ok"], true);
             }
         }
@@ -1021,7 +1061,7 @@ mod tests {
         let mut base = classified("tool_execution_intent", "configured_command", 2);
         base["event"]["command_set_ids"] = serde_json::json!(["Utility-Read", "a".repeat(64)]);
         let record = forwarded(base.clone());
-        assert_eq!(record["schema_version"], 5);
+        assert_eq!(record["schema_version"], 6);
         assert_eq!(record["command_set_ids"], base["event"]["command_set_ids"]);
         let accepted = |request: &serde_json::Value| {
             read_frame(&mut Cursor::new(lines(std::slice::from_ref(request)))).is_ok()
@@ -1106,7 +1146,7 @@ mod tests {
         let mut completed = tool();
         completed["event"]["event"] = serde_json::json!("tool_completed");
         completed["event"]["outcome"] = serde_json::json!("success");
-        let ended = serde_json::json!({"version":4,"event":{"event":"session_ended","pi_session_id":"pi-1"}});
+        let ended = serde_json::json!({"version":5,"event":{"event":"session_ended","pi_session_id":"pi-1"}});
         for unclassified in [
             read,
             requested,
@@ -1176,7 +1216,7 @@ mod tests {
 
     #[test]
     fn enforces_session_lifecycle_and_allows_switches() {
-        let end = serde_json::json!({"version":4,"event":{"event":"session_ended","pi_session_id":"pi-1"}});
+        let end = serde_json::json!({"version":5,"event":{"event":"session_ended","pi_session_id":"pi-1"}});
         let mut output = Vec::new();
         let mut count = 0;
         serve(

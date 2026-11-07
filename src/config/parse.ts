@@ -42,6 +42,7 @@ import {
 import { parseCodeModeConfig, parseMcpConfig } from "./mcp.js";
 import { ConfigError } from "./errors.js";
 import { parseBashCommandSets } from "./command-sets.js";
+import { SUBAGENTS_POLICY_SUBJECT, type SubagentsConfig } from "../domain/subagents.js";
 
 type UnknownRecord = Record<string, unknown>;
 
@@ -64,6 +65,34 @@ const ROOT_KEYS = [
 const POLICY_KEYS = ["mode", "session_grant", "audit"] as const;
 const COMMAND_CLASS_POLICY_KEYS = ["mode", "session_grant"] as const;
 const IDENTITY_MODES = ["disabled", "broker"] as const;
+
+function parseSubagents(value: unknown, issues: string[]): SubagentsConfig | undefined {
+  if (value === undefined) return undefined;
+  if (!isRecord(value)) {
+    issues.push("config.subagents must be a table");
+    return undefined;
+  }
+  inspectKeys(value, ["enabled"], "config.subagents", issues, ["max_concurrent", "max_total"]);
+  const enabled = own(value, "enabled");
+  const concurrentValue = own(value, "max_concurrent");
+  const totalValue = own(value, "max_total");
+  const maxConcurrent = concurrentValue === undefined ? 4 : concurrentValue;
+  const maxTotal = totalValue === undefined ? 32 : totalValue;
+  if (typeof enabled !== "boolean") issues.push("config.subagents.enabled must be a boolean");
+  if (
+    !Number.isSafeInteger(maxConcurrent) ||
+    (maxConcurrent as number) < 1 ||
+    (maxConcurrent as number) > 32
+  )
+    issues.push("config.subagents.max_concurrent must be an integer from 1 to 32");
+  if (!Number.isSafeInteger(maxTotal) || (maxTotal as number) < 1 || (maxTotal as number) > 1024)
+    issues.push("config.subagents.max_total must be an integer from 1 to 1024");
+  return Object.freeze({
+    enabled: enabled === true,
+    maxConcurrent: maxConcurrent as number,
+    maxTotal: maxTotal as number,
+  });
+}
 
 function isRecord(value: unknown): value is UnknownRecord {
   return (
@@ -563,7 +592,34 @@ export function parseConfig(
   }
 
   const issues: string[] = [];
-  inspectKeys(parsed, ROOT_KEYS, "config", issues, ["skills"]);
+  inspectKeys(parsed, ROOT_KEYS, "config", issues, ["skills", "subagents", "extension_guidance"]);
+  const guidanceValue = own(parsed, "extension_guidance");
+  const extensionGuidance: Record<string, string> = {};
+  if (guidanceValue !== undefined) {
+    if (!isRecord(guidanceValue)) issues.push("config.extension_guidance must be a table");
+    else {
+      const known = new Set(["subagents", ...catalog.extensions.map((extension) => extension.id)]);
+      let bytes = 0;
+      for (const [id, value] of Object.entries(guidanceValue)) {
+        if (!known.has(id))
+          issues.push(`config.extension_guidance.${id} is not a compiled optional extension`);
+        if (
+          typeof value !== "string" ||
+          value.trim().length === 0 ||
+          Buffer.byteLength(value) > 16384 ||
+          value.includes("\u0000")
+        ) {
+          issues.push(
+            `config.extension_guidance.${id} must be nonempty text of at most 16384 bytes without NUL`,
+          );
+        } else {
+          bytes += Buffer.byteLength(value);
+          extensionGuidance[id] = value;
+        }
+      }
+      if (bytes > 65536) issues.push("config.extension_guidance must total at most 65536 bytes");
+    }
+  }
 
   const configVersion = own(parsed, "config_version");
   if (configVersion !== 14) {
@@ -591,6 +647,7 @@ export function parseConfig(
   const audit = parseAudit(own(parsed, "audit"), issues);
   const exports = parseExports(own(parsed, "exports"), issues);
   const skills = parseSkills(own(parsed, "skills"), issues);
+  const subagents = parseSubagents(own(parsed, "subagents"), issues);
   const sessions = parseSessions(own(parsed, "sessions"), issues);
   const identity = parseIdentity(own(parsed, "identity"), issues);
   const execution = parseExecution(own(parsed, "execution"), issues);
@@ -652,6 +709,7 @@ export function parseConfig(
       : catalog.extensions.filter((extension) => Object.hasOwn(extensions, extension.id));
   const toolNames = [
     ...TOOL_NAMES,
+    ...(subagents?.enabled === true ? [SUBAGENTS_POLICY_SUBJECT] : []),
     ...selectedDefinitions.flatMap((extension) =>
       extension.kind === "managed" ? extension.tools.map((tool) => tool.name) : extension.toolNames,
     ),
@@ -680,11 +738,13 @@ export function parseConfig(
 
   return Object.freeze({
     configVersion: 14,
+    ...(guidanceValue === undefined ? {} : { extensionGuidance: Object.freeze(extensionGuidance) }),
     codemode,
     mcp,
     audit,
     sessions,
     skills,
+    ...(subagents === undefined ? {} : { subagents }),
     exports,
     modelsFile,
     execution,

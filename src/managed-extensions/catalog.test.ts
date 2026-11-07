@@ -10,6 +10,7 @@ import {
   instantiateManagedExtension,
 } from "./sdk.js";
 import gitCloneExtension from "./git-clone/index.js";
+import { SUBAGENT_TOOL_NAMES, SUBAGENTS_POLICY_SUBJECT } from "../domain/subagents.js";
 
 const DIGEST = "a".repeat(64);
 
@@ -171,6 +172,12 @@ describe("managed extension catalog", () => {
     ).toThrow("formatCall must be a function");
   });
 
+  it("reserves the built-in subagent extension identity", () => {
+    expect(() => createManagedExtensionCatalog([record(extension({ id: "subagents" }))])).toThrow(
+      "extension id is reserved: subagents",
+    );
+  });
+
   it.each([
     "read",
     "grep",
@@ -182,6 +189,8 @@ describe("managed extension catalog", () => {
     "user_shell",
     "codemode",
     "mcp__docs",
+    SUBAGENTS_POLICY_SUBJECT,
+    ...SUBAGENT_TOOL_NAMES,
   ])("rejects reserved tool name %s", (name) => {
     const base = extension();
     const tool = base.tools[0];

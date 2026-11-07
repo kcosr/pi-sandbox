@@ -1,4 +1,6 @@
 import {
+  SUBAGENT_TOOL_NAMES,
+  SUBAGENTS_POLICY_SUBJECT,
   IDENTITY_BROKER_SOCKET_PATH,
   type ApprovalSubject,
   type IdentityConfig,
@@ -200,7 +202,15 @@ function formatSubjectPolicy(
   const policy = getSubjectPolicy(input.config, subject);
   const granted = subject === "user_shell" ? false : input.hasSessionGrant(subject);
   const advertised =
-    subject === "user_shell" ? "not a model tool" : input.isToolActive(subject) ? "yes" : "no";
+    subject === "user_shell"
+      ? "not a model tool"
+      : (
+            subject === SUBAGENTS_POLICY_SUBJECT
+              ? SUBAGENT_TOOL_NAMES.some((name) => input.isToolActive(name))
+              : input.isToolActive(subject)
+          )
+        ? "yes"
+        : "no";
   const rows: Array<readonly [string, string]> = [
     ["Execution", executionBoundary(input, subject)],
     ["Mode", policy.mode],
@@ -281,6 +291,7 @@ function capitalize(value: string): string {
 }
 
 function executionBoundary(input: PolicyDiagnosticInput, subject: string): string {
+  if (subject === SUBAGENTS_POLICY_SUBJECT) return "host";
   if (input.hostToolScopes?.[subject] !== undefined) return "host";
   return input.config.execution.backend === "bubblewrap"
     ? "sandbox"
@@ -288,6 +299,11 @@ function executionBoundary(input: PolicyDiagnosticInput, subject: string): strin
 }
 
 function subjectScope(input: PolicyDiagnosticInput, subject: string): readonly string[] {
+  if (subject === SUBAGENTS_POLICY_SUBJECT)
+    return [
+      `One approval policy covers ${SUBAGENT_TOOL_NAMES.join(", ")}.`,
+      "An offered session grant applies to all five operations. Subagent tool calls still require their own ordinary tool policies.",
+    ];
   const hostScope = input.hostToolScopes?.[subject];
   if (hostScope !== undefined) {
     return [

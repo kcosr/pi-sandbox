@@ -23,6 +23,7 @@ import {
 } from "../permissions/index.js";
 import type { ToolAuditor } from "../audit/tools.js";
 import { approvalPreview, approvalUi } from "../permissions/index.js";
+import { assertCurrentManagedChild, currentManagedChild } from "../subagents/invocation.js";
 import { ManagedToolExecutionError } from "../runtime/tool-error.js";
 import type { ResolvedMcpServer } from "./resolve.js";
 import { mcpSubject, resolveMcpPolicy } from "./policy.js";
@@ -148,6 +149,7 @@ export class ManagedMcpRuntime {
       readonly preferences?: ManagedMcpPreferences;
       readonly getPolicy: () => PolicyEngine | undefined;
       readonly getAuditor: () => ToolAuditor | undefined;
+      readonly beforeApproval?: () => void;
       readonly transportFactory?: (server: ResolvedMcpServer) => McpTransport;
     },
   ) {
@@ -434,12 +436,16 @@ export class ManagedMcpRuntime {
       signal === undefined
         ? this.controller.signal
         : AbortSignal.any([signal, this.controller.signal]);
-    const ui = approvalUi(ctx);
+    const ui = approvalUi(ctx, undefined, this.options.beforeApproval);
+    assertCurrentManagedChild();
+    currentManagedChild()?.setActivity("checking approval");
     const decision = await policy.evaluate(request, {
       signal: operationSignal,
       ...(ui === undefined ? {} : { ui }),
     });
     await this.options.getAuditor()?.decision(decision, admission.definition.name);
+    assertCurrentManagedChild();
+    currentManagedChild()?.setActivity("running tools");
     if (!decision.allowed) throw new Error(`MCP tool denied: ${decision.reason}`);
     if (!this.current(admission) || operationSignal.aborted)
       throw new Error("MCP invocation changed or cancelled; make a fresh call");

@@ -25,6 +25,7 @@ import { parse as parseToml, stringify as stringifyToml } from "@iarna/toml";
 import { testManagedMcpCodemode } from "./mcp-codemode-smoke.mjs";
 import { testLocalProcessLifetime } from "./local-processes-smoke.mjs";
 import { testSharedSkills } from "./skills-smoke.mjs";
+import { testManagedSubagents } from "./subagents-smoke.mjs";
 import { testRpcSessionLifecycle } from "./rpc-lifecycle-smoke.mjs";
 
 import { prepareHostIndependentSmokeConfig } from "./packaged-smoke-config.mjs";
@@ -238,7 +239,7 @@ try {
     : undefined;
   if (
     extensionCommands === undefined ||
-    JSON.stringify(extensionCommands) !== JSON.stringify(["sandbox"])
+    JSON.stringify(extensionCommands) !== JSON.stringify(["sandbox", "extensions"])
   ) {
     throw new Error(
       `compiled executable exposed unexpected extension commands: ${JSON.stringify(extensionCommands)}`,
@@ -354,6 +355,16 @@ try {
     sharedDirectory: join(runtimeDirectory, "shared-skills-smoke"),
     visibleSharedDirectory: join(compiledLibexecDirectory, "shared-skills-smoke"),
   });
+  await testManagedSubagents({
+    launch,
+    configPath: releaseManifest.layout.allowConfigOverride
+      ? overridePath
+      : join(defaultsDirectory, "config.toml"),
+    modelsPath: releaseManifest.layout.allowConfigOverride
+      ? overrideModelsPath
+      : join(defaultsDirectory, "models.json"),
+    workspace,
+  });
   await testManagedMcpCodemode({
     sharedSkill,
     launch,
@@ -369,6 +380,7 @@ try {
     uid: process.geteuid(),
   });
   await assert.rejects(lstat(dotenvSessionDir), { code: "ENOENT" });
+
   console.log(
     "packaged diagnostics, RPC lifecycle, local processes, shared skills, MCP and code-mode smoke tests passed",
   );

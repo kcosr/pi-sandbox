@@ -21,6 +21,7 @@ export interface UserExportOptions {
   readonly getSource: () => SandboxExportSource | undefined;
   readonly admitted: () => boolean;
   readonly audit?: ExportAudit;
+  readonly beforeCapture?: () => Promise<void>;
 }
 
 export function resolveExportDestination(input: string, cwd: string, accountHome?: string): string {
@@ -99,6 +100,7 @@ export function createUserExportController(options: UserExportOptions): {
       const promise = (async () => {
         try {
           await waitForIdle(ctx, quitSignal);
+          await options.beforeCapture?.();
           let hasFiles = true;
           try {
             const source = options.getSource();
@@ -148,6 +150,7 @@ export function createUserExportController(options: UserExportOptions): {
         try {
           ctx.ui.notify("Waiting for foreground activity before saving…", "info");
           await waitForIdle(ctx, signal);
+          await options.beforeCapture?.();
           checkCancelled(signal);
           const source = options.getSource();
           if (!source) throw new Error("Private sandbox file export is unavailable");

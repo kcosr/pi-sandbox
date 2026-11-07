@@ -6,12 +6,21 @@ import type {
   ToolRendererResolver,
   UserBashEvent,
   UserBashEventResult,
+  ModelRuntime,
 } from "@earendil-works/pi-coding-agent";
+import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import { SettingsManager } from "@earendil-works/pi-coding-agent";
 import { isManagedToolSelected } from "../runtime/arguments.js";
 
-import { TOOL_NAMES, type SandboxConfig, type ToolName } from "../domain/index.js";
+import {
+  SUBAGENT_TOOL_NAMES,
+  TOOL_NAMES,
+  type SandboxConfig,
+  type ToolName,
+} from "../domain/index.js";
 import type {
   HostCommandExecutor,
   HostCommandRequest,
@@ -65,6 +74,9 @@ function fakePi(settings: ReturnType<ExtensionAPI["getSettings"]> = {}): FakePi 
   const api = {
     on(name: string, handler: Handler) {
       handlers.set(name, handler);
+      return () => {
+        if (handlers.get(name) === handler) handlers.delete(name);
+      };
     },
     registerTool(tool: ToolDefinition) {
       tools.set(tool.name, tool);
@@ -138,6 +150,7 @@ function context(
     tools: [],
     executeTool: () => Promise.reject(new Error("Unexpected nested tool execution in fixture")),
     ui: {
+      theme: { fg: (_color: string, text: string) => text },
       select: options.select ?? (() => Promise.resolve(undefined)),
       notify: options.notify ?? (() => undefined),
     },
@@ -342,6 +355,265 @@ async function executeTool(
 }
 
 describe("managed initial tool activation", () => {
+  it("stops all managed execution when optional preferences cannot be loaded", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "managed-invalid-preferences-"));
+    const path = join(directory, "extensions.json");
+    const pi = fakePi();
+    const executor = fakeExecutor();
+    const probe = vi.spyOn(executor, "probe");
+    const cfg: SandboxConfig = {
+      ...config(),
+      codemode: { enabled: true, timeoutMs: 1000 },
+    };
+    try {
+      await writeFile(path, "invalid-secret-preferences");
+      await createPiSandboxExtension({
+        cwd: "/work/project",
+        configPath: "/etc/pi-sandbox/config.toml",
+        userStateDir: directory,
+        loadConfig: () => Promise.resolve(cfg),
+        executor,
+        features: { config: cfg, servers: [], selected: () => true },
+      })(pi.api);
+      await expect(
+        pi.handlers.get("session_start")!(undefined as never, context()),
+      ).rejects.toThrow(new Error(`Invalid user extension preferences at ${JSON.stringify(path)}`));
+      expect(probe).not.toHaveBeenCalled();
+      expect(pi.commands.has("extensions")).toBe(false);
+      expect(pi.tools.has("read")).toBe(false);
+      await expect(executeTool(pi, "codemode", { code: "text(1)" })).rejects.toThrow(
+        "Code mode unavailable",
+      );
+    } finally {
+      await rm(directory, { recursive: true, force: true });
+    }
+  });
+
+  it("toggles optional tools and guidance, persists choices, and blocks a stale call awaiting approval", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "managed-optional-"));
+    const cfg: SandboxConfig = {
+      ...configWithPiTool("ask"),
+      extensionGuidance: {
+        "standard-example": "Company tool guidance.",
+        subagents: "Do not show this.",
+      },
+    };
+    const create = async (args: string[] = []) => {
+      const pi = fakePi();
+      await createPiSandboxExtension({
+        cwd: "/work/project",
+        configPath: "/etc/pi-sandbox/config.toml",
+        userStateDir: directory,
+        loadConfig: () => Promise.resolve(cfg),
+        executor: fakeExecutor(),
+        piToolExtensions: [piToolFixture()],
+        toolArguments: args,
+      })(pi.api);
+      await pi.handlers.get("session_start")!(undefined as never, context());
+      return pi;
+    };
+    const guidance = (pi: FakePi) => {
+      const sections: Record<string, string> = { pi_sandbox_extension_guidance: "stale" };
+      pi.handlers.get("before_agent_start")!(
+        { systemPromptOptions: { sections } } as never,
+        context(),
+      );
+      return sections.pi_sandbox_extension_guidance;
+    };
+    const command = (pi: FakePi, args: string) =>
+      pi.commands.get("extensions")!.handler(args, context() as never);
+    try {
+      const pi = await create();
+      const executionSpy = vi.spyOn(pi.api, "exec");
+      expect(guidance(pi)).toBe("Company tool guidance.");
+      const staleTool = pi.tools.get("standard_echo")!;
+      const approval = deferred<string | undefined>();
+      const entered = deferred<void>();
+      const call = staleTool.execute(
+        "waiting",
+        { value: "test" },
+        undefined,
+        undefined,
+        context({
+          hasUI: true,
+          select: () => {
+            entered.resolve();
+            return approval.promise;
+          },
+        }),
+      );
+      await entered.promise;
+      await command(pi, "disable standard-example");
+      expect(pi.tools.get("standard_echo")!.exposure).toBe("hidden");
+      expect(pi.api.getActiveTools()).not.toContain("standard_echo");
+      expect(guidance(pi)).toBeUndefined();
+      approval.resolve("Allow once");
+      await expect(call).rejects.toThrow("Optional extension is disabled");
+      await expect(
+        staleTool.execute("stale", { value: "test" }, undefined, undefined, context()),
+      ).rejects.toThrow("Optional extension is disabled");
+      expect(executionSpy).not.toHaveBeenCalled();
+      expect((await create()).tools.get("standard_echo")!.exposure).toBe("hidden");
+      const overridden = await create(["--enable-extension", "standard-example"]);
+      expect(overridden.api.getActiveTools()).toContain("standard_echo");
+      await command(pi, "enable standard-example");
+      expect(pi.api.getActiveTools()).toContain("standard_echo");
+      expect(guidance(pi)).toBe("Company tool guidance.");
+      pi.api.setActiveTools(["read"]);
+      expect(guidance(pi)).toBeUndefined();
+      await command(pi, "disable standard-example");
+      await command(pi, "enable standard-example");
+      expect(pi.api.getActiveTools()).toEqual(["read"]);
+    } finally {
+      await rm(directory, { recursive: true, force: true });
+    }
+  });
+
+  it("shares one management grant, audits actual operations, and disposes child lifecycle hooks", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "managed-child-lifecycle-"));
+    const pi = fakePi();
+    Object.assign(pi.api, { appendEntry: vi.fn() });
+    const events: AuditEvent[] = [];
+    const prompts: string[] = [];
+    const cfg: SandboxConfig = {
+      ...config(),
+      subagents: { enabled: true, maxConcurrent: 4, maxTotal: 32 },
+      audit: { enabled: true, facility: "local0" },
+      tools: {
+        ...config().tools,
+        subagents: { mode: "ask", sessionGrant: "offer", audit: true },
+      },
+    };
+    const ctx = context({
+      hasUI: true,
+      select: (title) => {
+        prompts.push(title);
+        return Promise.resolve("Allow for session");
+      },
+    });
+    Object.assign(ctx, { isProjectTrusted: () => false, isIdle: () => true });
+    Object.assign(ctx.sessionManager, { getEntries: () => [] });
+    Object.assign(ctx.ui, { setStatus: vi.fn() });
+    try {
+      await createPiSandboxExtension({
+        cwd: "/work/project",
+        configPath: "/etc/pi-sandbox/config.toml",
+        userStateDir: directory,
+        loadConfig: () => Promise.resolve(cfg),
+        executor: fakeExecutor(),
+        getModelRuntime: () => ({}) as ModelRuntime,
+        auditClient: {
+          submit: (event) => {
+            events.push(event);
+            return Promise.resolve();
+          },
+          close: () => Promise.resolve(),
+        },
+        features: { config: cfg, servers: [], selected: () => true },
+      })(pi.api);
+      await pi.handlers.get("session_start")!(undefined as never, ctx);
+      for (const name of SUBAGENT_TOOL_NAMES) expect(pi.tools.has(name)).toBe(true);
+      expect(pi.tools.has("subagents")).toBe(false);
+      expect(pi.activeTools.at(-1)).not.toContain("subagents");
+      expect(pi.commands.has("subagents-rpc")).toBe(true);
+      for (const name of [
+        "inspect_agent",
+        "spawn_agent",
+        "steer_agent",
+        "resume_agent",
+        "cancel_agent",
+      ]) {
+        await pi.tools
+          .get(name)!
+          .execute(
+            `call-${name}`,
+            name === "spawn_agent"
+              ? { task: "Review" }
+              : name === "resume_agent" || name === "steer_agent"
+                ? { id: "missing", message: "Continue" }
+                : { id: "missing" },
+            undefined,
+            undefined,
+            ctx,
+          );
+      }
+      expect(prompts).toHaveLength(1);
+      expect(prompts[0]).toContain("Allow inspect_agent:");
+      expect(prompts[0]).toContain("all subagent management operations");
+      expect(
+        events
+          .filter((event) => event.event === "tool_execution_intent")
+          .map((event) => event.tool),
+      ).toEqual(["inspect_agent", "spawn_agent", "steer_agent", "resume_agent", "cancel_agent"]);
+      expect(
+        events
+          .filter((event) => event.event === "tool_execution_intent")
+          .slice(1)
+          .every((event) => event.approval_source === "session_grant"),
+      ).toBe(true);
+      expect(events.some((event) => event.tool === "subagents")).toBe(false);
+      await pi.handlers.get("session_shutdown")!(undefined as never, ctx);
+      expect(pi.handlers.has("agent_settled")).toBe(false);
+    } finally {
+      await rm(directory, { recursive: true, force: true });
+    }
+  });
+
+  it.each([
+    { mode: "disabled" as const, args: [], expected: [] },
+    { mode: "deny" as const, args: ["--tools", "inspect_agent"], expected: ["inspect_agent"] },
+    {
+      mode: "allow" as const,
+      args: ["--exclude-tools", "spawn_agent"],
+      expected: ["steer_agent", "cancel_agent", "resume_agent", "inspect_agent"],
+    },
+    { mode: "allow" as const, args: ["--no-tools"], expected: [] },
+    { mode: "allow" as const, args: ["--tools", "subagents"], expected: [] },
+  ])(
+    "expands the management group without overriding tool selection: $mode $args",
+    async ({ mode, args, expected }) => {
+      const directory = await mkdtemp(join(tmpdir(), "managed-child-selection-"));
+      const pi = fakePi();
+      Object.assign(pi.api, { appendEntry: vi.fn() });
+      const cfg: SandboxConfig = {
+        ...config(),
+        subagents: { enabled: true, maxConcurrent: 4, maxTotal: 32 },
+        tools: { ...config().tools, subagents: { mode, sessionGrant: "never", audit: false } },
+      };
+      const ctx = context();
+      Object.assign(ctx, { isProjectTrusted: () => false, isIdle: () => true });
+      Object.assign(ctx.sessionManager, { getEntries: () => [] });
+      Object.assign(ctx.ui, { setStatus: vi.fn() });
+      try {
+        await createPiSandboxExtension({
+          cwd: "/work/project",
+          configPath: "/etc/pi-sandbox/config.toml",
+          userStateDir: directory,
+          loadConfig: () => Promise.resolve(cfg),
+          executor: fakeExecutor(),
+          getModelRuntime: () => ({}) as ModelRuntime,
+          toolArguments: args,
+          features: {
+            config: cfg,
+            servers: [],
+            selected: (name) => isManagedToolSelected(args, name),
+          },
+        })(pi.api);
+        await pi.handlers.get("session_start")!(undefined as never, ctx);
+        expect(SUBAGENT_TOOL_NAMES.filter((name) => pi.tools.has(name))).toEqual(expected);
+        expect(pi.tools.has("subagents")).toBe(false);
+        if (mode === "deny")
+          await expect(
+            pi.tools
+              .get("inspect_agent")!
+              .execute("call", { id: "missing" }, undefined, undefined, ctx),
+          ).rejects.toThrow("Pi Sandbox denied inspect_agent: policy_denied");
+        await pi.handlers.get("session_shutdown")!(undefined as never, ctx);
+      } finally {
+        await rm(directory, { recursive: true, force: true });
+      }
+    },
+  );
   async function activate(
     settings: ReturnType<ExtensionAPI["getSettings"]> = {},
     args: readonly string[] = [],

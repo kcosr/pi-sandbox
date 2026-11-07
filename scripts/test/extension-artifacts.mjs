@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
-import { lstat, mkdir, readFile, readdir, symlink } from "node:fs/promises";
+import { lstat, mkdir, readFile, symlink } from "node:fs/promises";
 import { dirname, isAbsolute, join, resolve, sep } from "node:path";
 import { pathToFileURL } from "node:url";
 import ts from "typescript";
@@ -14,12 +14,9 @@ export async function installExtensionArtifacts(
 ) {
   const modules = join(temporaryDirectory, "node_modules");
   await mkdir(modules);
-  // Avoid linking the workspace package aliases: that would silently test the
-  // source checkout instead of the independently distributable tarballs.
-  for (const name of await readdir(join(root, "node_modules"))) {
-    if (name === "@kcosr" || name.startsWith(".")) continue;
-    await symlink(join(root, "node_modules", name), join(modules, name), "dir");
-  }
+  // Link only each artifact's declared public peers. Workspace-wide links mask
+  // missing declarations and accidental private/transitive imports.
+  const linkedPeers = new Set();
   const artifacts = {};
   for (const name of names) {
     const packed = JSON.parse(
@@ -54,6 +51,17 @@ export async function installExtensionArtifacts(
     const metadata = JSON.parse(await readFile(join(directory, "package.json"), "utf8"));
     assert.deepEqual(metadata.dependencies ?? {}, {}, "Extensions must install independently");
     assert.equal(metadata.peerDependencies["@earendil-works/pi-coding-agent"], "1.5.0");
+    for (const peer of Object.keys(metadata.peerDependencies)) {
+      if (linkedPeers.has(peer)) continue;
+      assert(
+        !peer.startsWith("@kcosr/"),
+        "Reusable extensions cannot depend on workspace packages",
+      );
+      const destination = join(modules, peer);
+      await mkdir(dirname(destination), { recursive: true });
+      await symlink(join(root, "node_modules", peer), destination, "dir");
+      linkedPeers.add(peer);
+    }
     for (const target of Object.values(metadata.exports)) {
       assert(entries.includes(`package/${target.replace(/^\.\//u, "")}`));
       await import(pathToFileURL(join(directory, target)).href);
