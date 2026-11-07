@@ -100,7 +100,7 @@ export function approvalUi(
       if (prompt.request.subject === SUBAGENTS_POLICY_SUBJECT && prompt.allowForSession)
         title += "\nAllow for session covers all subagent management operations.";
       if (child !== undefined)
-        title = `Child ${boundedDisplayText(child.childId, 64)} — ${boundedDisplayText(child.label, 160)}\n${title}\nSession choices apply to the main agent and all subagents.`;
+        title = `Subagent ${boundedDisplayText(child.childId, 64)} — ${boundedDisplayText(child.label, 160)}\n${title}\nSession choices apply to the main agent and all subagents.`;
       if (
         prompt.request.subject === "bash" &&
         prompt.request.commandClass === "unclassified" &&

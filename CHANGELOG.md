@@ -3,7 +3,7 @@
 ## Unreleased
 
 - Add optional SDK subagents with shared managed approvals, concurrent and total
-  new-spawn limits, Markdown TUI previews and RPC observation, plus an independent vanilla Pi
+  new-spawn limits, compact footer status, Markdown previews and RPC observation, plus an independent vanilla Pi
   package. Child audit provenance requires application and collector upgrades together.
 - Add user optional-extension toggles, process-only CLI overrides and administrator
   guidance that follows active extension tools.

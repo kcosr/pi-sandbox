@@ -49,6 +49,8 @@ bounded terminal-safe Markdown previews, modal navigation, initial status hiding
 stale controls and approval focus. Optional-extension tests cover persisted user
 choices, CLI precedence, administrator ceilings, hidden definitions, calls disabled
 while awaiting approval, and guidance following effective tool selection.
+The mandatory upstream footer-width suite covers inline extension status, ANSI
+width handling, and narrow-terminal placement without losing native stats/model text.
 
 The packaged Linux and native Seatbelt smoke entry points include
 `subagents-smoke.mjs`: real managed children, parent-to-child and child-to-parent

@@ -612,7 +612,7 @@ describe("subagent controller", () => {
     const state = JSON.parse(readFileSync(path, "utf8")) as { records: { sessionFile: string }[] };
     state.records[0]!.sessionFile = join(directory, "elsewhere.jsonl");
     writeFileSync(path, JSON.stringify(state));
-    expect(() => new Controller(api, host, "parent")).toThrow("Invalid child record");
+    expect(() => new Controller(api, host, "parent")).toThrow("Invalid subagent record");
     expect(child.status).toBe("running");
   });
 

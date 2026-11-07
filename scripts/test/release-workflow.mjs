@@ -58,6 +58,7 @@ const expectedUpstreamSuites = [
   "packages/coding-agent/test/model-resolver.test.ts",
   "packages/coding-agent/test/default-tools-setting.test.ts",
   "packages/coding-agent/test/settings-selector.test.ts",
+  "packages/coding-agent/test/footer-width.test.ts",
   "packages/coding-agent/test/read-line-range-display.test.ts",
   "packages/coding-agent/test/agent-session-retry.test.ts",
   "packages/ai/test/json-parse.test.ts",

@@ -103,6 +103,21 @@ function fixture(empty = false) {
 }
 
 describe("subagent observation", () => {
+  it("explains the machine command in the TUI while retaining RPC error responses", async () => {
+    const f = fixture();
+    const notify = vi.fn();
+    const command = f.commands.get("agents-rpc")!;
+    await command.handler("", { mode: "tui", ui: { notify } } as never);
+    expect(notify).toHaveBeenCalledWith(expect.stringContaining("Use /agents"), "info");
+    expect(f.entries.some((entry) => entry.type === SUBAGENT_RESPONSE_ENTRY)).toBe(false);
+    await command.handler("", f.context as never);
+    expect(f.entries.at(-1)).toMatchObject({
+      type: SUBAGENT_RESPONSE_ENTRY,
+      data: { success: false },
+    });
+    f.presentation.dispose();
+  });
+
   it("styles interactive status with the current theme and keeps RPC status plain", () => {
     const f = fixture();
     Object.assign(f.context, { mode: "tui", hasUI: true });
@@ -111,17 +126,12 @@ describe("subagent observation", () => {
     });
     f.update({ status: "running", activity: "awaiting approval" });
     const interactive = String(f.setStatus.mock.calls.at(-1)?.[1]);
-    expect(interactive).toContain("<dim>Agents: </dim>");
-    expect(interactive).toContain("<accent>1/4 active</accent>");
-    expect(interactive).toContain("<warning>1 awaiting approval</warning>");
+    expect(interactive).toBe("<dim>Subagents </dim><accent>1/4</accent>");
     f.update({ status: "failed" });
-    expect(String(f.setStatus.mock.calls.at(-1)?.[1])).toContain("<error>1 failed</error>");
+    expect(String(f.setStatus.mock.calls.at(-1)?.[1])).toBe("<dim>Subagents </dim><dim>0/4</dim>");
     Object.assign(f.context, { mode: "rpc" });
     f.update({ status: "completed" });
-    expect(f.setStatus).toHaveBeenLastCalledWith(
-      "subagents",
-      "Agents: 0/4 active · 1/32 started · /agents",
-    );
+    expect(f.setStatus).toHaveBeenLastCalledWith("subagents", "Subagents 0/4");
     f.presentation.dispose();
   });
 
@@ -129,15 +139,9 @@ describe("subagent observation", () => {
     const f = fixture(true);
     expect(f.setStatus).not.toHaveBeenCalled();
     f.update({ status: "starting" });
-    expect(f.setStatus).toHaveBeenLastCalledWith(
-      "subagents",
-      expect.stringContaining("1/32 started"),
-    );
+    expect(f.setStatus).toHaveBeenLastCalledWith("subagents", "Subagents 1/4");
     f.update({ status: "completed" });
-    expect(f.setStatus).toHaveBeenLastCalledWith(
-      "subagents",
-      expect.stringContaining("0/4 active"),
-    );
+    expect(f.setStatus).toHaveBeenLastCalledWith("subagents", "Subagents 0/4");
     f.presentation.dispose();
   });
 

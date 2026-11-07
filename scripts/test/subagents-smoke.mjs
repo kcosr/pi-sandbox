@@ -351,7 +351,7 @@ export async function testManagedSubagents({ launch, configPath, modelsPath, wor
       JSON.stringify(state),
     );
     assert.equal(running.prompts.length, 2, "Concurrent children share the same read approval");
-    assert(running.prompts[1].startsWith("Child "), "Child approval identifies its origin");
+    assert(running.prompts[1].startsWith("Subagent "), "Child approval identifies its origin");
     assert.equal(
       await readFile(join(workspace, "subagent-output.txt"), "utf8"),
       "MANAGED_CHILD_OUTPUT",

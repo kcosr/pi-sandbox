@@ -50,7 +50,7 @@ function jsonCopy<T>(value: T): T {
     return entry;
   });
   if (text.length > 4 * 1024 * 1024)
-    throw new Error("Tool configuration exceeds the child snapshot limit");
+    throw new Error("Tool configuration exceeds the subagent snapshot limit");
   return JSON.parse(text) as T;
 }
 
@@ -155,7 +155,7 @@ async function captureTools(
   const factories: InlineExtension[] = [];
   for (const tool of captured) {
     if (/[,*]/u.test(tool.name) || /^[+-]/u.test(tool.name))
-      throw new Error("Child tools require exact representable names");
+      throw new Error("Subagent tools require exact representable names");
     if (isMcp(tool.name)) continue;
     if (tool.sourceInfo.source === "builtin") {
       if (BUILTINS.has(tool.name)) continue;
@@ -173,7 +173,7 @@ async function captureTools(
       } else throw new Error(`Cannot reproduce built-in tool ${tool.name}`);
     } else {
       if (tool.sourceInfo.source === "sdk" || !isAbsolute(tool.sourceInfo.path))
-        throw new Error(`Tool ${tool.name} is runtime-only and cannot be reproduced in a child`);
+        throw new Error(`Tool ${tool.name} is runtime-only and cannot be reproduced in a subagent`);
       paths.add(await realpath(tool.sourceInfo.path));
     }
   }
@@ -297,7 +297,7 @@ export function createStandaloneHost(config: SubagentConfig): SubagentHost {
                 // thrown by prompt hooks, so throwing here cannot stop a run.
                 if (request.signal.aborted || !request.isCurrent()) return;
                 return {
-                  systemPrompt: `${event.systemPrompt}\n\nYou are a child agent assigned one bounded task. Complete the assignment and return a concise result with evidence and blockers. Do not invent additional assignments. You cannot delegate to other agents.`,
+                  systemPrompt: `${event.systemPrompt}\n\nYou are a subagent assigned one bounded task. Complete the assignment and return a concise result with evidence and blockers. Do not invent additional assignments. You cannot delegate to other agents.`,
                 };
               });
             },
@@ -306,7 +306,7 @@ export function createStandaloneHost(config: SubagentConfig): SubagentHost {
       });
       await resources.reload();
       if (resources.getExtensions().errors.length)
-        throw new Error("A selected child extension failed to load");
+        throw new Error("A selected subagent extension failed to load");
       const manager = existsSync(request.sessionFile)
         ? SessionManager.open(request.sessionFile, agentDir, request.cwd)
         : SessionManager.create(request.cwd, agentDir);
@@ -335,7 +335,7 @@ export function createStandaloneHost(config: SubagentConfig): SubagentHost {
           request.signal.throwIfAborted();
           const actual = childApi?.getAllTools() ?? [];
           if (actual.some((tool) => !selected.names.includes(tool.name)))
-            throw new Error("Unexpected tool in child registry");
+            throw new Error("Unexpected tool in subagent registry");
           if (selected.names.every((name) => actual.some((tool) => tool.name === name))) {
             for (const expected of selected.captured) {
               const got = actual.find((tool) => tool.name === expected.name)!;
@@ -344,11 +344,11 @@ export function createStandaloneHost(config: SubagentConfig): SubagentHost {
                 got.description !== expected.description ||
                 got.exposure !== expected.exposure
               )
-                throw new Error(`Child tool declaration changed: ${expected.name}`);
+                throw new Error(`Subagent tool declaration changed: ${expected.name}`);
             }
             break;
           }
-          if (Date.now() >= until) throw new Error("Child tool registration timed out");
+          if (Date.now() >= until) throw new Error("Subagent tool registration timed out");
           await new Promise<void>((resolve) => setTimeout(resolve, 25));
         }
         childApi!.setActiveTools(selected.active);

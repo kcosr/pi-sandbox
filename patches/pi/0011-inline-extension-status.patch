@@ -1,0 +1,155 @@
+diff --git a/packages/coding-agent/src/modes/interactive/components/footer.ts b/packages/coding-agent/src/modes/interactive/components/footer.ts
+--- a/packages/coding-agent/src/modes/interactive/components/footer.ts
++++ b/packages/coding-agent/src/modes/interactive/components/footer.ts
+@@ -280,20 +280,24 @@
+ 		// that end with a reset, which would clear an outer dim wrapper. So we dim the parts
+ 		// before and after the colored section independently.
+ 		const dimStatsLeft = theme.fg("dim", statsLeft);
+-		const remainder = statsLine.slice(statsLeft.length); // padding + rightSide
+-		const dimRemainder = theme.fg("dim", remainder);
++
++		// Use only spare padding for statuses; never displace native stats or model information.
++		const statusLine = Array.from(this.footerData.getExtensionStatuses().entries())
++			.sort(([a], [b]) => a.localeCompare(b))
++			.map(([, text]) => sanitizeStatusText(text))
++			.join(" ");
++		const statusWidth = visibleWidth(statusLine);
++		const inlineStatus = statusWidth > 0 && totalNeeded + minPadding + statusWidth <= width;
++		const statusPrefix = inlineStatus ? " ".repeat(minPadding) + statusLine : "";
++		const remainder = statsLine.slice(statsLeft.length); // ASCII padding + rightSide
++		// Paint model information independently: a status may finish with an ANSI reset.
++		const dimRemainder = theme.fg("dim", inlineStatus ? remainder.slice(minPadding + statusWidth) : remainder);
+ 
+ 		const pwdLine = truncateToWidth(theme.fg("dim", pwd), width, theme.fg("dim", "..."));
+-		const lines = [pwdLine, dimStatsLeft + dimRemainder];
+-
+-		// Add extension statuses on a single line, sorted by key alphabetically
+-		const extensionStatuses = this.footerData.getExtensionStatuses();
+-		if (extensionStatuses.size > 0) {
+-			const sortedStatuses = Array.from(extensionStatuses.entries())
+-				.sort(([a], [b]) => a.localeCompare(b))
+-				.map(([, text]) => sanitizeStatusText(text));
+-			const statusLine = sortedStatuses.join(" ");
+-			// Truncate to terminal width with dim ellipsis for consistency with footer style
++		const lines = [pwdLine, dimStatsLeft + statusPrefix + dimRemainder];
++
++		if (statusWidth > 0 && !inlineStatus) {
++			// Narrow terminals retain the dedicated status row and native footer layout.
+ 			lines.push(truncateToWidth(statusLine, width, theme.fg("dim", "...")));
+ 		}
+ 
+diff --git a/packages/coding-agent/test/footer-width.test.ts b/packages/coding-agent/test/footer-width.test.ts
+--- a/packages/coding-agent/test/footer-width.test.ts
++++ b/packages/coding-agent/test/footer-width.test.ts
+@@ -3,7 +3,7 @@
+ import type { AgentSession } from "../src/core/agent-session.ts";
+ import type { ReadonlyFooterDataProvider } from "../src/core/footer-data-provider.ts";
+ import { FooterComponent, formatCwdForFooter } from "../src/modes/interactive/components/footer.ts";
+-import { initTheme } from "../src/modes/interactive/theme/theme.ts";
++import { initTheme, theme } from "../src/modes/interactive/theme/theme.ts";
+ import { stripAnsi } from "../src/utils/ansi.ts";
+ 
+ type AssistantUsage = {
+@@ -92,10 +92,10 @@
+ 	return session as unknown as AgentSession;
+ }
+ 
+-function createFooterData(providerCount: number): ReadonlyFooterDataProvider {
++function createFooterData(providerCount: number, statuses = new Map<string, string>()): ReadonlyFooterDataProvider {
+ 	const provider = {
+ 		getGitBranch: () => "main",
+-		getExtensionStatuses: () => new Map<string, string>(),
++		getExtensionStatuses: () => statuses,
+ 		getAvailableProviderCount: () => providerCount,
+ 		onBranchChange: (callback: () => void) => {
+ 			void callback;
+@@ -280,3 +280,89 @@
+ 		expect(stats).not.toContain("(sub)");
+ 	});
+ });
++
++describe("FooterComponent inline extension statuses", () => {
++	beforeAll(() => {
++		initTheme(undefined, false);
++	});
++
++	it("uses spare padding between native stats and model information, retaining ANSI styles", () => {
++		const session = createSession({
++			sessionName: "review",
++			reasoning: true,
++			thinkingLevel: "medium",
++			routedModel: { model: { id: "routed-model" }, thinkingLevel: "high" },
++			usage: { input: 100, output: 10, cacheRead: 0, cacheWrite: 0, cost: { total: 0.01 } },
++		});
++		const colored = "\u001b[31mworker 2/4\u001b[0m";
++		const statuses = new Map([
++			["worker", colored],
++			["alpha", "ready\n now\t"],
++		]);
++		const baseline = new FooterComponent(session, createFooterData(2)).render(140);
++		const lines = new FooterComponent(session, createFooterData(2, statuses)).render(140);
++		expect(lines).toHaveLength(2);
++		expect(lines[0]).toBe(baseline[0]);
++		const plain = stripAnsi(lines[1]);
++		expect(plain).toContain("↑100 ↓10 $0.010 12.3%/200k (auto)  ready now worker 2/4");
++		const model = "(test) test-model • medium → routed-model • high";
++		expect(plain.indexOf(model)).toBe(stripAnsi(baseline[1]).indexOf(model));
++		expect(lines[1]).toContain(colored);
++		const afterStatus = lines[1].slice(lines[1].indexOf(colored) + colored.length);
++		expect(afterStatus).toBe(theme.fg("dim", stripAnsi(afterStatus)));
++		expect(stripAnsi(afterStatus).trim()).toBe(model);
++		expect(lines[1]).toContain(theme.fg("dim", "↑100 ↓10 $0.010 12.3%/200k (auto)"));
++		expect(visibleWidth(lines[1])).toBe(140);
++	});
++
++	it("fits by visible columns at the exact boundary, including colored wide text", () => {
++		const session = createSession({ sessionName: "", modelId: "m" });
++		const status = "\u001b[32m作業 2/4\u001b[0m";
++		const footer = new FooterComponent(session, createFooterData(1, new Map([["tasks", status]])));
++		const baseline = new FooterComponent(session, createFooterData(1));
++		const width = visibleWidth("12.3%/200k (auto)") + 2 + visibleWidth(status) + 2 + visibleWidth("m");
++		expect(footer.render(width)).toHaveLength(2);
++		expect(stripAnsi(footer.render(width)[1])).toBe("12.3%/200k (auto)  作業 2/4  m");
++		const narrower = footer.render(width - 1);
++		expect(narrower).toHaveLength(3);
++		expect(narrower.slice(0, 2)).toEqual(baseline.render(width - 1));
++		expect(narrower[2]).toBe(status);
++	});
++
++	it("retains an otherwise visible provider instead of replacing it with status", () => {
++		const session = createSession({ sessionName: "", modelId: "m", provider: "provider" });
++		const baseline = new FooterComponent(session, createFooterData(2));
++		const width = visibleWidth("12.3%/200k (auto)  (provider) m");
++		const lines = new FooterComponent(session, createFooterData(2, new Map([["tasks", "ready"]]))).render(width);
++		expect(lines).toHaveLength(3);
++		expect(lines.slice(0, 2)).toEqual(baseline.render(width));
++		expect(stripAnsi(lines[1])).toContain("(provider) m");
++		expect(lines[2]).toBe("ready");
++	});
++
++	it.each([1, 2, 4, 8, 20, 40])(
++		"keeps narrow footer rows within %i columns without reducing native information",
++		(width) => {
++			const session = createSession({ sessionName: "", modelId: "模".repeat(20), reasoning: true });
++			const statuses = new Map([["tasks", "\u001b[31m待機中\u001b[0m ".repeat(20)]]);
++			const baseline = new FooterComponent(session, createFooterData(2)).render(width);
++			const lines = new FooterComponent(session, createFooterData(2, statuses)).render(width);
++			expect(lines).toHaveLength(3);
++			expect(lines.slice(0, 2)).toEqual(baseline);
++			for (const line of lines) expect(visibleWidth(line)).toBeLessThanOrEqual(width);
++		},
++	);
++
++	it("responds to updates and removal without caching a status or retaining an empty row", () => {
++		const session = createSession({ sessionName: "" });
++		const statuses = new Map<string, string>();
++		const footer = new FooterComponent(session, createFooterData(1, statuses));
++		const baseline = footer.render(80);
++		statuses.set("tasks", "worker 2/4");
++		expect(stripAnsi(footer.render(80)[1])).toContain("worker 2/4");
++		statuses.set("tasks", "worker 0/4");
++		expect(stripAnsi(footer.render(80)[1])).toContain("worker 0/4");
++		statuses.delete("tasks");
++		expect(footer.render(80)).toEqual(baseline);
++	});
++});

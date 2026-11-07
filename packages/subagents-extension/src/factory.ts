@@ -98,7 +98,7 @@ export function createSubagentsExtension(
               eventId: item.taskId,
               agentId: item.id,
               taskId: item.taskId,
-              content: `Child result: ${item.id} / ${item.taskId}\nOutcome: ${item.status}\n${boundedText(item.result ?? item.error ?? "No answer", 6000)}`,
+              content: `Subagent result: ${item.id} / ${item.taskId}\nOutcome: ${item.status}\n${boundedText(item.result ?? item.error ?? "No answer", 6000)}`,
             })),
         acknowledge: (id) => owner.acknowledge(id),
         disarm: () => {
@@ -135,6 +135,7 @@ export function createSubagentsExtension(
     });
     const tool = <Args extends object>(
       name: string,
+      label: string,
       description: string,
       schema: ArgumentSchema,
       execute: (
@@ -146,7 +147,7 @@ export function createSubagentsExtension(
     ) => {
       pi.registerTool({
         name,
-        label: name,
+        label,
         description,
         parameters: schema satisfies ToolDefinition["parameters"],
         exposure: "model-only",
@@ -193,18 +194,19 @@ export function createSubagentsExtension(
       type: "string",
       minLength: 1,
       maxLength: 128,
-      description: "Child ID returned by spawn_agent, not its task ID.",
+      description: "Subagent ID returned by spawn_agent, not its task ID.",
     });
     const registerTools = () => {
       if (toolsRegistered) return;
       toolsRegistered = true;
       tool<{ task: string; extended?: boolean }>(
         "spawn_agent",
-        "Start one bounded background task with a fresh conversation and shared files. Include needed context and avoid overlapping edits. Returns a child ID. Results arrive automatically: continue other work or end your turn; do not poll for completion.",
+        "Spawn subagent",
+        "Start one bounded background task with a fresh conversation and shared files. Include needed context and avoid overlapping edits. Returns a subagent ID. Results arrive automatically: continue other work or end your turn; do not poll for completion.",
         objectSchema(
           {
             task: text(
-              "Objective, relevant context, constraints and expected result; the child does not receive this conversation.",
+              "Objective, relevant context, constraints and expected result; the subagent does not receive this conversation.",
             ),
             extended: {
               type: "boolean",
@@ -226,7 +228,8 @@ export function createSubagentsExtension(
       );
       tool<{ id: string; message: string }>(
         "steer_agent",
-        "Redirect a running child after its current tools finish. Returns acceptance, not completion. Use resume_agent for settled children.",
+        "Steer subagent",
+        "Redirect a running subagent after its current tools finish. Returns acceptance, not completion. Use resume_agent for settled subagents.",
         objectSchema({
           id: id(),
           message: text("Correction or additional instructions for the current task."),
@@ -235,7 +238,8 @@ export function createSubagentsExtension(
       );
       tool<{ id: string }>(
         "cancel_agent",
-        "Request cancellation and suppress a child's completion callback. Its transcript and existing file changes remain. Stopping work still occupies capacity until it settles.",
+        "Cancel subagent",
+        "Request cancellation and suppress a subagent's completion callback. Its transcript and existing file changes remain. Stopping work still occupies capacity until it settles.",
         objectSchema({ id: id() }),
         async (owner, args) => {
           const result = await owner.cancel(args.id);
@@ -244,7 +248,8 @@ export function createSubagentsExtension(
       );
       tool<{ id: string; message: string; extended?: boolean }>(
         "resume_agent",
-        "Give a follow-up task to a settled child, preserving its conversation. Uses the parent's current model/reasoning without consuming another spawn allowance. Concurrency limits still apply. Results arrive automatically.",
+        "Resume subagent",
+        "Give a follow-up task to a settled subagent, preserving its conversation. Uses the parent's current model/reasoning without consuming another spawn allowance. Concurrency limits still apply. Results arrive automatically.",
         objectSchema(
           {
             id: id(),
@@ -252,7 +257,7 @@ export function createSubagentsExtension(
             extended: {
               type: "boolean",
               description:
-                "Explicitly switch standard/extended mode. Omission preserves the child's current mode.",
+                "Explicitly switch standard/extended mode. Omission preserves the subagent's current mode.",
             },
           },
           ["id", "message"],
@@ -269,7 +274,8 @@ export function createSubagentsExtension(
       );
       tool<{ id: string }>(
         "inspect_agent",
-        "Read status and bounded recent progress to decide whether to steer or cancel. Does not wait, acknowledge a result, or change the child; results arrive automatically.",
+        "Inspect subagent",
+        "Read status and bounded recent progress to decide whether to steer or cancel. Does not wait, acknowledge a result, or change the subagent; results arrive automatically.",
         objectSchema({ id: id() }),
         (owner, args) => owner.inspect(args.id),
       );

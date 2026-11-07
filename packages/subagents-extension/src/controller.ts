@@ -156,7 +156,7 @@ export class Controller implements SubagentController {
   }
   private require(id: string): Child {
     const child = this.children.get(id);
-    if (!child) throw new Error(`Unknown child: ${boundedText(String(id), 128)}`);
+    if (!child) throw new Error(`Unknown subagent: ${boundedText(String(id), 128)}`);
     return child;
   }
   public spawn(
@@ -177,7 +177,7 @@ export class Controller implements SubagentController {
     const previous = this.require(id);
     if (previous.active)
       return Promise.reject(
-        new Error("Child is still active or stopping; wait for settlement before resuming"),
+        new Error("Subagent is still active or stopping; wait for settlement before resuming"),
       );
     return this.start(previous, message, extended ?? previous.value.extended, context, signal);
   }
@@ -195,7 +195,7 @@ export class Controller implements SubagentController {
     if (!this.host.config.enabled) throw new Error("Subagents are disabled");
     if (context.sessionManager.getSessionId() !== this.parentSessionId)
       throw new Error("Subagent controller belongs to another parent session");
-    if (!context.model) throw new Error("Select a parent model before starting a child");
+    if (!context.model) throw new Error("Select a parent model before starting a subagent");
     const stats = this.statistics();
     if (!previous && stats.total >= stats.maxTotal)
       throw new Error(`Subagent session total limit reached (${stats.maxTotal})`);
@@ -295,7 +295,7 @@ export class Controller implements SubagentController {
     };
     signal?.addEventListener("abort", abortStartup, { once: true });
     const startup = setTimeout(() => {
-      child.value = { ...child.value, error: "Child startup timed out" };
+      child.value = { ...child.value, error: "Subagent startup timed out" };
       this.cancelFromCallback(child);
     }, this.host.config.startupTimeoutMs);
     void this.run(child, request).catch((error) => {
@@ -349,7 +349,7 @@ export class Controller implements SubagentController {
       child.value = { ...child.value, status: "running", activity: "thinking" };
       if (this.host.config.taskTimeoutMs > 0)
         deadline = setTimeout(() => {
-          child.value = { ...child.value, error: "Child task deadline exceeded" };
+          child.value = { ...child.value, error: "Subagent task deadline exceeded" };
           this.cancelFromCallback(child);
         }, this.host.config.taskTimeoutMs);
       child.ready.resolve();
@@ -357,7 +357,7 @@ export class Controller implements SubagentController {
       this.notify();
       await session.prompt(request.task, { expandPromptTemplates: false, source: "extension" });
       if (!child.abort.signal.aborted && child.progress.stopReason !== "stop")
-        failure = child.progress.error ?? "Child settled without a complete final answer";
+        failure = child.progress.error ?? "Subagent settled without a complete final answer";
     } catch (error) {
       if (!started) child.value = { ...child.value, callback: "disarmed" };
       failure = boundedText(error instanceof Error ? error.message : String(error), 1024);
@@ -429,7 +429,7 @@ export class Controller implements SubagentController {
           child.value = {
             ...child.value,
             callback: "disarmed",
-            error: boundedText(`Releasing child state failed: ${String(error)}`, 1024),
+            error: boundedText(`Releasing subagent state failed: ${String(error)}`, 1024),
           };
         }
       }
@@ -444,7 +444,7 @@ export class Controller implements SubagentController {
       // Cancellation has already been requested even if its state cannot be saved.
       child.value = {
         ...child.value,
-        error: boundedText(`Saving child cancellation failed: ${String(error)}`, 1024),
+        error: boundedText(`Saving subagent cancellation failed: ${String(error)}`, 1024),
       };
       this.notify();
     }
@@ -464,7 +464,7 @@ export class Controller implements SubagentController {
       activity: "stopping",
       updatedAt: Date.now(),
     };
-    child.ready.reject(new Error(child.value.error ?? "Child startup cancelled"));
+    child.ready.reject(new Error(child.value.error ?? "Subagent startup cancelled"));
     if (child.session) void child.session.abort().catch(() => undefined);
     this.persist();
     this.notify();
@@ -472,7 +472,7 @@ export class Controller implements SubagentController {
   public async cancel(id: string, expectedTaskId?: string): Promise<SubagentSnapshot> {
     const child = this.require(id);
     if (expectedTaskId !== undefined && child.value.taskId !== expectedTaskId)
-      throw new Error("Child task changed; refresh before cancelling");
+      throw new Error("Subagent task changed; refresh before cancelling");
     let persistenceFailure: Error | undefined;
     try {
       this.requestCancel(child);
@@ -497,7 +497,7 @@ export class Controller implements SubagentController {
     signal?.throwIfAborted();
     const child = this.require(id);
     if (child.value.status !== "running" || !child.session || child.abort.signal.aborted)
-      throw new Error("Child is not accepting steering; resume settled work instead");
+      throw new Error("Subagent is not accepting steering; resume settled work instead");
     await child.session.steer(message);
   }
   public inspect(id: string): string {

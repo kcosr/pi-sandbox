@@ -124,7 +124,7 @@ export class SubagentStore {
     owners.add(this.directory);
   }
   public sessionFile(id: string): string {
-    if (!ID.test(id)) throw new Error("Invalid child identity");
+    if (!ID.test(id)) throw new Error("Invalid subagent identity");
     const path = join(this.directory, id);
     mkdirSync(path, { recursive: true, mode: 0o700 });
     chmodSync(path, 0o700);
@@ -151,7 +151,7 @@ export class SubagentStore {
     const records: SubagentSnapshot[] = [];
     for (const value of input.records) {
       if (!value || typeof value !== "object" || Array.isArray(value))
-        throw new Error("Invalid child record");
+        throw new Error("Invalid subagent record");
       const item = value as SubagentSnapshot;
       if (
         Object.keys(item).some((key) => !RECORD_FIELDS.has(key)) ||
@@ -174,7 +174,7 @@ export class SubagentStore {
         item.tools.length > 128 ||
         item.tools.some((tool) => typeof tool !== "string" || Buffer.byteLength(tool) > 256)
       )
-        throw new Error("Invalid child record");
+        throw new Error("Invalid subagent record");
       for (const key of [
         "task",
         "activity",
@@ -185,7 +185,7 @@ export class SubagentStore {
         "reasoning",
       ] as const)
         if (typeof item[key] !== "string" || Buffer.byteLength(item[key]) > 32768)
-          throw new Error("Invalid child record text");
+          throw new Error("Invalid subagent record text");
       if (
         Buffer.byteLength(item.activity) > 256 ||
         Buffer.byteLength(item.assistant) > 4096 ||
@@ -196,7 +196,7 @@ export class SubagentStore {
           (typeof item.error !== "string" || Buffer.byteLength(item.error) > 1024)) ||
         (item.finishedAt !== undefined && !Number.isFinite(item.finishedAt))
       )
-        throw new Error("Invalid child result");
+        throw new Error("Invalid subagent result");
       seen.add(item.id);
       records.push({ ...item, tools: item.tools.map((tool: string) => tool) });
     }

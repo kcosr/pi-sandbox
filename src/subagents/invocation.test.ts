@@ -40,7 +40,7 @@ describe("managed child authorization", () => {
     ).toBe(true);
     expect((await engine.evaluate(request)).allowed).toBe(true);
     expect(prompts).toHaveLength(1);
-    expect(prompts[0]).toContain("Child one");
+    expect(prompts[0]).toContain("Subagent one");
     expect(prompts[0]).not.toContain("\u001b");
     engine.clearSessionGrants();
     await invoke("later");

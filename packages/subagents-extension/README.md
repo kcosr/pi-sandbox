@@ -77,15 +77,20 @@ when that quota is full; it still requires a free concurrency slot.
 
 ## Interactive presentation
 
-The status line appears after the first accepted child in a conversation and stays
-visible after completion. It shows active/capacity, approval waits when provided by
-a host, failures, and the spawn quota. `/agents` opens a centered modal list. Use
-arrows to select an agent and Enter to view its bounded output rendered with Pi's
+The compact native status appears after the first accepted child in a conversation
+and stays visible after completion. It shows only active/capacity, such as
+`Subagents 2/4`, with active work highlighted and idle counts dimmed. Ordinary Pi uses
+its standard extension status area. `/agents` opens a centered modal list with the
+spawn quota and task details; RPC observations retain those details as well. Use
+arrows to select a subagent and Enter to view its bounded output rendered with Pi's
 native Markdown. Scroll with arrows or Page Up/Down; Home jumps to the beginning,
 and End follows the latest output. Escape returns or closes. Press `c` to cancel
 the selected task. Closing the modal leaves tasks running; an approval prompt
 automatically closes the modal. Previews omit reasoning and transcript paths and
 remove terminal controls and clickable hyperlinks.
+
+`/agents-rpc` is a machine-facing command for RPC clients. Invoking it without
+arguments in interactive Pi explains how to open `/agents` instead.
 
 ## RPC clients
 

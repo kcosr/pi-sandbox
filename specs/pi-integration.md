@@ -354,6 +354,19 @@ provides these seams:
     Metadata keeps the authored root as `baseDir`, user scope, and top-level
     origin. Absence of the option preserves stock Pi behavior.
 
+12. `0011-inline-extension-status.patch` places ordinary `ui.setStatus` text
+    between the native token/context stats and model information when the full
+    text fits in their existing padding. Keep the native stats, provider, model,
+    reasoning and routing decisions unchanged; retain at least two spaces on
+    either side of inline status text. Sort and normalize statuses as before,
+    measure terminal columns rather than string length, and preserve each
+    status's ANSI styling. Apply the native model dim color independently after
+    a status that ends with a reset. When all status text cannot fit, keep the
+    existing dedicated, width-bounded status row. Status updates/removal and
+    terminal resize take effect on ordinary footer rendering, without another
+    API, repaint timer, custom footer or feature-specific rendering logic.
+    Ordinary unpatched Pi extensions continue using the same public status API.
+
 Pi 1.0's resource loader separates built-in factories from ordinary inline
 factories. The forced `--no-extensions` flag disables the built-in factories and
 user/project discovery while retaining the mandatory Pi Sandbox inline factory.
@@ -366,6 +379,10 @@ sharing without accessing session content. They also prove that disabling
 extensions keeps the mandatory inline factory while omitting built-in and
 discovered factories. Pi Sandbox tests separately prove the forced
 private-entry-point policy.
+
+The mandatory upstream `footer-width.test.ts` suite proves inline placement,
+native information and color preservation, exact fit boundaries with ANSI and
+wide Unicode text, narrow-terminal fallback, and live status updates/removal.
 
 Startup-hook tests must prove the awaited ordering for TUI, print, JSON, and
 RPC, before stdin consumption and theme initialization, as well as the absence

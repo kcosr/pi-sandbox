@@ -136,7 +136,7 @@ export function parseObservationRequest(text: string): ObservationRequest {
         /[\p{Cc}\p{Cf}]/u.test(item),
     )
   )
-    throw new Error("Invalid child identity");
+    throw new Error("Invalid subagent identity");
   return raw as unknown as ObservationRequest;
 }
 
@@ -167,23 +167,13 @@ export function attachSubagentPresentation(
     if (disposed) return;
     const state = observation(controller);
     const all = controller.snapshot();
-    const waiting = all.filter(
-      (agent) => ACTIVE.has(agent.status) && /approval/iu.test(agent.activity),
-    ).length;
-    const failed = all.filter((agent) => agent.status === "failed").length;
-    const color = (tone: "dim" | "accent" | "warning" | "error", text: string) =>
+    const color = (tone: "dim" | "accent", text: string) =>
       ctx.mode === "tui" && ctx.hasUI ? ctx.ui.theme.fg(tone, text) : text;
     const status =
       state.total === 0
         ? undefined
-        : color("dim", "Agents: ") +
-          color(
-            state.active > 0 ? "accent" : "dim",
-            `${state.active}/${state.maxConcurrent} active`,
-          ) +
-          (waiting ? color("dim", " · ") + color("warning", `${waiting} awaiting approval`) : "") +
-          (failed ? color("dim", " · ") + color("error", `${failed} failed`) : "") +
-          color("dim", ` · ${state.total}/${state.maxTotal} started · /agents`);
+        : color("dim", "Subagents ") +
+          color(state.active > 0 ? "accent" : "dim", `${state.active}/${state.maxConcurrent}`);
     if (status !== lastStatus) {
       ctx.ui.setStatus("subagents", status);
       lastStatus = status;
@@ -207,8 +197,15 @@ export function attachSubagentPresentation(
     refresh?.();
   };
   pi.registerCommand("agents-rpc", {
-    description: "Subagent observation protocol v1 (snapshot, inspect, cancel)",
-    async handler(text) {
+    description: "Subagent RPC protocol v1; use /agents interactively",
+    async handler(text, commandContext) {
+      if (text.trim() === "" && commandContext.mode === "tui") {
+        commandContext.ui.notify(
+          "Use /agents to view subagents. /agents-rpc is a JSON API for RPC clients (snapshot, inspect, cancel).",
+          "info",
+        );
+        return;
+      }
       let requestId: string | undefined;
       try {
         if (Buffer.byteLength(text) <= 4096) {
@@ -230,7 +227,7 @@ export function attachSubagentPresentation(
         else {
           const selected = controller.snapshot().find((agent) => agent.id === request.id);
           if (!selected || selected.taskId !== request.taskId)
-            throw new Error("Child task changed or is unavailable");
+            throw new Error("Subagent task changed or is unavailable");
           data = preview(
             request.action === "cancel"
               ? await controller.cancel(selected.id, selected.taskId)
@@ -251,7 +248,7 @@ export function attachSubagentPresentation(
     },
   });
   pi.registerCommand("agents", {
-    description: "View subagent progress and cancel a selected child",
+    description: "View subagent progress and cancel a selected subagent",
     async handler(_text, commandContext) {
       if (disposed) return;
       if (commandContext.mode !== "tui") {
@@ -347,7 +344,7 @@ export function attachSubagentPresentation(
                 );
                 if (!agent)
                   body = [
-                    theme.fg("warning", "This child task changed."),
+                    theme.fg("warning", "This subagent task changed."),
                     "Press Escape to return to the list.",
                   ];
                 else {
@@ -408,7 +405,7 @@ export function attachSubagentPresentation(
                 }
                 if (!agents.length)
                   body = [theme.fg("muted", "No subagents have started in this conversation.")];
-                position = agents.length ? `${selected + 1} of ${agents.length} agents` : "";
+                position = agents.length ? `${selected + 1} of ${agents.length} subagents` : "";
               }
               while (body.length < bodyHeight) body.push("");
               const pad = (line: string) => {
