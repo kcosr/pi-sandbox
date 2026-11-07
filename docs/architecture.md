@@ -162,14 +162,14 @@ the confirmation and continue process cleanup.
 
 Aborting the parent run suppresses automatic result delivery for **all existing
 children**, including children still running. It does not cancel their work.
-Inspect their status and results in `/agents`, and explicitly cancel a task there
+Inspect their status and results in `/subagents`, and explicitly cancel a task there
 when needed. Children created after that abort can deliver results normally.
 
 After the first accepted spawn, a compact `Subagents active/capacity` indicator appears.
 Managed Pi places extension status beside the native footer stats when it fits,
 using a separate status row on narrow terminals. The indicator uses the current
-theme; approval prompts take focus and detailed status stays in `/agents`.
-`/agents` opens a modal selectable list with quota totals and a bounded
+theme; approval prompts take focus and detailed status stays in `/subagents`.
+`/subagents` opens a modal selectable list with quota totals and a bounded
 read-only preview with Markdown-rendered agent output; arrows navigate,
 Enter opens a preview, Escape returns or closes, and `c` requests cancellation.
 An approval dismisses the preview to take focus. The ordinary package provides the

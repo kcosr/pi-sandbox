@@ -351,6 +351,6 @@ test("parent abort notifies once that existing running tasks lose automatic call
   assert.equal(f.notices.length, 1);
   assert.match(f.notices[0]!, /2 existing subagent tasks, including running tasks/);
   assert.match(f.notices[0]!, /Running tasks continue/);
-  assert.match(f.notices[0]!, /\/agents or inspect_agent/);
+  assert.match(f.notices[0]!, /\/subagents or inspect_agent/);
   assert.equal(f.sent.length, 0);
 });

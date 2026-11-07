@@ -196,12 +196,12 @@ export function attachSubagentPresentation(
     }
     refresh?.();
   };
-  pi.registerCommand("agents-rpc", {
-    description: "Subagent RPC protocol v1; use /agents interactively",
+  pi.registerCommand("subagents-rpc", {
+    description: "Subagent RPC protocol v1; use /subagents interactively",
     async handler(text, commandContext) {
       if (text.trim() === "" && commandContext.mode === "tui") {
         commandContext.ui.notify(
-          "Use /agents to view subagents. /agents-rpc is a JSON API for RPC clients (snapshot, inspect, cancel).",
+          "Use /subagents to view subagents. /subagents-rpc is a JSON API for RPC clients (snapshot, inspect, cancel).",
           "info",
         );
         return;
@@ -247,13 +247,13 @@ export function attachSubagentPresentation(
       }
     },
   });
-  pi.registerCommand("agents", {
+  pi.registerCommand("subagents", {
     description: "View subagent progress and cancel a selected subagent",
     async handler(_text, commandContext) {
       if (disposed) return;
       if (commandContext.mode !== "tui") {
         commandContext.ui.notify(
-          "Use the agents-rpc observation command for subagent state.",
+          "Use the /subagents-rpc observation command for subagent state.",
           "info",
         );
         return;

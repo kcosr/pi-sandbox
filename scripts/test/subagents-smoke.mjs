@@ -270,7 +270,7 @@ export async function testManagedSubagents({ launch, configPath, modelsPath, wor
     ];
     running = client(launch(launchArguments), () => failure);
     const commandList = await running.request("get_commands");
-    const command = commandList.commands.find((entry) => entry.name === "agents-rpc");
+    const command = commandList.commands.find((entry) => entry.name === "subagents-rpc");
     assert(command, `Managed observation command is registered: ${JSON.stringify(commandList)}`);
     assert(commandList.commands.some((entry) => entry.name === "extensions"));
     const observe = async (action = "snapshot", details = {}) => {

@@ -56,7 +56,7 @@ application owns the implementation, isolation boundary and cleanup.
 
 Optional subagents share the managed parent's approval session and execution
 boundary, with administrator-controlled concurrency and limits on new spawns.
-`/agents` shows progress and Markdown previews. `/extensions` lets users disable
+`/subagents` shows progress and Markdown previews. `/extensions` lets users disable
 optional tools, including Subagents and Git, within administrator policy. The standalone subagent package also supports
 ordinary Pi RPC parents without managed approvals.
 

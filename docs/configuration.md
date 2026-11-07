@@ -1011,7 +1011,7 @@ invocation denied.
 
 Disabling an extension hides its tools and blocks new invocations, including
 calls that were awaiting approval. Already executing operations can complete.
-Subagent tasks already running continue, and `/agents` remains available for
+Subagent tasks already running continue, and `/subagents` remains available for
 inspection and cancellation. Disabling Git controls `git_clone`; Git commands
 through Bash remain subject to Bash policy. Re-enabling restores the extension's
 prior active-tool selection. Running processes do not watch another process's

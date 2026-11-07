@@ -689,7 +689,7 @@ disabled tools, user exclusions and nested tool authorization must remain enforc
 in child sessions. Closing or replacing the root revokes old child admission and
 disarms completion delivery before releasing shared resources.
 
-Keep observation compatible with stock Pi: discover `/agents-rpc` through
+Keep observation compatible with stock Pi: discover `/subagents-rpc` through
 `get_commands`, send strict versioned control envelopes via `prompt`, and return
 correlated custom entries through `entry_appended`/`get_entries`. A handled prompt
 does not itself confirm control success. Rebind observer epochs after replacement;

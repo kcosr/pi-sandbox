@@ -297,7 +297,7 @@ export function createStandaloneHost(config: SubagentConfig): SubagentHost {
                 // thrown by prompt hooks, so throwing here cannot stop a run.
                 if (request.signal.aborted || !request.isCurrent()) return;
                 return {
-                  systemPrompt: `${event.systemPrompt}\n\nYou are a subagent assigned one bounded task. Complete the assignment and return a concise result with evidence and blockers. Do not invent additional assignments. You cannot delegate to other agents.`,
+                  systemPrompt: `${event.systemPrompt}\n\nYou are a subagent assigned one bounded task. Complete the assignment and return a concise result with evidence and blockers. Do not invent additional assignments. You cannot delegate to other subagents.`,
                 };
               });
             },

@@ -515,7 +515,7 @@ describe("managed initial tool activation", () => {
       for (const name of SUBAGENT_TOOL_NAMES) expect(pi.tools.has(name)).toBe(true);
       expect(pi.tools.has("subagents")).toBe(false);
       expect(pi.activeTools.at(-1)).not.toContain("subagents");
-      expect(pi.commands.has("agents-rpc")).toBe(true);
+      expect(pi.commands.has("subagents-rpc")).toBe(true);
       for (const name of [
         "inspect_agent",
         "spawn_agent",

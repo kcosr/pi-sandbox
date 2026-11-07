@@ -156,7 +156,7 @@ export function createManagedSubagentHost(options: ManagedSubagentHostOptions): 
               if (guidance !== undefined)
                 event.systemPromptOptions.sections.pi_sandbox_extension_guidance = guidance;
               event.systemPromptOptions.sections.pi_subagent_task =
-                "You are a subagent assigned one bounded task. Complete the assignment and return a concise result with evidence and blockers. Do not invent additional assignments. You cannot delegate to other agents.";
+                "You are a subagent assigned one bounded task. Complete the assignment and return a concise result with evidence and blockers. Do not invent additional assignments. You cannot delegate to other subagents.";
             });
             for (const definition of definitions)
               pi.registerTool(bindTool(definition, request, options));

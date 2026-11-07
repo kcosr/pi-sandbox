@@ -294,7 +294,7 @@ async function scenario(directory, runtime, artifact, enabled) {
       throw new Error("Parent did not settle after child notification");
     }
     const commands = await rpc("get_commands");
-    const command = commands.commands.find((item) => item.name === "agents-rpc");
+    const command = commands.commands.find((item) => item.name === "subagents-rpc");
     if (enabled) assert(command, JSON.stringify(commands));
     await rpc("prompt", { message: "Run the requested task." });
     if (!enabled) {

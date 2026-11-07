@@ -106,9 +106,9 @@ describe("subagent observation", () => {
   it("explains the machine command in the TUI while retaining RPC error responses", async () => {
     const f = fixture();
     const notify = vi.fn();
-    const command = f.commands.get("agents-rpc")!;
+    const command = f.commands.get("subagents-rpc")!;
     await command.handler("", { mode: "tui", ui: { notify } } as never);
-    expect(notify).toHaveBeenCalledWith(expect.stringContaining("Use /agents"), "info");
+    expect(notify).toHaveBeenCalledWith(expect.stringContaining("Use /subagents"), "info");
     expect(f.entries.some((entry) => entry.type === SUBAGENT_RESPONSE_ENTRY)).toBe(false);
     await command.handler("", f.context as never);
     expect(f.entries.at(-1)).toMatchObject({
@@ -178,7 +178,7 @@ describe("subagent observation", () => {
     expect(f.entries.filter((entry) => entry.type === SUBAGENT_STATE_ENTRY)).toHaveLength(1);
     f.update({ assistant: "more tokens", thinking: "more private preview", updatedAt: 3 });
     expect(f.entries).toHaveLength(1);
-    await f.commands.get("agents-rpc")!.handler(
+    await f.commands.get("subagents-rpc")!.handler(
       JSON.stringify({
         version: 1,
         requestId: "inspect-one",
@@ -209,16 +209,16 @@ describe("subagent observation", () => {
       taskId: "old-task",
     };
     await f.commands
-      .get("agents-rpc")!
+      .get("subagents-rpc")!
       .handler(JSON.stringify(request), f.context as ExtensionCommandContext);
     expect(f.cancel).not.toHaveBeenCalled();
     expect(f.entries.at(-1)!.data).toMatchObject({ requestId: "cancel-one", success: false });
     await f.commands
-      .get("agents-rpc")!
+      .get("subagents-rpc")!
       .handler(JSON.stringify({ ...request, extra: true }), f.context as ExtensionCommandContext);
     expect(f.entries.at(-1)!.data).toMatchObject({ requestId: "cancel-one", success: false });
     await f.commands
-      .get("agents-rpc")!
+      .get("subagents-rpc")!
       .handler(
         JSON.stringify({ ...request, taskId: "task-one" }),
         f.context as ExtensionCommandContext,
@@ -272,7 +272,7 @@ describe("subagent observation", () => {
         },
       },
     } as unknown as ExtensionCommandContext;
-    const opened = f.commands.get("agents")!.handler("", commandContext);
+    const opened = f.commands.get("subagents")!.handler("", commandContext);
     try {
       expect(component!.render(80).join("\n")).toContain("Inspect auth");
       component!.handleInput("\r");

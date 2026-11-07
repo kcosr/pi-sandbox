@@ -25,7 +25,7 @@ automatically.
 Stopping the parent turn (for example with Escape or RPC abort) disables automatic
 result delivery for **all existing children**, including children still running.
 Those children continue until they finish or are cancelled. A one-time notification
-points to `/agents` or `inspect_agent` for viewing their progress and results.
+points to `/subagents` or `inspect_agent` for viewing their progress and results.
 Explicitly resuming a settled child starts a new task with automatic delivery.
 
 If an idle parent cannot start a result turn, delivery retries at increasing delays
@@ -83,7 +83,7 @@ when that quota is full; it still requires a free concurrency slot.
 The compact native status appears after the first accepted child in a conversation
 and stays visible after completion. It shows only active/capacity, such as
 `Subagents 2/4`, with active work highlighted and idle counts dimmed. Ordinary Pi uses
-its standard extension status area. `/agents` opens a centered modal list with the
+its standard extension status area. `/subagents` opens a centered modal list with the
 spawn quota and task details; RPC observations retain those details as well. Use
 arrows to select a subagent and Enter to view its bounded output rendered with Pi's
 native Markdown. Scroll with arrows or Page Up/Down; Home jumps to the beginning,
@@ -92,13 +92,13 @@ the selected task. Closing the modal leaves tasks running; an approval prompt
 automatically closes the modal. Previews omit reasoning and transcript paths and
 remove terminal controls and clickable hyperlinks.
 
-`/agents-rpc` is a machine-facing command for RPC clients. Invoking it without
-arguments in interactive Pi explains how to open `/agents` instead.
+`/subagents-rpc` is a machine-facing command for RPC clients. Invoking it without
+arguments in interactive Pi explains how to open `/subagents` instead.
 
 ## RPC clients
 
 Run the main Pi in `--mode rpc`. Children still use in-process SDK sessions. First
-discover `agents-rpc` with `get_commands`; do not send an unknown slash command,
+discover `subagents-rpc` with `get_commands`; do not send an unknown slash command,
 because ordinary Pi treats unknown commands as model prompts. Use its returned
 `name` (the resolved invocation name) in a normal RPC `prompt` request:
 
@@ -106,7 +106,7 @@ because ordinary Pi treats unknown commands as model prompts. Use its returned
 {
   "id": "rpc-1",
   "type": "prompt",
-  "message": "/agents-rpc {\"version\":1,\"requestId\":\"view-1\",\"action\":\"snapshot\"}"
+  "message": "/subagents-rpc {\"version\":1,\"requestId\":\"view-1\",\"action\":\"snapshot\"}"
 }
 ```
 

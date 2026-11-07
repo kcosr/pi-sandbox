@@ -109,7 +109,7 @@ export function installDelivery(pi: ExtensionAPI, adapters: DeliveryAdapters): D
       if (!pauseNotified) {
         pauseNotified = true;
         notice(
-          "Automatic subagent results are paused because the parent could not start a turn. Use /agents or inspect_agent to view results. A successful parent turn resumes automatic delivery.",
+          "Automatic subagent results are paused because the parent could not start a turn. Use /subagents or inspect_agent to view results. A successful parent turn resumes automatic delivery.",
         );
       }
     } else {
@@ -129,7 +129,7 @@ export function installDelivery(pi: ExtensionAPI, adapters: DeliveryAdapters): D
     abortPending = false;
     if (count > 0)
       notice(
-        `Automatic results were disabled for ${count} existing subagent task${count === 1 ? "" : "s"}, including running tasks. Running tasks continue. Use /agents or inspect_agent to view their results.`,
+        `Automatic results were disabled for ${count} existing subagent task${count === 1 ? "" : "s"}, including running tasks. Running tasks continue. Use /subagents or inspect_agent to view their results.`,
       );
     if (watchedSignal) handledAborts.add(watchedSignal);
     attempts.clear();
