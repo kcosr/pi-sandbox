@@ -44,6 +44,11 @@ async function scenario({ root, directory, runtime, artifact, waitForChildren })
       parameters: { type: "object", properties: {}, additionalProperties: false },
       execute() { return Promise.resolve({ content: [{ type: "text", text: "WAIT_FIXTURE_FINISHED_BATCH" }], details: {}, terminate: true }); },
     });
+    pi.on("input", async (event) => {
+      if (event.text !== "WAIT_FIXTURE_HANDLED_INPUT") return;
+      await new Promise((resolve) => setTimeout(resolve, 1250));
+      return { action: "handled" };
+    });
     pi.on("turn_end", (event, ctx) => {
       const signal = ctx.signal;
       pi.appendEntry("acceptance:turn-end", { signalPresent: !!signal, aborted: signal?.aborted, stopReason: event.message.stopReason });
@@ -66,6 +71,12 @@ async function scenario({ root, directory, runtime, artifact, waitForChildren })
   const held = new Map();
   const closed = new Set();
   const parentCalls = [];
+  const inputMarkers = [
+    "WAIT_INPUT_STEER",
+    "WAIT_INPUT_FOLLOW_UP",
+    "WAIT_INPUT_PROMPT_STEER",
+    "WAIT_INPUT_PROMPT_FOLLOW_UP",
+  ];
   const resultMarker = (id) => `WAIT_FIXTURE_RESULT_${id}`;
   const spawnCall = (id) => ({ name: "spawn_agent", args: { task: `WAIT_FIXTURE_CHILD_${id}` } });
   const send = (response, text, calls = []) => {
@@ -137,6 +148,7 @@ async function scenario({ root, directory, runtime, artifact, waitForChildren })
       parentCalls.push({
         phase,
         consumed,
+        inputs: inputMarkers.filter((marker) => messages.includes(marker)),
         consumedFailure,
         consumedCancellation,
         settledResultCount,
@@ -423,6 +435,45 @@ async function scenario({ root, directory, runtime, artifact, waitForChildren })
         "first child wait",
       );
       await assertWaiting(staggered);
+      const beforeHandledInput = parentCalls.length;
+      assert.equal(
+        (
+          await rpc("prompt", {
+            message: "WAIT_FIXTURE_HANDLED_INPUT",
+            streamingBehavior: "steer",
+          })
+        ).disposition,
+        "handled",
+      );
+      assert.equal(
+        parentCalls.length,
+        beforeHandledInput,
+        "Input handled before enqueueing must not trigger a speculative parent request",
+      );
+      await assertWaiting(staggered);
+      for (const [index, [type, fields]] of [
+        ["steer", {}],
+        ["follow_up", {}],
+        ["prompt", { streamingBehavior: "steer" }],
+        ["prompt", { streamingBehavior: "followUp" }],
+      ].entries()) {
+        const marker = inputMarkers[index];
+        const beforeInput = messages.length;
+        const beforeCalls = parentCalls.length;
+        assert.equal((await rpc(type, { message: marker, ...fields })).disposition, "queued");
+        await waitFor(
+          () =>
+            parentCalls.at(-1).inputs.includes(marker) &&
+            assistantText("PARENT_STAGGERED_ANSWER", beforeInput),
+          `parent processes ${type}/${fields.streamingBehavior ?? "default"} while children wait`,
+        );
+        assert.equal(parentCalls.length, beforeCalls + 1);
+        await assertWaiting(staggered);
+        const pending = await observe("snapshot");
+        assert.equal(pending.active, 2);
+        assert.equal(pending.total, 2, "Parent input must not consume spawn allowance");
+        assert(!closed.has("A") && !closed.has("B"), "Input must not cancel held child work");
+      }
       release("A");
       await waitFor(
         () =>
@@ -433,7 +484,10 @@ async function scenario({ root, directory, runtime, artifact, waitForChildren })
       assert.equal((await observe("snapshot")).active, 1);
       release("B");
       await waitFor(
-        () => held.has("C") && parentCalls.filter((call) => call.phase === "staggered").length >= 4,
+        () =>
+          held.has("C") &&
+          parentCalls.at(-1).consumed.includes("A") &&
+          parentCalls.at(-1).consumed.includes("B"),
         "continuation spawning another child",
       );
       await assertWaiting(staggered);
@@ -602,7 +656,7 @@ async function scenario({ root, directory, runtime, artifact, waitForChildren })
         "Wait-mode parent abort cancels its active children",
       );
       assert(closed.has("ABORT"), "Parent abort must close the actual child provider request");
-      await delay(350);
+      await delay(1250);
       assert.equal(
         parentCalls.length,
         callsAfterAbort,

@@ -4,7 +4,7 @@ import type {
   ExtensionContext,
   SessionEntry,
 } from "@earendil-works/pi-coding-agent";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { installDelivery, RESULT_MESSAGE_TYPE, type PendingDelivery } from "./delivery.js";
 
 type Handler = (event: Record<string, unknown>, context: ExtensionContext) => unknown;
@@ -15,7 +15,7 @@ const result = (id: string, content = id): PendingDelivery => ({
   content,
 });
 
-function fixture() {
+function fixture(waitForChildren = true) {
   const handlers = new Map<string, Handler>();
   const entries: SessionEntry[] = [];
   let signal = new AbortController();
@@ -26,18 +26,20 @@ function fixture() {
   let cleanupError: Error | undefined;
   let releaseCleanup: (() => void) | undefined;
   let change: (() => void) | undefined;
+  let waiters = 0;
   const acknowledge = vi.fn((id: string) => {
     if (acknowledgementError) throw acknowledgementError;
     pending = pending.filter((item) => item.eventId !== id);
   });
   const abortParent = vi.fn(() => signal.abort());
+  const hasPendingMessages = vi.fn(() => false);
   const context = {
     sessionManager: { getEntries: () => entries, getSessionId: () => "parent" },
     get signal() {
       return signal.signal;
     },
     isIdle: () => false,
-    hasPendingMessages: () => false,
+    hasPendingMessages,
     abort: abortParent,
   } as unknown as ExtensionContext;
   const sendMessage = vi.fn();
@@ -54,8 +56,10 @@ function fixture() {
   const waitForIdle = vi.fn(
     (abort: AbortSignal) =>
       new Promise<void>((resolve, reject) => {
+        waiters += 1;
         const check = () => {
           if (!abort.aborted && !healthError && active > 0) return;
+          waiters -= 1;
           change = undefined;
           abort.removeEventListener("abort", check);
           if (healthError) reject(healthError);
@@ -85,14 +89,18 @@ function fixture() {
         return count;
       },
       onNotice: () => undefined,
-      completion: {
-        active: () => active,
-        assertHealthy: () => {
-          if (healthError) throw healthError;
-        },
-        waitForIdle,
-        quiesce,
-      },
+      ...(waitForChildren
+        ? {
+            completion: {
+              active: () => active,
+              assertHealthy: () => {
+                if (healthError) throw healthError;
+              },
+              waitForIdle,
+              quiesce,
+            },
+          }
+        : {}),
     },
   );
   delivery.updateContext(context);
@@ -108,6 +116,10 @@ function fixture() {
     sendMessage,
     quiesce,
     waitForIdle,
+    hasPendingMessages,
+    get waiters() {
+      return waiters;
+    },
     set active(value: number) {
       active = value;
       change?.();
@@ -155,7 +167,149 @@ function fixture() {
 }
 
 describe("opt-in parent completion", () => {
-  it("waits for staggered children without polling, then requires a result turn", async () => {
+  afterEach(() => vi.useRealTimers());
+
+  it("checks newly queued input once per second and releases only the child wait", async () => {
+    vi.useFakeTimers();
+    const f = fixture();
+    f.active = 1;
+    let settled = false;
+    const boundary = f.fire("turn_end").then((value) => {
+      settled = true;
+      return value;
+    });
+    const initialChecks = f.hasPendingMessages.mock.calls.length;
+    expect(f.waiters).toBe(1);
+    expect(vi.getTimerCount()).toBe(1);
+    await vi.advanceTimersByTimeAsync(999);
+    expect(f.hasPendingMessages).toHaveBeenCalledTimes(initialChecks);
+    expect(settled).toBe(false);
+    await vi.advanceTimersByTimeAsync(1);
+    expect(f.hasPendingMessages).toHaveBeenCalledTimes(initialChecks + 1);
+    expect(f.waitForIdle).toHaveBeenCalledOnce();
+    expect(f.waiters).toBe(1);
+
+    f.hasPendingMessages.mockReturnValue(true);
+    await vi.advanceTimersByTimeAsync(999);
+    expect(settled).toBe(false);
+    await vi.advanceTimersByTimeAsync(1);
+    // Pi drains its own queues after turn_end. A queue-only wake must not ask for
+    // a context-only model continuation or cancel any still-running children.
+    expect(await boundary).toBeUndefined();
+    expect(f.waiters).toBe(0);
+    expect(f.waitForIdle.mock.calls[0]![0].aborted).toBe(true);
+    expect(vi.getTimerCount()).toBe(0);
+    expect(f.quiesce).not.toHaveBeenCalled();
+    expect(f.abortParent).not.toHaveBeenCalled();
+    expect(f.sendMessage).not.toHaveBeenCalled();
+
+    f.hasPendingMessages.mockReturnValue(false);
+    await f.fire("turn_start");
+    const nextBoundary = f.fire("turn_end");
+    expect(f.waiters).toBe(1);
+    expect(vi.getTimerCount()).toBe(1);
+    f.active = 0;
+    expect(await nextBoundary).toBeUndefined();
+    expect(f.waiters).toBe(0);
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it("rechecks queued input immediately after subscribing to child completion", async () => {
+    vi.useFakeTimers();
+    const f = fixture();
+    f.active = 1;
+    f.hasPendingMessages
+      .mockReturnValueOnce(false)
+      .mockReturnValueOnce(false)
+      .mockReturnValue(true);
+    expect(await f.fire("turn_end")).toBeUndefined();
+    expect(f.waitForIdle).toHaveBeenCalledOnce();
+    expect(f.waiters).toBe(0);
+    expect(vi.getTimerCount()).toBe(0);
+    expect(f.quiesce).not.toHaveBeenCalled();
+    expect(f.abortParent).not.toHaveBeenCalled();
+    f.delivery.dispose();
+  });
+
+  it("delivers child completion immediately without waiting for the input timer", async () => {
+    vi.useFakeTimers();
+    const f = fixture();
+    f.active = 1;
+    const boundary = f.fire("turn_end");
+    const checks = f.hasPendingMessages.mock.calls.length;
+    await vi.advanceTimersByTimeAsync(250);
+    f.pending = [result("finished")];
+    f.active = 0;
+    expect((await boundary)?.entries).toHaveLength(1);
+    expect(f.waiters).toBe(0);
+    expect(vi.getTimerCount()).toBe(0);
+    await vi.advanceTimersByTimeAsync(2_000);
+    expect(f.hasPendingMessages).toHaveBeenCalledTimes(checks);
+    expect(f.abortParent).not.toHaveBeenCalled();
+  });
+
+  it.each(["idle", "tools", "continuation", "queued", "provider-error", "default"])(
+    "does not arm an input timer outside a child wait: %s",
+    async (kind) => {
+      vi.useFakeTimers();
+      const f = fixture(kind !== "default");
+      if (kind !== "idle") f.active = 1;
+      if (kind === "queued") f.hasPendingMessages.mockReturnValue(true);
+      const timer = vi.spyOn(globalThis, "setTimeout");
+      try {
+        await f.fire(
+          "turn_end",
+          kind === "tools"
+            ? { message: { role: "assistant", content: [{ type: "toolCall" }] } }
+            : kind === "continuation"
+              ? { continue: true }
+              : kind === "provider-error"
+                ? { outcome: "error" }
+                : {},
+        );
+        expect(timer).not.toHaveBeenCalled();
+        expect(f.waitForIdle).not.toHaveBeenCalled();
+        const checks = f.hasPendingMessages.mock.calls.length;
+        f.delivery.tick();
+        await vi.advanceTimersByTimeAsync(2_000);
+        expect(f.hasPendingMessages).toHaveBeenCalledTimes(checks);
+        expect(vi.getTimerCount()).toBe(0);
+      } finally {
+        timer.mockRestore();
+        f.delivery.dispose();
+      }
+    },
+  );
+
+  it.each(["pending-input", "child-health"])(
+    "aborts explicitly and removes the timer and child waiter after %s fails",
+    async (kind) => {
+      vi.useFakeTimers();
+      const f = fixture();
+      f.active = 1;
+      const waiting = f.fire("turn_end");
+      const failure = expect(waiting).rejects.toThrow(
+        /checking queued input failed|saving result failed/,
+      );
+      if (kind === "pending-input") {
+        f.hasPendingMessages.mockImplementation(() => {
+          throw new Error("checking queued input failed");
+        });
+        await vi.advanceTimersByTimeAsync(1_000);
+      } else f.healthError = new Error("saving result failed");
+      await failure;
+      expect(f.waiters).toBe(0);
+      expect(vi.getTimerCount()).toBe(0);
+      const checks = f.hasPendingMessages.mock.calls.length;
+      await vi.advanceTimersByTimeAsync(2_000);
+      expect(f.hasPendingMessages).toHaveBeenCalledTimes(checks);
+      expect(f.quiesce).toHaveBeenCalledOnce();
+      expect(f.abortParent).toHaveBeenCalled();
+      expect(f.sendMessage).not.toHaveBeenCalled();
+    },
+  );
+
+  it("waits for staggered children, then requires a result turn", async () => {
     const f = fixture();
     f.active = 2;
     let settled = false;
@@ -223,6 +377,7 @@ describe("opt-in parent completion", () => {
   });
 
   it("abort interrupts the wait and waits for cancellation cleanup", async () => {
+    vi.useFakeTimers();
     const f = fixture();
     f.active = 1;
     f.holdCleanup();
@@ -231,9 +386,11 @@ describe("opt-in parent completion", () => {
       settled = true;
     });
     f.signal.abort();
-    await Promise.resolve();
+    await vi.advanceTimersByTimeAsync(0);
     expect(f.quiesce).toHaveBeenCalledTimes(1);
     expect(settled).toBe(false);
+    expect(f.waiters).toBe(0);
+    expect(vi.getTimerCount()).toBe(0);
     f.finishCleanup();
     await boundary;
     await f.fire("agent_settled", { aborted: true });
@@ -400,11 +557,14 @@ describe("opt-in parent completion", () => {
   });
 
   it("disposal wakes an outstanding wait without scheduling another parent run", async () => {
+    vi.useFakeTimers();
     const f = fixture();
     f.active = 1;
     const boundary = f.fire("turn_end");
     f.delivery.dispose();
     expect(await boundary).toBeUndefined();
+    expect(f.waiters).toBe(0);
+    expect(vi.getTimerCount()).toBe(0);
     expect(f.abortParent).toHaveBeenCalled();
     expect(f.sendMessage).not.toHaveBeenCalled();
   });

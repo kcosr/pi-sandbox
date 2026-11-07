@@ -122,6 +122,12 @@ that normal completion event without subagent-specific polling or resume calls.
 Intermediate assistant messages and turn events are not final run completion.
 No Pi patches or additional approval UI are required.
 
+Only while blocked waiting for children, the extension checks Pi's queued user
+input once per second. Accepted steering and follow-up messages wake the parent
+while its children continue running. The check stops when the wait ends or is
+aborted; child completion still wakes the parent immediately through controller
+notifications. These are local queue checks, not model requests.
+
 In this mode, explicit parent abort cancels existing children and suppresses their
 callbacks; shutdown likewise requests cleanup. This differs from the default
 background behavior described above. A child still cleaning up retains capacity.

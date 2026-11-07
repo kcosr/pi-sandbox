@@ -55,6 +55,7 @@ interface Attempt {
 }
 const MAXIMUM_IDLE_SENDS = 6;
 const MAXIMUM_RETRY_DELAY_MS = 30_000;
+const PENDING_INPUT_CHECK_MS = 1_000;
 
 function details(result: PendingDelivery) {
   return {
@@ -283,7 +284,8 @@ export function installDelivery(pi: ExtensionAPI, adapters: DeliveryAdapters): D
   }
 
   function tick() {
-    // Waiting mode is driven only by lifecycle boundaries and controller notifications.
+    // Waiting mode handles results at lifecycle boundaries; pending-input polling
+    // runs only inside an outstanding child wait.
     // Never start an independent idle run after its operation has settled or aborted.
     if (completion || disposed || !context) return;
     try {
@@ -324,6 +326,33 @@ export function installDelivery(pi: ExtensionAPI, adapters: DeliveryAdapters): D
     }
   }
 
+  async function waitForIdleOrInput(next: ExtensionContext, signal: AbortSignal) {
+    if (completion!.active() === 0 || next.hasPendingMessages()) return;
+    const waiting = new AbortController();
+    const waitSignal = AbortSignal.any([signal, lifetime.signal, waiting.signal]);
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    try {
+      await new Promise<void>((resolve, reject) => {
+        // Stock Pi exposes no post-enqueue extension event. Check only while
+        // waiting, leaving accepted input in Pi's own steering/follow-up queues.
+        const checkInput = () => {
+          try {
+            if (next.hasPendingMessages()) resolve();
+            else timer = setTimeout(checkInput, PENDING_INPUT_CHECK_MS);
+          } catch (error) {
+            reject(error instanceof Error ? error : new Error(String(error)));
+          }
+        };
+        void completion!.waitForIdle(waitSignal).then(resolve, reject);
+        checkInput();
+      });
+    } finally {
+      if (timer !== undefined) clearTimeout(timer);
+      // A queue wake must unsubscribe the otherwise still-active child waiter.
+      waiting.abort();
+    }
+  }
+
   async function waitBoundary(event: TurnEndEvent, next: ExtensionContext) {
     try {
       updateContext(next);
@@ -351,7 +380,7 @@ export function installDelivery(pi: ExtensionAPI, adapters: DeliveryAdapters): D
       if (event.continue || next.hasPendingMessages() || (calls.length > 0 && !terminates)) return;
       const signal = next.signal;
       if (!signal) throw new Error("Pi turn_end did not provide an active abort signal");
-      await completion!.waitForIdle(AbortSignal.any([signal, lifetime.signal]));
+      await waitForIdleOrInput(next, signal);
       if (disposed) return;
       if (signal.aborted || stopped) {
         abort();
