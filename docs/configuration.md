@@ -376,6 +376,8 @@ Managed Pi ignores the ordinary extension's `.pi/subagents.json` and
 The standalone extension additionally offers opt-in `waitForChildren` completion
 for ordinary Pi and SDK hosts; managed Pi retains background completion and does
 not expose that option in administrative TOML.
+The standalone-only `forwardActivity` option also defaults off; managed Pi does
+not forward child activity or expose that option in administrative TOML.
 The optional table is additive within main schema 14; broker protocol/rules remain 10. Audit child provenance requires the paired application/collector update below.
 
 ## Code mode and MCP servers

@@ -15,6 +15,7 @@ import { parseSubagentConfig } from "./config.js";
 import { Controller, SUBAGENT_SPAWN_ENTRY } from "./controller.js";
 import type { SubagentHost, SubagentSessionRequest } from "./contracts.js";
 import { SubagentStore } from "./storage.js";
+import { type SubagentActivityEvent, SUBAGENT_ACTIVITY_ENTRY } from "./activity.js";
 
 const directories: string[] = [];
 afterEach(() => {
@@ -79,10 +80,129 @@ function fakeSession() {
     abort,
     dispose,
   } as unknown as AgentSession;
-  return { session, complete, dispose, abort };
+  return { session, complete, dispose, abort, emit: (event: unknown) => listener?.(event) };
 }
 
 describe("subagent controller", () => {
+  it.each([
+    "completed",
+    "failed",
+    "interrupted",
+    "cancelled",
+    "starting",
+    "running",
+    "stopping",
+  ] as const)(
+    "only forwards a restored %s child when recovery changes its status",
+    async (status) => {
+      const directory = root();
+      const fake = fakeSession();
+      const entries: { type: string; customType: string; data: unknown }[] = [];
+      const context = {
+        ...parent(directory),
+        sessionManager: { getSessionId: () => "parent", getEntries: () => entries },
+        ui: { notify: vi.fn() },
+      } as unknown as ExtensionContext;
+      const eventApi = {
+        ...api,
+        appendEntry: (customType: string, data: unknown) => {
+          entries.push({ type: "custom", customType, data });
+        },
+      };
+      const host = {
+        config: parseSubagentConfig({ forwardActivity: true }, directory),
+        createSession: () => Promise.resolve(fake.session),
+      };
+      const controller = new Controller(eventApi, host, "parent", context);
+      await controller.spawn("retained task", false, context);
+      fake.complete();
+      await controller.waitForIdle();
+      await controller.shutdown();
+      const store = new SubagentStore(directory, "parent");
+      store.write(1, [{ ...controller.snapshot()[0]!, status, activity: status }]);
+      store.close();
+      const count = entries.length;
+      const restored = new Controller(eventApi, host, "parent", context);
+      const changes = entries
+        .slice(count)
+        .filter((entry) => entry.customType === SUBAGENT_ACTIVITY_ENTRY)
+        .map((entry) => entry.data as SubagentActivityEvent);
+      if (["starting", "running", "stopping"].includes(status)) {
+        expect(changes).toMatchObject([{ kind: "lifecycle", status: "interrupted" }]);
+      } else {
+        expect(changes).toEqual([]);
+      }
+      await restored.shutdown();
+      const restoredCount = entries.length;
+      const reopened = new Controller(eventApi, host, "parent", context);
+      expect(entries).toHaveLength(restoredCount);
+      await reopened.shutdown();
+    },
+  );
+
+  it("observes and forwards child events without allowing observer failure to fail the task", async () => {
+    const directory = root();
+    const fake = fakeSession();
+    const entries: unknown[] = [];
+    const context = {
+      ...parent(directory),
+      sessionManager: { getSessionId: () => "parent", getEntries: () => entries },
+      ui: { notify: vi.fn() },
+    } as unknown as ExtensionContext;
+    const controller = new Controller(
+      {
+        ...api,
+        appendEntry: (customType: string, data: unknown) => {
+          entries.push({ type: "custom", customType, data });
+        },
+      },
+      {
+        config: parseSubagentConfig({ forwardActivity: true }, directory),
+        createSession: () => Promise.resolve(fake.session),
+      },
+      "parent",
+      context,
+    );
+    const observer = vi.fn(() => {
+      throw new Error("observer must not affect child work");
+    });
+    controller.subscribeActivity(observer);
+    const task = await controller.spawn("read the fixture", false, context);
+    fake.emit({
+      type: "tool_execution_start",
+      toolCallId: "tool-1",
+      toolName: "read",
+      args: { path: "fixture" },
+    });
+    fake.emit({
+      type: "tool_execution_end",
+      toolCallId: "tool-1",
+      toolName: "read",
+      isError: false,
+      result: { content: [{ type: "text", text: "fixture contents" }] },
+    });
+    fake.complete("the result");
+    await controller.waitForIdle();
+    expect(observer).toHaveBeenCalledTimes(1);
+    expect(controller.snapshot()[0]).toMatchObject({ status: "completed", result: "the result" });
+    const activity = entries
+      .filter((entry) => (entry as { customType: string }).customType === "pi-subagents:activity")
+      .map((entry) => (entry as { data: { childId: string; taskId: string; kind: string } }).data);
+    expect(
+      activity.every((event) => event.childId === task.id && event.taskId === task.taskId),
+    ).toBe(true);
+    expect(activity.map((event) => event.kind)).toContain("tool_start");
+    expect(activity.map((event) => event.kind)).toContain("tool_end");
+    expect(activity.map((event) => event.kind)).toContain("assistant");
+    await controller.shutdown();
+    const count = entries.length;
+    fake.emit({
+      type: "message_end",
+      message: { role: "assistant", content: [{ type: "text", text: "late" }] },
+    });
+    expect(entries).toHaveLength(count);
+  });
+
   it("waits for actual cleanup and additional accepted work without cancelling either task", async () => {
     const directory = root();
     const sessions = [fakeSession(), fakeSession()];

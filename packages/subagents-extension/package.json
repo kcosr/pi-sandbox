@@ -23,7 +23,8 @@
     "./factory": "./dist/factory.js",
     "./contracts": "./dist/contracts.js",
     "./controller": "./dist/controller.js",
-    "./config": "./dist/config.js"
+    "./config": "./dist/config.js",
+    "./activity": "./dist/activity.js"
   },
   "files": [
     "dist",

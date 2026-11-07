@@ -1,3 +1,4 @@
+import type { SubagentActivityEvent } from "./activity.js";
 import type { ThinkingLevel } from "@earendil-works/pi-agent-core";
 import type { Api, Model } from "@earendil-works/pi-ai";
 import type { AgentSession, ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
@@ -62,6 +63,8 @@ export interface SubagentConfig {
   readonly enabled: boolean;
   /** Keep the parent run open through child cleanup and result incorporation. */
   readonly waitForChildren: boolean;
+  /** Persist bounded child activity as namespaced parent-session custom entries. */
+  readonly forwardActivity: boolean;
   readonly maxConcurrent: number;
   /** Lifetime limit on accepted new spawns; resuming a child does not consume it. */
   readonly maxTotal: number;
@@ -110,6 +113,10 @@ export interface SubagentController {
   };
   inspect(id: string): string;
   subscribe(listener: (snapshots: readonly SubagentSnapshot[]) => void): () => void;
+  /** Observe bounded child events without changing execution; no historical replay. */
+  subscribeActivity(
+    listener: (event: SubagentActivityEvent) => void | PromiseLike<void>,
+  ): () => void;
   /** Throw if this controller closed or encountered a lifecycle/storage failure. */
   assertHealthy(): void;
   /** Wait for actual work and cleanup to finish; reject on abort, closure or lifecycle failure. */

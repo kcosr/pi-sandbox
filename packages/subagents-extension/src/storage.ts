@@ -13,6 +13,7 @@ import { randomUUID } from "node:crypto";
 import { join } from "node:path";
 import type { SubagentSnapshot } from "./contracts.js";
 import { readBoundedFile } from "./bounds.js";
+import { isProcessIdentity, previousOwnerIsDead, processIdentity } from "./owner.js";
 
 const MAXIMUM_STATE_BYTES = 64 * 1024 * 1024;
 const owners = new Set<string>();
@@ -76,13 +77,18 @@ export class SubagentStore {
     this.lockFile = join(this.directory, "owner.json");
     chmodSync(this.directory, 0o700);
     if (owners.has(this.directory)) throw new Error("Subagent session already has an owner");
+    const identity = processIdentity(process.pid);
     let reclaim: string | undefined;
     if (existsSync(this.lockFile)) {
       const old = JSON.parse(readBoundedFile(this.lockFile, 4096)) as {
+        version?: unknown;
         pid?: unknown;
         token?: unknown;
+        process?: unknown;
       };
       if (
+        old.version !== 1 ||
+        !isProcessIdentity(old.process) ||
         typeof old.pid !== "number" ||
         !Number.isSafeInteger(old.pid) ||
         old.pid <= 0 ||
@@ -90,13 +96,8 @@ export class SubagentStore {
         !/^[a-f0-9-]{36}$/u.test(old.token)
       )
         throw new Error("Invalid subagent owner record");
-      let live = true;
-      try {
-        process.kill(old.pid, 0);
-      } catch (error) {
-        if ((error as NodeJS.ErrnoException).code === "ESRCH") live = false;
-      }
-      if (live) throw new Error("Subagent session is owned by another live controller");
+      if (!previousOwnerIsDead(old.pid, old.process))
+        throw new Error("Subagent session is owned by another live controller");
       // Only one contender may reclaim a particular dead ownership generation.
       // Recheck while holding that generation's gate; a stale observer must never
       // unlink the replacement owner's file. An interrupted gate fails closed.
@@ -115,7 +116,10 @@ export class SubagentStore {
     try {
       const fd = openSync(this.lockFile, "wx", 0o600);
       try {
-        writeFileSync(fd, JSON.stringify({ pid: process.pid, token: this.token }));
+        writeFileSync(
+          fd,
+          JSON.stringify({ version: 1, pid: process.pid, token: this.token, process: identity }),
+        );
       } finally {
         closeSync(fd);
       }

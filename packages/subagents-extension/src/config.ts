@@ -9,6 +9,7 @@ const BUILTIN_TOOLS = new Set([...DEFAULT_TOOLS, "grep", "find", "ls", "powershe
 const FIELDS = new Set([
   "enabled",
   "waitForChildren",
+  "forwardActivity",
   "maxConcurrent",
   "maxTotal",
   "startupTimeoutMs",
@@ -45,6 +46,8 @@ export function parseSubagentConfig(
     throw new Error("Invalid subagent enabled");
   if (raw.waitForChildren !== undefined && typeof raw.waitForChildren !== "boolean")
     throw new Error("Invalid subagent waitForChildren");
+  if (raw.forwardActivity !== undefined && typeof raw.forwardActivity !== "boolean")
+    throw new Error("Invalid subagent forwardActivity");
   const directory = raw.stateDirectory ?? defaultDirectory;
   if (typeof directory !== "string" || !isAbsolute(directory) || directory.includes("\0"))
     throw new Error("Subagent stateDirectory must be absolute");
@@ -59,6 +62,7 @@ export function parseSubagentConfig(
   return Object.freeze({
     enabled: raw.enabled ?? true,
     waitForChildren: raw.waitForChildren ?? false,
+    forwardActivity: raw.forwardActivity ?? false,
     maxConcurrent: integer("maxConcurrent", 4, 1, 32),
     maxTotal: integer("maxTotal", 32, 1, 1024),
     startupTimeoutMs: integer("startupTimeoutMs", 30_000, 1, MAXIMUM_TIMER_MS),
@@ -70,8 +74,10 @@ export function parseSubagentConfig(
 }
 
 export function readSubagentConfig(cwd: string, trusted: boolean): SubagentConfig {
-  const path = process.env.PI_SUBAGENTS_CONFIG ?? join(cwd, ".pi", "subagents.json");
-  if ((!trusted && !process.env.PI_SUBAGENTS_CONFIG) || !existsSync(path))
-    return parseSubagentConfig({});
+  const explicit = process.env.PI_SUBAGENTS_CONFIG;
+  const path = explicit ?? join(cwd, ".pi", "subagents.json");
+  // An explicitly selected configuration is required, even in untrusted projects.
+  // Missing it must never silently disable waiting or other host-selected behavior.
+  if (explicit === undefined && (!trusted || !existsSync(path))) return parseSubagentConfig({});
   return parseSubagentConfig(JSON.parse(readBoundedFile(path, 65_536)));
 }

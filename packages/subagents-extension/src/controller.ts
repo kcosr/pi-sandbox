@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import { SubagentActivity, type SubagentActivityEvent } from "./activity.js";
 import type { AgentSession, ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import type { Api, Model } from "@earendil-works/pi-ai";
 import { boundedTail, boundedText, validateTask } from "./bounds.js";
@@ -36,6 +37,7 @@ export const SUBAGENT_SPAWN_ENTRY = "pi-subagents:spawn";
 export class Controller implements SubagentController {
   public readonly parentSessionId: string;
   private readonly store: SubagentStore;
+  private readonly activity: SubagentActivity;
   private readonly children = new Map<string, Child>();
   private readonly listeners = new Set<(snapshots: readonly SubagentSnapshot[]) => void>();
   private readonly idleWaiters = new Set<() => void>();
@@ -55,9 +57,17 @@ export class Controller implements SubagentController {
     private readonly parentContext?: ExtensionContext,
   ) {
     this.parentSessionId = parentSessionId;
+    this.activity = new SubagentActivity(
+      pi,
+      parentSessionId,
+      host.config.enabled && host.config.forwardActivity,
+      parentContext?.sessionManager.getEntries() ?? [],
+      (message) => parentContext?.ui.notify(message, "warning"),
+    );
     this.store = new SubagentStore(host.config.stateDirectory, parentSessionId);
     try {
       const saved = this.store.read();
+      this.activity.seedSnapshots(saved.records);
       this.total = saved.used;
       for (const entry of parentContext?.sessionManager.getEntries() ?? []) {
         if (entry.type !== "custom" || entry.customType !== SUBAGENT_SPAWN_ENTRY) continue;
@@ -89,7 +99,9 @@ export class Controller implements SubagentController {
         this.children.set(value.id, child);
       }
       this.persist();
+      this.activity.snapshots(this.snapshot());
     } catch (error) {
+      this.activity.dispose();
       this.store.close();
       throw error;
     }
@@ -128,6 +140,11 @@ export class Controller implements SubagentController {
     return () => {
       this.listeners.delete(listener);
     };
+  }
+  public subscribeActivity(
+    listener: (event: SubagentActivityEvent) => void | PromiseLike<void>,
+  ): () => void {
+    return this.activity.subscribe(listener);
   }
   public assertHealthy(): void {
     if (this.lifecycleError) throw this.lifecycleError;
@@ -173,6 +190,7 @@ export class Controller implements SubagentController {
       this.notification = undefined;
     }
     const snapshot = this.snapshot();
+    this.activity.snapshots(snapshot);
     for (const listener of this.listeners) {
       try {
         listener(snapshot);
@@ -389,6 +407,7 @@ export class Controller implements SubagentController {
         // in that gap must be repeated once Pi can honor it, before its first request.
         if (event.type === "agent_start" && (child.abort.signal.aborted || !request.isCurrent()))
           void session.abort().catch(() => undefined);
+        this.activity.sessionEvent(child.value, event);
         child.progress.event(event);
         const progress = child.progress;
         child.value = {
@@ -711,6 +730,7 @@ export class Controller implements SubagentController {
       if (this.notification) clearTimeout(this.notification);
       this.notification = undefined;
       this.listeners.clear();
+      this.activity.dispose();
       this.releaseStoreIfSettled();
     }
   }

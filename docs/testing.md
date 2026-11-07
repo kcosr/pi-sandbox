@@ -212,6 +212,14 @@ reads, conflict checks before I/O, per-request snapshots and fresh subsequent
 reads, post-resolution aggregate limits, symbolic installation validation,
 explicit MCP mapping and unchanged sandbox/extension environment isolation.
 
+Standalone subagent tests cover explicit-config failures, process-instance
+ownership and stale PID recovery, bounded child activity, observer errors and
+persistent forwarding quotas. The packed-package RPC smoke exercises activity
+forwarding with stock Pi under Node and Bun, including resumed task identities,
+text/tool events, and parent waiting/input/cancellation with forwarding enabled.
+The process-identity probes for macOS and Windows require native qualification;
+Linux tests do not qualify those platforms.
+
 ### Integration
 
 A deterministic fake Pi API loads the built extension without contacting a

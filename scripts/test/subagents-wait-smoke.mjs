@@ -30,6 +30,7 @@ async function scenario({ root, directory, runtime, artifact, waitForChildren })
     config,
     JSON.stringify({
       maxConcurrent: 3,
+      forwardActivity: true,
       maxTotal: 10,
       cancelTimeoutMs: 2000,
       ...(waitForChildren ? { waitForChildren: true } : {}),

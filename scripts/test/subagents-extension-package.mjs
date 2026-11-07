@@ -92,6 +92,7 @@ async function scenario(directory, runtime, artifact, enabled) {
     config,
     JSON.stringify({
       enabled,
+      forwardActivity: enabled,
       maxConcurrent: 2,
       maxTotal: 1,
       ...(enabled ? {} : { waitForChildren: true }),
@@ -353,6 +354,33 @@ async function scenario(directory, runtime, artifact, enabled) {
       const resumedSnapshot = await observe("snapshot");
       assert.equal(resumedSnapshot.total, 1);
       assert.notEqual(resumedSnapshot.agents[0].taskId, agent.taskId);
+      const activity = messages
+        .filter(
+          (event) =>
+            event.type === "entry_appended" && event.entry?.customType === "pi-subagents:activity",
+        )
+        .map((event) => event.entry.data);
+      assert(
+        activity.some(
+          (event) => event.kind === "assistant" && event.text.includes("SDK_CHILD_DONE"),
+        ),
+      );
+      assert(activity.some((event) => event.kind === "tool_start" && event.toolName === "read"));
+      assert(
+        activity.some(
+          (event) => event.kind === "tool_end" && event.result.includes("SDK_CHILD_READ_OK"),
+        ),
+      );
+      assert(activity.some((event) => event.kind === "lifecycle" && event.status === "completed"));
+      assert(activity.every((event) => event.version === 1 && event.childId === agent.id));
+      assert(activity.some((event) => event.taskId === agent.taskId));
+      assert(activity.some((event) => event.taskId === resumedSnapshot.agents[0].taskId));
+      assert(
+        activity.every(
+          (event, index) => index === 0 || event.sequence > activity[index - 1].sequence,
+        ),
+      );
+      assert(activity.every((event) => Buffer.byteLength(JSON.stringify(event)) <= 16 * 1024));
       const requestsBeforeCap = childRequests;
       planned = {
         name: "spawn_agent",
@@ -376,7 +404,8 @@ async function scenario(directory, runtime, artifact, enabled) {
       );
       const transcript = await rpc("get_messages");
       assert(
-        !JSON.stringify(transcript).includes("observation-"),
+        !JSON.stringify(transcript).includes("observation-") &&
+          !JSON.stringify(transcript).includes("pi-subagents:activity"),
         "Observation entries must not become model messages",
       );
       assert.equal((await observe("snapshot")).total, 1);
@@ -386,7 +415,7 @@ async function scenario(directory, runtime, artifact, enabled) {
     assert.equal(await ended, 0, stderr);
     assert.equal(await readFile(join(workspace, "sample.txt"), "utf8"), "SDK_CHILD_READ_OK\n");
     console.log(
-      `Packed subagents (${runtime}, enabled=${enabled}): RPC parent, SDK children, observation and quotas passed`,
+      `Packed subagents (${runtime}, enabled=${enabled}): RPC parent, SDK children, bounded activity, observation and quotas passed`,
     );
   } finally {
     lines?.close();

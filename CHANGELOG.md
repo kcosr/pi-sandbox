@@ -2,6 +2,19 @@
 
 ## Unreleased
 
+### Added
+
+- Add optional bounded subagent activity events for parent RPC clients and embedding
+  applications, including completed messages, tool calls/results and task status.
+  ([#54](https://github.com/kcosr/pi-sandbox/pull/54))
+
+### Fixed
+
+- Reject missing explicit subagent configuration and recover stale state ownership
+  after process death or PID reuse. Close existing sessions before updating;
+  older ownership markers without process identity are no longer accepted.
+  ([#54](https://github.com/kcosr/pi-sandbox/pull/54))
+
 ## 0.13.0 - 2026-11-07
 
 ### Breaking changes
