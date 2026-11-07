@@ -50,8 +50,77 @@ function assistant(activity: SubagentActivity, text: string, task = snapshot()) 
     },
   });
 }
+const entryBytes = (event: SubagentActivityEvent) =>
+  Buffer.byteLength(JSON.stringify(event)) + 1024;
+const serializedEntry = (event: SubagentActivityEvent) =>
+  JSON.stringify({
+    type: "entry_appended",
+    entry: {
+      type: "custom",
+      id: "01234567",
+      parentId: "89abcdef",
+      timestamp: new Date(event.timestamp).toISOString(),
+      customType: SUBAGENT_ACTIVITY_ENTRY,
+      data: event,
+    },
+  });
 
 describe("bounded subagent activity", () => {
+  it("omits tool-call-only assistant messages and retains mixed text without false truncation", () => {
+    const f = fixture();
+    const toolCall = { type: "toolCall", id: "call", name: "read", arguments: { path: "file" } };
+    f.activity.sessionEvent(snapshot(), {
+      type: "message_end",
+      message: { role: "assistant", content: [toolCall] },
+    });
+    expect(f.events()).toEqual([]);
+    f.activity.sessionEvent(snapshot(), {
+      type: "message_end",
+      message: {
+        role: "assistant",
+        content: [{ type: "text", text: "Reading now" }, toolCall],
+      },
+    });
+    expect(f.events()).toMatchObject([
+      { kind: "assistant", text: "Reading now", truncated: false },
+    ]);
+  });
+
+  it("persists lifecycle changes without progress-only updates", () => {
+    const f = fixture();
+    const child = snapshot();
+    f.activity.snapshots([child]);
+    for (const activity of ["writing", "running read", "thinking"])
+      f.activity.snapshots([{ ...child, activity }]);
+    f.activity.snapshots([{ ...child, status: "completed", activity: "completed" }]);
+    f.activity.snapshots([{ ...child, taskId: "task-two", activity: "writing" }]);
+    expect(f.events()).toMatchObject([
+      { kind: "lifecycle", taskId: "task-one", status: "running", activity: "thinking" },
+      { kind: "lifecycle", taskId: "task-one", status: "completed" },
+      { kind: "lifecycle", taskId: "task-two", status: "running", activity: "writing" },
+    ]);
+  });
+
+  it("drops malformed tool identities without exhausting a task on restore", () => {
+    const f = fixture();
+    for (const identity of [
+      {},
+      { toolCallId: "call", toolName: "x".repeat(513) },
+      { toolCallId: "call", toolName: "read", parentToolCallId: "" },
+    ]) {
+      f.activity.sessionEvent(snapshot(), { type: "tool_execution_start", ...identity, args: {} });
+      f.activity.sessionEvent(snapshot(), { type: "tool_execution_end", ...identity, result: {} });
+    }
+    expect(f.events()).toEqual([]);
+    assistant(f.activity, "first answer");
+    const restored = fixture(true, f.entries);
+    assistant(restored.activity, "still visible");
+    expect(restored.events()).toMatchObject([
+      { kind: "assistant", text: "first answer" },
+      { kind: "assistant", text: "still visible" },
+    ]);
+  });
+
   it("forwards only namespaced completed text, tool events and changed lifecycle", () => {
     const f = fixture();
     const child = snapshot();
@@ -151,6 +220,33 @@ describe("bounded subagent activity", () => {
     expect(listener).toHaveBeenCalledTimes(3);
   });
 
+  it("isolates rejected async observers without an unhandled rejection", async () => {
+    const f = fixture();
+    const broken = vi.fn(async () => {
+      await Promise.resolve();
+      throw new Error("async observer broke");
+    });
+    const good = vi.fn();
+    const unhandled = vi.fn();
+    process.on("unhandledRejection", unhandled);
+    try {
+      f.activity.subscribe(broken);
+      f.activity.subscribe(good);
+      assistant(f.activity, "one");
+      await new Promise<void>((resolve) => setImmediate(resolve));
+      assistant(f.activity, "two");
+      expect(broken).toHaveBeenCalledTimes(1);
+      expect(good).toHaveBeenCalledTimes(3);
+      expect(f.events().filter((event) => event.kind === "truncated")).toMatchObject([
+        { scope: "session", reason: "observer_error" },
+      ]);
+      expect(f.diagnostic).toHaveBeenCalledTimes(1);
+      expect(unhandled).not.toHaveBeenCalled();
+    } finally {
+      process.off("unhandledRejection", unhandled);
+    }
+  });
+
   it("bounds serialized escaped text and arguments, retaining tool identity", () => {
     const f = fixture();
     assistant(f.activity, "\u0000".repeat(40_000));
@@ -162,7 +258,8 @@ describe("bounded subagent activity", () => {
     });
     expect(f.events()).toHaveLength(2);
     for (const event of f.events()) {
-      expect(Buffer.byteLength(JSON.stringify(event))).toBeLessThanOrEqual(
+      expect(entryBytes(event)).toBeLessThanOrEqual(SUBAGENT_ACTIVITY_LIMITS.event);
+      expect(Buffer.byteLength(serializedEntry(event))).toBeLessThanOrEqual(
         SUBAGENT_ACTIVITY_LIMITS.event,
       );
       expect(event).toMatchObject({ truncated: true });
@@ -176,9 +273,9 @@ describe("bounded subagent activity", () => {
     for (let i = 0; i < 160; i++) assistant(f.activity, text);
     const taskMarker = f.events().filter((event) => event.kind === "truncated");
     expect(taskMarker).toMatchObject([{ scope: "task", reason: "byte_limit" }]);
-    expect(
-      f.events().reduce((total, event) => total + Buffer.byteLength(JSON.stringify(event)), 0),
-    ).toBeLessThanOrEqual(SUBAGENT_ACTIVITY_LIMITS.task);
+    expect(f.events().reduce((total, event) => total + entryBytes(event), 0)).toBeLessThanOrEqual(
+      SUBAGENT_ACTIVITY_LIMITS.task,
+    );
     const restored = fixture(true, f.entries);
     const priorCount = restored.entries.length;
     assistant(restored.activity, "same task");
@@ -192,9 +289,7 @@ describe("bounded subagent activity", () => {
       restored.events().filter((event) => event.kind === "truncated" && event.scope === "session"),
     ).toHaveLength(1);
     expect(
-      restored
-        .events()
-        .reduce((total, event) => total + Buffer.byteLength(JSON.stringify(event)), 0),
+      restored.events().reduce((total, event) => total + entryBytes(event), 0),
     ).toBeLessThanOrEqual(SUBAGENT_ACTIVITY_LIMITS.session);
     const exhausted = fixture(true, restored.entries);
     expect(exhausted.diagnostic).toHaveBeenCalledTimes(1);
@@ -204,5 +299,25 @@ describe("bounded subagent activity", () => {
     const exhaustedCount = exhausted.entries.length;
     assistant(exhausted.activity, "future task", snapshot("task-future"));
     expect(exhausted.entries).toHaveLength(exhaustedCount);
+    expect(
+      restored
+        .events()
+        .reduce((total, event) => total + Buffer.byteLength(serializedEntry(event)), 0),
+    ).toBeLessThanOrEqual(SUBAGENT_ACTIVITY_LIMITS.session);
+  });
+
+  it("charges the same entry overhead when restoring a partially used task budget", () => {
+    const f = fixture();
+    for (let index = 0; index < 450; index++) assistant(f.activity, "small completed message");
+    expect(f.events().some((event) => event.kind === "truncated")).toBe(false);
+    const restored = fixture(true, f.entries);
+    for (let index = 0; index < 450; index++)
+      assistant(restored.activity, "small completed message");
+    expect(restored.events().filter((event) => event.kind === "truncated")).toMatchObject([
+      { scope: "task", reason: "byte_limit" },
+    ]);
+    expect(
+      restored.events().reduce((total, event) => total + entryBytes(event), 0),
+    ).toBeLessThanOrEqual(SUBAGENT_ACTIVITY_LIMITS.task);
   });
 });

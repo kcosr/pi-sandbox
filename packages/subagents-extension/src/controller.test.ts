@@ -15,6 +15,7 @@ import { parseSubagentConfig } from "./config.js";
 import { Controller, SUBAGENT_SPAWN_ENTRY } from "./controller.js";
 import type { SubagentHost, SubagentSessionRequest } from "./contracts.js";
 import { SubagentStore } from "./storage.js";
+import { type SubagentActivityEvent, SUBAGENT_ACTIVITY_ENTRY } from "./activity.js";
 
 const directories: string[] = [];
 afterEach(() => {
@@ -83,6 +84,62 @@ function fakeSession() {
 }
 
 describe("subagent controller", () => {
+  it.each([
+    "completed",
+    "failed",
+    "interrupted",
+    "cancelled",
+    "starting",
+    "running",
+    "stopping",
+  ] as const)(
+    "only forwards a restored %s child when recovery changes its status",
+    async (status) => {
+      const directory = root();
+      const fake = fakeSession();
+      const entries: { type: string; customType: string; data: unknown }[] = [];
+      const context = {
+        ...parent(directory),
+        sessionManager: { getSessionId: () => "parent", getEntries: () => entries },
+        ui: { notify: vi.fn() },
+      } as unknown as ExtensionContext;
+      const eventApi = {
+        ...api,
+        appendEntry: (customType: string, data: unknown) => {
+          entries.push({ type: "custom", customType, data });
+        },
+      };
+      const host = {
+        config: parseSubagentConfig({ forwardActivity: true }, directory),
+        createSession: () => Promise.resolve(fake.session),
+      };
+      const controller = new Controller(eventApi, host, "parent", context);
+      await controller.spawn("retained task", false, context);
+      fake.complete();
+      await controller.waitForIdle();
+      await controller.shutdown();
+      const store = new SubagentStore(directory, "parent");
+      store.write(1, [{ ...controller.snapshot()[0]!, status, activity: status }]);
+      store.close();
+      const count = entries.length;
+      const restored = new Controller(eventApi, host, "parent", context);
+      const changes = entries
+        .slice(count)
+        .filter((entry) => entry.customType === SUBAGENT_ACTIVITY_ENTRY)
+        .map((entry) => entry.data as SubagentActivityEvent);
+      if (["starting", "running", "stopping"].includes(status)) {
+        expect(changes).toMatchObject([{ kind: "lifecycle", status: "interrupted" }]);
+      } else {
+        expect(changes).toEqual([]);
+      }
+      await restored.shutdown();
+      const restoredCount = entries.length;
+      const reopened = new Controller(eventApi, host, "parent", context);
+      expect(entries).toHaveLength(restoredCount);
+      await reopened.shutdown();
+    },
+  );
+
   it("observes and forwards child events without allowing observer failure to fail the task", async () => {
     const directory = root();
     const fake = fakeSession();

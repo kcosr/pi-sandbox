@@ -219,7 +219,9 @@ export. Every event has `version: 1`, `parentSessionId`, observer `epoch`, stric
 increasing `sequence` within that epoch, `childId`, task-generation `taskId`,
 a compact `label`, and a millisecond Unix `timestamp`. The `kind` union is:
 
-- `lifecycle`: `status` and `activity` from the child snapshot.
+- `lifecycle`: `status` and `activity` from the child snapshot, emitted only when
+  task generation or status changes. Progress-only changes and unchanged retained
+  children do not generate entries; recovery from an active state to interrupted does.
 - `assistant`: completed `text` and a `truncated` flag.
 - `tool_start`: `toolCallId`, `toolName`, optional `parentToolCallId`, display-only
   JSON `args` text and `truncated`.
@@ -232,9 +234,11 @@ retains the child ID but creates a new task ID. Never process these as native
 parent assistant/tool events. An omitted terminal event does not prove that the
 child completed successfully.
 
-Each serialized activity event is limited to 16 KiB. Forwarding is bounded to
-1 MiB per task generation and 8 MiB per parent session, reserving a truncation
-marker before a scope is exhausted. Byte totals are recovered from retained
+Each serialized activity entry is limited to 16 KiB: event data is capped at
+15 KiB, reserving 1 KiB for Pi's entry and RPC envelope. Forwarding is bounded to
+1 MiB per task generation and 8 MiB per parent session, charging the same 1 KiB
+overhead per entry and reserving a truncation marker before a scope is exhausted.
+Byte totals, including that overhead, are recovered from retained
 activity entries on session startup, so reopening a parent does not reset them.
 Reopening an exhausted parent emits a nonpersisted warning through Pi's normal
 UI/RPC notification channel, so a new client sees why activity is unavailable
@@ -245,14 +249,16 @@ apply stricter capture limits in addition to these limits.
 Embedders can use `controller.subscribeActivity(listener)` for the same bounded
 event shapes without enabling persistence. It does not replay history, and its
 returned function unsubscribes the listener. Subscriptions end on controller
-shutdown. A throwing listener is removed; one bounded diagnostic is emitted
+shutdown. A listener that throws or returns a rejected promise is removed; one bounded diagnostic is emitted
 without failing a task. A persistence error stops forwarding rather than changing
 task results. Direct observers receive events independently of the forwarding
 byte budget.
 
-State ownership records identify the owning process instance, including its
-start and host boot identity, so a stale lock is recoverable after process death
-or PID reuse. Unverifiable ownership remains locked; a live owner is not displaced.
+State ownership records identify the owning process instance from its PID and
+start time, plus the host boot identity for Linux's boot-relative start ticks,
+so a stale lock is recoverable after process death or PID reuse. Non-Linux
+wall-clock boot timestamps do not establish owner death. Unverifiable ownership
+remains locked; a live owner is not displaced.
 The same state directory must not be used simultaneously in independent PID
 namespaces. Existing owner records from versions without process identity are
 rejected: close sessions before updating, or, after confirming their process has

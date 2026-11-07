@@ -2,12 +2,10 @@ import { execFileSync } from "node:child_process";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 
-/** Kernel boot and process start identity, independent of a reused numeric PID. */
-export interface ProcessIdentity {
-  readonly platform: NodeJS.Platform;
-  readonly boot: string;
-  readonly start: string;
-}
+/** Linux boot-relative ticks or an absolute process start, independent of a reused PID. */
+export type ProcessIdentity =
+  | Readonly<{ platform: "linux"; boot: string; start: string }>
+  | Readonly<{ platform: "darwin" | "win32"; start: string }>;
 
 type ProcessProbe =
   | { readonly state: "live"; readonly identity: ProcessIdentity }
@@ -49,14 +47,10 @@ export function probeProcess(pid: number): ProcessProbe {
       return { state: "live", identity: { platform: process.platform, boot, start } };
     }
     if (process.platform === "darwin") {
-      const bootTime = command("/usr/sbin/sysctl", ["-n", "kern.boottime"]);
-      const match = /sec\s*=\s*(\d+),\s*usec\s*=\s*(\d+)/u.exec(bootTime);
-      const boot = match ? `${match[1]}:${match[2]}` : undefined;
       const start = command("/bin/ps", ["-p", String(pid), "-o", "lstart="]);
       const state = command("/bin/ps", ["-p", String(pid), "-o", "stat="]);
       if (state.startsWith("Z")) return { state: "dead" };
-      if (boot && start)
-        return { state: "live", identity: { platform: process.platform, boot, start } };
+      if (start) return { state: "live", identity: { platform: process.platform, start } };
     }
     if (process.platform === "win32" && process.env.SystemRoot) {
       const powershell = join(
@@ -66,18 +60,17 @@ export function probeProcess(pid: number): ProcessProbe {
         "v1.0",
         "powershell.exe",
       );
-      const text = command(powershell, [
+      const start = command(powershell, [
         "-NoLogo",
         "-NonInteractive",
         "-NoProfile",
         "-Command",
-        `$ErrorActionPreference='Stop'; $p=Get-Process -Id ${pid}; $o=Get-CimInstance Win32_OperatingSystem; @{boot=$o.LastBootUpTime.ToUniversalTime().Ticks.ToString();start=$p.StartTime.ToUniversalTime().Ticks.ToString()} | ConvertTo-Json -Compress`,
+        `$ErrorActionPreference='Stop'; $p=Get-Process -Id ${pid}; $p.StartTime.ToUniversalTime().Ticks.ToString()`,
       ]);
-      const data = JSON.parse(text) as { boot?: unknown; start?: unknown };
-      if (typeof data.boot === "string" && typeof data.start === "string")
+      if (/^\d+$/u.test(start))
         return {
           state: "live",
-          identity: { platform: process.platform, boot: data.boot, start: data.start },
+          identity: { platform: process.platform, start },
         };
     }
   } catch {
@@ -91,22 +84,28 @@ export function probeProcess(pid: number): ProcessProbe {
   return { state: "unknown" };
 }
 
+let currentProcessIdentity: ProcessIdentity | undefined;
+
 export function processIdentity(pid: number): ProcessIdentity {
+  if (pid === process.pid && currentProcessIdentity) return currentProcessIdentity;
   const probe = probeProcess(pid);
   if (probe.state !== "live") throw new Error("Cannot establish subagent owner process identity");
-  return probe.identity;
+  const identity = Object.freeze(probe.identity);
+  if (pid === process.pid) currentProcessIdentity = identity;
+  return identity;
 }
 
 export function isProcessIdentity(value: unknown): value is ProcessIdentity {
   if (!value || typeof value !== "object" || Array.isArray(value)) return false;
   const input = value as Record<string, unknown>;
   return (
-    Object.keys(input).length === 3 &&
-    typeof input.platform === "string" &&
-    ["linux", "darwin", "win32"].includes(input.platform) &&
-    typeof input.boot === "string" &&
-    input.boot.length > 0 &&
-    input.boot.length <= 256 &&
+    (input.platform === "linux"
+      ? Object.keys(input).length === 3 &&
+        typeof input.boot === "string" &&
+        input.boot.length > 0 &&
+        input.boot.length <= 256
+      : Object.keys(input).length === 2 &&
+        (input.platform === "darwin" || input.platform === "win32")) &&
     typeof input.start === "string" &&
     input.start.length > 0 &&
     input.start.length <= 256
@@ -119,7 +118,11 @@ export function previousOwnerIsDead(pid: number, identity: ProcessIdentity): boo
   if (probe.state === "unknown") return false;
   return (
     probe.identity.platform !== identity.platform ||
-    probe.identity.boot !== identity.boot ||
+    // Linux starts are boot-relative ticks. Other platforms report absolute
+    // process start times; their boot timestamps can change after a clock step.
+    (identity.platform === "linux" &&
+      probe.identity.platform === "linux" &&
+      probe.identity.boot !== identity.boot) ||
     probe.identity.start !== identity.start
   );
 }

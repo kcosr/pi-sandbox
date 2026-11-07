@@ -114,7 +114,9 @@ export interface SubagentController {
   inspect(id: string): string;
   subscribe(listener: (snapshots: readonly SubagentSnapshot[]) => void): () => void;
   /** Observe bounded child events without changing execution; no historical replay. */
-  subscribeActivity(listener: (event: SubagentActivityEvent) => void): () => void;
+  subscribeActivity(
+    listener: (event: SubagentActivityEvent) => void | PromiseLike<void>,
+  ): () => void;
   /** Throw if this controller closed or encountered a lifecycle/storage failure. */
   assertHealthy(): void;
   /** Wait for actual work and cleanup to finish; reject on abort, closure or lifecycle failure. */

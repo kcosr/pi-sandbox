@@ -67,6 +67,7 @@ export class Controller implements SubagentController {
     this.store = new SubagentStore(host.config.stateDirectory, parentSessionId);
     try {
       const saved = this.store.read();
+      this.activity.seedSnapshots(saved.records);
       this.total = saved.used;
       for (const entry of parentContext?.sessionManager.getEntries() ?? []) {
         if (entry.type !== "custom" || entry.customType !== SUBAGENT_SPAWN_ENTRY) continue;
@@ -140,7 +141,9 @@ export class Controller implements SubagentController {
       this.listeners.delete(listener);
     };
   }
-  public subscribeActivity(listener: (event: SubagentActivityEvent) => void): () => void {
+  public subscribeActivity(
+    listener: (event: SubagentActivityEvent) => void | PromiseLike<void>,
+  ): () => void {
     return this.activity.subscribe(listener);
   }
   public assertHealthy(): void {

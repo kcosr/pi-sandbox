@@ -4,13 +4,14 @@ import { boundedText } from "./bounds.js";
 import type { SubagentSnapshot, SubagentStatus } from "./contracts.js";
 
 export const SUBAGENT_ACTIVITY_ENTRY = "pi-subagents:activity";
-/** UTF-8 bytes of serialized activity events, including their correlation envelope. */
+/** UTF-8 bytes per entry, task and session, including the reserved Pi/RPC envelope. */
 export const SUBAGENT_ACTIVITY_LIMITS = Object.freeze({
   event: 16 * 1024,
   task: 1024 * 1024,
   session: 8 * 1024 * 1024,
 });
-const MARKER_RESERVE = 2048;
+const ENTRY_OVERHEAD = 1024;
+const MARKER_RESERVE = 2048 + ENTRY_OVERHEAD;
 const CONTENT_BYTES = 8192;
 
 type ActivityIdentity = Readonly<{
@@ -56,10 +57,13 @@ function object(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 function size(value: unknown): number {
-  return Buffer.byteLength(JSON.stringify(value));
+  return Buffer.byteLength(JSON.stringify(value)) + ENTRY_OVERHEAD;
 }
 function taskKey(value: { childId: string; taskId: string }): string {
   return `${value.childId}\0${value.taskId}`;
+}
+function lifecycleSignature(snapshot: SubagentSnapshot): string {
+  return `${snapshot.taskId}\0${snapshot.status}`;
 }
 function identifier(value: unknown): value is string {
   return typeof value === "string" && value.length > 0 && Buffer.byteLength(value) <= 512;
@@ -75,8 +79,8 @@ function textContent(content: unknown): { text: string; truncated: boolean } {
     }
     if (!object(block)) continue;
     if (block.type !== "text" || typeof block.text !== "string") {
-      // Reasoning and binary blocks are deliberately never copied.
-      if (block.type !== "thinking") truncated = true;
+      // Reasoning is private, and tool calls have separate execution events.
+      if (block.type !== "thinking" && block.type !== "toolCall") truncated = true;
       continue;
     }
     const next = text + boundedText(block.text, CONTENT_BYTES);
@@ -136,7 +140,9 @@ function argumentsText(value: unknown): { text: string; truncated: boolean } {
 export class SubagentActivity {
   private readonly epoch = randomUUID();
   private sequence = 0;
-  private readonly listeners = new Set<(event: SubagentActivityEvent) => void>();
+  private readonly listeners = new Set<
+    (event: SubagentActivityEvent) => void | PromiseLike<void>
+  >();
   private readonly lifecycle = new Map<string, string>();
   private readonly taskBytes = new Map<string, number>();
   private readonly truncatedTasks = new Set<string>();
@@ -188,7 +194,7 @@ export class SubagentActivity {
     }
   }
 
-  subscribe(listener: (event: SubagentActivityEvent) => void): () => void {
+  subscribe(listener: (event: SubagentActivityEvent) => void | PromiseLike<void>): () => void {
     if (this.disposed) return () => undefined;
     this.listeners.add(listener);
     return () => {
@@ -204,11 +210,15 @@ export class SubagentActivity {
     return !this.disposed && (this.forwarding || this.listeners.size > 0);
   }
 
+  seedSnapshots(snapshots: readonly SubagentSnapshot[]): void {
+    for (const snapshot of snapshots) this.lifecycle.set(snapshot.id, lifecycleSignature(snapshot));
+  }
+
   snapshots(snapshots: readonly SubagentSnapshot[]): void {
     if (!this.observing) return;
     for (const snapshot of snapshots) {
       const key = snapshot.id;
-      const signature = `${snapshot.taskId}\0${snapshot.status}\0${snapshot.activity}`;
+      const signature = lifecycleSignature(snapshot);
       if (this.lifecycle.get(key) === signature) continue;
       this.lifecycle.set(key, signature);
       this.emit(snapshot, {
@@ -234,10 +244,8 @@ export class SubagentActivity {
       !identifier(value.toolCallId) ||
       !identifier(value.toolName) ||
       (value.parentToolCallId !== undefined && !identifier(value.parentToolCallId))
-    ) {
-      this.emit(snapshot, { kind: "truncated", scope: "task", reason: "byte_limit" });
+    )
       return;
-    }
     const identity = {
       toolCallId: value.toolCallId,
       toolName: value.toolName,
@@ -305,7 +313,17 @@ export class SubagentActivity {
     let failed = false;
     for (const listener of this.listeners) {
       try {
-        listener(event);
+        const result: unknown = listener(event);
+        if (
+          result &&
+          (typeof result === "object" || typeof result === "function") &&
+          typeof (result as PromiseLike<unknown>).then === "function"
+        ) {
+          void Promise.resolve(result).catch(() => {
+            this.listeners.delete(listener);
+            if (!this.disposed) this.observerError(event);
+          });
+        }
       } catch {
         this.listeners.delete(listener);
         failed = true;
@@ -363,6 +381,7 @@ export class SubagentActivity {
   private forward(event: SubagentActivityEvent): void {
     if (!this.forwarding || this.sessionTruncated) return;
     const key = taskKey(event);
+    if (this.truncatedTasks.has(key)) return;
     const bytes = size(event);
     if (this.sessionBytes + bytes + MARKER_RESERVE > SUBAGENT_ACTIVITY_LIMITS.session) {
       this.sessionTruncated = true;
@@ -371,7 +390,6 @@ export class SubagentActivity {
       if (this.notify(marker)) this.observerError(marker);
       return;
     }
-    if (this.truncatedTasks.has(key)) return;
     if ((this.taskBytes.get(key) ?? 0) + bytes + MARKER_RESERVE > SUBAGENT_ACTIVITY_LIMITS.task) {
       this.truncatedTasks.add(key);
       const marker = this.marker(event, "task", "byte_limit");
