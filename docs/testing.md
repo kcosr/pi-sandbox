@@ -3,9 +3,10 @@
 ## Reusable extension acceptance
 
 Shared package unit tests run with `npm run test:unit`. `npm run test:extension`
-builds and inspects both tarballs, checks their emitted JS/declaration imports,
+builds and inspects all three extension tarballs, checks their emitted JS/declaration imports,
 and starts stock Pi 1.5.0 against independently extracted artifacts. Sandbox is
 installed without Git or permissions; Git is installed alone and with sandbox.
+Subagents are installed independently of both other extensions.
 No workspace package links are admitted. Provenance includes Git's bundled runner.
 
 To exercise a bundle-bearing artifact, run each package script with the same
