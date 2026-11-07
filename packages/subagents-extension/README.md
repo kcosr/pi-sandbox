@@ -69,7 +69,10 @@ limited to 64 MiB independently of the spawn quota; inability to persist state
 fails the operation explicitly. Saved spawn counts and parent journal entries
 preserve the quota across reload/resume. Child state uses
 format version 2 with spawn-only counts; earlier development version 1 child state
-is rejected rather than migrated. The parent transcript format is unchanged. This
+is rejected rather than migrated. Parent quota recovery reads `pi-subagents:spawn`
+journal entries and ignores the earlier `pi-subagents:attempt` entries. Resuming a
+parent with version-1 child state fails initialization; managed Pi then disables
+the session's tools. Start a new parent conversation instead. This
 standalone entry does not automatically expire child transcripts; the embedding application
 may own retention. A crash interrupts running tasks; continuing requires an
 explicit resume. Resuming an existing child never consumes the spawn quota, even

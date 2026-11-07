@@ -702,26 +702,26 @@ export function createPiSandboxExtension(dependencies: ExtensionDependencies): E
         throw new Error("Pi Sandbox session was started more than once");
       }
       state.started = true;
-      const config = await dependencies.loadConfig();
-      state.config = config;
-      state.policy = new PolicyEngine(config.tools, mcp?.resolveSubject);
-      state.preferences = await createOptionalExtensions({
-        pi,
-        config,
-        agentDir: dependencies.userStateDir,
-        args: dependencies.toolArguments ?? [],
-        definitions: managedDefinitions,
-        originals: originalDefinitions,
-        desiredActive,
-      });
-      registerExtensionPreferencesCommand(pi, state.preferences);
-      await dependencies.onSessionStart?.(ctx.sessionManager.getSessionFile());
-      await cleanExpiredSubagents({
-        userStateDir: dependencies.userStateDir,
-        retentionDays: config.sessions.retentionDays,
-        parentSessionId: ctx.sessionManager.getSessionId(),
-      });
       try {
+        const config = await dependencies.loadConfig();
+        state.config = config;
+        state.policy = new PolicyEngine(config.tools, mcp?.resolveSubject);
+        state.preferences = await createOptionalExtensions({
+          pi,
+          config,
+          agentDir: dependencies.userStateDir,
+          args: dependencies.toolArguments ?? [],
+          definitions: managedDefinitions,
+          originals: originalDefinitions,
+          desiredActive,
+        });
+        registerExtensionPreferencesCommand(pi, state.preferences);
+        await dependencies.onSessionStart?.(ctx.sessionManager.getSessionFile());
+        await cleanExpiredSubagents({
+          userStateDir: dependencies.userStateDir,
+          retentionDays: config.sessions.retentionDays,
+          parentSessionId: ctx.sessionManager.getSessionId(),
+        });
         if (
           hasCommandClassPolicies(config.tools[COMMAND_CLASS_TOOL]) &&
           state.bashAnalyzer === undefined

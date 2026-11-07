@@ -162,9 +162,10 @@ describe("optional extension preferences", () => {
     Buffer.from([0xff]),
   ])("rejects malformed or unbounded state without exposing its contents", async (content) => {
     const agentDir = await directory();
-    await writeFile(join(agentDir, "extensions.json"), content);
+    const path = join(agentDir, "extensions.json");
+    await writeFile(path, content);
     await expect(loadExtensionPreferences({ agentDir, descriptors })).rejects.toThrow(
-      /^Invalid user extension preferences$/,
+      new Error(`Invalid user extension preferences at ${JSON.stringify(path)}`),
     );
   });
 
@@ -187,7 +188,9 @@ describe("optional extension preferences", () => {
     await writeFile(target, JSON.stringify({ version: 1, extensions: {} }));
     await symlink(target, join(agentDir, "extensions.json"));
     await expect(loadExtensionPreferences({ agentDir, descriptors })).rejects.toThrow(
-      "Cannot read user extension preferences",
+      new Error(
+        `Cannot read user extension preferences at ${JSON.stringify(join(agentDir, "extensions.json"))}`,
+      ),
     );
   });
 

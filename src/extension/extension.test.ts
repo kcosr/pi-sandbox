@@ -8,7 +8,7 @@ import type {
   UserBashEventResult,
   ModelRuntime,
 } from "@earendil-works/pi-coding-agent";
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it, vi } from "vitest";
@@ -355,6 +355,40 @@ async function executeTool(
 }
 
 describe("managed initial tool activation", () => {
+  it("stops all managed execution when optional preferences cannot be loaded", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "managed-invalid-preferences-"));
+    const path = join(directory, "extensions.json");
+    const pi = fakePi();
+    const executor = fakeExecutor();
+    const probe = vi.spyOn(executor, "probe");
+    const cfg: SandboxConfig = {
+      ...config(),
+      codemode: { enabled: true, timeoutMs: 1000 },
+    };
+    try {
+      await writeFile(path, "invalid-secret-preferences");
+      await createPiSandboxExtension({
+        cwd: "/work/project",
+        configPath: "/etc/pi-sandbox/config.toml",
+        userStateDir: directory,
+        loadConfig: () => Promise.resolve(cfg),
+        executor,
+        features: { config: cfg, servers: [], selected: () => true },
+      })(pi.api);
+      await expect(
+        pi.handlers.get("session_start")!(undefined as never, context()),
+      ).rejects.toThrow(new Error(`Invalid user extension preferences at ${JSON.stringify(path)}`));
+      expect(probe).not.toHaveBeenCalled();
+      expect(pi.commands.has("extensions")).toBe(false);
+      expect(pi.tools.has("read")).toBe(false);
+      await expect(executeTool(pi, "codemode", { code: "text(1)" })).rejects.toThrow(
+        "Code mode unavailable",
+      );
+    } finally {
+      await rm(directory, { recursive: true, force: true });
+    }
+  });
+
   it("toggles optional tools and guidance, persists choices, and blocks a stale call awaiting approval", async () => {
     const directory = await mkdtemp(join(tmpdir(), "managed-optional-"));
     const cfg: SandboxConfig = {

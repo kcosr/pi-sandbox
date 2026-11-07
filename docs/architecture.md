@@ -148,7 +148,7 @@ applies in both directions across that logical session, with the existing subjec
 command-class and catalog-revision boundaries. Child identity annotates the dialog
 and audit event; it is not part of the grant key. A new parent session clears grants.
 
-The runner reserves concurrent capacity and an attempt allowance before asynchronous
+The runner reserves concurrent capacity and a spawn allowance before asynchronous
 startup. Accepted new spawns consume the total even when startup fails. Resumes
 consume concurrent capacity but no additional total allowance. Completion or cancellation releases only concurrent capacity. A child still
 stopping holds its slot until its SDK session settles and is disposed. Cancellation
@@ -176,6 +176,11 @@ An approval dismisses the preview to take focus. The ordinary package provides t
 same view without managed approvals. RPC clients use the versioned observation
 command documented in the [package README](../packages/subagents-extension/README.md).
 Observation entries do not become model messages; completion results do.
+
+Spawn-only quotas use version-2 subagent state and `pi-subagents:spawn` parent
+journal entries. Earlier development version-1 state is rejected during session
+initialization, leaving managed tools unavailable; start a new parent conversation.
+Old `pi-subagents:attempt` journal entries do not contribute to quota recovery.
 
 ### Parent replacement
 

@@ -457,6 +457,10 @@ skipped. Expired child conversations are removed while a small spawn-count
 ledger remains; housekeeping must never refund the total quota. This ledger and
 parent spawn entries also protect counts across ordinary reload/resume. A saved
 child whose transcript has expired can no longer be resumed.
+Quota recovery reads version-2 child state and `pi-subagents:spawn` parent entries;
+earlier development `pi-subagents:attempt` entries are ignored. Version-1 child
+state fails initialization and leaves managed tools unavailable. These development
+formats are not migrated; start a new parent conversation.
 
 ## Network details
 

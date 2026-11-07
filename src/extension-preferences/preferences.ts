@@ -66,7 +66,7 @@ async function read(path: string): Promise<Document> {
     file = await open(path, constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK);
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code === "ENOENT") return { version: 1, extensions: {} };
-    throw new Error("Cannot read user extension preferences");
+    throw new Error(`Cannot read user extension preferences at ${JSON.stringify(path)}`);
   }
   try {
     const stat = await file.stat();
@@ -83,7 +83,7 @@ async function read(path: string): Promise<Document> {
       JSON.parse(new TextDecoder("utf-8", { fatal: true }).decode(bytes.subarray(0, length))),
     );
   } catch {
-    throw new Error("Invalid user extension preferences");
+    throw new Error(`Invalid user extension preferences at ${JSON.stringify(path)}`);
   } finally {
     await file.close();
   }

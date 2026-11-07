@@ -26,6 +26,7 @@ export async function testManagedSubagents({ launch, configPath, modelsPath, wor
   let mcpCalls = 0;
   let overlapPending = false;
   let testingDisabled = false;
+  let testingCliEnabled;
   let disabledRequests = 0;
   let running;
   const server = createServer(async (request, response) => {
@@ -78,6 +79,14 @@ export async function testManagedSubagents({ launch, configPath, modelsPath, wor
       const instructions = JSON.stringify(
         body.messages.filter((message) => ["system", "developer"].includes(message.role)),
       );
+      if (testingCliEnabled !== undefined) {
+        assert.equal(parent, testingCliEnabled, "CLI override controls real model tools");
+        assert.equal(
+          instructions.includes("SUBAGENT_GUIDANCE_FIXTURE"),
+          testingCliEnabled,
+          "CLI override controls conditional guidance",
+        );
+      }
       let calls = [];
       if (testingDisabled) {
         disabledRequests++;
@@ -251,17 +260,15 @@ export async function testManagedSubagents({ launch, configPath, modelsPath, wor
         },
       }),
     );
-    running = client(
-      launch([
-        "--provider",
-        "fixture",
-        "--model",
-        "fixture",
-        "--tools",
-        ["read", "write", "bash", "codemode", "mcp__childfixture__marker", ...management].join(","),
-      ]),
-      () => failure,
-    );
+    const launchArguments = [
+      "--provider",
+      "fixture",
+      "--model",
+      "fixture",
+      "--tools",
+      ["read", "write", "bash", "codemode", "mcp__childfixture__marker", ...management].join(","),
+    ];
+    running = client(launch(launchArguments), () => failure);
     const commandList = await running.request("get_commands");
     const command = commandList.commands.find((entry) => entry.name === "agents-rpc");
     assert(command, `Managed observation command is registered: ${JSON.stringify(commandList)}`);
@@ -406,8 +413,55 @@ export async function testManagedSubagents({ launch, configPath, modelsPath, wor
     );
     await running.stop();
     running = undefined;
+    const extensionNotice = async (message) => {
+      const offset = running.messages.length;
+      assert.equal((await running.request("prompt", { message })).disposition, "handled");
+      return running.wait(() =>
+        running.messages
+          .slice(offset)
+          .find((event) => event.type === "extension_ui_request" && event.method === "notify"),
+      );
+    };
+    // The last menu action saved disabled. Both CLI directions lock the menu,
+    // reach the actual Pi registry and leave that saved preference untouched.
+    for (const enabled of [false, true]) {
+      testingCliEnabled = enabled;
+      testingDisabled = !enabled;
+      running = client(
+        launch([
+          ...launchArguments,
+          enabled ? "--enable-extension" : "--disable-extension",
+          "subagents",
+        ]),
+        () => failure,
+      );
+      const stateNotice = await extensionNotice("/extensions list");
+      assert(
+        stateNotice.message.includes(
+          `${enabled ? "On" : "Off"}  Subagents (subagents) — command line`,
+        ),
+      );
+      const lockedNotice = await extensionNotice(
+        `/extensions ${enabled ? "disable" : "enable"} subagents`,
+      );
+      assert.match(lockedNotice.message, /controlled by the command line/);
+      await prompt(enabled ? "CHECK_ENABLED_EXTENSIONS" : "CHECK_DISABLED_EXTENSIONS", []);
+      await running.idle();
+      await running.stop();
+      running = undefined;
+    }
+    testingCliEnabled = undefined;
+    testingDisabled = true;
+    running = client(launch(launchArguments), () => failure);
+    const persisted = await extensionNotice("/extensions list");
+    assert(persisted.message.includes("Off  Subagents (subagents)"));
+    assert(!persisted.message.includes("command line"), "CLI override must not persist");
+    await prompt("CHECK_DISABLED_EXTENSIONS", []);
+    await running.idle();
+    await running.stop();
+    running = undefined;
     console.log(
-      "Managed subagents: shared grants, real tools, extension visibility/guidance, previews and spawn quotas passed",
+      "Managed subagents: shared grants, real tools, extension visibility/guidance, CLI overrides, previews and spawn quotas passed",
     );
   } finally {
     await running?.stop();

@@ -57,6 +57,7 @@ import {
   createManagedPiArguments,
   isManagedMcpSelected,
   isManagedToolSelected,
+  managedExtensionSelection,
 } from "./arguments.js";
 import { validateCandidateSkillDirectories, validateSharedSkillDirectories } from "./skills.js";
 import { applyManagedEnvironment } from "./environment.js";
@@ -562,6 +563,16 @@ export async function runPiSandbox({ piArgs: args, configPath }: SandboxArgument
       getAccountIdentity,
       getMachineId,
     );
+  const optionalIds = new Set([
+    "subagents",
+    ...Object.values(config.extensions).map((extension) => extension.id),
+  ]);
+  for (const [id, enabled] of managedExtensionSelection(args).overrides) {
+    if (!optionalIds.has(id))
+      throw new Error(
+        `Unknown optional extension ${JSON.stringify(id)} for --${enabled ? "enable" : "disable"}-extension. Available IDs: ${[...optionalIds].sort().join(", ")}`,
+      );
+  }
   await validateSharedSkillDirectories(config.skills.directories);
   const { cwd, validateSessionCwd } = createWorkspaceBoundary(process.cwd());
   const managedExtensions = instantiateConfiguredManagedExtensions(config);

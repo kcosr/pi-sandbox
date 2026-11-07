@@ -34,7 +34,10 @@ export function registerExtensionPreferencesCommand(
     getArgumentCompletions(prefix) {
       const choices = [
         "list",
-        ...preferences.snapshot().flatMap((entry) => [`enable ${entry.id}`, `disable ${entry.id}`]),
+        ...preferences
+          .snapshot()
+          .filter((entry) => entry.editable)
+          .flatMap((entry) => [`enable ${entry.id}`, `disable ${entry.id}`]),
       ].filter((value) => value.startsWith(prefix));
       return choices.length ? choices.map((value) => ({ value, label: value })) : null;
     },

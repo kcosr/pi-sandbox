@@ -11,7 +11,7 @@ afterEach(async () => {
     directories.splice(0).map((path) => rm(path, { recursive: true, force: true })),
   );
 });
-async function fixture(mode: "tui" | "rpc" = "tui", cliEnabled?: boolean) {
+async function fixture(mode: "tui" | "rpc" = "tui", cliEnabled?: boolean, adminEnabled = true) {
   const agentDir = await mkdtemp(join(tmpdir(), "extensions-menu-"));
   directories.push(agentDir);
   const preferences = await loadExtensionPreferences({
@@ -21,7 +21,7 @@ async function fixture(mode: "tui" | "rpc" = "tui", cliEnabled?: boolean) {
         id: "subagents",
         label: "Subagents",
         toolNames: ["spawn_agent"],
-        adminEnabled: true,
+        adminEnabled,
         ...(cliEnabled === undefined ? {} : { cliEnabled }),
       },
     ],
@@ -45,6 +45,29 @@ async function fixture(mode: "tui" | "rpc" = "tui", cliEnabled?: boolean) {
 }
 
 describe("optional extensions command", () => {
+  it.each([
+    { cliEnabled: true, adminEnabled: true },
+    { cliEnabled: false, adminEnabled: true },
+    { cliEnabled: undefined, adminEnabled: false },
+  ])(
+    "omits locked extensions from toggle completions: %j",
+    async ({ cliEnabled, adminEnabled }) => {
+      const f = await fixture("tui", cliEnabled, adminEnabled);
+      expect(f.command.getArgumentCompletions?.("")).toEqual([{ value: "list", label: "list" }]);
+      expect(f.command.getArgumentCompletions?.("enable ")).toBeNull();
+      expect(f.command.getArgumentCompletions?.("disable ")).toBeNull();
+    },
+  );
+
+  it("offers list and toggle completions for editable extensions", async () => {
+    const f = await fixture();
+    expect(f.command.getArgumentCompletions?.("")).toEqual([
+      { value: "list", label: "list" },
+      { value: "enable subagents", label: "enable subagents" },
+      { value: "disable subagents", label: "disable subagents" },
+    ]);
+  });
+
   it("toggles an item in a native menu and refreshes its displayed state", async () => {
     const f = await fixture();
     f.select
