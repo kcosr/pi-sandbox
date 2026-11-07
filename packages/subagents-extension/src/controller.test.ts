@@ -83,6 +83,170 @@ function fakeSession() {
 }
 
 describe("subagent controller", () => {
+  it("waits for actual cleanup and additional accepted work without cancelling either task", async () => {
+    const directory = root();
+    const sessions = [fakeSession(), fakeSession()];
+    const cleanup = deferred<void>();
+    const entered = deferred<void>();
+    let created = 0;
+    const controller = new Controller(
+      api,
+      {
+        config: parseSubagentConfig({}, directory),
+        createSession: () => Promise.resolve(sessions[created++]!.session),
+        disposeSession: () => {
+          entered.resolve();
+          return cleanup.promise;
+        },
+      },
+      "parent",
+    );
+    await controller.waitForIdle();
+    await controller.spawn("first", false, parent(directory));
+    let idle = false;
+    const waiting = controller.waitForIdle().then(() => {
+      idle = true;
+    });
+    sessions[0]!.complete();
+    await entered.promise;
+    expect(idle).toBe(false);
+    expect(controller.statistics().active).toBe(1);
+    await controller.spawn("second while waiting", false, parent(directory));
+    sessions[1]!.complete();
+    expect(controller.statistics().active).toBe(2);
+    cleanup.resolve();
+    await waiting;
+    expect(controller.statistics().active).toBe(0);
+    for (const session of sessions) {
+      expect(session.abort).not.toHaveBeenCalled();
+      expect(session.dispose).toHaveBeenCalledOnce();
+    }
+    expect(controller.snapshot().every((item) => item.callback === "armed")).toBe(true);
+    await controller.shutdown();
+  });
+
+  it("rejects a wait with the exact abort reason and coalesces cancellation through cleanup", async () => {
+    const directory = root();
+    const fake = fakeSession();
+    const cleanup = deferred<void>();
+    const controller = new Controller(
+      api,
+      {
+        config: parseSubagentConfig({}, directory),
+        createSession: () => Promise.resolve(fake.session),
+        disposeSession: () => cleanup.promise,
+      },
+      "parent",
+    );
+    await controller.spawn("work", false, parent(directory));
+    const abort = new AbortController();
+    const reason = new Error("parent aborted");
+    const waiting = expect(controller.waitForIdle(abort.signal)).rejects.toBe(reason);
+    abort.abort(reason);
+    await waiting;
+    await expect(controller.waitForIdle(abort.signal)).rejects.toBe(reason);
+    expect(fake.abort).not.toHaveBeenCalled();
+    const first = controller.quiesce();
+    const second = controller.quiesce();
+    expect(second).toBe(first);
+    expect(controller.snapshot()[0]?.callback).toBe("disarmed");
+    expect(controller.statistics().active).toBe(1);
+    await expect(controller.spawn("during cleanup", false, parent(directory))).rejects.toThrow(
+      "quiescing",
+    );
+    cleanup.resolve();
+    await first;
+    expect(fake.abort).toHaveBeenCalledOnce();
+    await controller.waitForIdle();
+    await controller.shutdown();
+  });
+
+  it("rejects an outstanding wait when the controller closes", async () => {
+    const directory = root();
+    const fake = fakeSession();
+    const controller = new Controller(
+      api,
+      {
+        config: parseSubagentConfig({}, directory),
+        createSession: () => Promise.resolve(fake.session),
+      },
+      "parent",
+    );
+    await controller.spawn("work", false, parent(directory));
+    const waiting = expect(controller.waitForIdle()).rejects.toThrow("closed");
+    await controller.shutdown();
+    await waiting;
+    await expect(controller.waitForIdle()).rejects.toThrow("closed");
+  });
+
+  it("keeps acknowledgement persistence faults authoritative after the last task settles", async () => {
+    const directory = root();
+    const fake = fakeSession();
+    const controller = new Controller(
+      api,
+      {
+        config: parseSubagentConfig({}, directory),
+        createSession: () => Promise.resolve(fake.session),
+      },
+      "parent",
+    );
+    const item = await controller.spawn("work", false, parent(directory));
+    fake.complete();
+    await controller.waitForIdle();
+    const write = vi.spyOn(SubagentStore.prototype, "write").mockImplementationOnce(() => {
+      throw new Error("ack disk failure");
+    });
+    expect(() => controller.acknowledge(item.taskId)).toThrow("ack disk failure");
+    expect(controller.snapshot()[0]?.callback).toBe("acknowledged");
+    write.mockRestore();
+    controller.disarm();
+    expect(() => controller.assertHealthy()).toThrow("ack disk failure");
+    await expect(controller.waitForIdle()).rejects.toThrow("ack disk failure");
+    await controller.shutdown();
+  });
+
+  it.each(["host", "extension"])(
+    "detects %s cleanup errors reported through Pi's runner instead of thrown",
+    async (kind) => {
+      const directory = root();
+      const fake = fakeSession();
+      const listeners = new Set<(error: { event: string; error: string }) => void>();
+      const emit = vi.fn(() => {
+        for (const listener of listeners)
+          listener({ event: "session_shutdown", error: "hidden cleanup failure" });
+        return Promise.resolve();
+      });
+      Object.defineProperty(fake.session, "extensionRunner", {
+        value: {
+          onError(listener: (error: { event: string; error: string }) => void) {
+            listeners.add(listener);
+            return () => listeners.delete(listener);
+          },
+          emit,
+        },
+      });
+      const controller = new Controller(
+        api,
+        {
+          config: parseSubagentConfig({ cancelTimeoutMs: 1 }, directory),
+          createSession: () => Promise.resolve(fake.session),
+          ...(kind === "host" ? { disposeSession: emit } : {}),
+        },
+        "parent",
+      );
+      await controller.spawn("work", false, parent(directory));
+      const waiting = expect(controller.waitForIdle()).rejects.toThrow("hidden cleanup failure");
+      fake.complete();
+      await waiting;
+      expect(fake.dispose).toHaveBeenCalledOnce();
+      expect(listeners.size).toBe(0);
+      expect(controller.statistics().active).toBe(1);
+      expect(controller.snapshot()[0]).toMatchObject({ status: "stopping", callback: "disarmed" });
+      expect(() => controller.assertHealthy()).toThrow("hidden cleanup failure");
+      await expect(controller.shutdown()).rejects.toThrow("waiting for active work");
+    },
+  );
+
   it("retains user cancellation intent until settlement without releasing capacity or replacing it with a deadline", async () => {
     vi.useFakeTimers();
     const directory = root();
@@ -617,6 +781,7 @@ describe("subagent controller", () => {
     );
     expect(controller.statistics()).toMatchObject({ total: 1, active: 0 });
     expect(host.createSession).not.toHaveBeenCalled();
+    await expect(controller.waitForIdle()).rejects.toThrow("journal unavailable");
     await controller.shutdown();
     const recovered = new Controller(api, host, "parent");
     expect(recovered.statistics().total).toBe(1);
@@ -638,7 +803,11 @@ describe("subagent controller", () => {
     const write = vi.spyOn(SubagentStore.prototype, "write").mockImplementationOnce(() => {
       throw new Error("fixture result exceeds storage limit");
     });
+    const waiting = expect(controller.waitForIdle()).rejects.toThrow(
+      "result exceeds storage limit",
+    );
     fake.complete();
+    await waiting;
     await vi.waitFor(() => expect(controller.statistics().active).toBe(0));
     expect(controller.snapshot()[0]).toMatchObject({
       status: "failed",
@@ -656,7 +825,9 @@ describe("subagent controller", () => {
       const fake = fakeSession();
       const cleanup = vi.fn(() => Promise.reject(new Error("fixture cleanup failed")));
       if (kind === "extension")
-        Object.defineProperty(fake.session, "extensionRunner", { value: { emit: cleanup } });
+        Object.defineProperty(fake.session, "extensionRunner", {
+          value: { emit: cleanup, onError: () => () => undefined },
+        });
       const controller = new Controller(
         api,
         {
@@ -673,6 +844,7 @@ describe("subagent controller", () => {
       expect(cleanup).toHaveBeenCalledOnce();
       expect(controller.statistics().active).toBe(1);
       expect(controller.snapshot()[0]).toMatchObject({ status: "stopping", callback: "disarmed" });
+      await expect(controller.waitForIdle()).rejects.toThrow("fixture cleanup failed");
       await expect(
         controller.resume(child.id, "continue", false, parent(directory)),
       ).rejects.toThrow("still active");

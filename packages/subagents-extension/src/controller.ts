@@ -38,6 +38,9 @@ export class Controller implements SubagentController {
   private readonly store: SubagentStore;
   private readonly children = new Map<string, Child>();
   private readonly listeners = new Set<(snapshots: readonly SubagentSnapshot[]) => void>();
+  private readonly idleWaiters = new Set<() => void>();
+  private lifecycleError: Error | undefined;
+  private quiescence: Promise<void> | undefined;
   private total = 0;
   private closed = false;
   private quiescing = false;
@@ -126,6 +129,44 @@ export class Controller implements SubagentController {
       this.listeners.delete(listener);
     };
   }
+  public assertHealthy(): void {
+    if (this.lifecycleError) throw this.lifecycleError;
+    if (this.closed) throw new Error("Subagent controller is closed");
+  }
+  public waitForIdle(signal?: AbortSignal): Promise<void> {
+    return new Promise((resolve, reject) => {
+      const finish = (error?: unknown) => {
+        this.idleWaiters.delete(check);
+        signal?.removeEventListener("abort", check);
+        // AbortSignal.reason is an arbitrary value; preserve the caller's exact reason.
+        // eslint-disable-next-line @typescript-eslint/prefer-promise-reject-errors
+        if (error !== undefined) reject(error);
+        else resolve();
+      };
+      const check = () => {
+        try {
+          signal?.throwIfAborted();
+          this.assertHealthy();
+          if (![...this.children.values()].some((child) => child.active)) finish();
+        } catch (error) {
+          finish(error);
+        }
+      };
+      // Install both observers before checking state, including an already-aborted signal.
+      this.idleWaiters.add(check);
+      signal?.addEventListener("abort", check, { once: true });
+      check();
+    });
+  }
+  private wakeIdleWaiters(): void {
+    for (const check of this.idleWaiters) check();
+  }
+  private lifecycleFault(operation: string, error: unknown): void {
+    this.lifecycleError ??= new Error(
+      `Subagent ${operation} failed: ${boundedText(error instanceof Error ? error.message : String(error), 1024)}`,
+    );
+    this.wakeIdleWaiters();
+  }
   private notify(): void {
     if (this.notification) {
       clearTimeout(this.notification);
@@ -139,6 +180,7 @@ export class Controller implements SubagentController {
         /* Observers cannot change task execution. */
       }
     }
+    this.wakeIdleWaiters();
   }
   private notifyProgress(): void {
     if (this.closed) return;
@@ -151,8 +193,13 @@ export class Controller implements SubagentController {
     }
   }
   private persist(): void {
-    if (this.storeClosed) throw new Error("Subagent controller is closed");
-    this.store.write(this.total, this.snapshot());
+    try {
+      if (this.storeClosed) throw new Error("Subagent controller is closed");
+      this.store.write(this.total, this.snapshot());
+    } catch (error) {
+      this.lifecycleFault("state persistence", error);
+      throw error;
+    }
   }
   private require(id: string): Child {
     const child = this.children.get(id);
@@ -205,6 +252,13 @@ export class Controller implements SubagentController {
     const thinkingLevel = this.pi.getThinkingLevel();
     let id = previous?.value.id ?? `a-${randomUUID().slice(0, 8)}`;
     while (!previous && this.children.has(id)) id = `a-${randomUUID().slice(0, 8)}`;
+    let sessionFile: string;
+    try {
+      sessionFile = this.store.sessionFile(id);
+    } catch (error) {
+      this.lifecycleFault("session storage", error);
+      throw error;
+    }
     const now = Date.now();
     const value: SubagentSnapshot = {
       id,
@@ -222,7 +276,7 @@ export class Controller implements SubagentController {
       assistantTruncated: false,
       thinkingTruncated: false,
       callback: "armed",
-      sessionFile: this.store.sessionFile(id),
+      sessionFile,
       provider: model.provider,
       model: model.id,
       reasoning: thinkingLevel,
@@ -242,6 +296,7 @@ export class Controller implements SubagentController {
           total: this.total,
         });
     } catch (error) {
+      this.lifecycleFault("admission persistence", error);
       child.active = false;
       child.value = {
         ...child.value,
@@ -300,6 +355,7 @@ export class Controller implements SubagentController {
       this.cancelFromCallback(child);
     }, this.host.config.startupTimeoutMs);
     void this.run(child, request).catch((error) => {
+      this.lifecycleFault("cleanup", error);
       child.value = {
         ...child.value,
         status: "stopping",
@@ -371,17 +427,9 @@ export class Controller implements SubagentController {
       unsubscribe?.();
       if (child.session) {
         try {
-          try {
-            if (this.host.disposeSession) await this.host.disposeSession(child.session, request);
-            else
-              await child.session.extensionRunner?.emit({
-                type: "session_shutdown",
-                reason: "quit",
-              });
-          } finally {
-            child.session.dispose();
-          }
+          await this.cleanupSession(child.session, request);
         } catch (error) {
+          this.lifecycleFault("cleanup", error);
           child.value = {
             ...child.value,
             status: "stopping",
@@ -422,8 +470,6 @@ export class Controller implements SubagentController {
             error: boundedText(String(error), 1024),
           };
         }
-        this.notify();
-        child.finished.resolve();
         // A timed-out shutdown retains ownership until its last straggler really
         // settles. Only then may another controller reopen this conversation.
         try {
@@ -435,8 +481,33 @@ export class Controller implements SubagentController {
             error: boundedText(`Releasing subagent state failed: ${String(error)}`, 1024),
           };
         }
+        this.notify();
+        child.finished.resolve();
       }
     }
+  }
+
+  private async cleanupSession(
+    session: AgentSession,
+    request: SubagentSessionRequest,
+  ): Promise<void> {
+    let reported: Error | undefined;
+    let stopErrorListener: (() => void) | undefined;
+    try {
+      try {
+        stopErrorListener = session.extensionRunner?.onError((error) => {
+          if (error.event === "session_shutdown")
+            reported ??= new Error(boundedText(error.error, 1024));
+        });
+        if (this.host.disposeSession) await this.host.disposeSession(session, request);
+        else await session.extensionRunner?.emit({ type: "session_shutdown", reason: "quit" });
+      } finally {
+        session.dispose();
+      }
+    } finally {
+      stopErrorListener?.();
+    }
+    if (reported) throw reported;
   }
 
   private cancelFromCallback(child: Child): void {
@@ -570,29 +641,45 @@ export class Controller implements SubagentController {
     this.persist();
     this.notify();
   }
-  public async quiesce(): Promise<void> {
+  public quiesce(): Promise<void> {
+    if (this.quiescence) return this.quiescence;
     this.quiescing = true;
-    try {
-      const failures: unknown[] = [];
-      try {
-        this.disarm();
-      } catch (error) {
-        failures.push(error);
-      }
-      const cancellations = await Promise.allSettled(
-        [...this.children.values()]
-          .filter((child) => child.active)
-          .map((child) => this.cancel(child.value.id, child.value.taskId)),
-      );
-      if ([...this.children.values()].some((child) => child.active))
-        throw new Error("Subagent shutdown is still waiting for active work to settle");
-      for (const result of cancellations)
-        if (result.status === "rejected") failures.push(result.reason);
-      if (failures.length)
-        throw new AggregateError(failures, "Subagent state could not be saved while quiescing");
-    } finally {
+    const pending = deferred<void>();
+    this.quiescence = pending.promise;
+    const finish = () => {
       this.quiescing = false;
+      this.quiescence = undefined;
+    };
+    void this.performQuiescence().then(
+      () => {
+        finish();
+        pending.resolve();
+      },
+      (error: unknown) => {
+        finish();
+        pending.reject(error);
+      },
+    );
+    return pending.promise;
+  }
+  private async performQuiescence(): Promise<void> {
+    const failures: unknown[] = [];
+    try {
+      this.disarm();
+    } catch (error) {
+      failures.push(error);
     }
+    const cancellations = await Promise.allSettled(
+      [...this.children.values()]
+        .filter((child) => child.active)
+        .map((child) => this.cancel(child.value.id, child.value.taskId)),
+    );
+    if ([...this.children.values()].some((child) => child.active))
+      throw new Error("Subagent shutdown is still waiting for active work to settle");
+    for (const result of cancellations)
+      if (result.status === "rejected") failures.push(result.reason);
+    if (failures.length)
+      throw new AggregateError(failures, "Subagent state could not be saved while quiescing");
   }
   private releaseStoreIfSettled(): void {
     if (
@@ -602,12 +689,18 @@ export class Controller implements SubagentController {
       [...this.children.values()].some((child) => child.active)
     )
       return;
-    this.store.close();
+    try {
+      this.store.close();
+    } catch (error) {
+      this.lifecycleFault("state ownership release", error);
+      throw error;
+    }
     this.storeClosed = true;
   }
   public async shutdown(): Promise<void> {
     if (this.storeClosed) return;
     this.closed = true;
+    this.wakeIdleWaiters();
     this.shutdownWaiters++;
     try {
       await this.quiesce();

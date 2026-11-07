@@ -8,6 +8,7 @@ import { createInterface } from "node:readline";
 import { setTimeout as delay } from "node:timers/promises";
 import { fileURLToPath } from "node:url";
 import { installExtensionArtifacts } from "./extension-artifacts.mjs";
+import { testStandaloneSubagentWait } from "./subagents-wait-smoke.mjs";
 
 const root = dirname(dirname(dirname(fileURLToPath(import.meta.url))));
 const args = process.argv.slice(2);
@@ -50,6 +51,12 @@ try {
   await assert.rejects(access(join(extracted, "node_modules")));
   await assert.rejects(access(join(bare, "node_modules")));
   for (const [index, runtime] of runtimes.entries()) {
+    await testStandaloneSubagentWait({
+      root,
+      directory: join(temporary, `wait-${index}`),
+      runtime,
+      artifact: artifacts["subagents-extension"],
+    });
     await scenario(
       join(temporary, `runtime-${index}`),
       runtime,
@@ -81,7 +88,15 @@ async function scenario(directory, runtime, artifact, enabled) {
   await mkdir(state, { recursive: true });
   await writeFile(join(workspace, "sample.txt"), "SDK_CHILD_READ_OK\n");
   const config = join(directory, "subagents.json");
-  await writeFile(config, JSON.stringify({ enabled, maxConcurrent: 2, maxTotal: 1 }));
+  await writeFile(
+    config,
+    JSON.stringify({
+      enabled,
+      maxConcurrent: 2,
+      maxTotal: 1,
+      ...(enabled ? {} : { waitForChildren: true }),
+    }),
+  );
   let planned = enabled
     ? { name: "spawn_agent", args: { task: "Read sample.txt and report its contents." } }
     : undefined;

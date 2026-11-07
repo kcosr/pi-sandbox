@@ -54,6 +54,15 @@ while awaiting approval, startup failures, and guidance following effective tool
 The mandatory upstream footer-width suite covers inline extension status, ANSI
 width handling, and narrow-terminal placement without losing native stats/model text.
 
+The opt-in standalone `waitForChildren` policy is exercised against unpatched Pi
+RPC: staggered child completion, parent continuations that delegate again,
+resuming children without consuming another spawn allowance, child failures,
+user cancellation, parent abort and shutdown during the wait. The default
+background policy remains a separate control.
+Delivery/controller tests cover cleanup and persistence failures, suppressed and
+duplicate callbacks, stale generations, and final-settlement guards. These checks
+must not replace the existing managed or standalone acceptance suites.
+
 The packaged Linux and native Seatbelt smoke entry points include
 `subagents-smoke.mjs`: real managed children, CLI override visibility/guidance and
 menu locking without changing saved preferences, user cancellation callbacks,

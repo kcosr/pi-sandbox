@@ -4,7 +4,9 @@ import type {
   CustomMessageEntryDraft,
   ExtensionAPI,
   ExtensionContext,
+  TurnEndEvent,
 } from "@earendil-works/pi-coding-agent";
+import { boundedText } from "./bounds.js";
 
 /** Persisted in Pi's transcript; the IDs also identify the manager's durable outbox item. */
 export const RESULT_MESSAGE_TYPE = "pi-subagents:result";
@@ -26,6 +28,13 @@ export interface DeliveryAdapters {
   disarm(): number;
   onNotice?(message: string): void;
   onError?(error: unknown): void;
+  /** Present only for the opt-in completion policy. All methods retain host authority. */
+  completion?: {
+    assertHealthy(): void;
+    active(): number;
+    waitForIdle(signal: AbortSignal): Promise<void>;
+    quiesce(): Promise<void>;
+  };
 }
 
 export interface DeliveryController {
@@ -72,7 +81,8 @@ function isMatchingDetails(value: unknown, result: PendingDelivery): boolean {
  * Transcript reconciliation closes the append-before-ack crash window; it does
  * not promise exactly-once processing across crashes or external transcript edits.
  *
- * Adapters must be synchronous. There is no await between checking armed task IDs
+ * Result/outbox adapters are synchronous; completion waits precede selection.
+ * There is no await between checking armed task IDs
  * and handing their entries to Pi. A later abort stops continuation through Pi's
  * own abort signal. Other extensions can replace boundary entries; uncommitted
  * entries are retried after the next boundary, turn start, or settlement.
@@ -87,6 +97,47 @@ export function installDelivery(pi: ExtensionAPI, adapters: DeliveryAdapters): D
   const attempts = new Map<string, Attempt>();
   let pauseNotified = false;
   const unsubscribe: Array<() => void> = [];
+  const completion = adapters.completion;
+  const lifetime = new AbortController();
+  let stopped = false;
+  let cleanup: Promise<void> | undefined;
+  let failure: Error | undefined;
+  let failureReported = false;
+  let awaitingResultTurn = false;
+
+  function stopChildren(): Promise<void> {
+    stopped = true;
+    if (!cleanup) {
+      cleanup = completion!.quiesce();
+      // The boundary awaits and reports failure. AbortSignal listeners cannot await.
+      void cleanup.catch(() => undefined);
+    }
+    return cleanup;
+  }
+
+  async function failCompletion(error: unknown, next: ExtensionContext): Promise<undefined> {
+    failure ??= new Error(
+      `Subagent completion failed: ${boundedText(error instanceof Error ? error.message : String(error), 1024)}`,
+      { cause: error },
+    );
+    stopped = true;
+    // Pi catches boundary exceptions. Abort explicitly BEFORE throwing, otherwise
+    // an extension_error alone could accompany an apparently successful settlement.
+    next.abort();
+    try {
+      await stopChildren();
+    } catch (cleanupError) {
+      failure = new AggregateError(
+        [failure, cleanupError],
+        "Subagent completion and cleanup failed",
+      );
+    }
+    if (!failureReported) {
+      failureReported = true;
+      throw failure;
+    }
+    return undefined;
+  }
 
   const report = (error: unknown) => {
     if (adapters.onError) adapters.onError(error);
@@ -125,11 +176,16 @@ export function installDelivery(pi: ExtensionAPI, adapters: DeliveryAdapters): D
     // Disarm durable records first. A callback must not become eligible again on reload.
     // If persistence fails, later ticks retry it before delivering anything else.
     abortPending = true;
-    const count = adapters.disarm();
+    let count: number;
+    try {
+      count = adapters.disarm();
+    } finally {
+      if (completion) void stopChildren();
+    }
     abortPending = false;
     if (count > 0)
       notice(
-        `Automatic results were disabled for ${count} existing subagent task${count === 1 ? "" : "s"}, including running tasks. Running tasks continue. Use /subagents or inspect_agent to view their results.`,
+        `Automatic results were disabled for ${count} existing subagent task${count === 1 ? "" : "s"}, including running tasks. ${completion ? "Running tasks are being cancelled." : "Running tasks continue."} Use /subagents or inspect_agent to view their results.`,
       );
     if (watchedSignal) handledAborts.add(watchedSignal);
     attempts.clear();
@@ -159,7 +215,9 @@ export function installDelivery(pi: ExtensionAPI, adapters: DeliveryAdapters): D
     try {
       abort();
     } catch (error) {
-      report(error);
+      if (completion)
+        failure ??= new Error("Subagent cancellation could not be saved", { cause: error });
+      else report(error);
     }
   }
 
@@ -224,7 +282,9 @@ export function installDelivery(pi: ExtensionAPI, adapters: DeliveryAdapters): D
   }
 
   function tick() {
-    if (disposed || !context) return;
+    // Waiting mode is driven only by lifecycle boundaries and controller notifications.
+    // Never start an independent idle run after its operation has settled or aborted.
+    if (completion || disposed || !context) return;
     try {
       updateContext(context);
       const ready = pending();
@@ -263,12 +323,92 @@ export function installDelivery(pi: ExtensionAPI, adapters: DeliveryAdapters): D
     }
   }
 
+  async function waitBoundary(event: TurnEndEvent, next: ExtensionContext) {
+    try {
+      updateContext(next);
+      if (disposed) return;
+      if (failure) return failCompletion(failure, next);
+      if (event.outcome === "aborted" || next.signal?.aborted || stopped) {
+        abort();
+        await stopChildren();
+        return;
+      }
+      completion!.assertHealthy();
+      // Leave Pi's provider retry/compaction policy intact. A final failed parent
+      // is handled by the pre-settlement guard after those retries finish.
+      if (event.outcome === "error") return;
+      let result = boundary(event, next);
+      if (result) {
+        awaitingResultTurn = true;
+        return result;
+      }
+      if (
+        event.continue ||
+        next.hasPendingMessages() ||
+        (event.message.role === "assistant" &&
+          event.message.content.some((part) => part.type === "toolCall"))
+      )
+        return;
+      const signal = next.signal;
+      if (!signal) throw new Error("Pi turn_end did not provide an active abort signal");
+      await completion!.waitForIdle(AbortSignal.any([signal, lifetime.signal]));
+      if (disposed) return;
+      if (signal.aborted || stopped) {
+        abort();
+        await stopChildren();
+        return;
+      }
+      completion!.assertHealthy();
+      result = boundary(event, next);
+      if (result) awaitingResultTurn = true;
+      return result;
+    } catch (error) {
+      if (disposed) return;
+      if (next.signal?.aborted && error === next.signal.reason && !failure) {
+        try {
+          await stopChildren();
+          return;
+        } catch (cleanupError) {
+          return failCompletion(cleanupError, next);
+        }
+      }
+      return failCompletion(error, next);
+    }
+  }
+
+  async function verifyCompletion(event: BoundaryState, next: ExtensionContext) {
+    try {
+      updateContext(next);
+      if (disposed) return;
+      if (failure) return failCompletion(failure, next);
+      if (stopped || event.outcome === "aborted" || next.signal?.aborted) {
+        abort();
+        await stopChildren();
+        return;
+      }
+      completion!.assertHealthy();
+      if (event.outcome === "error") throw new Error("Parent failed before subagent completion");
+      releaseUncommittedBoundaries();
+      if (completion!.active() > 0 || pending().length > 0 || awaitingResultTurn)
+        throw new Error(
+          "Parent reached settlement with unfinished subagent work or undelivered results",
+        );
+      // Never await child work here: stock Pi has already cleared its abort signal.
+    } catch (error) {
+      if (!disposed) return failCompletion(error, next);
+    }
+  }
+
   const controller: DeliveryController = {
     updateContext,
     tick,
     dispose() {
       if (disposed) return;
       disposed = true;
+      // Stock RPC shutdown emits session_shutdown before disposing its session;
+      // it does not first abort an active run. Fence that run before waking it.
+      if (completion && context && !context.isIdle()) context.abort();
+      lifetime.abort();
       watchedSignal?.removeEventListener("abort", onAbort);
       for (const remove of unsubscribe.splice(0)) remove();
       attempts.clear();
@@ -281,18 +421,42 @@ export function installDelivery(pi: ExtensionAPI, adapters: DeliveryAdapters): D
       updateContext(next);
     }),
     pi.on("agent_start", (_event, next) => {
+      if (completion && !failure) {
+        stopped = false;
+        cleanup = undefined;
+      }
       updateContext(next);
     }),
-    pi.on("turn_start", (_event, next) => {
-      updateContext(next);
-      if (!disposed) releaseUncommittedBoundaries();
+    pi.on("turn_start", async (_event, next) => {
+      try {
+        updateContext(next);
+        if (!disposed) {
+          if (completion) {
+            if (failure) return failCompletion(failure, next);
+            completion.assertHealthy();
+            awaitingResultTurn = false;
+          }
+          releaseUncommittedBoundaries();
+        }
+      } catch (error) {
+        if (completion) await failCompletion(error, next);
+        else throw error;
+      }
     }),
-    pi.on("turn_end", (event, next) => boundary(event, next)),
-    pi.on("agent_before_settle", (event, next) => boundary(event, next, true)),
-    pi.on("agent_settled", (event, next) => {
+    pi.on("turn_end", (event, next) =>
+      completion ? waitBoundary(event, next) : boundary(event, next),
+    ),
+    pi.on("agent_before_settle", (event, next) =>
+      completion ? verifyCompletion(event, next) : boundary(event, next, true),
+    ),
+    pi.on("agent_settled", async (event, next) => {
       updateContext(next);
       if (disposed) return;
       if (event.aborted) abort();
+      if (completion) {
+        if (cleanup) await cleanup;
+        return;
+      }
       releaseUncommittedBoundaries();
       // Do not start a run inside settlement; the manager's next tick handles idle delivery.
     }),

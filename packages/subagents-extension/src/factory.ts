@@ -85,7 +85,18 @@ export function createSubagentsExtension(
             createStandaloneHost(readSubagentConfig(context.cwd, context.isProjectTrusted())));
       controller = new Controller(pi, host, context.sessionManager.getSessionId(), context);
       const owner = controller;
+      const waitsForChildren = host.config.enabled && host.config.waitForChildren;
       delivery = installDelivery(pi, {
+        ...(waitsForChildren
+          ? {
+              completion: {
+                assertHealthy: () => owner.assertHealthy(),
+                active: () => owner.statistics().active,
+                waitForIdle: (signal: AbortSignal) => owner.waitForIdle(signal),
+                quiesce: () => owner.quiesce(),
+              },
+            }
+          : {}),
         getPending: () =>
           owner
             .snapshot()
@@ -94,15 +105,22 @@ export function createSubagentsExtension(
                 !["starting", "running", "stopping"].includes(item.status) &&
                 item.callback === "armed",
             )
-            .map((item) => ({
-              eventId: item.taskId,
-              agentId: item.id,
-              taskId: item.taskId,
-              content:
-                item.cancelRequestedBy === "user"
-                  ? `Subagent cancelled by user: ${item.id} / ${item.taskId}\nOutcome: ${item.status}\nThe user cancelled this task. Do not automatically restart or replace this task.\n${boundedText(item.result ?? item.error ?? "No final answer", 6000)}`
-                  : `Subagent result: ${item.id} / ${item.taskId}\nOutcome: ${item.status}\n${boundedText(item.result ?? item.error ?? "No answer", 6000)}`,
-            })),
+            .map((item) => {
+              const output = boundedText(
+                [item.error && `Error: ${item.error}`, item.result].filter(Boolean).join("\n") ||
+                  "No final answer",
+                6000,
+              );
+              return {
+                eventId: item.taskId,
+                agentId: item.id,
+                taskId: item.taskId,
+                content:
+                  item.cancelRequestedBy === "user"
+                    ? `Subagent cancelled by user: ${item.id} / ${item.taskId}\nOutcome: ${item.status}\nThe user cancelled this task. Do not automatically restart or replace this task.\n${output}`
+                    : `Subagent result: ${item.id} / ${item.taskId}\nOutcome: ${item.status}\n${output}`,
+              };
+            }),
         acknowledge: (id) => owner.acknowledge(id),
         disarm: () => {
           const count = owner.snapshot().filter((item) => item.callback === "armed").length;
@@ -112,11 +130,13 @@ export function createSubagentsExtension(
       });
       delivery.updateContext(context);
       const currentDelivery = delivery;
-      unsubscribe = owner.subscribe(() => {
-        queueMicrotask(() => currentDelivery.tick());
-      });
-      timer = setInterval(() => currentDelivery.tick(), 250);
-      timer.unref();
+      if (!waitsForChildren) {
+        unsubscribe = owner.subscribe(() => {
+          queueMicrotask(() => currentDelivery.tick());
+        });
+        timer = setInterval(() => currentDelivery.tick(), 250);
+        timer.unref();
+      }
       if (options.presentation !== false)
         presentation = attachSubagentPresentation(pi, owner, context);
       options.onController?.(owner, context);

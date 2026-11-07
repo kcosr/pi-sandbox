@@ -60,6 +60,8 @@ export interface SubagentSessionRequest {
 
 export interface SubagentConfig {
   readonly enabled: boolean;
+  /** Keep the parent run open through child cleanup and result incorporation. */
+  readonly waitForChildren: boolean;
   readonly maxConcurrent: number;
   /** Lifetime limit on accepted new spawns; resuming a child does not consume it. */
   readonly maxTotal: number;
@@ -108,6 +110,10 @@ export interface SubagentController {
   };
   inspect(id: string): string;
   subscribe(listener: (snapshots: readonly SubagentSnapshot[]) => void): () => void;
+  /** Throw if this controller closed or encountered a lifecycle/storage failure. */
+  assertHealthy(): void;
+  /** Wait for actual work and cleanup to finish; reject on abort, closure or lifecycle failure. */
+  waitForIdle(signal?: AbortSignal): Promise<void>;
   disarm(): void;
   acknowledge(taskId: string): void;
   quiesce(): Promise<void>;

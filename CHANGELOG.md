@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Add opt-in standalone subagent completion that waits for delegated work and
+  parent result incorporation, with cancellation and explicit lifecycle errors.
 - Add optional SDK subagents with shared managed approvals, concurrent and total
   new-spawn limits, compact footer status, Markdown previews and RPC observation, plus an independent vanilla Pi
   package. Child audit provenance requires application and collector upgrades together.

@@ -373,6 +373,9 @@ subject scoping; `Allow once` authorizes only the individual invocation.
 
 Managed Pi ignores the ordinary extension's `.pi/subagents.json` and
 `PI_SUBAGENTS_CONFIG`. Its limits come exclusively from administrative policy.
+The standalone extension additionally offers opt-in `waitForChildren` completion
+for ordinary Pi and SDK hosts; managed Pi retains background completion and does
+not expose that option in administrative TOML.
 The optional table is additive within main schema 14; broker protocol/rules remain 10. Audit child provenance requires the paired application/collector update below.
 
 ## Code mode and MCP servers

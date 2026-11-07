@@ -43,7 +43,7 @@ delivery at its safe settlement boundary; failed parent turns do not reset retri
 
 Standalone configuration is read from trusted `.pi/subagents.json`, or an
 explicit `PI_SUBAGENTS_CONFIG` path. Configuration supports `enabled`,
-`maxConcurrent`, `maxTotal`, `startupTimeoutMs`, `cancelTimeoutMs`, `taskTimeoutMs`,
+`waitForChildren`, `maxConcurrent`, `maxTotal`, `startupTimeoutMs`, `cancelTimeoutMs`, `taskTimeoutMs`,
 `stateDirectory`, and `tools`. Defaults allow four concurrent tasks and 32 total
 new spawns per parent session. Accepted spawn attempts count before startup;
 cancellation, completion and failed startup do not refund the total.
@@ -104,6 +104,38 @@ remove terminal controls and clickable hyperlinks.
 invalid JSON in interactive Pi displays an error directing you to `/subagents`.
 
 ## RPC clients
+
+### Waiting for delegated work
+
+Set `"waitForChildren": true` in the standalone JSON configuration to keep a
+parent run open through child completion and result incorporation. It defaults
+to `false` in both interactive and RPC modes. The option also works through an
+explicit SDK host's `config`; managed Pi currently keeps the default behavior.
+
+While the parent would otherwise finish, the extension waits for active children,
+including startup, cancellation and host cleanup, using controller notifications.
+Eligible results, including child failures and user cancellations, enter the
+parent conversation and cause another turn. If that turn starts or resumes more
+children, the same process repeats. Only after the parent has incorporated the
+results and no work remains may Pi emit final `agent_settled`. RPC clients can use
+that normal completion event without subagent-specific polling or resume calls.
+Intermediate assistant messages and turn events are not final run completion.
+No Pi patches or additional approval UI are required.
+
+In this mode, explicit parent abort cancels existing children and suppresses their
+callbacks; shutdown likewise requests cleanup. This differs from the default
+background behavior described above. A child still cleaning up retains capacity.
+Cleanup, storage or delivery failures explicitly abort the parent and emit a
+normal Pi `extension_error`; clients must not treat an aborted settlement or an
+error as successful completion. After Pi exhausts its normal parent retries, a
+parent failure also cancels remaining children. A lifecycle/storage failure
+requires restarting the affected session; it is not silently retried as a new
+task. Normal child failures remain results for the parent to handle.
+
+The wait adds no deadline or model requests of its own. Existing `taskTimeoutMs`
+and cancellation limits still apply, and spawn accounting is unchanged.
+
+### Observations and controls
 
 Run the main Pi in `--mode rpc`. Children still use in-process SDK sessions. First
 discover `subagents-rpc` with `get_commands`; do not send an unknown slash command,

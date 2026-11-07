@@ -95,6 +95,7 @@ export function createManagedSubagentHost(options: ManagedSubagentHostOptions): 
   return {
     config: {
       enabled: true,
+      waitForChildren: false,
       maxConcurrent: policy.maxConcurrent,
       maxTotal: policy.maxTotal,
       startupTimeoutMs: 30000,

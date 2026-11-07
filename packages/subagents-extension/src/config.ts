@@ -8,6 +8,7 @@ export const DEFAULT_TOOLS = Object.freeze(["read", "bash", "edit", "write"]);
 const BUILTIN_TOOLS = new Set([...DEFAULT_TOOLS, "grep", "find", "ls", "powershell"]);
 const FIELDS = new Set([
   "enabled",
+  "waitForChildren",
   "maxConcurrent",
   "maxTotal",
   "startupTimeoutMs",
@@ -42,6 +43,8 @@ export function parseSubagentConfig(
   };
   if (raw.enabled !== undefined && typeof raw.enabled !== "boolean")
     throw new Error("Invalid subagent enabled");
+  if (raw.waitForChildren !== undefined && typeof raw.waitForChildren !== "boolean")
+    throw new Error("Invalid subagent waitForChildren");
   const directory = raw.stateDirectory ?? defaultDirectory;
   if (typeof directory !== "string" || !isAbsolute(directory) || directory.includes("\0"))
     throw new Error("Subagent stateDirectory must be absolute");
@@ -55,6 +58,7 @@ export function parseSubagentConfig(
     throw new Error("Subagent tools must be distinct standard Pi tool names");
   return Object.freeze({
     enabled: raw.enabled ?? true,
+    waitForChildren: raw.waitForChildren ?? false,
     maxConcurrent: integer("maxConcurrent", 4, 1, 32),
     maxTotal: integer("maxTotal", 32, 1, 1024),
     startupTimeoutMs: integer("startupTimeoutMs", 30_000, 1, MAXIMUM_TIMER_MS),
