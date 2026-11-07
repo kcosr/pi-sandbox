@@ -128,11 +128,12 @@ background behavior described above. A child still cleaning up retains capacity.
 Cleanup, storage or delivery failures explicitly abort the parent and emit a
 normal Pi `extension_error`; clients must not treat an aborted settlement or an
 error as successful completion. After Pi exhausts its normal parent retries, a
-parent failure cancels any still-active delegation tree and suppresses its pending
-callbacks, while preserving Pi's ordinary provider-error outcome. If all children
-have already settled, their undelivered results remain eligible for the next
-prompt. Later prompts may proceed normally. Normal child failures remain results
-for the parent to handle.
+parent failure preserves Pi's ordinary provider-error outcome. If any child is
+still active, it cancels the delegation tree and suppresses all pending callbacks,
+including results from children that already settled. If every child has already
+settled, their undelivered results remain eligible for the next prompt. Later
+prompts may proceed normally. Normal child failures remain results for the parent
+to handle.
 
 If cancellation exceeds `cancelTimeoutMs`, the run reports unfinished cleanup;
 the child retains capacity until it actually settles, and a later run can recover.
