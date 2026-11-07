@@ -42,8 +42,10 @@ Results remain available to inspect. A successfully completed parent turn resume
 delivery at its safe settlement boundary; failed parent turns do not reset retries.
 
 Standalone configuration is read from trusted `.pi/subagents.json`, or an
-explicit `PI_SUBAGENTS_CONFIG` path. Configuration supports `enabled`,
-`waitForChildren`, `maxConcurrent`, `maxTotal`, `startupTimeoutMs`, `cancelTimeoutMs`, `taskTimeoutMs`,
+explicit `PI_SUBAGENTS_CONFIG` path. A supplied path is required: missing, unreadable
+or invalid explicit configuration fails initialization instead of using defaults.
+Configuration supports `enabled`,
+`waitForChildren`, `forwardActivity`, `maxConcurrent`, `maxTotal`, `startupTimeoutMs`, `cancelTimeoutMs`, `taskTimeoutMs`,
 `stateDirectory`, and `tools`. Defaults allow four concurrent tasks and 32 total
 new spawns per parent session. Accepted spawn attempts count before startup;
 cancellation, completion and failed startup do not refund the total.
@@ -202,6 +204,59 @@ or reconnect; serialize controls with parent session transitions. Assistant toke
 ticks are not persisted as observation events. Request an on-demand preview to
 refresh text. These custom entries are persisted for the client but never injected
 into the model conversation. Completion notifications are separate model messages.
+
+## Child activity events
+
+Set `"forwardActivity": true` to receive completed child assistant messages,
+tool starts/results and lifecycle changes through `entry_appended` entries with
+custom type `pi-subagents:activity`. It defaults to false independently of
+`waitForChildren`. Forwarding does not change task execution, completion,
+cancellation or result delivery, and the entries never become model messages.
+Token deltas, thinking and binary content are omitted.
+
+Import `SubagentActivityEvent` and `SUBAGENT_ACTIVITY_ENTRY` from the `./activity`
+export. Every event has `version: 1`, `parentSessionId`, observer `epoch`, strictly
+increasing `sequence` within that epoch, `childId`, task-generation `taskId`,
+a compact `label`, and a millisecond Unix `timestamp`. The `kind` union is:
+
+- `lifecycle`: `status` and `activity` from the child snapshot.
+- `assistant`: completed `text` and a `truncated` flag.
+- `tool_start`: `toolCallId`, `toolName`, optional `parentToolCallId`, display-only
+  JSON `args` text and `truncated`.
+- `tool_end`: the same tool identity, text `result`, `isError` and `truncated`.
+- `truncated`: `scope` (`task` or `session`) and `reason` (`byte_limit` or
+  `observer_error`).
+
+Correlate by parent session, observer epoch, child and task generation; a resume
+retains the child ID but creates a new task ID. Never process these as native
+parent assistant/tool events. An omitted terminal event does not prove that the
+child completed successfully.
+
+Each serialized activity event is limited to 16 KiB. Forwarding is bounded to
+1 MiB per task generation and 8 MiB per parent session, reserving a truncation
+marker before a scope is exhausted. Byte totals are recovered from retained
+activity entries on session startup, so reopening a parent does not reset them.
+Reopening an exhausted parent emits a nonpersisted warning through Pi's normal
+UI/RPC notification channel, so a new client sees why activity is unavailable
+without appending beyond the lifetime budget. A new parent session starts fresh
+forwarding and spawn budgets. Consumers may
+apply stricter capture limits in addition to these limits.
+
+Embedders can use `controller.subscribeActivity(listener)` for the same bounded
+event shapes without enabling persistence. It does not replay history, and its
+returned function unsubscribes the listener. Subscriptions end on controller
+shutdown. A throwing listener is removed; one bounded diagnostic is emitted
+without failing a task. A persistence error stops forwarding rather than changing
+task results. Direct observers receive events independently of the forwarding
+byte budget.
+
+State ownership records identify the owning process instance, including its
+start and host boot identity, so a stale lock is recoverable after process death
+or PID reuse. Unverifiable ownership remains locked; a live owner is not displaced.
+The same state directory must not be used simultaneously in independent PID
+namespaces. Existing owner records from versions without process identity are
+rejected: close sessions before updating, or, after confirming their process has
+stopped, remove the stale `owner.json` marker (not the child state/transcripts).
 
 ## Embedding
 
