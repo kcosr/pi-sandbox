@@ -419,8 +419,15 @@ policy engine, including MCP revision checks and nested Code Mode calls. A child
 label never creates or broadens a grant. User preview controls cannot enable tools
 or approve work implicitly.
 
-The main-only concurrent and total-attempt limits prevent unbounded replacement
-children within a session. They are not provider-spend limits or a defense against
+User optional-extension preferences only narrow admitted tool availability. Disabled
+extensions remain trusted installed code but cannot dispatch new model calls;
+pending approvals recheck the preference before dispatch. Existing operations are
+not revoked. Preferences cannot disable the mandatory sandbox or approval engine,
+load custom code, or supply administrator prompt guidance.
+
+The main-only concurrent and new-spawn limits prevent unbounded replacement
+children within a session. Resuming an existing child consumes concurrent capacity
+without consuming another new-spawn allowance. These are not provider-spend limits or a defense against
 the trusted account owner editing their own session state. Cancellation is
 cooperative: an unsettled child retains its concurrent slot. Existing executor
 cleanup and descendant-survival limitations still apply. Child sessions do not
@@ -446,9 +453,9 @@ host filesystem permissions. Zero retention disables the maintenance entirely.
 
 Managed child transcripts and previews use the same retention age in a separate
 bounded, shallow sweep. The current root and directories with an owner record are
-skipped. Expired child conversations are removed while a small attempt-count
+skipped. Expired child conversations are removed while a small spawn-count
 ledger remains; housekeeping must never refund the total quota. This ledger and
-parent attempt entries also protect counts across ordinary reload/resume. A saved
+parent spawn entries also protect counts across ordinary reload/resume. A saved
 child whose transcript has expired can no longer be resumed.
 
 ## Network details

@@ -51,7 +51,7 @@ const STATUSES = new Set([
   "interrupted",
 ]);
 export interface StoredSubagents {
-  readonly version: 1;
+  readonly version: 2;
   readonly used: number;
   readonly records: readonly SubagentSnapshot[];
 }
@@ -131,14 +131,14 @@ export class SubagentStore {
     return join(path, "session.jsonl");
   }
   public read(): StoredSubagents {
-    if (!existsSync(this.stateFile)) return { version: 1, used: 0, records: [] };
+    if (!existsSync(this.stateFile)) return { version: 2, used: 0, records: [] };
     const data: unknown = JSON.parse(readBoundedFile(this.stateFile, MAXIMUM_STATE_BYTES));
     if (!data || typeof data !== "object" || Array.isArray(data))
       throw new Error("Invalid subagent state");
     const input = data as Record<string, unknown>;
     if (
       Object.keys(input).some((key) => !["version", "used", "records"].includes(key)) ||
-      input.version !== 1 ||
+      input.version !== 2 ||
       typeof input.used !== "number" ||
       !Number.isSafeInteger(input.used) ||
       input.used < 0 ||
@@ -200,10 +200,10 @@ export class SubagentStore {
       seen.add(item.id);
       records.push({ ...item, tools: item.tools.map((tool: string) => tool) });
     }
-    return { version: 1, used: input.used, records };
+    return { version: 2, used: input.used, records };
   }
   public write(used: number, records: readonly SubagentSnapshot[]): void {
-    const text = JSON.stringify({ version: 1, used, records });
+    const text = JSON.stringify({ version: 2, used, records });
     if (Buffer.byteLength(text) > MAXIMUM_STATE_BYTES)
       throw new Error("Subagent state exceeds its size limit");
     const temporary = `${this.stateFile}.${randomUUID()}.tmp`;

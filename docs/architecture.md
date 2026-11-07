@@ -149,8 +149,8 @@ command-class and catalog-revision boundaries. Child identity annotates the dial
 and audit event; it is not part of the grant key. A new parent session clears grants.
 
 The runner reserves concurrent capacity and an attempt allowance before asynchronous
-startup. Accepted spawn and resume attempts consume the total even when startup
-fails. Completion or cancellation releases only concurrent capacity. A child still
+startup. Accepted new spawns consume the total even when startup fails. Resumes
+consume concurrent capacity but no additional total allowance. Completion or cancellation releases only concurrent capacity. A child still
 stopping holds its slot until its SDK session settles and is disposed. Cancellation
 does not undo file changes. Shutdown disarms callbacks and attempts to settle
 children before the parent releases shared resources. Interactive export checks
@@ -165,8 +165,9 @@ children**, including children still running. It does not cancel their work.
 Inspect their status and results in `/agents`, and explicitly cancel a task there
 when needed. Children created after that abort can deliver results normally.
 
-The status line shows active children, approval waits, failures and used attempts.
-`/agents` opens a selectable list and bounded read-only preview; arrows navigate,
+After the first accepted spawn, the status line shows active children, approval
+waits, failures and used spawns. `/agents` opens a modal selectable list and bounded
+read-only preview with Markdown-rendered agent output; arrows navigate,
 Enter opens a preview, Escape returns or closes, and `c` requests cancellation.
 An approval dismisses the preview to take focus. The ordinary package provides the
 same view without managed approvals. RPC clients use the versioned observation
@@ -234,7 +235,7 @@ pass. Memory and the roots receiving metadata checks, state reads and cleanup
 are bounded; listing the root directory is streamed in full. This prevents an
 accumulating set of retained roots from starving later transcripts. The current
 parent, owned roots and recently updated state are protected. Cleanup preserves
-the small attempt-count ledger even after deleting transcripts, so retention
+the small spawn-count ledger even after deleting transcripts, so retention
 never refunds a charged task allowance.
 
 ## Managed application and identity broker

@@ -68,6 +68,11 @@ import {
 import { createSubagentsExtension } from "../../packages/subagents-extension/src/factory.js";
 import type { SubagentController } from "../../packages/subagents-extension/src/contracts.js";
 import { closeSubagentPreview } from "../../packages/subagents-extension/src/presentation.js";
+import { createOptionalExtensions, optionalExtensionGuidance } from "./optional.js";
+import {
+  registerExtensionPreferencesCommand,
+  type ExtensionPreferences,
+} from "../extension-preferences/index.js";
 
 interface ExtensionState {
   executor: SandboxExecutor | undefined;
@@ -81,6 +86,7 @@ interface ExtensionState {
   auditor: ToolAuditor | undefined;
   bashAnalyzer: BashCommandAnalyzer | undefined;
   beforeApproval?: () => void;
+  preferences?: ExtensionPreferences;
 }
 
 /** Analyzer result bound into one approval request. */
@@ -188,6 +194,8 @@ async function authorize<T extends JsonObject>(
   if (state.policy === undefined || state.stopped) {
     throw new Error("Pi Sandbox is not available");
   }
+  if (state.preferences?.permitsTool(subject) === false)
+    throw new Error(`Optional extension is disabled for ${subject}`);
   let arguments_: JsonObject = rawArguments;
   let classification: CommandClassification | undefined;
   if (subject === COMMAND_CLASS_TOOL && hasCommandClassPolicies(state.config?.tools[subject])) {
@@ -206,6 +214,9 @@ async function authorize<T extends JsonObject>(
     ...(classification?.stages === undefined ? {} : { commandStages: classification.stages }),
   });
   await authorizeRequest(state, request, ctx, signal, classification, subject);
+  // A user can disable an extension while this call is waiting for approval.
+  if (state.preferences?.permitsTool(subject) === false)
+    throw new Error(`Optional extension is disabled for ${subject}`);
   return request.arguments as T;
 }
 
@@ -459,6 +470,8 @@ export function createPiSandboxExtension(dependencies: ExtensionDependencies): E
     const starts: Array<(event: unknown, ctx: ExtensionContext) => unknown> = [];
     const stops: Array<(event: unknown, ctx: ExtensionContext) => unknown> = [];
     const managedDefinitions = new Map<string, ToolDefinition>();
+    const originalDefinitions = new Map<string, ToolDefinition>();
+    const desiredActive = new Set<string>();
     const subagentTools = new Map<string, ToolDefinition>();
     let subagents: SubagentController | undefined;
     const environmentPrompt = () =>
@@ -480,6 +493,9 @@ export function createPiSandboxExtension(dependencies: ExtensionDependencies): E
       if (subagents !== undefined) closeSubagentPreview(subagents);
     };
     const publish = (definition: ToolDefinition) => {
+      originalDefinitions.set(definition.name, definition);
+      if (state.preferences?.permitsTool(definition.name) === false)
+        definition = { ...definition, exposure: "hidden" };
       managedDefinitions.set(definition.name, definition);
       pi.registerTool(definition);
     };
@@ -689,6 +705,16 @@ export function createPiSandboxExtension(dependencies: ExtensionDependencies): E
       const config = await dependencies.loadConfig();
       state.config = config;
       state.policy = new PolicyEngine(config.tools, mcp?.resolveSubject);
+      state.preferences = await createOptionalExtensions({
+        pi,
+        config,
+        agentDir: dependencies.userStateDir,
+        args: dependencies.toolArguments ?? [],
+        definitions: managedDefinitions,
+        originals: originalDefinitions,
+        desiredActive,
+      });
+      registerExtensionPreferencesCommand(pi, state.preferences);
       await dependencies.onSessionStart?.(ctx.sessionManager.getSessionFile());
       await cleanExpiredSubagents({
         userStateDir: dependencies.userStateDir,
@@ -766,13 +792,13 @@ export function createPiSandboxExtension(dependencies: ExtensionDependencies): E
         await registerPiToolExtensions(registrationApi, state, enabled);
         if (config.codemode.enabled && features?.selected("codemode") === true)
           enabled.add("codemode");
-        pi.setActiveTools(
-          selectManagedActiveTools(
-            dependencies.toolArguments ?? [],
-            enabled,
-            pi.getSettings().defaultTools,
-          ),
+        const initialActive = selectManagedActiveTools(
+          dependencies.toolArguments ?? [],
+          enabled,
+          pi.getSettings().defaultTools,
         );
+        for (const name of initialActive) desiredActive.add(name);
+        pi.setActiveTools(initialActive.filter((name) => state.preferences!.permitsTool(name)));
         for (const start of starts) await start(_event, ctx);
       } catch (error) {
         state.executor = undefined;
@@ -820,6 +846,8 @@ export function createPiSandboxExtension(dependencies: ExtensionDependencies): E
         getModelRuntime: dependencies.getModelRuntime,
         definitions: managedDefinitions,
         getEnvironmentPrompt: environmentPrompt,
+        getToolGuidance: (active) =>
+          optionalExtensionGuidance(state.config, state.preferences, active),
         isAvailable: () => state.started && !state.stopped && state.executor !== undefined,
         beforeApproval: () => {
           if (subagents !== undefined) closeSubagentPreview(subagents);
@@ -858,6 +886,9 @@ export function createPiSandboxExtension(dependencies: ExtensionDependencies): E
       delete sections.pi_sandbox_environment;
       const environment = environmentPrompt();
       if (environment !== undefined) sections.pi_sandbox_environment = environment;
+      delete sections.pi_sandbox_extension_guidance;
+      const guidance = optionalExtensionGuidance(state.config, state.preferences, active);
+      if (guidance !== undefined) sections.pi_sandbox_extension_guidance = guidance;
       delete sections.pi_sandbox_tool_guidance;
       if (!active.has("codemode")) return;
       sections.pi_sandbox_tool_guidance =

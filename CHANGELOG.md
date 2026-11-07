@@ -3,8 +3,10 @@
 ## Unreleased
 
 - Add optional SDK subagents with shared managed approvals, concurrent and total
-  attempt limits, TUI previews and RPC observation, plus an independent vanilla Pi
+  new-spawn limits, Markdown TUI previews and RPC observation, plus an independent vanilla Pi
   package. Child audit provenance requires application and collector upgrades together.
+- Add user optional-extension toggles, process-only CLI overrides and administrator
+  guidance that follows active extension tools.
 - Resolve child state paths consistently through symlinked user-state directories
   so transcript resume and retention work with macOS temporary-directory aliases.
 

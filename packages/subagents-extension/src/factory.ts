@@ -244,7 +244,7 @@ export function createSubagentsExtension(
       );
       tool<{ id: string; message: string; extended?: boolean }>(
         "resume_agent",
-        "Give a follow-up task to a settled child, preserving its conversation. Uses the parent's current model/reasoning and consumes another session task allowance. Results arrive automatically.",
+        "Give a follow-up task to a settled child, preserving its conversation. Uses the parent's current model/reasoning without consuming another spawn allowance. Concurrency limits still apply. Results arrive automatically.",
         objectSchema(
           {
             id: id(),

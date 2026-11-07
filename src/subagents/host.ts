@@ -28,6 +28,7 @@ export interface ManagedSubagentHostOptions {
   readonly beforeApproval?: () => void;
   readonly wrapCodeMode?: (definition: ToolDefinition) => ToolDefinition;
   readonly getEnvironmentPrompt?: () => string | undefined;
+  readonly getToolGuidance?: (active: ReadonlySet<string>) => string | undefined;
 }
 
 function bindChildContext(
@@ -150,6 +151,10 @@ export function createManagedSubagentHost(options: ManagedSubagentHostOptions): 
               const environment = options.getEnvironmentPrompt?.();
               if (environment !== undefined)
                 event.systemPromptOptions.sections.pi_sandbox_environment = environment;
+              delete event.systemPromptOptions.sections.pi_sandbox_extension_guidance;
+              const guidance = options.getToolGuidance?.(new Set(pi.getActiveTools()));
+              if (guidance !== undefined)
+                event.systemPromptOptions.sections.pi_sandbox_extension_guidance = guidance;
               event.systemPromptOptions.sections.pi_subagent_task =
                 "You are a child agent assigned one bounded task. Complete the assignment and return a concise result with evidence and blockers. Do not invent additional assignments. You cannot delegate to other agents.";
             });

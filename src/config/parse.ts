@@ -592,7 +592,34 @@ export function parseConfig(
   }
 
   const issues: string[] = [];
-  inspectKeys(parsed, ROOT_KEYS, "config", issues, ["skills", "subagents"]);
+  inspectKeys(parsed, ROOT_KEYS, "config", issues, ["skills", "subagents", "extension_guidance"]);
+  const guidanceValue = own(parsed, "extension_guidance");
+  const extensionGuidance: Record<string, string> = {};
+  if (guidanceValue !== undefined) {
+    if (!isRecord(guidanceValue)) issues.push("config.extension_guidance must be a table");
+    else {
+      const known = new Set(["subagents", ...catalog.extensions.map((extension) => extension.id)]);
+      let bytes = 0;
+      for (const [id, value] of Object.entries(guidanceValue)) {
+        if (!known.has(id))
+          issues.push(`config.extension_guidance.${id} is not a compiled optional extension`);
+        if (
+          typeof value !== "string" ||
+          value.trim().length === 0 ||
+          Buffer.byteLength(value) > 16384 ||
+          value.includes("\u0000")
+        ) {
+          issues.push(
+            `config.extension_guidance.${id} must be nonempty text of at most 16384 bytes without NUL`,
+          );
+        } else {
+          bytes += Buffer.byteLength(value);
+          extensionGuidance[id] = value;
+        }
+      }
+      if (bytes > 65536) issues.push("config.extension_guidance must total at most 65536 bytes");
+    }
+  }
 
   const configVersion = own(parsed, "config_version");
   if (configVersion !== 14) {
@@ -711,6 +738,7 @@ export function parseConfig(
 
   return Object.freeze({
     configVersion: 14,
+    ...(guidanceValue === undefined ? {} : { extensionGuidance: Object.freeze(extensionGuidance) }),
     codemode,
     mcp,
     audit,

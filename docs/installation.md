@@ -7,6 +7,11 @@ sandbox and Git packages. Its normal entry needs no Pi Sandbox patches or manage
 approval components. See the [package documentation](../packages/subagents-extension/README.md)
 for configuration, SDK embedding and the RPC observation contract.
 
+Managed users can disable admitted optional extensions through `/extensions` or
+process-only `--disable-extension ID` overrides. Administrators can append
+conditional tool guidance through `[extension_guidance]`; see
+[optional extension preferences](configuration.md#optional-extension-preferences).
+
 Subagent tool provenance uses audit wire 5 and record schema 6. Upgrade the Linux
 application and collector together. Main configuration schema 14 and broker/rule
 version 10 are unchanged.

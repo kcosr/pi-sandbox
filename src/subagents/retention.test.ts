@@ -79,7 +79,7 @@ describe("managed subagent retention", () => {
       await expect(stat(f.sessionFile)).rejects.toMatchObject({ code: "ENOENT" });
       const reopened = new SubagentStore(await realpath(f.root), f.id);
       try {
-        expect(reopened.read()).toEqual({ version: 1, used: 17, records: [] });
+        expect(reopened.read()).toEqual({ version: 2, used: 17, records: [] });
       } finally {
         reopened.close();
       }
@@ -112,7 +112,7 @@ describe("managed subagent retention", () => {
     });
     await expect(stat(f.sessionFile)).rejects.toMatchObject({ code: "ENOENT" });
     expect(JSON.parse(await readFile(join(f.parent, "state.json"), "utf8"))).toEqual({
-      version: 1,
+      version: 2,
       used: 17,
       records: [],
     });
@@ -131,7 +131,7 @@ describe("managed subagent retention", () => {
     });
     await expect(stat(f.sessionFile)).rejects.toMatchObject({ code: "ENOENT" });
     expect(JSON.parse(await readFile(join(f.parent, "state.json"), "utf8"))).toEqual({
-      version: 1,
+      version: 2,
       used: 17,
       records: [],
     });

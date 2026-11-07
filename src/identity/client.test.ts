@@ -846,12 +846,24 @@ describe("identity MCP overrides", () => {
     const configured: SandboxConfig = {
       ...base,
       subagents: { enabled: true, maxConcurrent: 2, maxTotal: 17 },
+      extensionGuidance: { subagents: "Delegate bounded tasks." },
       tools: { subagents: { mode: "ask", sessionGrant: "never", audit: true } },
     };
     const effective = applyIdentityOverrides(configured, {
       tools: { subagents: { mode: "allow", sessionGrant: "never" } },
     });
     expect(effective.subagents).toBe(configured.subagents);
+    expect(effective.extensionGuidance).toBe(configured.extensionGuidance);
+    expect(() =>
+      parseBrokerResponse(
+        JSON.stringify({
+          version: 10,
+          status: "ok",
+          environment: { pi: {}, sandbox: {}, extensions: {} },
+          overrides: { tools: {}, extensionGuidance: { subagents: "Replacement" } },
+        }),
+      ),
+    ).toThrow();
     expect(effective.tools.subagents).toEqual({
       mode: "allow",
       sessionGrant: "never",

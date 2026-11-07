@@ -354,6 +354,86 @@ async function executeTool(
 }
 
 describe("managed initial tool activation", () => {
+  it("toggles optional tools and guidance, persists choices, and blocks a stale call awaiting approval", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "managed-optional-"));
+    const cfg: SandboxConfig = {
+      ...configWithPiTool("ask"),
+      extensionGuidance: {
+        "standard-example": "Company tool guidance.",
+        subagents: "Do not show this.",
+      },
+    };
+    const create = async (args: string[] = []) => {
+      const pi = fakePi();
+      await createPiSandboxExtension({
+        cwd: "/work/project",
+        configPath: "/etc/pi-sandbox/config.toml",
+        userStateDir: directory,
+        loadConfig: () => Promise.resolve(cfg),
+        executor: fakeExecutor(),
+        piToolExtensions: [piToolFixture()],
+        toolArguments: args,
+      })(pi.api);
+      await pi.handlers.get("session_start")!(undefined as never, context());
+      return pi;
+    };
+    const guidance = (pi: FakePi) => {
+      const sections: Record<string, string> = { pi_sandbox_extension_guidance: "stale" };
+      pi.handlers.get("before_agent_start")!(
+        { systemPromptOptions: { sections } } as never,
+        context(),
+      );
+      return sections.pi_sandbox_extension_guidance;
+    };
+    const command = (pi: FakePi, args: string) =>
+      pi.commands.get("extensions")!.handler(args, context() as never);
+    try {
+      const pi = await create();
+      const executionSpy = vi.spyOn(pi.api, "exec");
+      expect(guidance(pi)).toBe("Company tool guidance.");
+      const staleTool = pi.tools.get("standard_echo")!;
+      const approval = deferred<string | undefined>();
+      const entered = deferred<void>();
+      const call = staleTool.execute(
+        "waiting",
+        { value: "test" },
+        undefined,
+        undefined,
+        context({
+          hasUI: true,
+          select: () => {
+            entered.resolve();
+            return approval.promise;
+          },
+        }),
+      );
+      await entered.promise;
+      await command(pi, "disable standard-example");
+      expect(pi.tools.get("standard_echo")!.exposure).toBe("hidden");
+      expect(pi.api.getActiveTools()).not.toContain("standard_echo");
+      expect(guidance(pi)).toBeUndefined();
+      approval.resolve("Allow once");
+      await expect(call).rejects.toThrow("Optional extension is disabled");
+      await expect(
+        staleTool.execute("stale", { value: "test" }, undefined, undefined, context()),
+      ).rejects.toThrow("Optional extension is disabled");
+      expect(executionSpy).not.toHaveBeenCalled();
+      expect((await create()).tools.get("standard_echo")!.exposure).toBe("hidden");
+      const overridden = await create(["--enable-extension", "standard-example"]);
+      expect(overridden.api.getActiveTools()).toContain("standard_echo");
+      await command(pi, "enable standard-example");
+      expect(pi.api.getActiveTools()).toContain("standard_echo");
+      expect(guidance(pi)).toBe("Company tool guidance.");
+      pi.api.setActiveTools(["read"]);
+      expect(guidance(pi)).toBeUndefined();
+      await command(pi, "disable standard-example");
+      await command(pi, "enable standard-example");
+      expect(pi.api.getActiveTools()).toEqual(["read"]);
+    } finally {
+      await rm(directory, { recursive: true, force: true });
+    }
+  });
+
   it("shares one management grant, audits actual operations, and disposes child lifecycle hooks", async () => {
     const directory = await mkdtemp(join(tmpdir(), "managed-child-lifecycle-"));
     const pi = fakePi();

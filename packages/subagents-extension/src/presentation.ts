@@ -1,6 +1,17 @@
 import { randomUUID } from "node:crypto";
-import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
-import { matchesKey, truncateToWidth, wrapTextWithAnsi } from "@earendil-works/pi-tui";
+import {
+  getMarkdownTheme,
+  type ExtensionAPI,
+  type ExtensionContext,
+} from "@earendil-works/pi-coding-agent";
+import {
+  Markdown,
+  matchesKey,
+  stripTerminalSequences,
+  truncateToWidth,
+  visibleWidth,
+  wrapTextWithAnsi,
+} from "@earendil-works/pi-tui";
 import type { SubagentController, SubagentSnapshot } from "./contracts.js";
 
 export const SUBAGENT_STATE_ENTRY = "pi-subagents:state";
@@ -20,6 +31,25 @@ export function displayText(value: string, bytes = 2048): string {
     result += character;
   }
   return `${result}…`;
+}
+
+/** Keep native Markdown styling without exposing terminal hyperlinks or control commands. */
+export function safeMarkdownLine(line: string): string {
+  let marker = "\ue000";
+  while (line.includes(marker)) marker += "\ue000";
+  const styles: string[] = [];
+  const protectedStyles = line.replace(
+    // SGR is the only terminal escape sequence retained from the Markdown renderer.
+    // eslint-disable-next-line no-control-regex
+    /\u001b\[[0-9;:]*m/gu,
+    (style) => `${marker}${styles.push(style) - 1}${marker}`,
+  );
+  return stripTerminalSequences(protectedStyles)
+    .replace(/[\p{Cc}\p{Cf}]/gu, " ")
+    .replace(
+      new RegExp(`${marker}(\\d+)${marker}`, "gu"),
+      (_match, index: string) => styles[Number(index)] ?? "",
+    );
 }
 
 function summary(agent: SubagentSnapshot) {
@@ -123,7 +153,7 @@ export function attachSubagentPresentation(
   let disposed = false;
   let sequence = 0;
   let lastLifecycle = "";
-  let lastStatus = "";
+  let lastStatus: string | undefined;
   let refresh: (() => void) | undefined;
   let closeView: (() => void) | undefined;
   const epoch = randomUUID();
@@ -141,7 +171,10 @@ export function attachSubagentPresentation(
       (agent) => ACTIVE.has(agent.status) && /approval/iu.test(agent.activity),
     ).length;
     const failed = all.filter((agent) => agent.status === "failed").length;
-    const status = `Agents: ${state.active}/${state.maxConcurrent} active${waiting ? ` · ${waiting} awaiting approval` : ""}${failed ? ` · ${failed} failed` : ""} · ${state.total}/${state.maxTotal} attempts · /agents`;
+    const status =
+      state.total === 0
+        ? undefined
+        : `Agents: ${state.active}/${state.maxConcurrent} active${waiting ? ` · ${waiting} awaiting approval` : ""}${failed ? ` · ${failed} failed` : ""} · ${state.total}/${state.maxTotal} started · /agents`;
     if (status !== lastStatus) {
       ctx.ui.setStatus("subagents", status);
       lastStatus = status;
@@ -220,119 +253,263 @@ export function attachSubagentPresentation(
         return;
       }
       if (closeView) return;
-      await commandContext.ui.custom<void>((tui, theme, _keys, done) => {
-        let selected = 0;
-        let opened: { id: string; taskId: string } | undefined;
-        let scroll = 0;
-        let message = "";
-        let closing = false;
-        const close = () => {
-          if (!closing) {
-            closing = true;
-            done();
-          }
-        };
-        closeView = close;
-        previews.set(controller, close);
-        refresh = () => tui.requestRender();
-        const timer = setInterval(() => tui.requestRender(), 1000);
-        timer.unref();
-        const list = () => controller.snapshot();
-        return {
-          render(width: number) {
-            const agents = list();
-            selected = Math.max(0, Math.min(selected, agents.length - 1));
-            const height = Math.max(5, Math.min(22, tui.terminal.rows - 6));
-            let lines: string[];
-            if (opened) {
-              const agent = agents.find(
-                (entry) => entry.id === opened?.id && entry.taskId === opened.taskId,
-              );
-              if (!agent) lines = ["This child task changed. Press Escape to return."];
-              else {
-                const data = preview(agent);
-                const details = [
-                  `${data.id} · ${data.status} · ${data.extended ? "extended" : "standard"}`,
-                  data.task,
-                  `${data.activity}${data.tools.length ? `: ${data.tools.join(", ")}` : ""}`,
-                  `Last update ${Math.max(0, Math.floor((Date.now() - data.updatedAt) / 1000))}s ago`,
-                  "",
-                  data.assistant || "No assistant progress yet.",
-                  ...(data.result ? ["", `Result: ${data.result}`] : []),
-                  ...(data.error ? ["", `Error: ${data.error}`] : []),
-                ];
-                const wrapped = details.flatMap((line) =>
-                  wrapTextWithAnsi(line, Math.max(1, width)),
-                );
-                scroll = Math.max(0, Math.min(scroll, Math.max(0, wrapped.length - height)));
-                lines = wrapped.slice(scroll, scroll + height);
+      await commandContext.ui.custom<void>(
+        (tui, theme, _keys, done) => {
+          let selected = 0;
+          let opened: { id: string; taskId: string } | undefined;
+          let scroll = 0;
+          let bodyHeight = 1;
+          let bodyLength = 0;
+          let follow = false;
+          let message = "";
+          let closing = false;
+          const cancelling = new Set<string>();
+          const markdown = new Markdown("", 0, 0, getMarkdownTheme());
+          const close = () => {
+            if (!closing) {
+              closing = true;
+              done();
+            }
+          };
+          closeView = close;
+          previews.set(controller, close);
+          refresh = () => tui.requestRender();
+          const timer = setInterval(() => tui.requestRender(), 1000);
+          timer.unref();
+          const list = () => controller.snapshot();
+          const elapsed = (agent: SubagentSnapshot) => {
+            const seconds = Math.max(
+              0,
+              Math.floor(((agent.finishedAt ?? Date.now()) - agent.startedAt) / 1000),
+            );
+            return seconds < 60 ? `${seconds}s` : `${Math.floor(seconds / 60)}m ${seconds % 60}s`;
+          };
+          const status = (agent: SubagentSnapshot) =>
+            theme.fg(
+              agent.status === "failed"
+                ? "error"
+                : agent.status === "completed"
+                  ? "success"
+                  : ACTIVE.has(agent.status)
+                    ? "accent"
+                    : "muted",
+              agent.status,
+            );
+          return {
+            render(width: number) {
+              const agents = list();
+              selected = Math.max(0, Math.min(selected, agents.length - 1));
+              const stats = controller.statistics();
+              const height = Math.max(1, Math.min(34, tui.terminal.rows - 2));
+              bodyHeight = Math.max(1, height - 7);
+              if (height < 8 || width < 16) {
+                const identity = opened;
+                const agent = identity
+                  ? agents.find(
+                      (entry) => entry.id === identity.id && entry.taskId === identity.taskId,
+                    )
+                  : agents[selected];
+                const data = agent ? preview(agent) : undefined;
+                markdown.setText(data ? (data.result ?? data.assistant) : "No subagents started");
+                const body = identity
+                  ? markdown.render(Math.max(1, width)).map(safeMarkdownLine)
+                  : wrapTextWithAnsi(data?.task ?? "No subagents started", Math.max(1, width));
+                return (
+                  height === 1
+                    ? ["Esc back"]
+                    : [
+                        theme.fg(
+                          "accent",
+                          theme.bold(agent ? `${agent.id} · ${agent.status}` : "Subagents"),
+                        ),
+                        ...body.slice(0, height - 2),
+                        width < 30 ? "Esc back" : "Esc back · Resize for details",
+                      ]
+                ).map((line) => truncateToWidth(line, Math.max(1, width)));
               }
-            } else {
-              const start = Math.max(0, selected - height + 2);
-              lines = [
-                theme.fg("accent", "Subagents"),
-                ...agents
-                  .slice(start, start + height - 1)
-                  .map(
-                    (agent, index) =>
-                      `${start + index === selected ? ">" : " "} ${agent.id} ${displayText(agent.task, 100).replaceAll("\n", " ")} · ${displayText(agent.activity, 80)} · ${Math.max(0, Math.floor(((agent.finishedAt ?? Date.now()) - agent.startedAt) / 1000))}s`,
-                  ),
-              ];
-              if (!agents.length) lines.push("No subagents in this session.");
-            }
-            return [
-              ...lines,
-              ...(message ? [message] : []),
-              opened
-                ? "↑↓ scroll · Escape back · c cancel task"
-                : "↑↓ select · Enter preview · Escape close · c cancel task",
-            ].map((line) => truncateToWidth(line, Math.max(1, width)));
-          },
-          handleInput(input: string) {
-            if (matchesKey(input, "ctrl+c")) {
-              close();
-            } else if (matchesKey(input, "escape")) {
+              const inner = Math.max(1, width - 4);
+              let title = "Subagents";
+              let subtitle = `${stats.active}/${stats.maxConcurrent} active · ${stats.total}/${stats.maxTotal} started`;
+              let body: string[] = [];
+              let position = "";
               if (opened) {
-                opened = undefined;
-                scroll = 0;
-                message = "";
-              } else close();
-            } else if (matchesKey(input, "up")) {
-              if (opened) scroll--;
-              else selected--;
-            } else if (matchesKey(input, "down")) {
-              if (opened) scroll++;
-              else selected++;
-            } else if (matchesKey(input, "enter") && !opened) {
-              const item = list()[selected];
-              if (item) opened = { id: item.id, taskId: item.taskId };
-            } else if (input === "c") {
-              const selection = opened;
-              const item = selection
-                ? list().find(
-                    (agent) => agent.id === selection.id && agent.taskId === selection.taskId,
-                  )
-                : list()[selected];
-              if (item && ACTIVE.has(item.status))
-                void controller.cancel(item.id, item.taskId).catch((error: unknown) => {
-                  message = displayText(
-                    error instanceof Error ? error.message : "Cancellation failed",
-                    200,
+                const agent = agents.find(
+                  (entry) => entry.id === opened?.id && entry.taskId === opened.taskId,
+                );
+                if (!agent)
+                  body = [
+                    theme.fg("warning", "This child task changed."),
+                    "Press Escape to return to the list.",
+                  ];
+                else {
+                  const data = preview(agent);
+                  title = `Subagents › ${data.id}`;
+                  subtitle = `${status(agent)} · ${data.extended ? "extended" : "standard"} · ${elapsed(agent)}`;
+                  const output = data.result ?? data.assistant;
+                  markdown.setText(output || "No assistant output yet.");
+                  body = [
+                    theme.fg("muted", "Assignment"),
+                    ...wrapTextWithAnsi(data.task, inner),
+                    "",
+                    ...wrapTextWithAnsi(
+                      `${data.activity}${data.tools.length ? ` · ${data.tools.join(", ")}` : ""}`,
+                      inner,
+                    ),
+                    theme.fg(
+                      "dim",
+                      `Updated ${Math.max(0, Math.floor((Date.now() - data.updatedAt) / 1000))}s ago`,
+                    ),
+                    "",
+                    theme.fg(
+                      "accent",
+                      theme.bold(data.result === undefined ? "Latest output" : "Result"),
+                    ),
+                    "",
+                    ...markdown.render(inner).map(safeMarkdownLine),
+                    ...(data.assistantTruncated && data.result === undefined
+                      ? ["", theme.fg("dim", "Earlier output omitted from this preview.")]
+                      : []),
+                    ...(data.error
+                      ? ["", theme.fg("error", "Error"), ...wrapTextWithAnsi(data.error, inner)]
+                      : []),
+                  ];
+                }
+                bodyLength = body.length;
+                if (follow) scroll = Math.max(0, bodyLength - bodyHeight);
+                scroll = Math.max(0, Math.min(scroll, Math.max(0, bodyLength - bodyHeight)));
+                position =
+                  bodyLength > bodyHeight
+                    ? `Lines ${scroll + 1}–${Math.min(scroll + bodyHeight, bodyLength)} of ${bodyLength}${follow ? " · following" : ""}`
+                    : "";
+                body = body.slice(scroll, scroll + bodyHeight);
+              } else {
+                const visible = Math.max(1, Math.floor(bodyHeight / 3));
+                const start = Math.max(0, selected - visible + 1);
+                for (const [index, agent] of agents.slice(start, start + visible).entries()) {
+                  const current = index + start === selected;
+                  const label = displayText(agent.task, 160).replaceAll("\n", " ");
+                  body.push(
+                    theme.fg(
+                      current ? "accent" : "text",
+                      `${current ? "›" : " "} ${agent.id}  ${label}`,
+                    ),
+                    `  ${status(agent)} · ${agent.extended ? "extended" : "standard"} · ${elapsed(agent)} · ${displayText(agent.activity, 80).replaceAll("\n", " ")}`,
+                    "",
                   );
-                  tui.requestRender();
-                });
-            }
-            tui.requestRender();
-          },
-          invalidate() {},
-          dispose() {
-            clearInterval(timer);
-            refresh = undefined;
-            closeView = undefined;
-            previews.delete(controller);
-          },
-        };
-      });
+                }
+                if (!agents.length)
+                  body = [theme.fg("muted", "No subagents have started in this conversation.")];
+                position = agents.length ? `${selected + 1} of ${agents.length} agents` : "";
+              }
+              while (body.length < bodyHeight) body.push("");
+              const pad = (line: string) => {
+                const clipped = truncateToWidth(line, inner);
+                return clipped + " ".repeat(Math.max(0, inner - visibleWidth(clipped)));
+              };
+              const frame = (line: string) =>
+                `${theme.fg("border", "│")} ${pad(line)} ${theme.fg("border", "│")}`;
+              const hint = opened
+                ? "↑↓ scroll · PgUp/PgDn · Home/End · Esc back · c cancel"
+                : "↑↓ select · Enter details · Esc close · c cancel";
+              const lines = [
+                theme.fg("border", `╭${"─".repeat(Math.max(0, width - 2))}╮`),
+                frame(theme.fg("accent", theme.bold(title))),
+                frame(subtitle),
+                frame(""),
+                ...body.slice(0, bodyHeight).map(frame),
+                frame(message ? theme.fg("warning", message) : theme.fg("dim", position)),
+                frame(theme.fg("muted", hint)),
+                theme.fg("border", `╰${"─".repeat(Math.max(0, width - 2))}╯`),
+              ];
+              return lines.map((line) => truncateToWidth(line, Math.max(1, width)));
+            },
+            handleInput(input: string) {
+              if (closing) return;
+              if (matchesKey(input, "ctrl+c")) close();
+              else if (matchesKey(input, "escape")) {
+                if (opened) {
+                  opened = undefined;
+                  scroll = 0;
+                  follow = false;
+                  message = "";
+                } else close();
+              } else if (matchesKey(input, "up")) {
+                if (opened) {
+                  scroll--;
+                  follow = false;
+                } else selected--;
+              } else if (matchesKey(input, "down")) {
+                if (opened) {
+                  scroll++;
+                  follow = false;
+                } else selected++;
+              } else if (opened && matchesKey(input, "pageUp")) {
+                scroll -= bodyHeight;
+                follow = false;
+              } else if (opened && matchesKey(input, "pageDown")) {
+                scroll += bodyHeight;
+                follow = false;
+              } else if (opened && matchesKey(input, "home")) {
+                scroll = 0;
+                follow = false;
+              } else if (opened && matchesKey(input, "end")) {
+                scroll = bodyLength;
+                follow = true;
+              } else if (matchesKey(input, "enter") && !opened) {
+                const item = list()[selected];
+                if (item) {
+                  opened = { id: item.id, taskId: item.taskId };
+                  scroll = 0;
+                  follow = false;
+                  message = "";
+                }
+              } else if (input === "c") {
+                const selection = opened;
+                const item = selection
+                  ? list().find(
+                      (agent) => agent.id === selection.id && agent.taskId === selection.taskId,
+                    )
+                  : list()[selected];
+                if (item && ACTIVE.has(item.status) && !cancelling.has(item.taskId)) {
+                  cancelling.add(item.taskId);
+                  message = `Cancelling ${item.id}…`;
+                  void controller
+                    .cancel(item.id, item.taskId)
+                    .then((result) => {
+                      if (!closing) message = `${item.id}: ${result.status}`;
+                    })
+                    .catch((error: unknown) => {
+                      if (!closing)
+                        message = displayText(
+                          error instanceof Error ? error.message : "Cancellation failed",
+                          200,
+                        );
+                    })
+                    .finally(() => {
+                      cancelling.delete(item.taskId);
+                      if (!closing) tui.requestRender();
+                    });
+                }
+              }
+              tui.requestRender();
+            },
+            invalidate() {
+              markdown.invalidate();
+            },
+            dispose() {
+              closing = true;
+              clearInterval(timer);
+              refresh = undefined;
+              closeView = undefined;
+              previews.delete(controller);
+            },
+          };
+        },
+        {
+          overlay: true,
+          overlayOptions: () => ({ anchor: "center", width: "90%", maxHeight: "95%", margin: 1 }),
+        },
+      );
     },
   });
   const unsubscribe = controller.subscribe(publish);

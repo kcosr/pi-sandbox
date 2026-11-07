@@ -677,6 +677,11 @@ export async function runPiSandbox({ piArgs: args, configPath }: SandboxArgument
         hostExecutors: Object.freeze(hostExecutors),
       });
       const managedMain = piMain as unknown as ManagedMain;
+      if (args[0] === "--help" || args[0] === "-h") {
+        process.stdout.write(
+          "Pi Sandbox: --disable-extension ID / --enable-extension ID override optional extension preferences for this process.\nUse /extensions to change saved preferences.\n\n",
+        );
+      }
       if (buildLayout.allowConfigOverride && (args[0] === "--help" || args[0] === "-h")) {
         process.stdout.write(
           "Pi Sandbox: --config FILE selects a TOML policy before Pi arguments.\n\n",

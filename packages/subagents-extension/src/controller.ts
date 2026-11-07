@@ -30,7 +30,7 @@ interface Child {
   progress: SubagentProgress;
 }
 const isActiveStatus = (status: string) => ["starting", "running", "stopping"].includes(status);
-export const SUBAGENT_ATTEMPT_ENTRY = "pi-subagents:attempt";
+export const SUBAGENT_SPAWN_ENTRY = "pi-subagents:spawn";
 
 /** One owner per root conversation. Admission is synchronous; asynchronous child waits never serialize peers. */
 export class Controller implements SubagentController {
@@ -57,7 +57,7 @@ export class Controller implements SubagentController {
       const saved = this.store.read();
       this.total = saved.used;
       for (const entry of parentContext?.sessionManager.getEntries() ?? []) {
-        if (entry.type !== "custom" || entry.customType !== SUBAGENT_ATTEMPT_ENTRY) continue;
+        if (entry.type !== "custom" || entry.customType !== SUBAGENT_SPAWN_ENTRY) continue;
         const data = entry.data as
           { version?: unknown; parentSessionId?: unknown; total?: unknown } | undefined;
         if (
@@ -197,7 +197,7 @@ export class Controller implements SubagentController {
       throw new Error("Subagent controller belongs to another parent session");
     if (!context.model) throw new Error("Select a parent model before starting a child");
     const stats = this.statistics();
-    if (stats.total >= stats.maxTotal)
+    if (!previous && stats.total >= stats.maxTotal)
       throw new Error(`Subagent session total limit reached (${stats.maxTotal})`);
     if (stats.active >= stats.maxConcurrent)
       throw new Error(`Subagent concurrency limit reached (${stats.maxConcurrent})`);
@@ -228,13 +228,13 @@ export class Controller implements SubagentController {
       reasoning: thinkingLevel,
     };
     const child = this.child(value, true);
-    // Both capacity and total are reserved before invoking any asynchronous host work.
-    this.total++;
+    // Every generation reserves capacity. Only a new child consumes the lifetime spawn quota.
+    if (!previous) this.total++;
     this.children.set(id, child);
     try {
       this.persist();
-      if (this.parentContext)
-        this.pi.appendEntry(SUBAGENT_ATTEMPT_ENTRY, {
+      if (!previous && this.parentContext)
+        this.pi.appendEntry(SUBAGENT_SPAWN_ENTRY, {
           version: 1,
           parentSessionId: this.parentSessionId,
           id,
@@ -252,7 +252,7 @@ export class Controller implements SubagentController {
         error: boundedText(String(error), 1024),
       };
       child.finished.resolve();
-      // Keep the consumed attempt if the other durable store remains writable.
+      // Keep any consumed spawn allowance if the other durable store remains writable.
       try {
         this.persist();
       } catch {

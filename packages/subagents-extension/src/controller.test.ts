@@ -12,7 +12,7 @@ import { join } from "node:path";
 import type { AgentSession, ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { parseSubagentConfig } from "./config.js";
-import { Controller, SUBAGENT_ATTEMPT_ENTRY } from "./controller.js";
+import { Controller, SUBAGENT_SPAWN_ENTRY } from "./controller.js";
 import type { SubagentHost, SubagentSessionRequest } from "./contracts.js";
 import { SubagentStore } from "./storage.js";
 
@@ -93,7 +93,7 @@ describe("subagent controller", () => {
     const sessions = [fakeSession(), fakeSession()];
     const requests: SubagentSessionRequest[] = [];
     const host = (stateDirectory: string): SubagentHost => ({
-      config: parseSubagentConfig({ maxTotal: 2 }, stateDirectory),
+      config: parseSubagentConfig({ maxTotal: 1 }, stateDirectory),
       createSession(request) {
         requests.push(request);
         return Promise.resolve(sessions[requests.length - 1]!.session);
@@ -125,7 +125,7 @@ describe("subagent controller", () => {
     }
     const reopened = new Controller(api, host(alias), "parent");
     try {
-      expect(reopened.statistics().total).toBe(2);
+      expect(reopened.statistics().total).toBe(1);
       await expect(reopened.spawn("over cap", false, parent(directory))).rejects.toThrow(
         "total limit",
       );
@@ -260,9 +260,9 @@ describe("subagent controller", () => {
     await controller.shutdown();
   });
 
-  it("charges failed startup and resume attempts durably without refunding completed work", async () => {
+  it("charges failed new spawns durably while allowing repeated resumes at the total cap", async () => {
     const directory = root();
-    const config = parseSubagentConfig({ maxTotal: 3 }, directory);
+    const config = parseSubagentConfig({ maxTotal: 2 }, directory);
     let attempts = 0;
     const sessions: ReturnType<typeof fakeSession>[] = [];
     const host: SubagentHost = {
@@ -290,15 +290,69 @@ describe("subagent controller", () => {
     await vi.waitFor(() => expect(controller.statistics().active).toBe(0));
     await controller.shutdown();
     controller = new Controller(api, host, "parent");
-    expect(controller.statistics().total).toBe(3);
+    expect(controller.statistics().total).toBe(2);
     await expect(controller.spawn("over cap", false, parent(directory))).rejects.toThrow(
       "total limit",
     );
-    await expect(
-      controller.resume(second.id, "over cap", undefined, parent(directory)),
-    ).rejects.toThrow("total limit");
-    expect(attempts).toBe(3);
+    await controller.resume(second.id, "continue at the cap", undefined, parent(directory));
+    expect(controller.statistics().total).toBe(2);
+    expect(attempts).toBe(4);
     await controller.shutdown();
+  });
+
+  it("enforces concurrency on resume without charging total or permitting new spawns", async () => {
+    const directory = root();
+    const sessions = [fakeSession(), fakeSession(), fakeSession()];
+    let calls = 0;
+    const host: SubagentHost = {
+      config: parseSubagentConfig({ maxConcurrent: 1, maxTotal: 2 }, directory),
+      createSession: () => Promise.resolve(sessions[calls++]!.session),
+    };
+    const controller = new Controller(api, host, "parent");
+    try {
+      const first = await controller.spawn("first", false, parent(directory));
+      await controller.cancel(first.id);
+      const second = await controller.spawn("second", false, parent(directory));
+      await expect(
+        controller.resume(first.id, "blocked by live peer", false, parent(directory)),
+      ).rejects.toThrow("concurrency limit");
+      expect(controller.statistics()).toMatchObject({ total: 2, active: 1 });
+      await controller.cancel(second.id);
+      await controller.resume(first.id, "allowed at total cap", false, parent(directory));
+      expect(controller.statistics()).toMatchObject({ total: 2, active: 1 });
+      await expect(controller.spawn("still capped", false, parent(directory))).rejects.toThrow(
+        "total limit",
+      );
+    } finally {
+      await controller.shutdown();
+    }
+  });
+
+  it("does not charge total when a resume fails to start", async () => {
+    const directory = root();
+    const fake = fakeSession();
+    let calls = 0;
+    const controller = new Controller(
+      api,
+      {
+        config: parseSubagentConfig({ maxTotal: 1 }, directory),
+        createSession: () =>
+          ++calls === 1
+            ? Promise.resolve(fake.session)
+            : Promise.reject(new Error("resume auth unavailable")),
+      },
+      "parent",
+    );
+    try {
+      const child = await controller.spawn("first", false, parent(directory));
+      await controller.cancel(child.id);
+      await expect(
+        controller.resume(child.id, "continue", false, parent(directory)),
+      ).rejects.toThrow("resume auth unavailable");
+      expect(controller.statistics()).toMatchObject({ total: 1, active: 0 });
+    } finally {
+      await controller.shutdown();
+    }
   });
 
   it("retains admission totals in the parent journal after child history is removed", async () => {
@@ -320,9 +374,10 @@ describe("subagent controller", () => {
     const original = new Controller(parentApi, host, "parent", context);
     const child = await original.spawn("one attempt", false, context);
     await original.cancel(child.id);
+    await original.resume(child.id, "resume without another journal charge", false, context);
     await original.shutdown();
     expect(journal).toHaveLength(1);
-    expect(journal[0]).toMatchObject({ customType: SUBAGENT_ATTEMPT_ENTRY, data: { total: 1 } });
+    expect(journal[0]).toMatchObject({ customType: SUBAGENT_SPAWN_ENTRY, data: { total: 1 } });
     rmSync(join(directory, "parent"), { recursive: true });
     const recovered = new Controller(parentApi, host, "parent", context);
     expect(recovered.statistics().total).toBe(1);

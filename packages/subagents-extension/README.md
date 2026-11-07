@@ -37,7 +37,7 @@ Standalone configuration is read from trusted `.pi/subagents.json`, or an
 explicit `PI_SUBAGENTS_CONFIG` path. Configuration supports `enabled`,
 `maxConcurrent`, `maxTotal`, `startupTimeoutMs`, `cancelTimeoutMs`, `taskTimeoutMs`,
 `stateDirectory`, and `tools`. Defaults allow four concurrent tasks and 32 total
-spawn/resume attempts per parent session. Accepted attempts count before startup;
+new spawns per parent session. Accepted spawn attempts count before startup;
 cancellation, completion and failed startup do not refund the total.
 
 Standard children default to read/bash/edit/write. Extended children reproduce
@@ -65,21 +65,27 @@ Positive timers must not exceed 2147483647 milliseconds. Timing out a cancellati
 wait does not free a still-running child. State defaults to `subagents/` below the
 Pi agent directory, with private directory/file modes. It contains ordinary child
 conversation transcripts and bounded progress records. The progress manifest is
-limited to 64 MiB independently of the attempt quota; inability to persist state
-fails the operation explicitly. Saved attempt counts and
-parent journal entries preserve the quota across reload/resume. This standalone
-entry does not automatically expire child transcripts; the embedding application
+limited to 64 MiB independently of the spawn quota; inability to persist state
+fails the operation explicitly. Saved spawn counts and parent journal entries
+preserve the quota across reload/resume. Child state uses
+format version 2 with spawn-only counts; earlier development version 1 child state
+is rejected rather than migrated. The parent transcript format is unchanged. This
+standalone entry does not automatically expire child transcripts; the embedding application
 may own retention. A crash interrupts running tasks; continuing requires an
-explicit resume, which consumes another attempt.
+explicit resume. Resuming an existing child never consumes the spawn quota, even
+when that quota is full; it still requires a free concurrency slot.
 
 ## Interactive presentation
 
-The status line shows active/capacity, waiting approvals when provided by a host,
-failures, and total attempts. `/agents` opens the live list. Use arrows to select,
-Enter to preview recent assistant output and the result, and Escape to return or
-close. Press `c` to request cancellation of the selected task. Closing the view
-does not stop the task. Previews are bounded and strip terminal control characters;
-private reasoning and transcript paths are not included in observations.
+The status line appears after the first accepted child in a conversation and stays
+visible after completion. It shows active/capacity, approval waits when provided by
+a host, failures, and the spawn quota. `/agents` opens a centered modal list. Use
+arrows to select an agent and Enter to view its bounded output rendered with Pi's
+native Markdown. Scroll with arrows or Page Up/Down; Home jumps to the beginning,
+and End follows the latest output. Escape returns or closes. Press `c` to cancel
+the selected task. Closing the modal leaves tasks running; an approval prompt
+automatically closes the modal. Previews omit reasoning and transcript paths and
+remove terminal controls and clickable hyperlinks.
 
 ## RPC clients
 

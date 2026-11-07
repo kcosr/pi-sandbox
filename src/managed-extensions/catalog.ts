@@ -75,6 +75,7 @@ export function createManagedExtensionCatalog(
   for (const [index, record] of records.entries()) {
     validateRecord(record, `compiledExtensions[${index}]`);
     const { extension, manifest } = record;
+    if (extension.id === "subagents") throw new Error("extension id is reserved: subagents");
     if (extensions.has(extension.id)) throw new Error(`duplicate extension id: ${extension.id}`);
     extensions.set(extension.id, extension);
 

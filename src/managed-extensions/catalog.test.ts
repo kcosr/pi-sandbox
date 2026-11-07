@@ -172,6 +172,12 @@ describe("managed extension catalog", () => {
     ).toThrow("formatCall must be a function");
   });
 
+  it("reserves the built-in subagent extension identity", () => {
+    expect(() => createManagedExtensionCatalog([record(extension({ id: "subagents" }))])).toThrow(
+      "extension id is reserved: subagents",
+    );
+  });
+
   it.each([
     "read",
     "grep",

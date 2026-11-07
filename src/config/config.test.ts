@@ -42,6 +42,22 @@ function parseConfig(
 }
 
 describe("parseConfig", () => {
+  it("accepts bounded main-only guidance for known optional extensions", () => {
+    expect(
+      parseConfig(
+        completeConfig() + '\n[extension_guidance]\nsubagents = "Delegate independent work."\n',
+      ).extensionGuidance,
+    ).toEqual({ subagents: "Delegate independent work." });
+    for (const entry of [
+      'unknown = "text"',
+      'subagents = ""',
+      "subagents = false",
+      `subagents = "${"x".repeat(16385)}"`,
+    ])
+      expect(() => parseConfig(completeConfig() + `\n[extension_guidance]\n${entry}\n`)).toThrow(
+        "config.extension_guidance",
+      );
+  });
   it("admits subagents only with explicit main enablement and one group policy", () => {
     expect(parseConfig(completeConfig()).subagents).toBeUndefined();
     expect(parseConfig(completeConfig() + "\n[subagents]\nenabled = false\n").subagents).toEqual({

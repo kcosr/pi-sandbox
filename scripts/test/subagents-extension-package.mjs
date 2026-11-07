@@ -81,7 +81,7 @@ async function scenario(directory, runtime, artifact, enabled) {
   await mkdir(state, { recursive: true });
   await writeFile(join(workspace, "sample.txt"), "SDK_CHILD_READ_OK\n");
   const config = join(directory, "subagents.json");
-  await writeFile(config, JSON.stringify({ enabled, maxConcurrent: 2, maxTotal: 2 }));
+  await writeFile(config, JSON.stringify({ enabled, maxConcurrent: 2, maxTotal: 1 }));
   let planned = enabled
     ? { name: "spawn_agent", args: { task: "Read sample.txt and report its contents." } }
     : undefined;
@@ -273,16 +273,18 @@ async function scenario(directory, runtime, artifact, enabled) {
       assert(response.success, JSON.stringify(response));
       return response.data;
     }
-    async function waitChildren(total) {
+    async function waitChildren(total, after = 0) {
       await waitFor(() =>
-        messages.some(
-          (event) =>
-            event.type === "entry_appended" &&
-            event.entry?.customType === "pi-subagents:state" &&
-            event.entry.data?.total === total &&
-            event.entry.data?.active === 0 &&
-            event.entry.data.agents.every((agent) => agent.notifications !== "armed"),
-        ),
+        messages
+          .slice(after)
+          .some(
+            (event) =>
+              event.type === "entry_appended" &&
+              event.entry?.customType === "pi-subagents:state" &&
+              event.entry.data?.total === total &&
+              event.entry.data?.active === 0 &&
+              event.entry.data.agents.every((agent) => agent.notifications !== "armed"),
+          ),
       );
       for (let i = 0; i < 100; i++) {
         const state = await rpc("get_state");
@@ -330,9 +332,12 @@ async function scenario(directory, runtime, artifact, enabled) {
         name: "resume_agent",
         args: { id: agent.id, message: "Report the contents again." },
       };
-      await rpc("prompt", { message: "Continue the child." });
-      await waitChildren(2);
-      assert.equal((await observe("snapshot")).total, 2);
+      const beforeResume = messages.length;
+      await rpc("prompt", { message: "Continue the child at the spawn cap." });
+      await waitChildren(1, beforeResume);
+      const resumedSnapshot = await observe("snapshot");
+      assert.equal(resumedSnapshot.total, 1);
+      assert.notEqual(resumedSnapshot.agents[0].taskId, agent.taskId);
       const requestsBeforeCap = childRequests;
       planned = {
         name: "spawn_agent",
@@ -359,7 +364,7 @@ async function scenario(directory, runtime, artifact, enabled) {
         !JSON.stringify(transcript).includes("observation-"),
         "Observation entries must not become model messages",
       );
-      assert.equal((await observe("snapshot")).total, 2);
+      assert.equal((await observe("snapshot")).total, 1);
     }
     child.stdin.end();
     await waitFor(() => child.exitCode !== null || child.signalCode !== null);

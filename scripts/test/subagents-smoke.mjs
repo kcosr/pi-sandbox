@@ -25,6 +25,8 @@ export async function testManagedSubagents({ launch, configPath, modelsPath, wor
   let childRequests = 0;
   let mcpCalls = 0;
   let overlapPending = false;
+  let testingDisabled = false;
+  let disabledRequests = 0;
   let running;
   const server = createServer(async (request, response) => {
     try {
@@ -73,8 +75,17 @@ export async function testManagedSubagents({ launch, configPath, modelsPath, wor
       assert.equal(request.url, "/v1/chat/completions");
       const names = (body.tools ?? []).map((tool) => tool.function?.name ?? tool.custom?.name);
       const parent = names.includes("spawn_agent");
+      const instructions = JSON.stringify(
+        body.messages.filter((message) => ["system", "developer"].includes(message.role)),
+      );
       let calls = [];
-      if (parent) {
+      if (testingDisabled) {
+        disabledRequests++;
+        assert(!management.some((name) => names.includes(name)), "Disabled delegation is hidden");
+        assert(!instructions.includes("SUBAGENT_GUIDANCE_FIXTURE"));
+        assert(JSON.stringify(body.messages).includes("CHECK_DISABLED_EXTENSIONS"));
+      } else if (parent) {
+        assert(instructions.includes("SUBAGENT_GUIDANCE_FIXTURE"), "Parent guidance is enabled");
         calls = planned;
         planned = [];
         if (calls.length === 0 && overlapPending) {
@@ -92,6 +103,7 @@ export async function testManagedSubagents({ launch, configPath, modelsPath, wor
         }
       } else {
         childRequests++;
+        assert(!instructions.includes("SUBAGENT_GUIDANCE_FIXTURE"), "Children cannot delegate");
         assert(!management.some((name) => names.includes(name)), "Children cannot delegate");
         assert(!names.includes("edit"), "Disabled tools cannot return in child sessions");
         assert(!names.includes("powershell"), "Stock tools cannot return in managed children");
@@ -171,7 +183,14 @@ export async function testManagedSubagents({ launch, configPath, modelsPath, wor
         });
         send({}, "tool_calls");
       } else {
-        send({ role: "assistant", content: parent ? "PARENT_DONE" : "MANAGED_CHILD_DONE" });
+        send({
+          role: "assistant",
+          content: testingDisabled
+            ? "DISABLED_CHECK_DONE"
+            : parent
+              ? "PARENT_DONE"
+              : "MANAGED_CHILD_DONE",
+        });
         send({}, "stop");
       }
       response.end("data: [DONE]\n\n");
@@ -188,7 +207,8 @@ export async function testManagedSubagents({ launch, configPath, modelsPath, wor
     config.audit.enabled = false;
     config.sessions.retention_days = 0;
     config.filesystem.cwd_writable = true;
-    config.subagents = { enabled: true, max_concurrent: 2, max_total: 3 };
+    config.subagents = { enabled: true, max_concurrent: 2, max_total: 2 };
+    config.extension_guidance = { subagents: "SUBAGENT_GUIDANCE_FIXTURE" };
     config.codemode = { enabled: true, timeout_ms: 30000 };
     config.mcp = {
       servers: {
@@ -245,6 +265,7 @@ export async function testManagedSubagents({ launch, configPath, modelsPath, wor
     const commandList = await running.request("get_commands");
     const command = commandList.commands.find((entry) => entry.name === "agents-rpc");
     assert(command, `Managed observation command is registered: ${JSON.stringify(commandList)}`);
+    assert(commandList.commands.some((entry) => entry.name === "extensions"));
     const observe = async (action = "snapshot", details = {}) => {
       const requestId = `inspect-${++sequence}`;
       const result = await running.request("prompt", {
@@ -270,6 +291,19 @@ export async function testManagedSubagents({ launch, configPath, modelsPath, wor
         running.messages.slice(offset).find((message) => message.type === "agent_settled"),
       );
     };
+    const toggleSubagents = async (enabled) => {
+      const response = await running.request("prompt", {
+        message: `/extensions ${enabled ? "enable" : "disable"} subagents`,
+      });
+      assert.equal(response.disposition, "handled");
+    };
+    await toggleSubagents(false);
+    testingDisabled = true;
+    await prompt("CHECK_DISABLED_EXTENSIONS", []);
+    await running.idle();
+    testingDisabled = false;
+    assert.equal(disabledRequests, 1);
+    await toggleSubagents(true);
     // A parent grant must immediately cover future child writes.
     await prompt("Write the parent marker.", [
       { name: "write", args: { path: "subagent-parent.txt", content: "parent" } },
@@ -330,7 +364,8 @@ export async function testManagedSubagents({ launch, configPath, modelsPath, wor
       { name: "read", args: { path: "subagent-input.txt" } },
     ]);
     assert.equal(running.prompts.length, 2);
-    await prompt("Resume the child.", [
+    const beforeResume = running.messages.length;
+    await prompt("Resume the child at the spawn cap.", [
       {
         name: "resume_agent",
         args: {
@@ -341,16 +376,18 @@ export async function testManagedSubagents({ launch, configPath, modelsPath, wor
       },
     ]);
     await running.wait(() =>
-      running.messages.findLast(
-        (message) =>
-          message.type === "entry_appended" &&
-          message.entry?.customType === "pi-subagents:state" &&
-          message.entry.data?.total === 3 &&
-          message.entry.data?.active === 0,
-      ),
+      running.messages
+        .slice(beforeResume)
+        .findLast(
+          (message) =>
+            message.type === "entry_appended" &&
+            message.entry?.customType === "pi-subagents:state" &&
+            message.entry.data?.total === 2 &&
+            message.entry.data?.active === 0,
+        ),
     );
     await running.idle();
-    assert.equal((await observe()).total, 3);
+    assert.equal((await observe()).total, 2);
     assert.equal(mcpCalls, 1);
     assert.equal(await readFile(join(workspace, "subagent-nested.txt"), "utf8"), "NESTED_WRITE_OK");
     assert.equal(running.prompts.length, 3, "Only the new MCP subject needs an approval");
@@ -359,12 +396,18 @@ export async function testManagedSubagents({ launch, configPath, modelsPath, wor
       { name: "spawn_agent", args: { task: "This must exceed the total limit." } },
     ]);
     assert.equal(childRequests, before);
-    assert.equal((await observe()).total, 3);
+    assert.equal((await observe()).total, 2);
     assert.equal(running.prompts.length, 3);
+    await toggleSubagents(false);
+    assert.equal(
+      (await observe()).total,
+      2,
+      "Disabled delegation keeps existing agents inspectable",
+    );
     await running.stop();
     running = undefined;
     console.log(
-      "Managed subagents: shared parent/child grants, real tools, no delegation, previews and quotas passed",
+      "Managed subagents: shared grants, real tools, extension visibility/guidance, previews and spawn quotas passed",
     );
   } finally {
     await running?.stop();

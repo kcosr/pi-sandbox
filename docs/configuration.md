@@ -349,9 +349,11 @@ audit = true
 ```
 
 `max_concurrent` accepts integers from 1 through 32; `max_total` accepts 1 through 1024. Their defaults are 4 and 32. Both apply across all children of one parent
-session. Every accepted spawn or resume consumes one total attempt before startup;
+session. Every accepted new spawn consumes one total attempt before startup;
 failed startup, cancellation and completion do not refund it. Invalid requests and
-requests rejected at the limit do not consume attempts. There is no waiting queue
+requests rejected at the limit do not consume attempts. Resuming an existing child
+does not consume the total and remains possible after the total is exhausted; it
+still requires concurrent capacity. There is no waiting queue
 at the concurrency limit. The total survives reloading or reopening the saved
 parent. A new parent session starts with its own allowance. These limits bound
 delegated tasks, not model turns or provider tokens within one task.
@@ -989,6 +991,46 @@ environment variables, or expose credentials. The diagnostic subject list is
 the exact configured model-tool set plus `user_shell`. Diagnostics distinguish
 sandbox, direct, and managed-host execution scopes and list the selected
 compiled extensions.
+
+## Optional extension preferences
+
+`/extensions` opens the user menu for optional compiled extensions, including
+Subagents and configured Git. `/extensions list`, `/extensions enable ID`, and
+`/extensions disable ID` also work as user commands in RPC mode. MCP server
+preferences remain in `/mcp`; mandatory sandbox and approval components cannot
+be disabled.
+
+Preferences are saved in `extensions.json` under `PI_CODING_AGENT_DIR` and apply
+on subsequent starts. `--disable-extension ID` and `--enable-extension ID`
+override that preference for the current process; repeat switches for multiple
+extensions, with the last switch for each ID winning. Command-line overrides
+lock that entry in the menu. Administrator selection, disabled tool policies,
+and tool-exclusion flags remain ceilings. No preference loads new extension code
+or broadens policy. A policy of `deny` still leaves a tool available with every
+invocation denied.
+
+Disabling an extension hides its tools and blocks new invocations, including
+calls that were awaiting approval. Already executing operations can complete.
+Subagent tasks already running continue, and `/agents` remains available for
+inspection and cancellation. Disabling Git controls `git_clone`; Git commands
+through Bash remain subject to Bash policy. Re-enabling restores the extension's
+prior active-tool selection. Running processes do not watch another process's
+preference edits.
+
+Optional main-only guidance can follow those tools:
+
+```toml
+[extension_guidance]
+subagents = "Delegate independent tasks and summarize the evidence returned."
+git = "Use the approved repository mirror for company projects."
+```
+
+Keys must name `subagents` or a compiled optional extension. Values are nonempty
+text, up to 16 KiB each and 64 KiB total. Guidance is appended to the system prompt
+only when that extension is enabled and at least one of its tools is active.
+Child prompts use their own narrower tool set. Guidance is plain trusted text;
+it does not expand templates, load files, or change invocation policy. User/group
+rules and user preferences cannot supply or replace it.
 
 ## Prompt behavior
 

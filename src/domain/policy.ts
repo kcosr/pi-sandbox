@@ -137,6 +137,8 @@ export interface ManagedEnvironment<PiValue = string> {
 
 export interface SandboxConfig<PiValue = string> {
   readonly configVersion: 14;
+  /** Administrator-authored prompt additions, keyed by optional extension ID. */
+  readonly extensionGuidance?: Readonly<Record<string, string>>;
   readonly subagents?: SubagentsConfig;
   readonly codemode: CodeModeConfig;
   readonly mcp: McpConfig;

@@ -41,16 +41,19 @@ depend on provider credentials.
 Subagent package acceptance runs a stock Pi RPC parent and real SDK children
 against an offline scripted provider under Node and Bun. It covers real file
 reads, transcript resume, observations outside model messages, enabled/disabled
-configuration and total-attempt rejection. SDK tests additionally exercise
+configuration and new-spawn quota rejection with resumes allowed at the limit. SDK tests additionally exercise
 function-backed provider credentials, repository context, file-backed extended
 tools and a real local stdio MCP fixture. Controller tests cover concurrent
 admission, cancellation, startup failure, timers and durable quotas; UI tests cover
-bounded terminal-safe previews, stale controls and approval focus.
+bounded terminal-safe Markdown previews, modal navigation, initial status hiding,
+stale controls and approval focus. Optional-extension tests cover persisted user
+choices, CLI precedence, administrator ceilings, hidden definitions, calls disabled
+while awaiting approval, and guidance following effective tool selection.
 
 The packaged Linux and native Seatbelt smoke entry points include
 `subagents-smoke.mjs`: real managed children, parent-to-child and child-to-parent
 session grants, disabled-tool exclusion, shared file operations, child previews
-and attempt limits. Host and policy tests retain live-definition checks, child
+and new-spawn limits. Host and policy tests retain live-definition checks, child
 invocation/audit context and cleanup. All providers in these tests are local
 fixtures; do not invoke live model providers.
 

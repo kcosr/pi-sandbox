@@ -59,6 +59,7 @@ export interface SubagentSessionRequest {
 export interface SubagentConfig {
   readonly enabled: boolean;
   readonly maxConcurrent: number;
+  /** Lifetime limit on accepted new spawns; resuming a child does not consume it. */
   readonly maxTotal: number;
   readonly startupTimeoutMs: number;
   readonly cancelTimeoutMs: number;
@@ -97,6 +98,7 @@ export interface SubagentController {
     readonly enabled: boolean;
     readonly active: number;
     readonly maxConcurrent: number;
+    /** Accepted new spawns in this parent conversation, including failed starts. */
     readonly total: number;
     readonly maxTotal: number;
   };

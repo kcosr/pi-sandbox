@@ -3,18 +3,22 @@ import type {
   ExtensionCommandContext,
   ExtensionContext,
 } from "@earendil-works/pi-coding-agent";
-import { describe, expect, it, vi } from "vitest";
+import { beforeAll, describe, expect, it, vi } from "vitest";
+import { initTheme } from "@earendil-works/pi-coding-agent";
+import { stripTerminalSequences, visibleWidth } from "@earendil-works/pi-tui";
+beforeAll(() => initTheme("dark"));
 import type { SubagentController, SubagentSnapshot } from "./contracts.js";
 import {
   attachSubagentPresentation,
   closeSubagentPreview,
   displayText,
   parseObservationRequest,
+  safeMarkdownLine,
   SUBAGENT_RESPONSE_ENTRY,
   SUBAGENT_STATE_ENTRY,
 } from "./presentation.js";
 
-function fixture() {
+function fixture(empty = false) {
   let agents: readonly SubagentSnapshot[] = [
     {
       id: "a-one",
@@ -38,6 +42,9 @@ function fixture() {
       reasoning: "off",
     },
   ];
+  const initial = agents[0]!;
+  if (empty) agents = [];
+  let total = agents.length;
   let listener: ((agents: readonly SubagentSnapshot[]) => void) | undefined;
   const cancel = vi.fn((id: string, taskId?: string) => {
     expect(id).toBe("a-one");
@@ -47,7 +54,14 @@ function fixture() {
   const controller = {
     parentSessionId: "parent",
     snapshot: () => agents,
-    statistics: () => ({ enabled: true, active: 1, total: 1, maxConcurrent: 4, maxTotal: 32 }),
+    statistics: () => ({
+      enabled: true,
+      active: agents.filter((agent) => ["starting", "running", "stopping"].includes(agent.status))
+        .length,
+      total,
+      maxConcurrent: 4,
+      maxTotal: 32,
+    }),
     subscribe(callback: typeof listener) {
       listener = callback;
       return () => {
@@ -66,9 +80,10 @@ function fixture() {
       entries.push({ type, data });
     },
   } satisfies Pick<ExtensionAPI, "registerCommand" | "appendEntry">;
+  const setStatus = vi.fn();
   const context = {
     mode: "rpc",
-    ui: { setStatus: vi.fn(), notify: vi.fn() },
+    ui: { setStatus, notify: vi.fn() },
   } as unknown as ExtensionContext;
   const presentation = attachSubagentPresentation(pi as ExtensionAPI, controller, context);
   return {
@@ -77,15 +92,41 @@ function fixture() {
     cancel,
     presentation,
     context,
+    setStatus,
     controller,
     update(next: Partial<SubagentSnapshot>) {
-      agents = [{ ...agents[0]!, ...next }];
+      agents = [{ ...(agents[0] ?? initial), ...next }];
+      total = 1;
       listener?.(agents);
     },
   };
 }
 
 describe("subagent observation", () => {
+  it("keeps persistent status hidden until the first accepted child and visible after completion", () => {
+    const f = fixture(true);
+    expect(f.setStatus).not.toHaveBeenCalled();
+    f.update({ status: "starting" });
+    expect(f.setStatus).toHaveBeenLastCalledWith(
+      "subagents",
+      expect.stringContaining("1/32 started"),
+    );
+    f.update({ status: "completed" });
+    expect(f.setStatus).toHaveBeenLastCalledWith(
+      "subagents",
+      expect.stringContaining("0/4 active"),
+    );
+    f.presentation.dispose();
+  });
+
+  it("preserves native Markdown styling while removing clickable links and control commands", () => {
+    const styled = "\u001b[1mResult\u001b[0m";
+    expect(
+      safeMarkdownLine(`\u001b]8;;javascript:alert(1)\u001b\\${styled}\u001b]8;;\u001b\\`),
+    ).toBe(styled);
+    expect(safeMarkdownLine("safe\u001b[2Jtext\u0007")).toBe("safetext ");
+  });
+
   it("rejects ambiguous control envelopes and unbounded input", () => {
     const request = {
       version: 1,
@@ -187,15 +228,17 @@ describe("subagent observation", () => {
       | { handleInput(input: string): void; render(width: number): string[]; dispose(): void }
       | undefined;
     let finish: (() => void) | undefined;
+    const terminal = { rows: 30 };
     const commandContext = {
       mode: "tui",
       ui: {
-        custom(factory: (...args: unknown[]) => typeof component) {
+        custom(factory: (...args: unknown[]) => typeof component, options: unknown) {
+          expect(options).toMatchObject({ overlay: true });
           return new Promise<void>((resolve) => {
             finish = resolve;
             component = factory(
-              { terminal: { rows: 30 }, requestRender: vi.fn() },
-              { fg: (_name: string, value: string) => value },
+              { terminal, requestRender: vi.fn() },
+              { fg: (_name: string, value: string) => value, bold: (value: string) => value },
               {},
               resolve,
             );
@@ -207,7 +250,43 @@ describe("subagent observation", () => {
     try {
       expect(component!.render(80).join("\n")).toContain("Inspect auth");
       component!.handleInput("\r");
-      expect(component!.render(80).join("\n")).toContain("Reading files");
+      expect(component!.render(80).map(stripTerminalSequences).join("\n")).toContain(
+        "Reading files",
+      );
+      f.update({ assistant: "## Findings\n\n**Safe** result.\n\n```ts\nconst answer = 42;\n```" });
+      const rendered = component!.render(80).map(stripTerminalSequences).join("\n");
+      expect(rendered).toContain("Findings");
+      expect(rendered).toContain("Safe result.");
+      expect(rendered).toContain("const answer = 42;");
+      expect(rendered).not.toContain("## Findings");
+      expect(rendered).not.toContain("**Safe**");
+      expect(rendered).not.toContain("private preview");
+      expect(rendered).not.toContain("session.jsonl");
+      expect(component!.render(35).every((line) => visibleWidth(line) <= 35)).toBe(true);
+      for (const rows of [1, 3, 5, 6, 7, 8]) {
+        terminal.rows = rows;
+        for (const width of [10, 80]) {
+          const compact = component!.render(width);
+          expect(compact.length).toBeLessThanOrEqual(Math.max(1, rows - 2));
+          expect(compact.every((line) => visibleWidth(line) <= width)).toBe(true);
+          expect(compact.map(stripTerminalSequences).join("\n")).toContain("Esc back");
+          if (rows >= 6 && width === 80)
+            expect(compact.map(stripTerminalSequences).join("\n")).toContain("Findings");
+        }
+      }
+      terminal.rows = 30;
+      f.update({
+        assistant: Array.from({ length: 80 }, (_, index) => `line-${index}\n`).join("\n"),
+      });
+      component!.render(80);
+      component!.handleInput("\u001b[F");
+      expect(component!.render(80).map(stripTerminalSequences).join("\n")).toContain("line-79");
+      f.update({ taskId: "new-generation" });
+      component!.handleInput("c");
+      expect(f.cancel).not.toHaveBeenCalled();
+      expect(component!.render(80).map(stripTerminalSequences).join("\n")).toContain(
+        "task changed",
+      );
       component!.handleInput("\u001b");
       expect(component!.render(80).join("\n")).toContain("Subagents");
       expect(f.cancel).not.toHaveBeenCalled();

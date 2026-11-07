@@ -165,7 +165,7 @@ describe.skipIf(!REAL_BWRAP_AVAILABLE)(
         "write",
       ]);
       expect([...fakePi.activeTools].sort()).toEqual([...fakePi.tools.keys()].sort());
-      expect([...fakePi.commands.keys()]).toEqual(["sandbox"]);
+      expect([...fakePi.commands.keys()]).toEqual(["sandbox", "extensions"]);
     });
 
     it("routes all seven model tools through the sandbox executor", async () => {

@@ -239,7 +239,7 @@ try {
     : undefined;
   if (
     extensionCommands === undefined ||
-    JSON.stringify(extensionCommands) !== JSON.stringify(["sandbox"])
+    JSON.stringify(extensionCommands) !== JSON.stringify(["sandbox", "extensions"])
   ) {
     throw new Error(
       `compiled executable exposed unexpected extension commands: ${JSON.stringify(extensionCommands)}`,
