@@ -495,10 +495,11 @@ export class Controller implements SubagentController {
     let stopErrorListener: (() => void) | undefined;
     try {
       try {
-        stopErrorListener = session.extensionRunner?.onError((error) => {
-          if (error.event === "session_shutdown")
-            reported ??= new Error(boundedText(error.error, 1024));
-        });
+        if (this.host.config.enabled && this.host.config.waitForChildren)
+          stopErrorListener = session.extensionRunner?.onError((error) => {
+            if (error.event === "session_shutdown")
+              reported ??= new Error(boundedText(error.error, 1024));
+          });
         if (this.host.disposeSession) await this.host.disposeSession(session, request);
         else await session.extensionRunner?.emit({ type: "session_shutdown", reason: "quit" });
       } finally {

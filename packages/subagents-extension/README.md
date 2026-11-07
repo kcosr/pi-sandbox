@@ -128,9 +128,17 @@ background behavior described above. A child still cleaning up retains capacity.
 Cleanup, storage or delivery failures explicitly abort the parent and emit a
 normal Pi `extension_error`; clients must not treat an aborted settlement or an
 error as successful completion. After Pi exhausts its normal parent retries, a
-parent failure also cancels remaining children. A lifecycle/storage failure
-requires restarting the affected session; it is not silently retried as a new
-task. Normal child failures remain results for the parent to handle.
+parent failure also cancels remaining children, while preserving Pi's ordinary
+provider-error outcome. Later prompts may proceed normally. Normal child failures
+remain results for the parent to handle.
+
+If cancellation exceeds `cancelTimeoutMs`, the run reports unfinished cleanup;
+the child retains capacity until it actually settles, and a later run can recover.
+Actual storage or cleanup faults require restarting the affected session and are
+reported again on each attempted run. In waiting mode, this includes errors Pi
+reports from child `session_shutdown` handlers: disposing the local session does
+not prove that a failed extension cleanup released its resources. The default
+background mode keeps Pi's existing handling of those reported hook errors.
 
 The wait adds no deadline or model requests of its own. Existing `taskTimeoutMs`
 and cancellation limits still apply, and spawn accounting is unchanged.

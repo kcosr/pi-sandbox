@@ -18,7 +18,7 @@ const result = (id: string, content = id): PendingDelivery => ({
 function fixture() {
   const handlers = new Map<string, Handler>();
   const entries: SessionEntry[] = [];
-  const signal = new AbortController();
+  let signal = new AbortController();
   let active = 0;
   let pending: PendingDelivery[] = [];
   let healthError: Error | undefined;
@@ -33,7 +33,9 @@ function fixture() {
   const abortParent = vi.fn(() => signal.abort());
   const context = {
     sessionManager: { getEntries: () => entries, getSessionId: () => "parent" },
-    signal: signal.signal,
+    get signal() {
+      return signal.signal;
+    },
     isIdle: () => false,
     hasPendingMessages: () => false,
     abort: abortParent,
@@ -97,7 +99,9 @@ function fixture() {
   return {
     context,
     abortParent,
-    signal,
+    get signal() {
+      return signal;
+    },
     entries,
     delivery,
     acknowledge,
@@ -118,8 +122,13 @@ function fixture() {
     set acknowledgementError(value: Error) {
       acknowledgementError = value;
     },
-    set cleanupError(value: Error) {
+    set cleanupError(value: Error | undefined) {
       cleanupError = value;
+    },
+    async newRun() {
+      signal = new AbortController();
+      await handlers.get("agent_start")?.({}, context);
+      await handlers.get("turn_start")?.({}, context);
     },
     holdCleanup() {
       releaseCleanup = () => undefined;
@@ -293,17 +302,81 @@ describe("opt-in parent completion", () => {
     },
   );
 
-  it("allows Pi retry boundaries but fails closed after a final parent error", async () => {
+  it("allows Pi retry boundaries and stops children after a final parent error without poisoning the next run", async () => {
     const f = fixture();
     f.active = 1;
     f.pending = [result("one")];
     expect(await f.fire("turn_end", { outcome: "error" })).toBeUndefined();
     expect(f.abortParent).not.toHaveBeenCalled();
-    await expect(f.fire("agent_before_settle", { outcome: "error" })).rejects.toThrow(
-      /Parent failed/,
-    );
-    expect(f.abortParent).toHaveBeenCalled();
+    expect(await f.fire("agent_before_settle", { outcome: "error" })).toBeUndefined();
+    expect(f.quiesce).toHaveBeenCalledOnce();
+    expect(f.abortParent).not.toHaveBeenCalled();
     expect(f.sendMessage).not.toHaveBeenCalled();
+    await f.fire("agent_settled", { aborted: false });
+    await f.newRun();
+    await f.fire("turn_end");
+    await f.fire("agent_before_settle");
+    expect(f.abortParent).not.toHaveBeenCalled();
+  });
+
+  it("does not reclassify an unrelated provider failure as a subagent abort", async () => {
+    const f = fixture();
+    await f.fire("turn_end", { outcome: "error" });
+    await f.fire("agent_before_settle", { outcome: "error" });
+    await f.fire("agent_settled", { aborted: false });
+    expect(f.quiesce).not.toHaveBeenCalled();
+    await f.newRun();
+    await f.fire("turn_end");
+    await f.fire("agent_before_settle");
+    expect(f.abortParent).not.toHaveBeenCalled();
+  });
+
+  it("reports bounded abort-cleanup failure once and permits a later healthy run", async () => {
+    const f = fixture();
+    f.active = 1;
+    f.cleanupError = new Error("Subagent shutdown is still waiting for active work to settle");
+    const waiting = f.fire("turn_end");
+    const failure = expect(waiting).rejects.toThrow(/Subagent completion/);
+    f.signal.abort();
+    await failure;
+    // Pi already emitted the boundary exception; settlement must not report it twice.
+    await expect(f.fire("agent_settled", { aborted: true })).resolves.toBeUndefined();
+    f.cleanupError = undefined;
+    f.active = 0;
+    const aborted = f.abortParent.mock.calls.length;
+    await f.newRun();
+    await f.fire("turn_end");
+    await f.fire("agent_before_settle");
+    expect(f.abortParent).toHaveBeenCalledTimes(aborted);
+  });
+
+  it("reports a genuine sticky controller fault on each attempted run", async () => {
+    const f = fixture();
+    f.healthError = new Error("state persistence failed");
+    await expect(f.fire("turn_end")).rejects.toThrow(/state persistence failed/);
+    await f.fire("agent_settled", { aborted: true });
+    await expect(f.newRun()).rejects.toThrow(/state persistence failed/);
+    await f.fire("agent_settled", { aborted: true });
+    expect(f.abortParent).toHaveBeenCalledTimes(2);
+  });
+
+  it("waits when finalized tool results terminate the parent batch", async () => {
+    const f = fixture();
+    f.active = 1;
+    await f.fire("tool_execution_end", { toolCallId: "finish", result: { terminate: true } });
+    const waiting = f.fire("turn_end", {
+      message: { role: "assistant", content: [{ type: "toolCall", id: "finish" }] },
+    });
+    expect(f.waitForIdle).toHaveBeenCalledOnce();
+    f.pending = [result("finished")];
+    f.active = 0;
+    const output = await waiting;
+    expect(output?.continue).toBe(true);
+    f.commit(output);
+    await f.fire("turn_start");
+    await f.fire("turn_end");
+    await f.fire("agent_before_settle");
+    expect(f.abortParent).not.toHaveBeenCalled();
   });
 
   it("disposal wakes an outstanding wait without scheduling another parent run", async () => {

@@ -205,12 +205,18 @@ describe("subagent controller", () => {
     await controller.shutdown();
   });
 
-  it.each(["host", "extension"])(
-    "detects %s cleanup errors reported through Pi's runner instead of thrown",
-    async (kind) => {
+  it.each([
+    { kind: "host", waitForChildren: true },
+    { kind: "extension", waitForChildren: true },
+    { kind: "host", waitForChildren: false },
+    { kind: "extension", waitForChildren: false },
+  ])(
+    "handles reported $kind cleanup errors according to waitForChildren=$waitForChildren",
+    async ({ kind, waitForChildren }) => {
       const directory = root();
       const fake = fakeSession();
-      const listeners = new Set<(error: { event: string; error: string }) => void>();
+      const reported = vi.fn();
+      const listeners = new Set<(error: { event: string; error: string }) => void>([reported]);
       const emit = vi.fn(() => {
         for (const listener of listeners)
           listener({ event: "session_shutdown", error: "hidden cleanup failure" });
@@ -228,24 +234,79 @@ describe("subagent controller", () => {
       const controller = new Controller(
         api,
         {
-          config: parseSubagentConfig({ cancelTimeoutMs: 1 }, directory),
+          config: parseSubagentConfig({ cancelTimeoutMs: 1, waitForChildren }, directory),
           createSession: () => Promise.resolve(fake.session),
           ...(kind === "host" ? { disposeSession: emit } : {}),
         },
         "parent",
       );
       await controller.spawn("work", false, parent(directory));
-      const waiting = expect(controller.waitForIdle()).rejects.toThrow("hidden cleanup failure");
+      const waiting = waitForChildren
+        ? expect(controller.waitForIdle()).rejects.toThrow("hidden cleanup failure")
+        : expect(controller.waitForIdle()).resolves.toBeUndefined();
       fake.complete();
       await waiting;
       expect(fake.dispose).toHaveBeenCalledOnce();
-      expect(listeners.size).toBe(0);
-      expect(controller.statistics().active).toBe(1);
-      expect(controller.snapshot()[0]).toMatchObject({ status: "stopping", callback: "disarmed" });
-      expect(() => controller.assertHealthy()).toThrow("hidden cleanup failure");
-      await expect(controller.shutdown()).rejects.toThrow("waiting for active work");
+      expect(reported).toHaveBeenCalledWith({
+        event: "session_shutdown",
+        error: "hidden cleanup failure",
+      });
+      expect(listeners.size).toBe(1);
+      if (waitForChildren) {
+        expect(controller.statistics().active).toBe(1);
+        expect(controller.snapshot()[0]).toMatchObject({
+          status: "stopping",
+          callback: "disarmed",
+        });
+        expect(() => controller.assertHealthy()).toThrow("hidden cleanup failure");
+        await expect(controller.shutdown()).rejects.toThrow("waiting for active work");
+      } else {
+        expect(controller.statistics().active).toBe(0);
+        expect(controller.snapshot()[0]).toMatchObject({ status: "completed", callback: "armed" });
+        expect(() => controller.assertHealthy()).not.toThrow();
+        await controller.shutdown();
+      }
     },
   );
+
+  it("reports cancellation cleanup timeout without releasing capacity or poisoning later idle waits", async () => {
+    vi.useFakeTimers();
+    const directory = root();
+    const fake = fakeSession();
+    const cleanup = deferred<void>();
+    const controller = new Controller(
+      api,
+      {
+        config: parseSubagentConfig({ waitForChildren: true, cancelTimeoutMs: 10 }, directory),
+        createSession: () => Promise.resolve(fake.session),
+        disposeSession: () => cleanup.promise,
+      },
+      "parent",
+    );
+    await controller.spawn("work", false, parent(directory));
+    const quiescence = expect(controller.quiesce()).rejects.toThrow(
+      "waiting for active work to settle",
+    );
+    await vi.advanceTimersByTimeAsync(11);
+    await quiescence;
+    expect(controller.statistics().active).toBe(1);
+    expect(controller.snapshot()[0]).toMatchObject({ status: "stopping", callback: "disarmed" });
+    expect(fake.dispose).not.toHaveBeenCalled();
+    expect(() => controller.assertHealthy()).not.toThrow();
+    let idle = false;
+    const waiting = controller.waitForIdle().then(() => {
+      idle = true;
+    });
+    await Promise.resolve();
+    expect(idle).toBe(false);
+    cleanup.resolve();
+    await waiting;
+    expect(fake.dispose).toHaveBeenCalledOnce();
+    expect(controller.statistics().active).toBe(0);
+    expect(controller.snapshot()[0]?.callback).toBe("disarmed");
+    await controller.waitForIdle();
+    await controller.shutdown();
+  });
 
   it("retains user cancellation intent until settlement without releasing capacity or replacing it with a deadline", async () => {
     vi.useFakeTimers();

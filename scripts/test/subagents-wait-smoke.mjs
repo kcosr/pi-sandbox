@@ -40,6 +40,10 @@ async function scenario({ root, directory, runtime, artifact, waitForChildren })
     observer,
     `export default function(pi) {
     const watched = new WeakSet();
+    pi.registerTool({ name: "finish_batch", label: "Finish batch", description: "End this fixture tool turn.",
+      parameters: { type: "object", properties: {}, additionalProperties: false },
+      execute() { return Promise.resolve({ content: [{ type: "text", text: "WAIT_FIXTURE_FINISHED_BATCH" }], details: {}, terminate: true }); },
+    });
     pi.on("turn_end", (event, ctx) => {
       const signal = ctx.signal;
       pi.appendEntry("acceptance:turn-end", { signalPresent: !!signal, aborted: signal?.aborted, stopReason: event.message.stopReason });
@@ -51,10 +55,11 @@ async function scenario({ root, directory, runtime, artifact, waitForChildren })
   }\n`,
   );
 
-  let phase = waitForChildren ? "staggered" : "default";
+  let phase = waitForChildren ? "parenterror" : "default";
   let first = true;
   let spawnedC = false;
   let resumeTarget;
+  let terminatedBatch = false;
   let failure;
   let sequence = 0;
   const held = new Map();
@@ -117,7 +122,7 @@ async function scenario({ root, directory, runtime, artifact, waitForChildren })
         return;
       }
       const messages = JSON.stringify(body.messages);
-      const consumed = ["A", "B", "C", "RESUME", "DEFAULT"].filter((id) =>
+      const consumed = ["A", "B", "C", "RESUME", "TERMINATE", "DEFAULT"].filter((id) =>
         messages.includes(resultMarker(id)),
       );
       const consumedFailure =
@@ -126,7 +131,27 @@ async function scenario({ root, directory, runtime, artifact, waitForChildren })
         messages.includes("Subagent cancelled by user:") &&
         messages.includes("Do not automatically restart or replace this task.");
       parentCalls.push({ phase, consumed, consumedFailure, consumedCancellation });
-      if (first) {
+      if (phase === "parenterror" || (phase === "activeerror" && !first)) {
+        if (phase === "activeerror") {
+          const deadline = Date.now() + 5000;
+          while (!held.has("ACTIVEERROR") && Date.now() < deadline) await delay(10);
+          assert(
+            held.has("ACTIVEERROR"),
+            "Child request must start before the parent provider failure",
+          );
+        }
+        response.writeHead(400, { "content-type": "application/json" });
+        response.end(
+          JSON.stringify({
+            error: {
+              message: `WAIT_PARENT_PROVIDER_${phase.toUpperCase()}`,
+              type: "invalid_request_error",
+            },
+          }),
+        );
+      } else if (phase.startsWith("recovery")) {
+        send(response, `PARENT_${phase.toUpperCase()}_ANSWER`);
+      } else if (first) {
         first = false;
         if (phase === "resume") {
           assert(resumeTarget);
@@ -143,6 +168,10 @@ async function scenario({ root, directory, runtime, artifact, waitForChildren })
       } else if (phase === "staggered" && consumed.includes("A") && !spawnedC) {
         spawnedC = true;
         send(response, "", [spawnCall("C")]);
+      } else if (phase === "terminate" && !terminatedBatch) {
+        terminatedBatch = true;
+        assert(names.includes("finish_batch"));
+        send(response, "", [{ name: "finish_batch", args: {} }]);
       } else {
         send(response, `PARENT_${phase.toUpperCase()}_ANSWER`);
       }
@@ -298,7 +327,7 @@ async function scenario({ root, directory, runtime, artifact, waitForChildren })
       assert(find().success, JSON.stringify(find()));
       return find().data;
     }
-    async function assertWaiting(after = 0) {
+    async function assertWaiting(after = 0, stopReason = "stop") {
       assert.equal(
         (await rpc("get_state")).isStreaming,
         true,
@@ -307,7 +336,7 @@ async function scenario({ root, directory, runtime, artifact, waitForChildren })
       assert.equal(settled(after).length, 0, "No intermediate agent_settled is allowed");
       assert(
         entries("acceptance:turn-end", after).some(
-          (entry) => entry.stopReason === "stop" && entry.signalPresent && !entry.aborted,
+          (entry) => entry.stopReason === stopReason && entry.signalPresent && !entry.aborted,
         ),
         "Real turn_end context must retain a live abort signal",
       );
@@ -323,6 +352,36 @@ async function scenario({ root, directory, runtime, artifact, waitForChildren })
       const after = messages.length;
       await rpc("prompt", { message: `Run ${phase} fixture.` });
       return after;
+    }
+    async function assertProviderFailure(after, marker) {
+      await waitFor(
+        () => settled(after).length === 1,
+        "ordinary parent provider failure settlement",
+      );
+      assert.equal(
+        settled(after)[0].aborted,
+        false,
+        "A provider failure must retain native failed-run semantics",
+      );
+      assert(
+        messages
+          .slice(after)
+          .some(
+            (event) =>
+              event.type === "message_end" &&
+              event.message?.role === "assistant" &&
+              event.message.stopReason === "error" &&
+              event.message.errorMessage?.includes(marker),
+          ),
+        "The original parent provider error must remain visible",
+      );
+    }
+    async function assertRecovery(next) {
+      const after = await startPhase(next);
+      await waitFor(() => settled(after).length === 1, "successful run after provider failure");
+      assert.equal(settled(after)[0].aborted, false);
+      assert(assistantText(`PARENT_${next.toUpperCase()}_ANSWER`, after));
+      assert.equal((await observe("snapshot")).active, 0);
     }
 
     await rpc("get_commands");
@@ -340,32 +399,36 @@ async function scenario({ root, directory, runtime, artifact, waitForChildren })
         "ordinary idle callback",
       );
     } else {
+      await assertProviderFailure(0, "WAIT_PARENT_PROVIDER_PARENTERROR");
+      assert.equal((await observe("snapshot")).total, 0, "Initial failure must have no children");
+      await assertRecovery("recovery-empty");
+      const staggered = await startPhase("staggered");
       await waitFor(
         () => held.has("A") && held.has("B") && assistantText("PARENT_STAGGERED_ANSWER"),
         "first child wait",
       );
-      await assertWaiting();
+      await assertWaiting(staggered);
       release("A");
       await waitFor(
         () =>
           entries("pi-subagents:state").some((entry) => entry.total === 2 && entry.active === 1),
         "first child settles while its peer remains active",
       );
-      await assertWaiting();
+      await assertWaiting(staggered);
       assert.equal((await observe("snapshot")).active, 1);
       release("B");
       await waitFor(
         () => held.has("C") && parentCalls.filter((call) => call.phase === "staggered").length >= 4,
         "continuation spawning another child",
       );
-      await assertWaiting();
+      await assertWaiting(staggered);
       assert.equal((await observe("snapshot")).active, 1);
       assert(
         parentCalls.at(-1).consumed.includes("A") && parentCalls.at(-1).consumed.includes("B"),
       );
       release("C");
-      await waitFor(() => settled().length === 1, "single final settlement");
-      assert.equal(settled()[0].aborted, false);
+      await waitFor(() => settled(staggered).length === 1, "single final settlement");
+      assert.equal(settled(staggered)[0].aborted, false);
       assert(
         parentCalls.at(-1).consumed.includes("A") &&
           parentCalls.at(-1).consumed.includes("B") &&
@@ -398,6 +461,29 @@ async function scenario({ root, directory, runtime, artifact, waitForChildren })
         resumeTarget.taskId,
       );
 
+      const terminated = await startPhase("terminate");
+      await waitFor(
+        () =>
+          held.has("TERMINATE") &&
+          messages
+            .slice(terminated)
+            .some(
+              (event) =>
+                event.type === "tool_execution_end" &&
+                event.toolName === "finish_batch" &&
+                event.result?.terminate === true,
+            ),
+        "terminating tool result while a child is active",
+      );
+      await assertWaiting(terminated, "toolUse");
+      release("TERMINATE");
+      await waitFor(
+        () => settled(terminated).length === 1,
+        "terminated tool turn result consumption",
+      );
+      assert.equal(settled(terminated)[0].aborted, false);
+      assert(parentCalls.at(-1).consumed.includes("TERMINATE"));
+
       const failed = await startPhase("fail");
       await waitFor(() => settled(failed).length === 1, "failed child incorporation");
       assert.equal(settled(failed)[0].aborted, false);
@@ -427,6 +513,19 @@ async function scenario({ root, directory, runtime, artifact, waitForChildren })
         closed.has("CANCEL"),
         "User cancellation must abort its actual child provider request",
       );
+
+      const activeError = await startPhase("activeerror");
+      await assertProviderFailure(activeError, "WAIT_PARENT_PROVIDER_ACTIVEERROR");
+      assert.equal(
+        (await observe("snapshot")).active,
+        0,
+        "Parent provider failure must cancel active wait-mode children",
+      );
+      assert(
+        closed.has("ACTIVEERROR"),
+        "Parent provider failure must close the child provider request",
+      );
+      await assertRecovery("recovery-active");
 
       const aborted = await startPhase("abort");
       await waitFor(

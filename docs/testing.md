@@ -60,7 +60,8 @@ resuming children without consuming another spawn allowance, child failures,
 user cancellation, parent abort and shutdown during the wait. The default
 background policy remains a separate control.
 Delivery/controller tests cover cleanup and persistence failures, suppressed and
-duplicate callbacks, stale generations, and final-settlement guards. These checks
+duplicate callbacks, stale generations, final-settlement guards, recovery after
+parent errors, cancellation beyond its wait limit, and terminating tool batches. These checks
 must not replace the existing managed or standalone acceptance suites.
 
 The packaged Linux and native Seatbelt smoke entry points include

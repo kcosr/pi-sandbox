@@ -104,6 +104,7 @@ export function installDelivery(pi: ExtensionAPI, adapters: DeliveryAdapters): D
   let failure: Error | undefined;
   let failureReported = false;
   let awaitingResultTurn = false;
+  const terminatingTools = new Set<string>();
 
   function stopChildren(): Promise<void> {
     stopped = true;
@@ -342,13 +343,12 @@ export function installDelivery(pi: ExtensionAPI, adapters: DeliveryAdapters): D
         awaitingResultTurn = true;
         return result;
       }
-      if (
-        event.continue ||
-        next.hasPendingMessages() ||
-        (event.message.role === "assistant" &&
-          event.message.content.some((part) => part.type === "toolCall"))
-      )
-        return;
+      const calls =
+        event.message.role === "assistant"
+          ? event.message.content.filter((part) => part.type === "toolCall")
+          : [];
+      const terminates = calls.length > 0 && calls.every((call) => terminatingTools.has(call.id));
+      if (event.continue || next.hasPendingMessages() || (calls.length > 0 && !terminates)) return;
       const signal = next.signal;
       if (!signal) throw new Error("Pi turn_end did not provide an active abort signal");
       await completion!.waitForIdle(AbortSignal.any([signal, lifetime.signal]));
@@ -387,9 +387,15 @@ export function installDelivery(pi: ExtensionAPI, adapters: DeliveryAdapters): D
         return;
       }
       completion!.assertHealthy();
-      if (event.outcome === "error") throw new Error("Parent failed before subagent completion");
       releaseUncommittedBoundaries();
-      if (completion!.active() > 0 || pending().length > 0 || awaitingResultTurn)
+      const unfinished = completion!.active() > 0 || pending().length > 0 || awaitingResultTurn;
+      if (event.outcome === "error") {
+        // Preserve Pi's ordinary provider-error outcome. Remaining delegated work
+        // must still be stopped, but a failed request is not an infrastructure fault.
+        if (unfinished) await stopChildren();
+        return;
+      }
+      if (unfinished)
         throw new Error(
           "Parent reached settlement with unfinished subagent work or undelivered results",
         );
@@ -421,7 +427,11 @@ export function installDelivery(pi: ExtensionAPI, adapters: DeliveryAdapters): D
       updateContext(next);
     }),
     pi.on("agent_start", (_event, next) => {
-      if (completion && !failure) {
+      if (completion) {
+        // Delivery failures belong to one run. Durable controller faults are
+        // checked again (and reported again) at turn_start, never silently latched.
+        failure = undefined;
+        failureReported = false;
         stopped = false;
         cleanup = undefined;
       }
@@ -432,6 +442,7 @@ export function installDelivery(pi: ExtensionAPI, adapters: DeliveryAdapters): D
         updateContext(next);
         if (!disposed) {
           if (completion) {
+            terminatingTools.clear();
             if (failure) return failCompletion(failure, next);
             completion.assertHealthy();
             awaitingResultTurn = false;
@@ -450,13 +461,23 @@ export function installDelivery(pi: ExtensionAPI, adapters: DeliveryAdapters): D
       completion ? verifyCompletion(event, next) : boundary(event, next, true),
     ),
     pi.on("agent_settled", async (event, next) => {
+      if (completion) {
+        try {
+          updateContext(next);
+          if (disposed) return;
+          if (event.aborted) abort();
+          if (cleanup) await cleanup;
+        } catch (error) {
+          if (!failureReported) {
+            failureReported = true;
+            throw error;
+          }
+        }
+        return;
+      }
       updateContext(next);
       if (disposed) return;
       if (event.aborted) abort();
-      if (completion) {
-        if (cleanup) await cleanup;
-        return;
-      }
       releaseUncommittedBoundaries();
       // Do not start a run inside settlement; the manager's next tick handles idle delivery.
     }),
@@ -464,5 +485,21 @@ export function installDelivery(pi: ExtensionAPI, adapters: DeliveryAdapters): D
       controller.dispose();
     }),
   );
+  if (completion)
+    unsubscribe.push(
+      pi.on("tool_execution_end", (event) => {
+        // Pi does not retain this flag in turn_end.toolResults. The finalized public
+        // execution event exposes it, including blocked calls, before finishTurn runs.
+        const result: unknown = event.result;
+        if (
+          !event.parentToolCallId &&
+          result !== null &&
+          typeof result === "object" &&
+          "terminate" in result &&
+          result.terminate === true
+        )
+          terminatingTools.add(event.toolCallId);
+      }),
+    );
   return controller;
 }
