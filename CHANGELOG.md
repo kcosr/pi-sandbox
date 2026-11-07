@@ -2,16 +2,28 @@
 
 ## Unreleased
 
+## 0.13.0 - 2026-11-07
+
+### Breaking changes
+
+- Upgrade the application and audit collector together for child provenance in
+  audit wire 5 / record schema 6. Configuration remains schema 14; broker protocol
+  and rule version remain 10. ([#52](https://github.com/kcosr/pi-sandbox/pull/52))
+
+### Added
+
 - Add opt-in standalone subagent completion that waits for delegated work and
   parent result incorporation, with queued-input wakeups, cancellation and
   explicit lifecycle errors. ([#52](https://github.com/kcosr/pi-sandbox/pull/52))
 - Add optional SDK subagents with shared managed approvals, concurrent and total
   new-spawn limits, compact footer status, Markdown previews, RPC observation and
-  an independent vanilla Pi package. Child audit provenance requires upgrading
-  the application and collector together to audit wire 5 / record schema 6.
+  the independent vanilla Pi subagent package version 0.1.0.
   ([#52](https://github.com/kcosr/pi-sandbox/pull/52))
 - Add user optional-extension toggles, process-only CLI overrides and administrator
   guidance that follows active extension tools. ([#52](https://github.com/kcosr/pi-sandbox/pull/52))
+
+### Fixed
+
 - Resolve child state paths consistently through symlinked user-state directories
   so transcript resume and retention work with macOS temporary-directory aliases.
   ([#52](https://github.com/kcosr/pi-sandbox/pull/52))

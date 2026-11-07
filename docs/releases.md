@@ -3,14 +3,15 @@
 Pi Sandbox uses its own semantic version, independent of the pinned Pi release
 and the reusable extension packages:
 
-| Component                  | Authoritative version source                |
-| -------------------------- | ------------------------------------------- |
-| Pi Sandbox product         | Root `package.json` and `package-lock.json` |
-| Upstream Pi                | `pi-source.lock.json`                       |
-| Reusable sandbox extension | `packages/sandbox-extension/package.json`   |
-| Reusable Git extension     | `packages/git-extension/package.json`       |
+| Component                   | Authoritative version source                |
+| --------------------------- | ------------------------------------------- |
+| Pi Sandbox product          | Root `package.json` and `package-lock.json` |
+| Upstream Pi                 | `pi-source.lock.json`                       |
+| Reusable sandbox extension  | `packages/sandbox-extension/package.json`   |
+| Reusable Git extension      | `packages/git-extension/package.json`       |
+| Reusable subagent extension | `packages/subagents-extension/package.json` |
 
-Product tags use `v<product-version>`, for example `v0.12.0`. During the `0.x`
+Product tags use `v<product-version>`, for example `v0.13.0`. During the `0.x`
 series, new features and breaking changes increment the minor version; fixes
 increment the patch version. Document configuration changes and required
 administrator action in `CHANGELOG.md`. An upstream upgrade does not make the
@@ -24,13 +25,13 @@ application versions:
 
 | Build                                            | Example display                      |
 | ------------------------------------------------ | ------------------------------------ |
-| Clean checkout at `v0.12.0` tag                  | `1.5.0+ps.0.12.0`                    |
-| Untagged Git checkout                            | `1.5.0+ps.0.12.0.dev.gabcdef0`       |
-| Modified Git checkout                            | `1.5.0+ps.0.12.0.dev.gabcdef0.dirty` |
-| Source execution or a build without Git metadata | `1.5.0+ps.0.12.0.dev.source`         |
+| Clean checkout at `v0.13.0` tag                  | `1.5.0+ps.0.13.0`                    |
+| Untagged Git checkout                            | `1.5.0+ps.0.13.0.dev.gabcdef0`       |
+| Modified Git checkout                            | `1.5.0+ps.0.13.0.dev.gabcdef0.dirty` |
+| Source execution or a build without Git metadata | `1.5.0+ps.0.13.0.dev.source`         |
 
-Only a clean checkout at `v0.12.0` produces the release display for product
-version `0.12.0`, pinned to Pi `1.5.0`. Build identity is embedded at build time;
+Only a clean checkout at `v0.13.0` produces the release display for product
+version `0.13.0`, pinned to Pi `1.5.0`. Build identity is embedded at build time;
 launching the application does not query Git. The combined value is a display identifier,
 not the product's release number. Use the product version and tag for release
 ordering; SemVer build metadata does not affect precedence.
