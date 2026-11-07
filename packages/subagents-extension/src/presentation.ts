@@ -171,10 +171,19 @@ export function attachSubagentPresentation(
       (agent) => ACTIVE.has(agent.status) && /approval/iu.test(agent.activity),
     ).length;
     const failed = all.filter((agent) => agent.status === "failed").length;
+    const color = (tone: "dim" | "accent" | "warning" | "error", text: string) =>
+      ctx.mode === "tui" && ctx.hasUI ? ctx.ui.theme.fg(tone, text) : text;
     const status =
       state.total === 0
         ? undefined
-        : `Agents: ${state.active}/${state.maxConcurrent} active${waiting ? ` · ${waiting} awaiting approval` : ""}${failed ? ` · ${failed} failed` : ""} · ${state.total}/${state.maxTotal} started · /agents`;
+        : color("dim", "Agents: ") +
+          color(
+            state.active > 0 ? "accent" : "dim",
+            `${state.active}/${state.maxConcurrent} active`,
+          ) +
+          (waiting ? color("dim", " · ") + color("warning", `${waiting} awaiting approval`) : "") +
+          (failed ? color("dim", " · ") + color("error", `${failed} failed`) : "") +
+          color("dim", ` · ${state.total}/${state.maxTotal} started · /agents`);
     if (status !== lastStatus) {
       ctx.ui.setStatus("subagents", status);
       lastStatus = status;

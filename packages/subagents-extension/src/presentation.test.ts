@@ -103,6 +103,28 @@ function fixture(empty = false) {
 }
 
 describe("subagent observation", () => {
+  it("styles interactive status with the current theme and keeps RPC status plain", () => {
+    const f = fixture();
+    Object.assign(f.context, { mode: "tui", hasUI: true });
+    Object.assign(f.context.ui, {
+      theme: { fg: (color: string, text: string) => `<${color}>${text}</${color}>` },
+    });
+    f.update({ status: "running", activity: "awaiting approval" });
+    const interactive = String(f.setStatus.mock.calls.at(-1)?.[1]);
+    expect(interactive).toContain("<dim>Agents: </dim>");
+    expect(interactive).toContain("<accent>1/4 active</accent>");
+    expect(interactive).toContain("<warning>1 awaiting approval</warning>");
+    f.update({ status: "failed" });
+    expect(String(f.setStatus.mock.calls.at(-1)?.[1])).toContain("<error>1 failed</error>");
+    Object.assign(f.context, { mode: "rpc" });
+    f.update({ status: "completed" });
+    expect(f.setStatus).toHaveBeenLastCalledWith(
+      "subagents",
+      "Agents: 0/4 active · 1/32 started · /agents",
+    );
+    f.presentation.dispose();
+  });
+
   it("keeps persistent status hidden until the first accepted child and visible after completion", () => {
     const f = fixture(true);
     expect(f.setStatus).not.toHaveBeenCalled();

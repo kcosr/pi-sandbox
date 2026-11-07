@@ -150,6 +150,7 @@ function context(
     tools: [],
     executeTool: () => Promise.reject(new Error("Unexpected nested tool execution in fixture")),
     ui: {
+      theme: { fg: (_color: string, text: string) => text },
       select: options.select ?? (() => Promise.resolve(undefined)),
       notify: options.notify ?? (() => undefined),
     },
