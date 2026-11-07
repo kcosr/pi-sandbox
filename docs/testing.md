@@ -44,7 +44,9 @@ reads, transcript resume, observations outside model messages, enabled/disabled
 configuration and new-spawn quota rejection with resumes allowed at the limit. SDK tests additionally exercise
 function-backed provider credentials, repository context, file-backed extended
 tools and a real local stdio MCP fixture. Controller tests cover concurrent
-admission, cancellation, startup failure, timers and durable quotas; UI tests cover
+admission, cancellation, startup failure, timers and durable quotas. Cancellation
+tests distinguish user notifications from tool-requested suppression and retain
+parent-abort, shutdown and stale-task guards; UI tests cover
 bounded terminal-safe Markdown previews, modal navigation, initial status hiding,
 stale controls and approval focus. Optional-extension tests cover persisted user
 choices, CLI precedence, administrator ceilings, hidden definitions, calls disabled
@@ -54,7 +56,8 @@ width handling, and narrow-terminal placement without losing native stats/model 
 
 The packaged Linux and native Seatbelt smoke entry points include
 `subagents-smoke.mjs`: real managed children, CLI override visibility/guidance and
-menu locking without changing saved preferences, parent-to-child and child-to-parent
+menu locking without changing saved preferences, user cancellation callbacks,
+parent-to-child and child-to-parent
 session grants, disabled-tool exclusion, shared file operations, child previews
 and new-spawn limits. Host and policy tests retain live-definition checks, child
 invocation/audit context and cleanup. All providers in these tests are local

@@ -27,6 +27,11 @@ export async function testManagedSubagents({ launch, configPath, modelsPath, wor
   let overlapPending = false;
   let testingDisabled = false;
   let testingCliEnabled;
+  let testingUserCancellation = false;
+  let cancellationTaskId;
+  let cancellationStreams = 0;
+  let cancellationStreamClosed = false;
+  let cancellationCallbacks = 0;
   let disabledRequests = 0;
   let running;
   const server = createServer(async (request, response) => {
@@ -79,6 +84,18 @@ export async function testManagedSubagents({ launch, configPath, modelsPath, wor
       const instructions = JSON.stringify(
         body.messages.filter((message) => ["system", "developer"].includes(message.role)),
       );
+      if (parent && cancellationTaskId !== undefined) {
+        const notice = body.messages.find((message) => {
+          const text = JSON.stringify(message);
+          return text.includes("Subagent cancelled by user:") && text.includes(cancellationTaskId);
+        });
+        if (notice !== undefined) {
+          cancellationCallbacks++;
+          assert(
+            JSON.stringify(notice).includes("Do not automatically restart or replace this task."),
+          );
+        }
+      }
       if (testingCliEnabled !== undefined) {
         assert.equal(parent, testingCliEnabled, "CLI override controls real model tools");
         assert.equal(
@@ -172,6 +189,15 @@ export async function testManagedSubagents({ launch, configPath, modelsPath, wor
         response.write(
           `data: ${JSON.stringify({ id: `managed-${++sequence}`, object: "chat.completion.chunk", created: 1, model: "fixture", choices: [{ index: 0, delta, finish_reason }] })}\n\n`,
         );
+      if (testingUserCancellation && !parent) {
+        assert(JSON.stringify(body.messages).includes("USER_CANCELLATION_FIXTURE"));
+        cancellationStreams++;
+        response.once("close", () => {
+          cancellationStreamClosed = true;
+        });
+        send({ role: "assistant", content: "Waiting for user cancellation." });
+        return;
+      }
       if (calls.length) {
         send({
           role: "assistant",
@@ -405,6 +431,28 @@ export async function testManagedSubagents({ launch, configPath, modelsPath, wor
     assert.equal(childRequests, before);
     assert.equal((await observe()).total, 2);
     assert.equal(running.prompts.length, 3);
+    testingUserCancellation = true;
+    await prompt("Resume for the user cancellation check.", [
+      {
+        name: "resume_agent",
+        args: { id: item.id, message: "USER_CANCELLATION_FIXTURE", extended: false },
+      },
+    ]);
+    await running.wait(() => cancellationStreams === 1);
+    const cancelling = (await observe()).agents.find((agent) => agent.id === item.id);
+    assert(cancelling);
+    cancellationTaskId = cancelling.taskId;
+    await observe("cancel", { id: cancelling.id, taskId: cancelling.taskId });
+    await running.wait(() => cancellationStreamClosed && cancellationCallbacks === 1);
+    await running.idle();
+    const cancelled = (await observe()).agents.find((agent) => agent.id === item.id);
+    assert(cancelled);
+    assert.equal(cancelled.status, "cancelled");
+    assert.equal(cancelled.notifications, "acknowledged");
+    assert.equal(cancellationCallbacks, 1, "User cancellation produces one parent callback");
+    assert.equal((await observe()).total, 2, "User cancellation does not alter the spawn quota");
+    cancellationTaskId = undefined;
+    testingUserCancellation = false;
     await toggleSubagents(false);
     assert.equal(
       (await observe()).total,
@@ -461,7 +509,7 @@ export async function testManagedSubagents({ launch, configPath, modelsPath, wor
     await running.stop();
     running = undefined;
     console.log(
-      "Managed subagents: shared grants, real tools, extension visibility/guidance, CLI overrides, previews and spawn quotas passed",
+      "Managed subagents: shared grants, real tools, extension visibility/guidance, CLI overrides, user cancellation callbacks, previews and spawn quotas passed",
     );
   } finally {
     await running?.stop();

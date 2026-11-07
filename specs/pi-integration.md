@@ -360,8 +360,10 @@ provides these seams:
     reasoning and routing decisions unchanged; retain at least two spaces on
     either side of inline status text. Sort and normalize statuses as before,
     measure terminal columns rather than string length, and preserve each
-    status's ANSI styling. Apply the native model dim color independently after
-    a status that ends with a reset. When all status text cannot fit, keep the
+    status's ANSI styling. End ANSI-formatted inline statuses with a full SGR
+    reset before independently applying the native model dim color, including
+    when the extension leaves foreground, bold or background styling open.
+    When all status text cannot fit, keep the
     existing dedicated, width-bounded status row. Status updates/removal and
     terminal resize take effect on ordinary footer rendering, without another
     API, repaint timer, custom footer or feature-specific rendering logic.

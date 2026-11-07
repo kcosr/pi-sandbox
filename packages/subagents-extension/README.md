@@ -22,6 +22,14 @@ confirmed after shutdown, the same conversation cannot be reopened until the
 application restarts. Work that settles later releases its session ownership
 automatically.
 
+Cancelling with `/subagents` or the RPC cancel action records the user's intent.
+After the task actually settles, its existing automatic callback tells the parent
+that the user cancelled it and instructs the parent not to restart or replace it
+automatically. The command can return `stopping` while work is still settling.
+Repeated cancellation does not send another callback or restore callbacks disabled
+by a parent abort or shutdown. Cancelling through the model's `cancel_agent` tool
+instead suppresses the callback because the tool itself returns the result.
+
 Stopping the parent turn (for example with Escape or RPC abort) disables automatic
 result delivery for **all existing children**, including children still running.
 Those children continue until they finish or are cancelled. A one-time notification
@@ -92,8 +100,8 @@ the selected task. Closing the modal leaves tasks running; an approval prompt
 automatically closes the modal. Previews omit reasoning and transcript paths and
 remove terminal controls and clickable hyperlinks.
 
-`/subagents-rpc` is a machine-facing command for RPC clients. Invoking it without
-arguments in interactive Pi explains how to open `/subagents` instead.
+`/subagents-rpc` is a machine-facing command requiring a JSON request. Missing or
+invalid JSON in interactive Pi displays an error directing you to `/subagents`.
 
 ## RPC clients
 

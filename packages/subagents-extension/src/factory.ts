@@ -98,7 +98,10 @@ export function createSubagentsExtension(
               eventId: item.taskId,
               agentId: item.id,
               taskId: item.taskId,
-              content: `Subagent result: ${item.id} / ${item.taskId}\nOutcome: ${item.status}\n${boundedText(item.result ?? item.error ?? "No answer", 6000)}`,
+              content:
+                item.cancelRequestedBy === "user"
+                  ? `Subagent cancelled by user: ${item.id} / ${item.taskId}\nOutcome: ${item.status}\nThe user cancelled this task. Do not automatically restart or replace this task.\n${boundedText(item.result ?? item.error ?? "No final answer", 6000)}`
+                  : `Subagent result: ${item.id} / ${item.taskId}\nOutcome: ${item.status}\n${boundedText(item.result ?? item.error ?? "No answer", 6000)}`,
             })),
         acknowledge: (id) => owner.acknowledge(id),
         disarm: () => {

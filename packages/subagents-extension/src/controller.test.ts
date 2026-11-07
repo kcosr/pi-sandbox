@@ -83,6 +83,178 @@ function fakeSession() {
 }
 
 describe("subagent controller", () => {
+  it("retains user cancellation intent until settlement without releasing capacity or replacing it with a deadline", async () => {
+    vi.useFakeTimers();
+    const directory = root();
+    const fake = fakeSession();
+    fake.abort.mockImplementation(() => Promise.resolve());
+    const next = fakeSession();
+    let sessions = 0;
+    const controller = new Controller(
+      api,
+      {
+        config: parseSubagentConfig(
+          { maxConcurrent: 1, cancelTimeoutMs: 1, taskTimeoutMs: 10 },
+          directory,
+        ),
+        createSession: () => Promise.resolve(sessions++ === 0 ? fake.session : next.session),
+      },
+      "parent",
+    );
+    const item = await controller.spawn("work", false, parent(directory));
+    await expect(controller.cancelByUser(item.id, "stale")).rejects.toThrow("changed");
+    expect(fake.abort).not.toHaveBeenCalled();
+    const cancellation = controller.cancelByUser(item.id, item.taskId);
+    await vi.advanceTimersByTimeAsync(1);
+    const stopping = await cancellation;
+    expect(stopping).toMatchObject({
+      status: "stopping",
+      callback: "armed",
+      cancelRequestedBy: "user",
+    });
+    expect(controller.statistics().active).toBe(1);
+    await expect(controller.resume(item.id, "too soon", false, parent(directory))).rejects.toThrow(
+      "still active",
+    );
+    await vi.advanceTimersByTimeAsync(20);
+    expect(controller.snapshot()[0]?.error).toBeUndefined();
+    expect(JSON.parse(readFileSync(join(directory, "parent", "state.json"), "utf8"))).toMatchObject(
+      { records: [{ cancelRequestedBy: "user", callback: "armed" }] },
+    );
+    fake.complete();
+    await vi.waitFor(() => expect(controller.statistics().active).toBe(0));
+    expect(controller.snapshot()[0]).toMatchObject({
+      status: "cancelled",
+      callback: "armed",
+      cancelRequestedBy: "user",
+    });
+    controller.acknowledge(item.taskId);
+    await expect(controller.cancelByUser(item.id, item.taskId)).resolves.toMatchObject({
+      callback: "acknowledged",
+    });
+    const resumed = await controller.resume(
+      item.id,
+      "continue explicitly",
+      false,
+      parent(directory),
+    );
+    expect(resumed.cancelRequestedBy).toBeUndefined();
+    await controller.cancel(resumed.id);
+    await controller.shutdown();
+  });
+
+  it("retains a user callback when cancellation wins during asynchronous startup", async () => {
+    const directory = root();
+    const ready = deferred<AgentSession>();
+    const fake = fakeSession();
+    const controller = new Controller(
+      api,
+      {
+        config: parseSubagentConfig({ cancelTimeoutMs: 1 }, directory),
+        createSession: () => ready.promise,
+      },
+      "parent",
+    );
+    const starting = controller.spawn("work", false, parent(directory));
+    const rejected = expect(starting).rejects.toThrow("cancelled");
+    const item = controller.snapshot()[0]!;
+    await expect(controller.cancelByUser(item.id, item.taskId)).resolves.toMatchObject({
+      status: "stopping",
+      callback: "armed",
+      cancelRequestedBy: "user",
+    });
+    await rejected;
+    ready.resolve(fake.session);
+    await vi.waitFor(() => expect(controller.statistics().active).toBe(0));
+    expect(controller.snapshot()[0]).toMatchObject({
+      status: "cancelled",
+      callback: "armed",
+      cancelRequestedBy: "user",
+    });
+    expect(fake.dispose).toHaveBeenCalled();
+    await controller.shutdown();
+  });
+
+  it.each(["before", "after", "shutdown"] as const)(
+    "does not re-arm user cancellation after suppression: %s",
+    async (when) => {
+      const directory = root();
+      const fake = fakeSession();
+      fake.abort.mockImplementation(() => Promise.resolve());
+      const controller = new Controller(
+        api,
+        {
+          config: parseSubagentConfig({ cancelTimeoutMs: 1 }, directory),
+          createSession: () => Promise.resolve(fake.session),
+        },
+        "parent",
+      );
+      const item = await controller.spawn("work", false, parent(directory));
+      if (when === "before") controller.disarm();
+      await controller.cancelByUser(item.id, item.taskId);
+      if (when === "after") controller.disarm();
+      if (when === "shutdown")
+        await expect(controller.shutdown()).rejects.toThrow("waiting for active work");
+      await expect(controller.cancelByUser(item.id, item.taskId)).resolves.toMatchObject({
+        callback: "disarmed",
+      });
+      fake.complete();
+      await vi.waitFor(() => expect(controller.statistics().active).toBe(0));
+      expect(controller.snapshot()[0]?.callback).toBe("disarmed");
+      await controller.shutdown();
+    },
+  );
+
+  it("does not fabricate user cancellation for an already settled task", async () => {
+    const directory = root();
+    const fake = fakeSession();
+    const controller = new Controller(
+      api,
+      {
+        config: parseSubagentConfig({}, directory),
+        createSession: () => Promise.resolve(fake.session),
+      },
+      "parent",
+    );
+    const item = await controller.spawn("work", false, parent(directory));
+    fake.complete();
+    await vi.waitFor(() => expect(controller.statistics().active).toBe(0));
+    const result = await controller.cancelByUser(item.id, item.taskId);
+    expect(result).toMatchObject({ status: "completed", callback: "armed" });
+    expect(result.cancelRequestedBy).toBeUndefined();
+    expect(fake.abort).not.toHaveBeenCalled();
+    await controller.shutdown();
+  });
+
+  it("persists user cancellation origin and rejects invalid stored origins", async () => {
+    const directory = root();
+    const fake = fakeSession();
+    const host: SubagentHost = {
+      config: parseSubagentConfig({}, directory),
+      createSession: () => Promise.resolve(fake.session),
+    };
+    let controller = new Controller(api, host, "parent");
+    const item = await controller.spawn("work", false, parent(directory));
+    await controller.cancelByUser(item.id, item.taskId);
+    await controller.shutdown();
+    controller = new Controller(api, host, "parent");
+    expect(controller.snapshot()[0]).toMatchObject({
+      status: "cancelled",
+      cancelRequestedBy: "user",
+      callback: "disarmed",
+    });
+    await controller.shutdown();
+    const path = join(directory, "parent", "state.json");
+    const document = JSON.parse(readFileSync(path, "utf8")) as {
+      records: { cancelRequestedBy: unknown }[];
+    };
+    for (const invalid of [null, "tool", true]) {
+      document.records[0]!.cancelRequestedBy = invalid;
+      writeFileSync(path, JSON.stringify(document));
+      expect(() => new Controller(api, host, "parent")).toThrow("Invalid subagent record");
+    }
+  });
+
   it("shares state, ownership and resume identity across aliases of its state directory", async () => {
     const directory = root();
     const target = join(directory, "state");

@@ -36,6 +36,7 @@ const RECORD_FIELDS = new Set([
   "result",
   "error",
   "callback",
+  "cancelRequestedBy",
   "sessionFile",
   "provider",
   "model",
@@ -168,6 +169,7 @@ export class SubagentStore {
         item.sessionFile !== join(this.directory, item.id, "session.jsonl") ||
         typeof item.extended !== "boolean" ||
         !["armed", "disarmed", "acknowledged"].includes(item.callback) ||
+        (item.cancelRequestedBy !== undefined && item.cancelRequestedBy !== "user") ||
         !Number.isFinite(item.startedAt) ||
         !Number.isFinite(item.updatedAt) ||
         !Array.isArray(item.tools) ||

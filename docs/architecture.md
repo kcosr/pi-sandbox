@@ -165,6 +165,13 @@ children**, including children still running. It does not cancel their work.
 Inspect their status and results in `/subagents`, and explicitly cancel a task there
 when needed. Children created after that abort can deliver results normally.
 
+Cancelling through `/subagents` or its RPC observation command preserves a single
+parent notification after the subagent actually settles. It identifies the user's
+cancellation and tells the parent not to restart that work automatically.
+Cancellation through the model's `cancel_agent` tool suppresses that notification
+because the tool already returns the cancellation result. User cancellation does
+not rearm notifications suppressed by parent abort or shutdown.
+
 After the first accepted spawn, a compact `Subagents active/capacity` indicator appears.
 Managed Pi places extension status beside the native footer stats when it fits,
 using a separate status row on narrow terminals. The indicator uses the current

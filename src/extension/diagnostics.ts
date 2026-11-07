@@ -302,7 +302,7 @@ function subjectScope(input: PolicyDiagnosticInput, subject: string): readonly s
   if (subject === SUBAGENTS_POLICY_SUBJECT)
     return [
       `One approval policy covers ${SUBAGENT_TOOL_NAMES.join(", ")}.`,
-      "An offered session grant applies to all five operations. Child tool calls still require their own ordinary tool policies.",
+      "An offered session grant applies to all five operations. Subagent tool calls still require their own ordinary tool policies.",
     ];
   const hostScope = input.hostToolScopes?.[subject];
   if (hostScope !== undefined) {

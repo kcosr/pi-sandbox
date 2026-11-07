@@ -1,7 +1,7 @@
 diff --git a/packages/coding-agent/src/modes/interactive/components/footer.ts b/packages/coding-agent/src/modes/interactive/components/footer.ts
 --- a/packages/coding-agent/src/modes/interactive/components/footer.ts
 +++ b/packages/coding-agent/src/modes/interactive/components/footer.ts
-@@ -280,20 +280,24 @@
+@@ -280,20 +280,26 @@
  		// that end with a reset, which would clear an outer dim wrapper. So we dim the parts
  		// before and after the colored section independently.
  		const dimStatsLeft = theme.fg("dim", statsLeft);
@@ -15,9 +15,11 @@ diff --git a/packages/coding-agent/src/modes/interactive/components/footer.ts b/
 +			.join(" ");
 +		const statusWidth = visibleWidth(statusLine);
 +		const inlineStatus = statusWidth > 0 && totalNeeded + minPadding + statusWidth <= width;
-+		const statusPrefix = inlineStatus ? " ".repeat(minPadding) + statusLine : "";
++		const statusPrefix = inlineStatus
++			? " ".repeat(minPadding) + statusLine + (statusLine.includes("\u001b") ? "\u001b[0m" : "")
++			: "";
 +		const remainder = statsLine.slice(statsLeft.length); // ASCII padding + rightSide
-+		// Paint model information independently: a status may finish with an ANSI reset.
++		// Reset open status styles, then paint native model information independently.
 +		const dimRemainder = theme.fg("dim", inlineStatus ? remainder.slice(minPadding + statusWidth) : remainder);
  
  		const pwdLine = truncateToWidth(theme.fg("dim", pwd), width, theme.fg("dim", "..."));
@@ -63,7 +65,7 @@ diff --git a/packages/coding-agent/test/footer-width.test.ts b/packages/coding-a
  		getAvailableProviderCount: () => providerCount,
  		onBranchChange: (callback: () => void) => {
  			void callback;
-@@ -280,3 +280,89 @@
+@@ -280,3 +280,101 @@
  		expect(stats).not.toContain("(sub)");
  	});
  });
@@ -96,10 +98,22 @@ diff --git a/packages/coding-agent/test/footer-width.test.ts b/packages/coding-a
 +		expect(plain.indexOf(model)).toBe(stripAnsi(baseline[1]).indexOf(model));
 +		expect(lines[1]).toContain(colored);
 +		const afterStatus = lines[1].slice(lines[1].indexOf(colored) + colored.length);
-+		expect(afterStatus).toBe(theme.fg("dim", stripAnsi(afterStatus)));
++		expect(afterStatus).toBe(`\u001b[0m${theme.fg("dim", stripAnsi(afterStatus))}`);
 +		expect(stripAnsi(afterStatus).trim()).toBe(model);
 +		expect(lines[1]).toContain(theme.fg("dim", "↑100 ↓10 $0.010 12.3%/200k (auto)"));
 +		expect(visibleWidth(lines[1])).toBe(140);
++	});
++
++	it("resets unterminated foreground, bold and background before native model styling", () => {
++		const session = createSession({ sessionName: "", reasoning: true, thinkingLevel: "medium" });
++		const status = "\u001b[31m\u001b[1m\u001b[44mworker 2/4";
++		const lines = new FooterComponent(session, createFooterData(2, new Map([["tasks", status]]))).render(100);
++		expect(lines).toHaveLength(2);
++		expect(lines[1]).toContain(status);
++		const afterStatus = lines[1].slice(lines[1].indexOf(status) + status.length);
++		expect(afterStatus).toBe(`\u001b[0m${theme.fg("dim", stripAnsi(afterStatus))}`);
++		expect(stripAnsi(afterStatus).trim()).toBe("(test) test-model • medium");
++		expect(visibleWidth(lines[1])).toBe(100);
 +	});
 +
 +	it("fits by visible columns at the exact boundary, including colored wide text", () => {

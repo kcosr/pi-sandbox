@@ -295,6 +295,7 @@ export class Controller implements SubagentController {
     };
     signal?.addEventListener("abort", abortStartup, { once: true });
     const startup = setTimeout(() => {
+      if (child.abort.signal.aborted) return;
       child.value = { ...child.value, error: "Subagent startup timed out" };
       this.cancelFromCallback(child);
     }, this.host.config.startupTimeoutMs);
@@ -349,6 +350,7 @@ export class Controller implements SubagentController {
       child.value = { ...child.value, status: "running", activity: "thinking" };
       if (this.host.config.taskTimeoutMs > 0)
         deadline = setTimeout(() => {
+          if (child.abort.signal.aborted) return;
           child.value = { ...child.value, error: "Subagent task deadline exceeded" };
           this.cancelFromCallback(child);
         }, this.host.config.taskTimeoutMs);
@@ -359,7 +361,8 @@ export class Controller implements SubagentController {
       if (!child.abort.signal.aborted && child.progress.stopReason !== "stop")
         failure = child.progress.error ?? "Subagent settled without a complete final answer";
     } catch (error) {
-      if (!started) child.value = { ...child.value, callback: "disarmed" };
+      if (!started && child.value.cancelRequestedBy !== "user")
+        child.value = { ...child.value, callback: "disarmed" };
       failure = boundedText(error instanceof Error ? error.message : String(error), 1024);
       child.ready.reject(new Error(failure));
     } finally {
@@ -437,6 +440,7 @@ export class Controller implements SubagentController {
   }
 
   private cancelFromCallback(child: Child): void {
+    if (child.abort.signal.aborted) return;
     try {
       this.requestCancel(child);
     } catch (error) {
@@ -450,8 +454,13 @@ export class Controller implements SubagentController {
     }
   }
 
-  private requestCancel(child: Child): void {
-    child.value = { ...child.value, callback: "disarmed" };
+  private requestCancel(child: Child, byUser = false): void {
+    // Repeated user cancellation cannot replace an earlier cause or re-arm delivery.
+    if (byUser && (!child.active || child.abort.signal.aborted)) return;
+    child.value = {
+      ...child.value,
+      ...(byUser ? { cancelRequestedBy: "user" as const } : { callback: "disarmed" as const }),
+    };
     if (!child.active) {
       this.persist();
       this.notify();
@@ -469,14 +478,29 @@ export class Controller implements SubagentController {
     this.persist();
     this.notify();
   }
-  public async cancel(id: string, expectedTaskId?: string): Promise<SubagentSnapshot> {
+  public cancel(id: string, expectedTaskId?: string): Promise<SubagentSnapshot> {
+    return this.cancelTask(id, expectedTaskId);
+  }
+  public cancelByUser(id: string, expectedTaskId: string): Promise<SubagentSnapshot> {
+    if (typeof expectedTaskId !== "string")
+      return Promise.reject(
+        new Error("An exact subagent task ID is required for user cancellation"),
+      );
+    return this.cancelTask(id, expectedTaskId, true);
+  }
+  private async cancelTask(
+    id: string,
+    expectedTaskId?: string,
+    byUser = false,
+  ): Promise<SubagentSnapshot> {
     const child = this.require(id);
     if (expectedTaskId !== undefined && child.value.taskId !== expectedTaskId)
       throw new Error("Subagent task changed; refresh before cancelling");
     let persistenceFailure: Error | undefined;
     try {
-      this.requestCancel(child);
+      this.requestCancel(child, byUser);
     } catch (error) {
+      if (byUser) child.value = { ...child.value, callback: "disarmed" };
       persistenceFailure = error instanceof Error ? error : new Error(String(error));
     }
     if (child.active) {
@@ -512,6 +536,9 @@ export class Controller implements SubagentController {
         activity: boundedText(value.activity, 256),
         tools: value.tools.slice(0, 16),
         callback: value.callback,
+        ...(value.cancelRequestedBy === undefined
+          ? {}
+          : { cancelRequestedBy: value.cancelRequestedBy }),
         assistant: boundedTail(value.assistant || value.result || "", budget),
         thinking: boundedTail(value.thinking, budget),
         assistantTruncated:

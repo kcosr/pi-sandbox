@@ -31,6 +31,8 @@ export interface SubagentSnapshot {
   readonly result?: string;
   readonly error?: string;
   readonly callback: "armed" | "disarmed" | "acknowledged";
+  /** Explicit UI/RPC intent; notification remains subject to the task's callback state. */
+  readonly cancelRequestedBy?: "user";
   readonly sessionFile: string;
   readonly provider: string;
   readonly model: string;
@@ -93,6 +95,8 @@ export interface SubagentController {
   ): Promise<SubagentSnapshot>;
   steer(id: string, message: string, signal?: AbortSignal): Promise<void>;
   cancel(id: string, expectedTaskId?: string): Promise<SubagentSnapshot>;
+  /** Cancel an exact current task on behalf of the user, retaining its existing callback state. */
+  cancelByUser(id: string, expectedTaskId: string): Promise<SubagentSnapshot>;
   snapshot(): readonly SubagentSnapshot[];
   statistics(): {
     readonly enabled: boolean;

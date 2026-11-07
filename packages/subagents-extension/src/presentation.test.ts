@@ -68,7 +68,8 @@ function fixture(empty = false) {
         listener = undefined;
       };
     },
-    cancel,
+    cancel: () => Promise.reject(new Error("User controls must not use model cancellation")),
+    cancelByUser: cancel,
   } as unknown as SubagentController;
   const entries: { type: string; data: unknown }[] = [];
   const commands = new Map<string, Parameters<ExtensionAPI["registerCommand"]>[1]>();
@@ -103,14 +104,33 @@ function fixture(empty = false) {
 }
 
 describe("subagent observation", () => {
-  it("explains the machine command in the TUI while retaining RPC error responses", async () => {
+  it("shows machine-command input errors in the TUI while retaining structured RPC errors", async () => {
     const f = fixture();
     const notify = vi.fn();
     const command = f.commands.get("subagents-rpc")!;
     await command.handler("", { mode: "tui", ui: { notify } } as never);
-    expect(notify).toHaveBeenCalledWith(expect.stringContaining("Use /subagents"), "info");
+    expect(command.description).toContain("JSON required");
+    expect(notify).toHaveBeenCalledWith(
+      "This command requires a JSON request. Use /subagents for the interactive menu.",
+      "error",
+    );
     expect(f.entries.some((entry) => entry.type === SUBAGENT_RESPONSE_ENTRY)).toBe(false);
+    for (const text of [
+      "not JSON",
+      JSON.stringify({ version: 1, requestId: "bad", action: "spawn" }),
+    ]) {
+      notify.mockClear();
+      await command.handler(text, { mode: "tui", ui: { notify } } as never);
+      expect(notify).toHaveBeenCalledWith(expect.stringContaining("Use /subagents"), "error");
+      expect(f.entries.at(-1)).toMatchObject({
+        type: SUBAGENT_RESPONSE_ENTRY,
+        data: { success: false },
+      });
+    }
+    notify.mockClear();
+    Object.assign(f.context.ui, { notify });
     await command.handler("", f.context as never);
+    expect(notify).not.toHaveBeenCalled();
     expect(f.entries.at(-1)).toMatchObject({
       type: SUBAGENT_RESPONSE_ENTRY,
       data: { success: false },

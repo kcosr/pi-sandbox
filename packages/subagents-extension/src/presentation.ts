@@ -64,6 +64,9 @@ function summary(agent: SubagentSnapshot) {
     updatedAt: agent.updatedAt,
     ...(agent.finishedAt === undefined ? {} : { finishedAt: agent.finishedAt }),
     notifications: agent.callback,
+    ...(agent.cancelRequestedBy === undefined
+      ? {}
+      : { cancelRequestedBy: agent.cancelRequestedBy }),
   };
 }
 
@@ -197,12 +200,12 @@ export function attachSubagentPresentation(
     refresh?.();
   };
   pi.registerCommand("subagents-rpc", {
-    description: "Subagent RPC protocol v1; use /subagents interactively",
+    description: "Subagent RPC protocol v1; JSON required. Use /subagents for the interactive menu",
     async handler(text, commandContext) {
       if (text.trim() === "" && commandContext.mode === "tui") {
         commandContext.ui.notify(
-          "Use /subagents to view subagents. /subagents-rpc is a JSON API for RPC clients (snapshot, inspect, cancel).",
-          "info",
+          "This command requires a JSON request. Use /subagents for the interactive menu.",
+          "error",
         );
         return;
       }
@@ -230,7 +233,7 @@ export function attachSubagentPresentation(
             throw new Error("Subagent task changed or is unavailable");
           data = preview(
             request.action === "cancel"
-              ? await controller.cancel(selected.id, selected.taskId)
+              ? await controller.cancelByUser(selected.id, selected.taskId)
               : selected,
           );
         }
@@ -238,11 +241,17 @@ export function attachSubagentPresentation(
         pi.appendEntry(SUBAGENT_RESPONSE_ENTRY, { ...identity(), requestId, success: true, data });
       } catch (error) {
         if (disposed) return;
+        const message = displayText(
+          error instanceof Error ? error.message : "Observation failed",
+          512,
+        );
+        if (commandContext.mode === "tui")
+          commandContext.ui.notify(`${message}. Use /subagents for the interactive menu.`, "error");
         pi.appendEntry(SUBAGENT_RESPONSE_ENTRY, {
           ...identity(),
           ...(requestId === undefined ? {} : { requestId }),
           success: false,
-          error: displayText(error instanceof Error ? error.message : "Observation failed", 512),
+          error: message,
         });
       }
     },
@@ -480,7 +489,7 @@ export function attachSubagentPresentation(
                   cancelling.add(item.taskId);
                   message = `Cancelling ${item.id}…`;
                   void controller
-                    .cancel(item.id, item.taskId)
+                    .cancelByUser(item.id, item.taskId)
                     .then((result) => {
                       if (!closing) message = `${item.id}: ${result.status}`;
                     })
