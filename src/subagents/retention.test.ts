@@ -1,4 +1,14 @@
-import { mkdtemp, mkdir, readFile, rm, stat, symlink, utimes, writeFile } from "node:fs/promises";
+import {
+  mkdtemp,
+  mkdir,
+  readFile,
+  realpath,
+  rm,
+  stat,
+  symlink,
+  utimes,
+  writeFile,
+} from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
@@ -13,9 +23,16 @@ afterEach(async () => {
     directories.splice(0).map((path) => rm(path, { recursive: true, force: true })),
   );
 });
-async function fixture(id = "parent") {
-  const directory = await mkdtemp(join(tmpdir(), "pi-child-retention-"));
-  directories.push(directory);
+async function fixture(id = "parent", alias = false) {
+  const temporary = await mkdtemp(join(tmpdir(), "pi-child-retention-"));
+  directories.push(temporary);
+  let directory = temporary;
+  if (alias) {
+    const target = join(temporary, "state");
+    directory = join(temporary, "alias");
+    await mkdir(target);
+    await symlink(target, directory, "dir");
+  }
   const root = join(directory, "subagents");
   const store = new SubagentStore(root, id);
   const sessionFile = store.sessionFile("a-child");
@@ -49,6 +66,26 @@ async function fixture(id = "parent") {
   return { directory, root, id, sessionFile, parent: join(root, id), now: 30 * DAY };
 }
 describe("managed subagent retention", () => {
+  it.each(["authored", "canonical"])(
+    "expires aliased state through its %s path without refunding quota",
+    async (path) => {
+      const f = await fixture("parent", true);
+      await cleanExpiredSubagents({
+        userStateDir: path === "authored" ? f.directory : await realpath(f.directory),
+        retentionDays: 7,
+        parentSessionId: "other",
+        now: f.now,
+      });
+      await expect(stat(f.sessionFile)).rejects.toMatchObject({ code: "ENOENT" });
+      const reopened = new SubagentStore(await realpath(f.root), f.id);
+      try {
+        expect(reopened.read()).toEqual({ version: 1, used: 17, records: [] });
+      } finally {
+        reopened.close();
+      }
+    },
+  );
+
   it("advances past a full page of retained roots instead of starving later transcripts", async () => {
     const f = await fixture("zz-last");
     await Promise.all(

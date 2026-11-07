@@ -4,6 +4,7 @@ import {
   existsSync,
   mkdirSync,
   openSync,
+  realpathSync,
   renameSync,
   unlinkSync,
   writeFileSync,
@@ -65,10 +66,13 @@ export class SubagentStore {
     public readonly parentSessionId: string,
   ) {
     if (!ID.test(parentSessionId)) throw new Error("Invalid parent session identity");
-    this.directory = join(root, parentSessionId);
+    const directory = join(root, parentSessionId);
+    mkdirSync(directory, { recursive: true, mode: 0o700 });
+    // Resolve once before deriving any identity or persisted path. Creation,
+    // resume and retention must agree when the state root has symlink ancestors.
+    this.directory = realpathSync(directory);
     this.stateFile = join(this.directory, "state.json");
     this.lockFile = join(this.directory, "owner.json");
-    mkdirSync(this.directory, { recursive: true, mode: 0o700 });
     chmodSync(this.directory, 0o700);
     if (owners.has(this.directory)) throw new Error("Subagent session already has an owner");
     let reclaim: string | undefined;

@@ -225,8 +225,11 @@ registry. Disabling retention skips both sweeping and timestamp updates. This
 maintenance is independent of host-managed audit-log retention.
 
 Managed child transcripts and bounded preview records use the same retention
-age. Their daily pass streams the shallow child-root directory and selects at
-most 4096 roots in name order, resuming from a persisted cursor on the next due
+age. The shared store resolves its parent-session directory before deriving
+ownership, state and transcript paths, so aliased user-state directories share
+one identity across creation, resume and retention. Their daily pass streams the
+shallow child-root directory and selects at most 4096 roots in name order,
+resuming from a persisted cursor on the next due
 pass. Memory and the roots receiving metadata checks, state reads and cleanup
 are bounded; listing the root directory is streamed in full. This prevents an
 accumulating set of retained roots from starving later transcripts. The current

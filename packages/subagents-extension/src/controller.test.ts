@@ -1,4 +1,12 @@
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import {
+  mkdtempSync,
+  mkdirSync,
+  readFileSync,
+  realpathSync,
+  rmSync,
+  symlinkSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { AgentSession, ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
@@ -75,6 +83,57 @@ function fakeSession() {
 }
 
 describe("subagent controller", () => {
+  it("shares state, ownership and resume identity across aliases of its state directory", async () => {
+    const directory = root();
+    const target = join(directory, "state");
+    const alias = join(directory, "alias");
+    mkdirSync(target);
+    symlinkSync(target, alias, "dir");
+    const canonical = realpathSync(target);
+    const sessions = [fakeSession(), fakeSession()];
+    const requests: SubagentSessionRequest[] = [];
+    const host = (stateDirectory: string): SubagentHost => ({
+      config: parseSubagentConfig({ maxTotal: 2 }, stateDirectory),
+      createSession(request) {
+        requests.push(request);
+        return Promise.resolve(sessions[requests.length - 1]!.session);
+      },
+    });
+    let controller = new Controller(api, host(alias), "parent");
+    let childId: string;
+    try {
+      const child = await controller.spawn("first", false, parent(directory));
+      childId = child.id;
+      expect(child.sessionFile).toBe(join(canonical, "parent", child.id, "session.jsonl"));
+      writeFileSync(child.sessionFile, "saved conversation\n");
+      expect(() => new Controller(api, host(canonical), "parent")).toThrow("owner");
+      sessions[0]!.complete();
+      await vi.waitFor(() => expect(controller.statistics().active).toBe(0));
+    } finally {
+      await controller.shutdown();
+    }
+    controller = new Controller(api, host(canonical), "parent");
+    try {
+      expect(controller.statistics().total).toBe(1);
+      const resumed = await controller.resume(childId, "continue", false, parent(directory));
+      expect(resumed.id).toBe(childId);
+      expect(requests[1]!.sessionFile).toBe(requests[0]!.sessionFile);
+      expect(readFileSync(requests[1]!.sessionFile, "utf8")).toBe("saved conversation\n");
+      expect(() => new Controller(api, host(alias), "parent")).toThrow("owner");
+    } finally {
+      await controller.shutdown();
+    }
+    const reopened = new Controller(api, host(alias), "parent");
+    try {
+      expect(reopened.statistics().total).toBe(2);
+      await expect(reopened.spawn("over cap", false, parent(directory))).rejects.toThrow(
+        "total limit",
+      );
+    } finally {
+      await reopened.shutdown();
+    }
+  });
+
   it.each(["startup", "deadline", "signal"])(
     "contains cancellation persistence failures from a %s callback",
     async (source) => {

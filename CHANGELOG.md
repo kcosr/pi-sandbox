@@ -5,6 +5,8 @@
 - Add optional SDK subagents with shared managed approvals, concurrent and total
   attempt limits, TUI previews and RPC observation, plus an independent vanilla Pi
   package. Child audit provenance requires application and collector upgrades together.
+- Resolve child state paths consistently through symlinked user-state directories
+  so transcript resume and retention work with macOS temporary-directory aliases.
 
 ## 0.12.0 - 2026-11-05
 
