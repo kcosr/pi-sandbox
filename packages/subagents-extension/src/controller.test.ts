@@ -106,7 +106,7 @@ describe("subagent controller", () => {
       childId = child.id;
       expect(child.sessionFile).toBe(join(canonical, "parent", child.id, "session.jsonl"));
       writeFileSync(child.sessionFile, "saved conversation\n");
-      expect(() => new Controller(api, host(canonical), "parent")).toThrow("owner");
+      expect(() => new Controller(api, host(canonical), "parent")).toThrow("already has an owner");
       sessions[0]!.complete();
       await vi.waitFor(() => expect(controller.statistics().active).toBe(0));
     } finally {
@@ -119,7 +119,7 @@ describe("subagent controller", () => {
       expect(resumed.id).toBe(childId);
       expect(requests[1]!.sessionFile).toBe(requests[0]!.sessionFile);
       expect(readFileSync(requests[1]!.sessionFile, "utf8")).toBe("saved conversation\n");
-      expect(() => new Controller(api, host(alias), "parent")).toThrow("owner");
+      expect(() => new Controller(api, host(alias), "parent")).toThrow("already has an owner");
     } finally {
       await controller.shutdown();
     }
