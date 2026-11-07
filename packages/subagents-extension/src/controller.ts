@@ -42,6 +42,7 @@ export class Controller implements SubagentController {
   private closed = false;
   private quiescing = false;
   private storeClosed = false;
+  private shutdownWaiters = 0;
   private notification: ReturnType<typeof setTimeout> | undefined;
 
   public constructor(
@@ -140,6 +141,7 @@ export class Controller implements SubagentController {
     }
   }
   private notifyProgress(): void {
+    if (this.closed) return;
     if (!this.notification) {
       this.notification = setTimeout(() => {
         this.notification = undefined;
@@ -149,6 +151,7 @@ export class Controller implements SubagentController {
     }
   }
   private persist(): void {
+    if (this.storeClosed) throw new Error("Subagent controller is closed");
     this.store.write(this.total, this.snapshot());
   }
   private require(id: string): Child {
@@ -288,12 +291,12 @@ export class Controller implements SubagentController {
       },
     };
     const abortStartup = () => {
-      this.requestCancel(child);
+      this.cancelFromCallback(child);
     };
     signal?.addEventListener("abort", abortStartup, { once: true });
     const startup = setTimeout(() => {
       child.value = { ...child.value, error: "Child startup timed out" };
-      this.requestCancel(child);
+      this.cancelFromCallback(child);
     }, this.host.config.startupTimeoutMs);
     void this.run(child, request).catch((error) => {
       child.value = {
@@ -325,6 +328,10 @@ export class Controller implements SubagentController {
       child.abort.signal.throwIfAborted();
       unsubscribe = session.subscribe((event) => {
         if (!child.active || this.children.get(child.value.id) !== child) return;
+        // prompt() can await preflight before Pi creates an active run. An abort
+        // in that gap must be repeated once Pi can honor it, before its first request.
+        if (event.type === "agent_start" && (child.abort.signal.aborted || !request.isCurrent()))
+          void session.abort().catch(() => undefined);
         child.progress.event(event);
         const progress = child.progress;
         child.value = {
@@ -343,7 +350,7 @@ export class Controller implements SubagentController {
       if (this.host.config.taskTimeoutMs > 0)
         deadline = setTimeout(() => {
           child.value = { ...child.value, error: "Child task deadline exceeded" };
-          this.requestCancel(child);
+          this.cancelFromCallback(child);
         }, this.host.config.taskTimeoutMs);
       child.ready.resolve();
       started = true;
@@ -379,10 +386,13 @@ export class Controller implements SubagentController {
             callback: "disarmed",
             error: boundedText(String(error), 1024),
           };
-          this.persist();
-          this.notify();
-          child.finished.resolve();
           cleanupFailed = true;
+          try {
+            this.persist();
+          } finally {
+            this.notify();
+            child.finished.resolve();
+          }
         }
       }
       if (!cleanupFailed) {
@@ -411,7 +421,32 @@ export class Controller implements SubagentController {
         }
         this.notify();
         child.finished.resolve();
+        // A timed-out shutdown retains ownership until its last straggler really
+        // settles. Only then may another controller reopen this conversation.
+        try {
+          this.releaseStoreIfSettled();
+        } catch (error) {
+          child.value = {
+            ...child.value,
+            callback: "disarmed",
+            error: boundedText(`Releasing child state failed: ${String(error)}`, 1024),
+          };
+        }
       }
+    }
+  }
+
+  private cancelFromCallback(child: Child): void {
+    try {
+      this.requestCancel(child);
+    } catch (error) {
+      // Timer and AbortSignal callbacks must never throw into the application.
+      // Cancellation has already been requested even if its state cannot be saved.
+      child.value = {
+        ...child.value,
+        error: boundedText(`Saving child cancellation failed: ${String(error)}`, 1024),
+      };
+      this.notify();
     }
   }
 
@@ -438,7 +473,12 @@ export class Controller implements SubagentController {
     const child = this.require(id);
     if (expectedTaskId !== undefined && child.value.taskId !== expectedTaskId)
       throw new Error("Child task changed; refresh before cancelling");
-    this.requestCancel(child);
+    let persistenceFailure: Error | undefined;
+    try {
+      this.requestCancel(child);
+    } catch (error) {
+      persistenceFailure = error instanceof Error ? error : new Error(String(error));
+    }
     if (child.active) {
       let timer: ReturnType<typeof setTimeout> | undefined;
       await Promise.race([
@@ -449,6 +489,7 @@ export class Controller implements SubagentController {
       ]);
       if (timer) clearTimeout(timer);
     }
+    if (persistenceFailure !== undefined) throw persistenceFailure;
     return Object.freeze({ ...child.value, tools: Object.freeze([...child.value.tools]) });
   }
   public async steer(id: string, message: string, signal?: AbortSignal): Promise<void> {
@@ -505,26 +546,51 @@ export class Controller implements SubagentController {
   public async quiesce(): Promise<void> {
     this.quiescing = true;
     try {
-      this.disarm();
-      await Promise.all(
+      const failures: unknown[] = [];
+      try {
+        this.disarm();
+      } catch (error) {
+        failures.push(error);
+      }
+      const cancellations = await Promise.allSettled(
         [...this.children.values()]
           .filter((child) => child.active)
           .map((child) => this.cancel(child.value.id, child.value.taskId)),
       );
       if ([...this.children.values()].some((child) => child.active))
         throw new Error("Subagent shutdown is still waiting for active work to settle");
+      for (const result of cancellations)
+        if (result.status === "rejected") failures.push(result.reason);
+      if (failures.length)
+        throw new AggregateError(failures, "Subagent state could not be saved while quiescing");
     } finally {
       this.quiescing = false;
     }
   }
+  private releaseStoreIfSettled(): void {
+    if (
+      !this.closed ||
+      this.storeClosed ||
+      this.shutdownWaiters > 0 ||
+      [...this.children.values()].some((child) => child.active)
+    )
+      return;
+    this.store.close();
+    this.storeClosed = true;
+  }
   public async shutdown(): Promise<void> {
     if (this.storeClosed) return;
     this.closed = true;
-    await this.quiesce();
-    this.persist();
-    this.store.close();
-    this.storeClosed = true;
-    if (this.notification) clearTimeout(this.notification);
-    this.listeners.clear();
+    this.shutdownWaiters++;
+    try {
+      await this.quiesce();
+      this.persist();
+    } finally {
+      this.shutdownWaiters--;
+      if (this.notification) clearTimeout(this.notification);
+      this.notification = undefined;
+      this.listeners.clear();
+      this.releaseStoreIfSettled();
+    }
   }
 }

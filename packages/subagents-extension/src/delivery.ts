@@ -22,8 +22,9 @@ export interface DeliveryAdapters {
   getPending(): readonly PendingDelivery[];
   /** Persist acknowledgment. Called only after finding the matching item in Pi's transcript. */
   acknowledge(eventId: string): void;
-  /** Synchronously disarm all existing work after an explicit parent abort. */
-  disarm(): void;
+  /** Disarm all existing work after a parent abort; return the number of newly suppressed tasks. */
+  disarm(): number;
+  onNotice?(message: string): void;
   onError?(error: unknown): void;
 }
 
@@ -37,9 +38,14 @@ export interface DeliveryController {
 
 interface Attempt {
   kind: "boundary" | "idle";
+  /** Number of idle sends, including the first attempt. */
+  sends?: number;
   /** The first idle tick after an unsuccessful run schedules a retry, not an immediate loop. */
   retryAt?: number;
+  paused?: boolean;
 }
+const MAXIMUM_IDLE_SENDS = 6;
+const MAXIMUM_RETRY_DELAY_MS = 30_000;
 
 function details(result: PendingDelivery) {
   return {
@@ -79,12 +85,37 @@ export function installDelivery(pi: ExtensionAPI, adapters: DeliveryAdapters): D
   let abortPending = false;
   const handledAborts = new WeakSet<AbortSignal>();
   const attempts = new Map<string, Attempt>();
+  let pauseNotified = false;
   const unsubscribe: Array<() => void> = [];
 
   const report = (error: unknown) => {
     if (adapters.onError) adapters.onError(error);
     else console.error("pi-subagents result delivery:", error);
   };
+
+  function notice(message: string) {
+    try {
+      if (adapters.onNotice) adapters.onNotice(message);
+      else context?.ui?.notify(message, "warning");
+    } catch (error) {
+      report(error);
+    }
+  }
+
+  function scheduleRetry(attempt: Attempt) {
+    const sends = attempt.sends ?? 1;
+    if (sends >= MAXIMUM_IDLE_SENDS) {
+      attempt.paused = true;
+      if (!pauseNotified) {
+        pauseNotified = true;
+        notice(
+          "Automatic subagent results are paused because the parent could not start a turn. Use /agents or inspect_agent to view results. A successful parent turn resumes automatic delivery.",
+        );
+      }
+    } else {
+      attempt.retryAt = Date.now() + Math.min(2_000 * 2 ** (sends - 1), MAXIMUM_RETRY_DELAY_MS);
+    }
+  }
 
   function abort() {
     if (disposed) return;
@@ -94,10 +125,15 @@ export function installDelivery(pi: ExtensionAPI, adapters: DeliveryAdapters): D
     // Disarm durable records first. A callback must not become eligible again on reload.
     // If persistence fails, later ticks retry it before delivering anything else.
     abortPending = true;
-    adapters.disarm();
+    const count = adapters.disarm();
     abortPending = false;
+    if (count > 0)
+      notice(
+        `Automatic results were disabled for ${count} existing subagent task${count === 1 ? "" : "s"}, including running tasks. Running tasks continue. Use /agents or inspect_agent to view their results.`,
+      );
     if (watchedSignal) handledAborts.add(watchedSignal);
     attempts.clear();
+    pauseNotified = false;
   }
 
   function updateContext(next: ExtensionContext) {
@@ -155,13 +191,23 @@ export function installDelivery(pi: ExtensionAPI, adapters: DeliveryAdapters): D
     for (const [id, attempt] of attempts) if (attempt.kind === "boundary") attempts.delete(id);
   }
 
-  function boundary(event: BoundaryState, next: ExtensionContext): BoundaryResult | undefined {
+  function boundary(
+    event: BoundaryState,
+    next: ExtensionContext,
+    settling = false,
+  ): BoundaryResult | undefined {
     updateContext(next);
     if (disposed) return;
     releaseUncommittedBoundaries();
     if (event.outcome === "aborted" || next.signal?.aborted) {
       abort();
       return;
+    }
+    if (settling && event.outcome === "completed") {
+      // A completed parent run demonstrates recovery; failed startup or provider
+      // errors must not reset the budget and restart an infinite retry loop.
+      for (const [id, attempt] of attempts) if (attempt.kind === "idle") attempts.delete(id);
+      pauseNotified = false;
     }
     const ready = pending().filter((result) => !attempts.has(result.eventId));
     if (ready.length === 0) return;
@@ -189,10 +235,12 @@ export function installDelivery(pi: ExtensionAPI, adapters: DeliveryAdapters): D
         if (attempt?.kind === "idle") {
           // If a run settled or startup failed without persisting the message, retry
           // after a backoff. A live run is excluded by isIdle() above.
-          if (attempt.retryAt === undefined) attempt.retryAt = Date.now() + 2_000;
-          if (Date.now() < attempt.retryAt) continue;
+          if (attempt.paused) continue;
+          if (attempt.retryAt === undefined) scheduleRetry(attempt);
+          if (attempt.paused || Date.now() < attempt.retryAt!) continue;
         }
-        attempts.set(result.eventId, { kind: "idle" });
+        const next: Attempt = { kind: "idle", sends: (attempt?.sends ?? 0) + 1 };
+        attempts.set(result.eventId, next);
         try {
           pi.sendMessage(
             {
@@ -204,10 +252,7 @@ export function installDelivery(pi: ExtensionAPI, adapters: DeliveryAdapters): D
             { deliverAs: "steer", triggerTurn: true },
           );
         } catch (error) {
-          attempts.set(result.eventId, {
-            kind: "idle",
-            retryAt: Date.now() + 2_000,
-          });
+          scheduleRetry(next);
           report(error);
         }
         // Start only one idle run. Remaining results join its next safe boundary.
@@ -243,7 +288,7 @@ export function installDelivery(pi: ExtensionAPI, adapters: DeliveryAdapters): D
       if (!disposed) releaseUncommittedBoundaries();
     }),
     pi.on("turn_end", (event, next) => boundary(event, next)),
-    pi.on("agent_before_settle", (event, next) => boundary(event, next)),
+    pi.on("agent_before_settle", (event, next) => boundary(event, next, true)),
     pi.on("agent_settled", (event, next) => {
       updateContext(next);
       if (disposed) return;

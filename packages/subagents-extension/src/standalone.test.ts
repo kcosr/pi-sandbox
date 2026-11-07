@@ -145,10 +145,40 @@ async function fixture(
   );
   const controller = new Controller(api, host, context.sessionManager.getSessionId());
   cleanup.push(() => controller.shutdown());
-  return { directory, cwd, api, context, controller, requests, session };
+  return { directory, cwd, api, context, controller, requests, session, host };
 }
 
 describe("ordinary Pi SDK children", () => {
+  it("honors cancellation during prompt preflight before the SDK has an active run", async () => {
+    const f = await fixture(() => [{ type: "text", text: "must not request the provider" }]);
+    let release!: () => void;
+    let enter!: () => void;
+    const released = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const entered = new Promise<void>((resolve) => {
+      enter = resolve;
+    });
+    const create = f.host.createSession.bind(f.host);
+    f.host.createSession = async (request) => {
+      const child = await create(request);
+      const prompt = child.prompt.bind(child);
+      child.prompt = async (...args) => {
+        enter();
+        await released;
+        return prompt(...args);
+      };
+      return child;
+    };
+    const child = await f.controller.spawn("cancel before startup", false, f.context);
+    await entered;
+    const cancelled = f.controller.cancel(child.id);
+    release();
+    expect((await cancelled).status).toBe("cancelled");
+    expect(f.requests).toEqual([]);
+    expect(f.controller.statistics()).toMatchObject({ active: 0, total: 1 });
+  });
+
   it("uses function-backed parent authentication in memory, reads repository context, and resumes its transcript", async () => {
     const f = await fixture((context, count) => {
       if (count === 1) {

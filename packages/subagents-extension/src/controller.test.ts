@@ -10,6 +10,8 @@ import { SubagentStore } from "./storage.js";
 
 const directories: string[] = [];
 afterEach(() => {
+  vi.restoreAllMocks();
+  vi.useRealTimers();
   for (const path of directories.splice(0)) rmSync(path, { recursive: true, force: true });
 });
 function root() {
@@ -73,6 +75,132 @@ function fakeSession() {
 }
 
 describe("subagent controller", () => {
+  it.each(["startup", "deadline", "signal"])(
+    "contains cancellation persistence failures from a %s callback",
+    async (source) => {
+      vi.useFakeTimers();
+      const directory = root();
+      const pending = deferred<AgentSession>();
+      const fake = fakeSession();
+      const controller = new Controller(
+        api,
+        {
+          config: parseSubagentConfig(
+            { startupTimeoutMs: 10, taskTimeoutMs: source === "deadline" ? 10 : 0 },
+            directory,
+          ),
+          createSession: () =>
+            source === "deadline" ? Promise.resolve(fake.session) : pending.promise,
+        },
+        "parent",
+      );
+      const abort = new AbortController();
+      const spawn = controller.spawn("task", false, parent(directory), abort.signal);
+      const started =
+        source === "deadline"
+          ? spawn
+          : expect(spawn).rejects.toThrow(source === "startup" ? "timed out" : "cancelled");
+      if (source === "deadline") await started;
+      const write = vi.spyOn(SubagentStore.prototype, "write").mockImplementation(() => {
+        throw new Error("fixture disk full");
+      });
+      if (source === "signal") abort.abort();
+      else await vi.advanceTimersByTimeAsync(10);
+      await started;
+      expect(controller.snapshot()[0]!.callback).toBe("disarmed");
+      write.mockRestore();
+      pending.resolve(fake.session);
+      await vi.advanceTimersByTimeAsync(0);
+      expect(controller.statistics().active).toBe(0);
+      expect(fake.dispose).toHaveBeenCalledOnce();
+      await controller.shutdown();
+    },
+  );
+
+  it("requests every child's cancellation even when saving quiescence fails", async () => {
+    const directory = root();
+    const sessions = [fakeSession(), fakeSession()];
+    let next = 0;
+    const host: SubagentHost = {
+      config: parseSubagentConfig({}, directory),
+      createSession: () => Promise.resolve(sessions[next++]!.session),
+    };
+    const controller = new Controller(api, host, "parent");
+    await controller.spawn("first", false, parent(directory));
+    await controller.spawn("second", false, parent(directory));
+    const write = vi.spyOn(SubagentStore.prototype, "write").mockImplementation(() => {
+      throw new Error("fixture disk full");
+    });
+    await expect(controller.shutdown()).rejects.toThrow("could not be saved");
+    for (const fake of sessions) {
+      expect(fake.abort).toHaveBeenCalledOnce();
+      expect(fake.dispose).toHaveBeenCalledOnce();
+    }
+    expect(controller.statistics().active).toBe(0);
+    write.mockRestore();
+    const reopened = new Controller(api, host, "parent");
+    expect(reopened.statistics().total).toBe(2);
+    await reopened.shutdown();
+  });
+
+  it("releases failed-shutdown ownership only after late work has actually settled", async () => {
+    const directory = root();
+    const pending = deferred<AgentSession>();
+    const host: SubagentHost = {
+      config: parseSubagentConfig({ cancelTimeoutMs: 10 }, directory),
+      createSession: () => pending.promise,
+    };
+    const controller = new Controller(api, host, "parent");
+    const spawn = expect(
+      controller.spawn("late startup", false, parent(directory)),
+    ).rejects.toThrow("cancelled");
+    await expect(controller.shutdown()).rejects.toThrow("waiting for active work");
+    await spawn;
+    expect(() => new Controller(api, host, "parent")).toThrow("owner");
+    const late = fakeSession();
+    pending.resolve(late.session);
+    await vi.waitFor(() => expect(late.dispose).toHaveBeenCalledOnce());
+    const reopened = new Controller(api, host, "parent");
+    expect(reopened.statistics()).toMatchObject({ active: 0, total: 1 });
+    const stored = readFileSync(join(directory, "parent", "state.json"), "utf8");
+    await expect(controller.cancel(controller.snapshot()[0]!.id)).rejects.toThrow("closed");
+    expect(readFileSync(join(directory, "parent", "state.json"), "utf8")).toBe(stored);
+    await reopened.shutdown();
+  });
+
+  it("still waits for disposal when saving cancellation fails", async () => {
+    const directory = root();
+    const fake = fakeSession();
+    const cleanup = deferred<void>();
+    const controller = new Controller(
+      api,
+      {
+        config: parseSubagentConfig({}, directory),
+        createSession: () => Promise.resolve(fake.session),
+        disposeSession: () => cleanup.promise,
+      },
+      "parent",
+    );
+    const child = await controller.spawn("task", false, parent(directory));
+    const write = vi.spyOn(SubagentStore.prototype, "write").mockImplementationOnce(() => {
+      throw new Error("fixture disk full");
+    });
+    let settled = false;
+    const cancellation = controller.cancel(child.id).finally(() => {
+      settled = true;
+    });
+    const failure = expect(cancellation).rejects.toThrow("fixture disk full");
+    await Promise.resolve();
+    expect(settled).toBe(false);
+    expect(fake.dispose).not.toHaveBeenCalled();
+    cleanup.resolve();
+    await failure;
+    expect(fake.dispose).toHaveBeenCalledOnce();
+    expect(controller.statistics().active).toBe(0);
+    write.mockRestore();
+    await controller.shutdown();
+  });
+
   it("charges failed startup and resume attempts durably without refunding completed work", async () => {
     const directory = root();
     const config = parseSubagentConfig({ maxTotal: 3 }, directory);

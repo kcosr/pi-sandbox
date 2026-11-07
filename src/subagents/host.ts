@@ -144,8 +144,9 @@ export function createManagedSubagentHost(options: ManagedSubagentHostOptions): 
         extensionFactories: [
           async (pi) => {
             pi.on("before_agent_start", (event) => {
-              request.signal.throwIfAborted();
-              if (!request.isCurrent()) throw new Error("Subagent task is no longer active");
+              // The controller aborts cancelled runs at agent_start. Prompt-hook
+              // errors are caught by Pi and therefore cannot be used as a fence.
+              if (request.signal.aborted || !request.isCurrent()) return;
               const environment = options.getEnvironmentPrompt?.();
               if (environment !== undefined)
                 event.systemPromptOptions.sections.pi_sandbox_environment = environment;

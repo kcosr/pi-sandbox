@@ -59,6 +59,7 @@ import { toolEnvironmentPrompt } from "./environment-prompt.js";
 import { assertCurrentManagedChild, currentManagedChild } from "../subagents/invocation.js";
 import { createManagedSubagentHost } from "../subagents/host.js";
 import { cleanExpiredSubagents } from "../subagents/retention.js";
+import { beforeManagedQuit } from "../subagents/quit.js";
 import {
   SUBAGENT_TOOL_NAMES,
   managedToolPolicySubject,
@@ -566,25 +567,31 @@ export function createPiSandboxExtension(dependencies: ExtensionDependencies): E
       }),
     );
 
+    const canSave = () =>
+      state.config?.exports.enabled === true &&
+      state.config.filesystem.cwdWritable === false &&
+      state.config.execution.backend !== "direct" &&
+      state.executor !== undefined &&
+      !state.stopped;
     const userExports = createUserExportController({
       cwd: dependencies.cwd,
       ...(dependencies.accountHome === undefined ? {} : { accountHome: dependencies.accountHome }),
       getSource: () => dependencies.getExportSource?.(),
-      admitted: () =>
-        state.config?.exports.enabled === true &&
-        state.config.filesystem.cwdWritable === false &&
-        state.config.execution.backend !== "direct" &&
-        state.executor !== undefined &&
-        !state.stopped,
+      admitted: canSave,
       ...(dependencies.exportAudit === undefined ? {} : { audit: dependencies.exportAudit }),
       beforeCapture: async () => {
         await subagents?.quiesce();
       },
     });
-    dependencies.registerBeforeInteractiveQuit?.(async (ctx, signal) => {
-      await subagents?.quiesce();
-      return userExports.beforeQuit(ctx, signal);
-    });
+    dependencies.registerBeforeInteractiveQuit?.((ctx, signal) =>
+      beforeManagedQuit(ctx, signal, {
+        quiesce: async () => {
+          await subagents?.quiesce();
+        },
+        canSave,
+        beforeQuit: (context, abortSignal) => userExports.beforeQuit(context, abortSignal),
+      }),
+    );
 
     pi.registerCommand("sandbox", {
       description: "Save private sandbox files or show status, mounts, and policy",

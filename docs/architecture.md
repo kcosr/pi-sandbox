@@ -152,9 +152,18 @@ The runner reserves concurrent capacity and an attempt allowance before asynchro
 startup. Accepted spawn and resume attempts consume the total even when startup
 fails. Completion or cancellation releases only concurrent capacity. A child still
 stopping holds its slot until its SDK session settles and is disposed. Cancellation
-does not undo file changes. Shutdown disarms callbacks and closes children before
-the parent releases shared resources. Interactive export checks first quiesce child
-work; cancelling the exit allows later tasks again.
+does not undo file changes. Shutdown disarms callbacks and attempts to settle
+children before the parent releases shared resources. Interactive export checks
+first quiesce child work. If stopping or cleanup cannot finish, interactive quit
+offers an explicit exit without saving; it never inventories or copies unsettled
+private files. When saving is not admitted, the confirmation simply offers to exit
+anyway. Escape or keeping the session open cancels that exit; signals interrupt
+the confirmation and continue process cleanup.
+
+Aborting the parent run suppresses automatic result delivery for **all existing
+children**, including children still running. It does not cancel their work.
+Inspect their status and results in `/agents`, and explicitly cancel a task there
+when needed. Children created after that abort can deliver results normally.
 
 The status line shows active children, approval waits, failures and used attempts.
 `/agents` opens a selectable list and bounded read-only preview; arrows navigate,
@@ -214,6 +223,16 @@ extension's session-start callback. All maintenance failures are nonfatal and
 silent. Duplicate concurrent sweeps are tolerated without locks or a process
 registry. Disabling retention skips both sweeping and timestamp updates. This
 maintenance is independent of host-managed audit-log retention.
+
+Managed child transcripts and bounded preview records use the same retention
+age. Their daily pass streams the shallow child-root directory and selects at
+most 4096 roots in name order, resuming from a persisted cursor on the next due
+pass. Memory and the roots receiving metadata checks, state reads and cleanup
+are bounded; listing the root directory is streamed in full. This prevents an
+accumulating set of retained roots from starving later transcripts. The current
+parent, owned roots and recently updated state are protected. Cleanup preserves
+the small attempt-count ledger even after deleting transcripts, so retention
+never refunds a charged task allowance.
 
 ## Managed application and identity broker
 

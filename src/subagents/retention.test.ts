@@ -49,6 +49,41 @@ async function fixture(id = "parent") {
   return { directory, root, id, sessionFile, parent: join(root, id), now: 30 * DAY };
 }
 describe("managed subagent retention", () => {
+  it("advances past a full page of retained roots instead of starving later transcripts", async () => {
+    const f = await fixture("zz-last");
+    await Promise.all(
+      Array.from({ length: 4096 }, (_, index) =>
+        mkdir(join(f.root, `a-${String(index).padStart(4, "0")}`)),
+      ),
+    );
+    await cleanExpiredSubagents({
+      userStateDir: f.directory,
+      retentionDays: 7,
+      parentSessionId: "other",
+      now: f.now,
+    });
+    expect(await readFile(f.sessionFile, "utf8")).toBe("private transcript\n");
+    expect(JSON.parse(await readFile(join(f.root, "retention.json"), "utf8"))).toMatchObject({
+      version: 2,
+      cursor: "a-4095",
+    });
+    await cleanExpiredSubagents({
+      userStateDir: f.directory,
+      retentionDays: 7,
+      parentSessionId: "other",
+      now: f.now + DAY,
+    });
+    await expect(stat(f.sessionFile)).rejects.toMatchObject({ code: "ENOENT" });
+    expect(JSON.parse(await readFile(join(f.parent, "state.json"), "utf8"))).toEqual({
+      version: 1,
+      used: 17,
+      records: [],
+    });
+    expect(JSON.parse(await readFile(join(f.root, "retention.json"), "utf8"))).toMatchObject({
+      version: 2,
+      cursor: "",
+    });
+  }, 15000);
   it("expires transcript and preview data while permanently preserving the consumed quota", async () => {
     const f = await fixture();
     await cleanExpiredSubagents({

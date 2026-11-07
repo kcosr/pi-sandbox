@@ -26,6 +26,8 @@ function fixture(initial: PendingDelivery[] = [result()]) {
   }> = [];
   const acknowledged: string[] = [];
   const errors: unknown[] = [];
+  const notices: string[] = [];
+  let sendError: Error | undefined;
   let pending = initial;
   let idle = false;
   let disarmed = 0;
@@ -50,6 +52,7 @@ function fixture(initial: PendingDelivery[] = [result()]) {
     },
     sendMessage(message: Parameters<ExtensionAPI["sendMessage"]>[0], options: unknown) {
       sent.push({ message, options });
+      if (sendError) throw sendError;
       idle = false;
     },
   } as unknown as ExtensionAPI;
@@ -61,7 +64,12 @@ function fixture(initial: PendingDelivery[] = [result()]) {
     },
     disarm() {
       disarmed++;
+      const count = pending.length;
       pending = [];
+      return count;
+    },
+    onNotice(message) {
+      notices.push(message);
     },
     onError(error) {
       errors.push(error);
@@ -74,7 +82,11 @@ function fixture(initial: PendingDelivery[] = [result()]) {
     sent,
     acknowledged,
     errors,
+    notices,
     context,
+    set sendError(value: Error | undefined) {
+      sendError = value;
+    },
     get disarmed() {
       return disarmed;
     },
@@ -283,4 +295,62 @@ test("a controller refuses to deliver old work into a different parent session",
   f.delivery.tick();
   assert.equal(f.sent.length, 0);
   assert.equal(f.errors.length, 1);
+});
+
+test.each(["asynchronous startup", "synchronous send"])(
+  "idle retries back off and pause after repeated %s failure until a successful parent turn",
+  (failure) => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(0);
+    const f = fixture();
+    if (failure === "synchronous send") f.sendError = new Error("fixture cannot start");
+    f.idle = true;
+    f.delivery.tick();
+    for (const [index, delay] of [2000, 4000, 8000, 16000, 30000].entries()) {
+      f.idle = true;
+      f.delivery.tick();
+      const now = Date.now();
+      vi.setSystemTime(now + delay - 1);
+      f.delivery.tick();
+      assert.equal(f.sent.length, index + 1);
+      vi.setSystemTime(now + delay);
+      f.delivery.tick();
+      assert.equal(f.sent.length, index + 2);
+    }
+    f.idle = true;
+    f.delivery.tick();
+    assert.equal(f.notices.length, 1);
+    assert.match(f.notices[0]!, /paused.*parent/);
+    assert.match(f.notices[0]!, /inspect_agent/);
+    vi.setSystemTime(Date.now() + 60 * 60 * 1000);
+    f.delivery.tick();
+    f.delivery.tick();
+    assert.equal(f.sent.length, 6);
+    assert.equal(f.notices.length, 1);
+    f.emit("agent_start");
+    assert.equal(f.boundary("agent_before_settle", "error"), undefined);
+    f.delivery.tick();
+    assert.equal(f.sent.length, 6);
+    // A genuine successful parent turn releases paused results at its safe boundary.
+    assert.equal(f.boundary("agent_before_settle", "completed")?.entries?.length, 1);
+    f.persist();
+    f.delivery.tick();
+    assert.deepEqual(f.acknowledged, ["event-1"]);
+  },
+);
+
+test("parent abort notifies once that existing running tasks lose automatic callbacks", () => {
+  const f = fixture([result(), result("2")]);
+  const abort = new AbortController();
+  f.signal = abort.signal;
+  f.emit("agent_start");
+  abort.abort();
+  f.emit("agent_settled", { aborted: true });
+  f.idle = true;
+  f.delivery.tick();
+  assert.equal(f.notices.length, 1);
+  assert.match(f.notices[0]!, /2 existing subagent tasks, including running tasks/);
+  assert.match(f.notices[0]!, /Running tasks continue/);
+  assert.match(f.notices[0]!, /\/agents or inspect_agent/);
+  assert.equal(f.sent.length, 0);
 });

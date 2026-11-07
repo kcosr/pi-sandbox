@@ -17,7 +17,21 @@ Children share files and process resources but keep independent conversations.
 They receive repository context, but not the parent's conversation, personal
 prompt files, skills or prompt templates. Pass the relevant task context explicitly.
 Cancellation is cooperative and preserves transcripts. A child that has not
-settled retains its concurrency slot and cannot be resumed.
+settled retains its concurrency slot and cannot be resumed. If cleanup cannot be
+confirmed after shutdown, the same conversation cannot be reopened until the
+application restarts. Work that settles later releases its session ownership
+automatically.
+
+Stopping the parent turn (for example with Escape or RPC abort) disables automatic
+result delivery for **all existing children**, including children still running.
+Those children continue until they finish or are cancelled. A one-time notification
+points to `/agents` or `inspect_agent` for viewing their progress and results.
+Explicitly resuming a settled child starts a new task with automatic delivery.
+
+If an idle parent cannot start a result turn, delivery retries at increasing delays
+(2, 4, 8, 16 and 30 seconds), then pauses after six attempts and notifies once.
+Results remain available to inspect. A successfully completed parent turn resumes
+delivery at its safe settlement boundary; failed parent turns do not reset retries.
 
 Standalone configuration is read from trusted `.pi/subagents.json`, or an
 explicit `PI_SUBAGENTS_CONFIG` path. Configuration supports `enabled`,

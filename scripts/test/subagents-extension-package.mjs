@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { Buffer } from "node:buffer";
 import { execFileSync, spawn } from "node:child_process";
-import { mkdir, mkdtemp, readFile, realpath, rm, writeFile } from "node:fs/promises";
+import { access, mkdir, mkdtemp, readFile, realpath, rm, writeFile } from "node:fs/promises";
 import { createServer } from "node:http";
 import { dirname, join } from "node:path";
 import { createInterface } from "node:readline";
@@ -19,6 +19,11 @@ execFileSync(process.execPath, [join(root, "scripts/build-extensions.mjs"), ...a
 const temporary = await realpath(
   await mkdtemp(join(process.env.PI_SANDBOX_TEST_TMPDIR ?? "/var/tmp", "pi-subagents-package-")),
 );
+// Deliberately outside the dependency-linked fixture: Pi must load this bare
+// extracted tree through its public extension aliases, as documented for -e.
+const extracted = await realpath(
+  await mkdtemp(join(process.env.PI_SANDBOX_TEST_TMPDIR ?? "/var/tmp", "pi-subagents-extracted-")),
+);
 const runtimes = [process.execPath];
 try {
   const bun =
@@ -33,11 +38,28 @@ try {
 }
 try {
   const artifacts = await installExtensionArtifacts(root, temporary, ["subagents-extension"]);
+  const bare = join(extracted, "extension");
+  await mkdir(bare);
+  execFileSync("tar", [
+    "-xzf",
+    artifacts["subagents-extension"].archive,
+    "--strip-components=1",
+    "-C",
+    bare,
+  ]);
+  await assert.rejects(access(join(extracted, "node_modules")));
+  await assert.rejects(access(join(bare, "node_modules")));
   for (const [index, runtime] of runtimes.entries()) {
     await scenario(
       join(temporary, `runtime-${index}`),
       runtime,
       artifacts["subagents-extension"],
+      true,
+    );
+    await scenario(
+      join(extracted, `bare-${index}`),
+      runtime,
+      { ...artifacts["subagents-extension"], directory: bare },
       true,
     );
     await scenario(
@@ -49,6 +71,7 @@ try {
   }
 } finally {
   await rm(temporary, { recursive: true, force: true });
+  await rm(extracted, { recursive: true, force: true });
 }
 
 async function scenario(directory, runtime, artifact, enabled) {
