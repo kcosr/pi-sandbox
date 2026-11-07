@@ -293,6 +293,8 @@ test("packaged smoke disables both services only in its temporary config copy", 
     );
     config.identity = { mode: "broker" };
     config.audit = { enabled: true, facility: "local5" };
+    config.subagents = { enabled: true, max_concurrent: 4, max_total: 32 };
+    config.tools.subagents = { mode: "allow", session_grant: "never", audit: true };
     const source = stringifyToml(config);
     await writeFile(original, source);
     await copyFile(original, fixture);
@@ -303,6 +305,8 @@ test("packaged smoke disables both services only in its temporary config copy", 
     const actual = parseToml(await readFile(fixture, "utf8"));
     assert.deepEqual(actual.identity, { mode: "disabled" });
     assert.deepEqual(actual.audit, { enabled: false, facility: "local5" });
+    assert.equal(actual.subagents, undefined);
+    assert.equal(actual.tools.subagents, undefined);
     assert.equal(actual.models_file, config.models_file);
     assert.equal(await readFile(original, "utf8"), source);
     await assert.rejects(

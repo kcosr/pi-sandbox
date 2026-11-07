@@ -14,7 +14,7 @@ import { lstat } from "node:fs/promises";
 import { connectAuditClient, type AuditClient, type AuditEvent } from "./client.js";
 
 const event = { event: "session_started", pi_session_id: "pi-1", cwd: "/workspace" } as const;
-const acknowledgment = `${JSON.stringify({ version: 4, ok: true, audit_session_id: "audit-1" })}\n`;
+const acknowledgment = `${JSON.stringify({ version: 5, ok: true, audit_session_id: "audit-1" })}\n`;
 let directory: string;
 let server: Server | undefined;
 let client: AuditClient | undefined;
@@ -94,7 +94,7 @@ describe("audit client", () => {
     });
     expect(received).toHaveLength(4);
     const wire = received[0] as { version: number; event: AuditEvent };
-    expect(wire.version).toBe(4);
+    expect(wire.version).toBe(5);
     expect(wire.event).toMatchObject({
       event: "export_intent",
       pi_session_id: "pi-1",
@@ -125,6 +125,8 @@ describe("audit client", () => {
     { command: "pwd\0", command_truncated: false },
     { command: "pwd\ud800", command_truncated: false },
     { repository: "x".repeat(8193), extension: "git-clone" },
+    { child_id: "only-one-field" },
+    { child_id: "child", child_task_id: "task", child_session_id: "s".repeat(257) },
   ])("rejects invalid metadata locally without poisoning the connection", async (metadata) => {
     const received: unknown[] = [];
     const path = await listen((socket) =>
@@ -144,7 +146,7 @@ describe("audit client", () => {
       }),
     ).rejects.toThrow("Invalid audit event");
     await client.submit(event);
-    expect(received).toEqual([{ version: 4, event }]);
+    expect(received).toEqual([{ version: 5, event }]);
   });
 
   it("preserves Bubblewrap as the tool execution boundary", async () => {
@@ -162,13 +164,16 @@ describe("audit client", () => {
       invocation_id: "call-1",
       tool: "bash",
       boundary: "bubblewrap",
+      child_id: "child",
+      child_task_id: "task",
+      child_session_id: "child-session",
     };
     await client.submit(call);
-    expect(received).toEqual([{ version: 4, event: call }]);
+    expect(received).toEqual([{ version: 5, event: call }]);
   });
 
   it.each(["http", "stdio"] as const)(
-    "sends typed %s MCP metadata and trusted parent correlation on wire version 4",
+    "sends typed %s MCP metadata and trusted parent correlation on wire version 5",
     async (transport) => {
       const requests: unknown[] = [];
       const path = await listen((socket) =>
@@ -190,7 +195,7 @@ describe("audit client", () => {
         parent_invocation_id: "script-1",
       };
       await client.submit(call);
-      expect(requests).toEqual([{ version: 4, event: call }]);
+      expect(requests).toEqual([{ version: 5, event: call }]);
     },
   );
 
@@ -230,7 +235,7 @@ describe("audit client", () => {
       } as AuditEvent;
       await expect(client.submit(call)).rejects.toThrow("Invalid audit event");
       await client.submit(event);
-      expect(requests).toEqual([{ version: 4, event }]);
+      expect(requests).toEqual([{ version: 5, event }]);
     },
   );
 
@@ -261,7 +266,7 @@ describe("audit client", () => {
         known_read_only_version: version,
       };
       await client.submit(call);
-      expect(requests).toEqual([{ version: 4, event: call }]);
+      expect(requests).toEqual([{ version: 5, event: call }]);
     },
   );
 
@@ -318,7 +323,7 @@ describe("audit client", () => {
     } as AuditEvent;
     await expect(client.submit(call)).rejects.toThrow("Invalid audit event");
     await client.submit(event);
-    expect(requests).toEqual([{ version: 4, event }]);
+    expect(requests).toEqual([{ version: 5, event }]);
   });
 
   it("sends configured command provenance separately from built-in safety", async () => {
@@ -342,7 +347,7 @@ describe("audit client", () => {
       command_set_ids: ["utility_read"],
     };
     await client.submit(call);
-    expect(requests).toEqual([{ version: 4, event: call }]);
+    expect(requests).toEqual([{ version: 5, event: call }]);
   });
 
   it("serializes submissions and waits for fragmented acknowledgments", async () => {
@@ -357,15 +362,15 @@ describe("audit client", () => {
     client = await connectAuditClient(path);
     await Promise.all([client.submit(event), client.submit(event)]);
     expect(requests).toEqual([
-      { version: 4, event },
-      { version: 4, event },
+      { version: 5, event },
+      { version: 5, event },
     ]);
   });
 
   it.each([
     '{"version":1,"ok":true,"audit_session_id":"a"}\n',
-    '{"version":4,"ok":false,"code":"syslog_unavailable"}\n',
-    '{"version":4,"ok":true,"audit_session_id":"a","extra":true}\n',
+    '{"version":5,"ok":false,"code":"syslog_unavailable"}\n',
+    '{"version":5,"ok":true,"audit_session_id":"a","extra":true}\n',
     "not json\n",
     acknowledgment + acknowledgment,
     "x".repeat(4097),

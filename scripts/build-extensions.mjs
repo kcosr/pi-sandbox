@@ -14,7 +14,7 @@ if (args.length !== 0 && (args.length !== 2 || args[0] !== "--distribution" || !
   throw new Error("usage: node scripts/build-extensions.mjs [--distribution FILE]");
 const distribution = args.length ? await loadDistribution(resolve(args[1])) : undefined;
 validateNativeToolBundle(distribution?.toolBundle);
-for (const name of ["sandbox-extension", "git-extension"]) {
+for (const name of ["sandbox-extension", "git-extension", "subagents-extension"]) {
   const pkg = join(root, "packages", name);
   const metadata = JSON.parse(await readFile(join(pkg, "package.json"), "utf8"));
   const pin = JSON.parse(await readFile(join(root, "pi-source.lock.json"), "utf8"));
@@ -66,7 +66,7 @@ for (const name of ["sandbox-extension", "git-extension"]) {
       [join(root, "node_modules/typescript/bin/tsc"), "-p", join(pkg, "tsconfig.build.json")],
       { stdio: "inherit" },
     );
-    if (distribution?.toolBundle) {
+    if (name === "sandbox-extension" && distribution?.toolBundle) {
       const bundle = distribution.toolBundle;
       await copyToolBundle(bundle, join(pkg, "dist/native-tools"));
       await writeFile(

@@ -1,0 +1,109 @@
+import type { ThinkingLevel } from "@earendil-works/pi-agent-core";
+import type { Api, Model } from "@earendil-works/pi-ai";
+import type { AgentSession, ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
+
+export const MANAGEMENT_TOOLS = [
+  "spawn_agent",
+  "steer_agent",
+  "cancel_agent",
+  "resume_agent",
+  "inspect_agent",
+] as const;
+
+export type SubagentStatus =
+  "starting" | "running" | "stopping" | "completed" | "failed" | "cancelled" | "interrupted";
+export interface SubagentSnapshot {
+  readonly id: string;
+  readonly taskId: string;
+  readonly parentSessionId: string;
+  readonly task: string;
+  readonly extended: boolean;
+  readonly status: SubagentStatus;
+  readonly activity: string;
+  readonly tools: readonly string[];
+  readonly startedAt: number;
+  readonly finishedAt?: number;
+  readonly updatedAt: number;
+  readonly assistant: string;
+  readonly thinking: string;
+  readonly assistantTruncated: boolean;
+  readonly thinkingTruncated: boolean;
+  readonly result?: string;
+  readonly error?: string;
+  readonly callback: "armed" | "disarmed" | "acknowledged";
+  readonly sessionFile: string;
+  readonly provider: string;
+  readonly model: string;
+  readonly reasoning: ThinkingLevel;
+}
+
+/** One captured generation. Host resources must never broaden its tool authority. */
+export interface SubagentSessionRequest {
+  readonly id: string;
+  readonly taskId: string;
+  readonly parentSessionId: string;
+  readonly task: string;
+  readonly cwd: string;
+  readonly extended: boolean;
+  readonly model: Model<Api>;
+  readonly thinkingLevel: ThinkingLevel;
+  readonly sessionFile: string;
+  readonly parentContext: ExtensionContext;
+  readonly parentApi: ExtensionAPI;
+  readonly signal: AbortSignal;
+  readonly isCurrent: () => boolean;
+  /** Used by the host for activity such as queued/active approvals. */
+  readonly setActivity: (activity: string) => void;
+}
+
+export interface SubagentConfig {
+  readonly enabled: boolean;
+  readonly maxConcurrent: number;
+  readonly maxTotal: number;
+  readonly startupTimeoutMs: number;
+  readonly cancelTimeoutMs: number;
+  readonly taskTimeoutMs: number;
+  readonly stateDirectory: string;
+  readonly tools: readonly string[];
+}
+
+export interface SubagentHost {
+  readonly config: SubagentConfig;
+  /** Return a prepared, bound SDK session. Never start its prompt here. */
+  createSession(request: SubagentSessionRequest): Promise<AgentSession>;
+  /** Optional host cleanup after the SDK session has settled. */
+  disposeSession?(session: AgentSession, request: SubagentSessionRequest): Promise<void>;
+}
+
+export interface SubagentController {
+  readonly parentSessionId: string;
+  spawn(
+    task: string,
+    extended: boolean,
+    context: ExtensionContext,
+    signal?: AbortSignal,
+  ): Promise<SubagentSnapshot>;
+  resume(
+    id: string,
+    message: string,
+    extended: boolean | undefined,
+    context: ExtensionContext,
+    signal?: AbortSignal,
+  ): Promise<SubagentSnapshot>;
+  steer(id: string, message: string, signal?: AbortSignal): Promise<void>;
+  cancel(id: string, expectedTaskId?: string): Promise<SubagentSnapshot>;
+  snapshot(): readonly SubagentSnapshot[];
+  statistics(): {
+    readonly enabled: boolean;
+    readonly active: number;
+    readonly maxConcurrent: number;
+    readonly total: number;
+    readonly maxTotal: number;
+  };
+  inspect(id: string): string;
+  subscribe(listener: (snapshots: readonly SubagentSnapshot[]) => void): () => void;
+  disarm(): void;
+  acknowledge(taskId: string): void;
+  quiesce(): Promise<void>;
+  shutdown(): Promise<void>;
+}

@@ -2109,6 +2109,35 @@ session_grant = "offer"
     }
 
     #[test]
+    fn rejects_subagent_admission_overrides_in_user_and_group_records() {
+        for selector in ["uid = 1000", "gid = 1000"] {
+            for table in ["subagents", "overrides.subagents"] {
+                let text = format!(
+                    "version = 10\n{selector}\n[{table}]\nenabled = true\nmax_concurrent = 8\nmax_total = 64\n"
+                );
+                assert!(toml::from_str::<IdentityRecord>(&text).is_err());
+            }
+        }
+    }
+
+    #[test]
+    fn carries_one_named_subagent_policy_for_user_and_group_rules() {
+        for (kind, selector) in [
+            (RecordKind::User, "uid = 7"),
+            (RecordKind::Group, "gid = 7"),
+        ] {
+            let text = format!(
+                "version = 10\n{selector}\n[overrides.tools.subagents]\nmode = 'ask'\nsession_grant = 'offer'\n"
+            );
+            let record = parse_record(text.as_bytes(), kind).unwrap();
+            let wire = serde_json::to_value(record.overrides).unwrap();
+            assert_eq!(wire["tools"]["subagents"]["mode"], "ask");
+            assert_eq!(wire["tools"]["subagents"]["session_grant"], "offer");
+            assert_eq!(wire["tools"].as_object().unwrap().len(), 1);
+        }
+    }
+
+    #[test]
     fn rejects_session_retention_in_user_and_group_records() {
         for (kind, selector) in [
             (RecordKind::User, "uid = 7"),

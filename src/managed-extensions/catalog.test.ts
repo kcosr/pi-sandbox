@@ -10,6 +10,7 @@ import {
   instantiateManagedExtension,
 } from "./sdk.js";
 import gitCloneExtension from "./git-clone/index.js";
+import { SUBAGENT_TOOL_NAMES, SUBAGENTS_POLICY_SUBJECT } from "../domain/subagents.js";
 
 const DIGEST = "a".repeat(64);
 
@@ -182,6 +183,8 @@ describe("managed extension catalog", () => {
     "user_shell",
     "codemode",
     "mcp__docs",
+    SUBAGENTS_POLICY_SUBJECT,
+    ...SUBAGENT_TOOL_NAMES,
   ])("rejects reserved tool name %s", (name) => {
     const base = extension();
     const tool = base.tools[0];

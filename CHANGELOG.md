@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- Add optional SDK subagents with shared managed approvals, concurrent and total
+  attempt limits, TUI previews and RPC observation, plus an independent vanilla Pi
+  package. Child audit provenance requires application and collector upgrades together.
+
 ## 0.12.0 - 2026-11-05
 
 ### Breaking changes

@@ -27,10 +27,12 @@ export async function verifyRelease(buildArguments) {
   const environment = { ...process.env };
   delete environment.NODE_ENV;
   const distributionArguments = ["--distribution", parsedArguments.distribution];
-  const extensionChecks = ["sandbox-extension", "git-extension"].map((name) => [
-    process.execPath,
-    [join(repositoryRoot, `scripts/test/${name}-package.mjs`), ...distributionArguments],
-  ]);
+  const extensionChecks = ["sandbox-extension", "git-extension", "subagents-extension"].map(
+    (name) => [
+      process.execPath,
+      [join(repositoryRoot, `scripts/test/${name}-package.mjs`), ...distributionArguments],
+    ],
+  );
   {
     const distribution = await loadDistribution(distributionArguments[1]);
     if (distribution.toolBundle)

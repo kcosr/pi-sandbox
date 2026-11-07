@@ -56,6 +56,17 @@ import { createManagedCodemodeExtension } from "../codemode/index.js";
 import { isManagedToolSelected, selectManagedActiveTools } from "../runtime/arguments.js";
 import { createUserExportController } from "../exports/service.js";
 import { toolEnvironmentPrompt } from "./environment-prompt.js";
+import { assertCurrentManagedChild, currentManagedChild } from "../subagents/invocation.js";
+import { createManagedSubagentHost } from "../subagents/host.js";
+import { cleanExpiredSubagents } from "../subagents/retention.js";
+import {
+  SUBAGENT_TOOL_NAMES,
+  managedToolPolicySubject,
+  policyToolNames,
+} from "../domain/subagents.js";
+import { createSubagentsExtension } from "../../packages/subagents-extension/src/factory.js";
+import type { SubagentController } from "../../packages/subagents-extension/src/contracts.js";
+import { closeSubagentPreview } from "../../packages/subagents-extension/src/presentation.js";
 
 interface ExtensionState {
   executor: SandboxExecutor | undefined;
@@ -68,6 +79,7 @@ interface ExtensionState {
   stopped: boolean;
   auditor: ToolAuditor | undefined;
   bashAnalyzer: BashCommandAnalyzer | undefined;
+  beforeApproval?: () => void;
 }
 
 /** Analyzer result bound into one approval request. */
@@ -183,7 +195,7 @@ async function authorize<T extends JsonObject>(
     classification = await classifyCommand(state.bashAnalyzer, arguments_);
   }
   const request = prepareApprovalRequest({
-    subject,
+    subject: managedToolPolicySubject(subject),
     display: approvalPreview(
       approvalSubjectLabel(subject, classification?.commandClass),
       arguments_,
@@ -192,7 +204,7 @@ async function authorize<T extends JsonObject>(
     ...(classification === undefined ? {} : { commandClass: classification.commandClass }),
     ...(classification?.stages === undefined ? {} : { commandStages: classification.stages }),
   });
-  await authorizeRequest(state, request, ctx, signal, classification);
+  await authorizeRequest(state, request, ctx, signal, classification, subject);
   return request.arguments as T;
 }
 
@@ -263,6 +275,7 @@ async function authorizeRequest(
   ctx: ExtensionContext,
   signal?: AbortSignal,
   classification?: CommandClassification,
+  operation = request.subject,
 ): Promise<void> {
   if (state.policy === undefined || state.stopped) {
     throw new Error("Pi Sandbox is not available");
@@ -270,13 +283,18 @@ async function authorizeRequest(
   const ui = approvalUi(
     ctx,
     classification?.commandClass === "unclassified" ? classification.issue : undefined,
+    state.beforeApproval,
   );
+  assertCurrentManagedChild();
+  currentManagedChild()?.setActivity("checking approval");
   const decision = await state.policy.evaluate(request, {
     ...(ui === undefined ? {} : { ui }),
     ...(signal === undefined ? {} : { signal }),
   });
-  await state.auditor?.decision(decision, request.subject, classificationAudit(classification));
-  if (!decision.allowed) throw new Error(denialMessage(request.subject, decision, classification));
+  await state.auditor?.decision(decision, operation, classificationAudit(classification));
+  assertCurrentManagedChild();
+  currentManagedChild()?.setActivity("running tools");
+  if (!decision.allowed) throw new Error(denialMessage(operation, decision, classification));
   if (signal?.aborted === true) throw new SandboxExecutionError("sandbox_aborted");
 }
 
@@ -439,6 +457,31 @@ export function createPiSandboxExtension(dependencies: ExtensionDependencies): E
 
     const starts: Array<(event: unknown, ctx: ExtensionContext) => unknown> = [];
     const stops: Array<(event: unknown, ctx: ExtensionContext) => unknown> = [];
+    const managedDefinitions = new Map<string, ToolDefinition>();
+    const subagentTools = new Map<string, ToolDefinition>();
+    let subagents: SubagentController | undefined;
+    const environmentPrompt = () =>
+      state.executor === undefined ||
+      state.config === undefined ||
+      state.config.execution.backend === "direct" ||
+      state.stopped
+        ? undefined
+        : toolEnvironmentPrompt({
+            home: state.executor.home,
+            cwd: dependencies.cwd,
+            backend: state.config.execution.backend,
+            filesystem: state.config.filesystem,
+            ...(dependencies.accountHome === undefined
+              ? {}
+              : { accountHome: dependencies.accountHome }),
+          });
+    state.beforeApproval = () => {
+      if (subagents !== undefined) closeSubagentPreview(subagents);
+    };
+    const publish = (definition: ToolDefinition) => {
+      managedDefinitions.set(definition.name, definition);
+      pi.registerTool(definition);
+    };
     const features = dependencies.features;
     const mcp =
       features === undefined
@@ -453,22 +496,29 @@ export function createPiSandboxExtension(dependencies: ExtensionDependencies): E
               : { preferences: features.mcpPreferences }),
             getPolicy: () => state.policy,
             getAuditor: () => state.auditor,
+            beforeApproval: state.beforeApproval,
           });
     const childApi = new Proxy(pi, {
       get(target, property): unknown {
         if (property === "on")
           return (name: string, handler: (event: unknown, ctx: ExtensionContext) => unknown) => {
-            if (name === "session_start") starts.push(handler);
-            else if (name === "session_shutdown") stops.push(handler);
-            else (target.on as (name: string, handler: unknown) => void)(name, handler);
+            const staged =
+              name === "session_start" ? starts : name === "session_shutdown" ? stops : undefined;
+            if (staged === undefined)
+              return (target.on as (name: string, handler: unknown) => () => void)(name, handler);
+            staged.push(handler);
+            return () => {
+              const index = staged.indexOf(handler);
+              if (index !== -1) staged.splice(index, 1);
+            };
           };
         if (property === "registerTool")
           return (definition: ToolDefinition) => {
             if (definition.name !== "codemode") {
-              target.registerTool(definition);
+              publish(definition);
               return;
             }
-            target.registerTool({
+            publish({
               ...definition,
               exposure: features?.selected("codemode") === true ? "model-only" : "hidden",
               async execute(...args) {
@@ -527,10 +577,14 @@ export function createPiSandboxExtension(dependencies: ExtensionDependencies): E
         state.executor !== undefined &&
         !state.stopped,
       ...(dependencies.exportAudit === undefined ? {} : { audit: dependencies.exportAudit }),
+      beforeCapture: async () => {
+        await subagents?.quiesce();
+      },
     });
-    dependencies.registerBeforeInteractiveQuit?.((ctx, signal) =>
-      userExports.beforeQuit(ctx, signal),
-    );
+    dependencies.registerBeforeInteractiveQuit?.(async (ctx, signal) => {
+      await subagents?.quiesce();
+      return userExports.beforeQuit(ctx, signal);
+    });
 
     pi.registerCommand("sandbox", {
       description: "Save private sandbox files or show status, mounts, and policy",
@@ -629,6 +683,11 @@ export function createPiSandboxExtension(dependencies: ExtensionDependencies): E
       state.config = config;
       state.policy = new PolicyEngine(config.tools, mcp?.resolveSubject);
       await dependencies.onSessionStart?.(ctx.sessionManager.getSessionFile());
+      await cleanExpiredSubagents({
+        userStateDir: dependencies.userStateDir,
+        retentionDays: config.sessions.retentionDays,
+        parentSessionId: ctx.sessionManager.getSessionId(),
+      });
       try {
         if (
           hasCommandClassPolicies(config.tools[COMMAND_CLASS_TOOL]) &&
@@ -662,11 +721,17 @@ export function createPiSandboxExtension(dependencies: ExtensionDependencies): E
               const auditTarget = managed?.extension.tools.find(
                 (tool) => tool.name === definition.name,
               )?.auditTarget;
-              target.registerTool(
-                config.tools[definition.name]?.audit === true && state.auditor !== undefined
+              publish(
+                config.tools[managedToolPolicySubject(definition.name)]?.audit === true &&
+                  state.auditor !== undefined
                   ? state.auditor.wrap(
                       definition,
-                      extension === undefined ? managedBoundary : "host",
+                      extension === undefined &&
+                        !SUBAGENT_TOOL_NAMES.includes(
+                          definition.name as (typeof SUBAGENT_TOOL_NAMES)[number],
+                        )
+                        ? managedBoundary
+                        : "host",
                       extension,
                       auditTarget,
                     )
@@ -676,13 +741,18 @@ export function createPiSandboxExtension(dependencies: ExtensionDependencies): E
           },
         });
         const enabled = new Set(
-          Object.keys(config.tools).filter(
-            (name) =>
-              state.policy?.isEnabled(name) === true &&
-              isManagedToolSelected(dependencies.toolArguments ?? [], name),
-          ),
+          Object.keys(config.tools)
+            .flatMap(policyToolNames)
+            .filter(
+              (name) =>
+                state.policy?.isEnabled(managedToolPolicySubject(name)) === true &&
+                isManagedToolSelected(dependencies.toolArguments ?? [], name),
+            ),
         );
         for (const definition of sandboxTools.values()) {
+          if (enabled.has(definition.name)) registrationApi.registerTool(definition);
+        }
+        for (const definition of subagentTools.values()) {
           if (enabled.has(definition.name)) registrationApi.registerTool(definition);
         }
         registerManagedTools(registrationApi, state, enabled, dependencies.cwd);
@@ -707,15 +777,16 @@ export function createPiSandboxExtension(dependencies: ExtensionDependencies): E
     pi.on("session_shutdown", async (event, ctx) => {
       state.stopped = true;
       try {
-        await userExports.close();
+        const children = await Promise.allSettled([subagents?.shutdown() ?? Promise.resolve()]);
         const cleanup = await Promise.allSettled([
+          userExports.close(),
           mcp?.close() ?? Promise.resolve(),
           ...stops.map((stop) => Promise.resolve().then(() => stop(event, ctx))),
         ]);
         state.policy?.clearSessionGrants();
         state.executor = undefined;
-        await state.auditor?.end();
-        if (cleanup.some((result) => result.status === "rejected"))
+        const audit = await Promise.allSettled([state.auditor?.end() ?? Promise.resolve()]);
+        if ([...children, ...cleanup, ...audit].some((result) => result.status === "rejected"))
           throw new Error("Managed tool shutdown failed");
       } finally {
         if (event?.reason === "quit") await dependencies.onProcessShutdown?.();
@@ -733,28 +804,53 @@ export function createPiSandboxExtension(dependencies: ExtensionDependencies): E
           ].filter((factory): factory is ExtensionFactory => factory !== undefined);
     for (const factory of factories) await factory(childApi);
 
+    if (features?.config.subagents?.enabled === true) {
+      if (dependencies.getModelRuntime === undefined)
+        throw new Error("Managed subagents require the application model runtime");
+      const host = createManagedSubagentHost({
+        config: features.config,
+        userStateDir: dependencies.userStateDir,
+        getModelRuntime: dependencies.getModelRuntime,
+        definitions: managedDefinitions,
+        getEnvironmentPrompt: environmentPrompt,
+        isAvailable: () => state.started && !state.stopped && state.executor !== undefined,
+        beforeApproval: () => {
+          if (subagents !== undefined) closeSubagentPreview(subagents);
+        },
+        wrapCodeMode: (definition) =>
+          state.auditor?.wrap(definition, "host", undefined, undefined, undefined, true) ??
+          definition,
+      });
+      await createSubagentsExtension({
+        host,
+        onController(controller) {
+          subagents = controller;
+        },
+      })(
+        new Proxy(childApi, {
+          get(target, property): unknown {
+            if (property !== "registerTool") return Reflect.get(target, property);
+            return (definition: ToolDefinition) => {
+              if (
+                !SUBAGENT_TOOL_NAMES.includes(
+                  definition.name as (typeof SUBAGENT_TOOL_NAMES)[number],
+                )
+              )
+                throw new Error("Unexpected subagent tool registration");
+              subagentTools.set(definition.name, policyWrappedPiTool(definition, state));
+            };
+          },
+        }),
+      );
+    }
+
     // Run after MCP's startup hook so autoactivation is reflected in the prompt.
     pi.on("before_agent_start", (event) => {
       const active = new Set(pi.getActiveTools());
       const sections = event.systemPromptOptions.sections;
       delete sections.pi_sandbox_environment;
-      if (
-        state.executor !== undefined &&
-        state.config !== undefined &&
-        state.config.execution.backend !== "direct" &&
-        !state.stopped
-      ) {
-        const environment = toolEnvironmentPrompt({
-          home: state.executor.home,
-          cwd: dependencies.cwd,
-          backend: state.config.execution.backend,
-          filesystem: state.config.filesystem,
-          ...(dependencies.accountHome === undefined
-            ? {}
-            : { accountHome: dependencies.accountHome }),
-        });
-        if (environment !== undefined) sections.pi_sandbox_environment = environment;
-      }
+      const environment = environmentPrompt();
+      if (environment !== undefined) sections.pi_sandbox_environment = environment;
       delete sections.pi_sandbox_tool_guidance;
       if (!active.has("codemode")) return;
       sections.pi_sandbox_tool_guidance =

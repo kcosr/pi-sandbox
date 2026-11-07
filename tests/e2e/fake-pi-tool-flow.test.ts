@@ -54,10 +54,14 @@ class FakePi {
       this.commands.set(name, options);
     },
     registerToolRenderer: (): void => undefined,
-    on: (event: string, handler: EventHandler): void => {
+    on: (event: string, handler: EventHandler): (() => void) => {
       const handlers = this.handlers.get(event) ?? [];
       handlers.push(handler);
       this.handlers.set(event, handlers);
+      return () => {
+        const index = handlers.indexOf(handler);
+        if (index !== -1) handlers.splice(index, 1);
+      };
     },
     getSettings: () => ({}),
     setActiveTools: (names: readonly string[]): void => {
@@ -666,6 +670,7 @@ describe.skipIf(!REAL_BWRAP_AVAILABLE)(
       });
       const prompts: Array<{ readonly title: string; readonly choices: readonly string[] }> = [];
       const interactive = {
+        ...nonInteractiveContext(),
         hasUI: true,
         ui: {
           select: (title: string, choices: readonly string[]) => {
@@ -730,7 +735,13 @@ function resultText(result: unknown): string {
 }
 
 function nonInteractiveContext(): ExtensionContext {
-  return { hasUI: false } as ExtensionContext;
+  return {
+    hasUI: false,
+    sessionManager: {
+      getSessionId: () => "fake-pi-session",
+      getSessionFile: () => undefined,
+    },
+  } as unknown as ExtensionContext;
 }
 
 function allowAllConfig(): SandboxConfig {

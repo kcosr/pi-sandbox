@@ -6,12 +6,21 @@ import type {
   ToolRendererResolver,
   UserBashEvent,
   UserBashEventResult,
+  ModelRuntime,
 } from "@earendil-works/pi-coding-agent";
+import { mkdtemp, rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import { SettingsManager } from "@earendil-works/pi-coding-agent";
 import { isManagedToolSelected } from "../runtime/arguments.js";
 
-import { TOOL_NAMES, type SandboxConfig, type ToolName } from "../domain/index.js";
+import {
+  SUBAGENT_TOOL_NAMES,
+  TOOL_NAMES,
+  type SandboxConfig,
+  type ToolName,
+} from "../domain/index.js";
 import type {
   HostCommandExecutor,
   HostCommandRequest,
@@ -65,6 +74,9 @@ function fakePi(settings: ReturnType<ExtensionAPI["getSettings"]> = {}): FakePi 
   const api = {
     on(name: string, handler: Handler) {
       handlers.set(name, handler);
+      return () => {
+        if (handlers.get(name) === handler) handlers.delete(name);
+      };
     },
     registerTool(tool: ToolDefinition) {
       tools.set(tool.name, tool);
@@ -342,6 +354,151 @@ async function executeTool(
 }
 
 describe("managed initial tool activation", () => {
+  it("shares one management grant, audits actual operations, and disposes child lifecycle hooks", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "managed-child-lifecycle-"));
+    const pi = fakePi();
+    Object.assign(pi.api, { appendEntry: vi.fn() });
+    const events: AuditEvent[] = [];
+    const prompts: string[] = [];
+    const cfg: SandboxConfig = {
+      ...config(),
+      subagents: { enabled: true, maxConcurrent: 4, maxTotal: 32 },
+      audit: { enabled: true, facility: "local0" },
+      tools: {
+        ...config().tools,
+        subagents: { mode: "ask", sessionGrant: "offer", audit: true },
+      },
+    };
+    const ctx = context({
+      hasUI: true,
+      select: (title) => {
+        prompts.push(title);
+        return Promise.resolve("Allow for session");
+      },
+    });
+    Object.assign(ctx, { isProjectTrusted: () => false, isIdle: () => true });
+    Object.assign(ctx.sessionManager, { getEntries: () => [] });
+    Object.assign(ctx.ui, { setStatus: vi.fn() });
+    try {
+      await createPiSandboxExtension({
+        cwd: "/work/project",
+        configPath: "/etc/pi-sandbox/config.toml",
+        userStateDir: directory,
+        loadConfig: () => Promise.resolve(cfg),
+        executor: fakeExecutor(),
+        getModelRuntime: () => ({}) as ModelRuntime,
+        auditClient: {
+          submit: (event) => {
+            events.push(event);
+            return Promise.resolve();
+          },
+          close: () => Promise.resolve(),
+        },
+        features: { config: cfg, servers: [], selected: () => true },
+      })(pi.api);
+      await pi.handlers.get("session_start")!(undefined as never, ctx);
+      for (const name of SUBAGENT_TOOL_NAMES) expect(pi.tools.has(name)).toBe(true);
+      expect(pi.tools.has("subagents")).toBe(false);
+      expect(pi.activeTools.at(-1)).not.toContain("subagents");
+      expect(pi.commands.has("agents-rpc")).toBe(true);
+      for (const name of [
+        "inspect_agent",
+        "spawn_agent",
+        "steer_agent",
+        "resume_agent",
+        "cancel_agent",
+      ]) {
+        await pi.tools
+          .get(name)!
+          .execute(
+            `call-${name}`,
+            name === "spawn_agent"
+              ? { task: "Review" }
+              : name === "resume_agent" || name === "steer_agent"
+                ? { id: "missing", message: "Continue" }
+                : { id: "missing" },
+            undefined,
+            undefined,
+            ctx,
+          );
+      }
+      expect(prompts).toHaveLength(1);
+      expect(prompts[0]).toContain("Allow inspect_agent:");
+      expect(prompts[0]).toContain("all subagent management operations");
+      expect(
+        events
+          .filter((event) => event.event === "tool_execution_intent")
+          .map((event) => event.tool),
+      ).toEqual(["inspect_agent", "spawn_agent", "steer_agent", "resume_agent", "cancel_agent"]);
+      expect(
+        events
+          .filter((event) => event.event === "tool_execution_intent")
+          .slice(1)
+          .every((event) => event.approval_source === "session_grant"),
+      ).toBe(true);
+      expect(events.some((event) => event.tool === "subagents")).toBe(false);
+      await pi.handlers.get("session_shutdown")!(undefined as never, ctx);
+      expect(pi.handlers.has("agent_settled")).toBe(false);
+    } finally {
+      await rm(directory, { recursive: true, force: true });
+    }
+  });
+
+  it.each([
+    { mode: "disabled" as const, args: [], expected: [] },
+    { mode: "deny" as const, args: ["--tools", "inspect_agent"], expected: ["inspect_agent"] },
+    {
+      mode: "allow" as const,
+      args: ["--exclude-tools", "spawn_agent"],
+      expected: ["steer_agent", "cancel_agent", "resume_agent", "inspect_agent"],
+    },
+    { mode: "allow" as const, args: ["--no-tools"], expected: [] },
+    { mode: "allow" as const, args: ["--tools", "subagents"], expected: [] },
+  ])(
+    "expands the management group without overriding tool selection: $mode $args",
+    async ({ mode, args, expected }) => {
+      const directory = await mkdtemp(join(tmpdir(), "managed-child-selection-"));
+      const pi = fakePi();
+      Object.assign(pi.api, { appendEntry: vi.fn() });
+      const cfg: SandboxConfig = {
+        ...config(),
+        subagents: { enabled: true, maxConcurrent: 4, maxTotal: 32 },
+        tools: { ...config().tools, subagents: { mode, sessionGrant: "never", audit: false } },
+      };
+      const ctx = context();
+      Object.assign(ctx, { isProjectTrusted: () => false, isIdle: () => true });
+      Object.assign(ctx.sessionManager, { getEntries: () => [] });
+      Object.assign(ctx.ui, { setStatus: vi.fn() });
+      try {
+        await createPiSandboxExtension({
+          cwd: "/work/project",
+          configPath: "/etc/pi-sandbox/config.toml",
+          userStateDir: directory,
+          loadConfig: () => Promise.resolve(cfg),
+          executor: fakeExecutor(),
+          getModelRuntime: () => ({}) as ModelRuntime,
+          toolArguments: args,
+          features: {
+            config: cfg,
+            servers: [],
+            selected: (name) => isManagedToolSelected(args, name),
+          },
+        })(pi.api);
+        await pi.handlers.get("session_start")!(undefined as never, ctx);
+        expect(SUBAGENT_TOOL_NAMES.filter((name) => pi.tools.has(name))).toEqual(expected);
+        expect(pi.tools.has("subagents")).toBe(false);
+        if (mode === "deny")
+          await expect(
+            pi.tools
+              .get("inspect_agent")!
+              .execute("call", { id: "missing" }, undefined, undefined, ctx),
+          ).rejects.toThrow("Pi Sandbox denied inspect_agent: policy_denied");
+        await pi.handlers.get("session_shutdown")!(undefined as never, ctx);
+      } finally {
+        await rm(directory, { recursive: true, force: true });
+      }
+    },
+  );
   async function activate(
     settings: ReturnType<ExtensionAPI["getSettings"]> = {},
     args: readonly string[] = [],

@@ -88,3 +88,10 @@ export {
   type AccountIdentity,
 } from "./account-macros.js";
 export { validateMcpUrl } from "./mcp-url.js";
+export {
+  SUBAGENT_TOOL_NAMES,
+  SUBAGENTS_POLICY_SUBJECT,
+  managedToolPolicySubject,
+  policyToolNames,
+  type SubagentsConfig,
+} from "./subagents.js";

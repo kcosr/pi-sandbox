@@ -8,6 +8,7 @@ import {
   type PiToolExtension,
 } from "./contracts.js";
 import { parseManagedHostEnvironment } from "./sdk.js";
+import { SUBAGENT_TOOL_NAMES, SUBAGENTS_POLICY_SUBJECT } from "../domain/subagents.js";
 
 const EXTENSION_ID_PATTERN = /^[a-z][a-z0-9-]{0,63}$/u;
 const TOOL_NAME_PATTERN = /^[a-z][a-z0-9_]{0,63}$/u;
@@ -15,7 +16,13 @@ const DIAGNOSTIC_SCOPE_PATTERN = /^[a-z][a-z0-9_.-]{0,127}$/u;
 const SHA256_PATTERN = /^[a-f0-9]{64}$/u;
 const SEMVER_PATTERN =
   /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(?:-([0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*))?(?:\+([0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*))?$/u;
-const RESERVED_TOOL_NAMES = new Set<string>([...TOOL_NAMES, "user_shell", "codemode"]);
+const RESERVED_TOOL_NAMES = new Set<string>([
+  ...TOOL_NAMES,
+  ...SUBAGENT_TOOL_NAMES,
+  SUBAGENTS_POLICY_SUBJECT,
+  "user_shell",
+  "codemode",
+]);
 const RECORD_KEYS = new Set(["manifest", "extension"]);
 const MANIFEST_KEYS = new Set(["kind", "apiVersion", "id", "version", "toolNames", "digests"]);
 const DIGEST_KEYS = new Set(["manifestSha256", "moduleSha256"]);

@@ -1,0 +1,40 @@
+{
+  "name": "@kcosr/pi-subagents-extension",
+  "version": "0.1.0",
+  "description": "Resumable Pi subagents with shared-process SDK sessions and automatic results",
+  "license": "MIT",
+  "type": "module",
+  "engines": {
+    "node": ">=24"
+  },
+  "peerDependencies": {
+    "@earendil-works/pi-coding-agent": "1.5.0",
+    "@earendil-works/pi-agent-core": "1.5.0",
+    "@earendil-works/pi-ai": "1.5.0",
+    "@earendil-works/pi-schema": "1.5.0",
+    "@earendil-works/pi-tui": "1.5.0"
+  },
+  "pi": {
+    "extensions": [
+      "./dist/index.js"
+    ]
+  },
+  "exports": {
+    ".": "./dist/index.js",
+    "./factory": "./dist/factory.js",
+    "./contracts": "./dist/contracts.js",
+    "./controller": "./dist/controller.js",
+    "./config": "./dist/config.js"
+  },
+  "files": [
+    "dist",
+    "README.md",
+    "LICENSE",
+    "provenance.json"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/kcosr/pi-sandbox.git",
+    "directory": "packages/subagents-extension"
+  }
+}

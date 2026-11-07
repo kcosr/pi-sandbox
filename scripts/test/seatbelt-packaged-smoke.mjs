@@ -11,6 +11,7 @@ import { parse, stringify } from "@iarna/toml";
 import { testRpcSessionLifecycle } from "./rpc-lifecycle-smoke.mjs";
 import { testSharedSkills } from "./skills-smoke.mjs";
 import { testManagedMcpCodemode } from "./mcp-codemode-smoke.mjs";
+import { testManagedSubagents } from "./subagents-smoke.mjs";
 
 if (process.platform !== "darwin" || process.argv.length !== 3) {
   throw new Error(
@@ -41,6 +42,8 @@ try {
   config.filesystem = { cwd_writable: true, hidden_paths: [], denied_paths: [denied] };
   config.identity = { mode: "disabled" };
   config.audit.enabled = false;
+  delete config.subagents;
+  delete config.tools.subagents;
   config.sessions.retention_days = 365;
   config.skills = { directories: [] };
   config.environment = {
@@ -130,6 +133,7 @@ try {
     sharedDirectory: join(temporary, "shared-skills"),
     visibleSharedDirectory: join(temporary, "shared-skills"),
   });
+  await testManagedSubagents({ launch, configPath, modelsPath, workspace });
   await testManagedMcpCodemode({
     sharedSkill,
     launch,

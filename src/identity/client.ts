@@ -205,6 +205,7 @@ export function applyIdentityOverrides<PiValue extends AuthoredPiEnvironmentValu
   }
   return Object.freeze({
     configVersion: 14,
+    ...(base.subagents === undefined ? {} : { subagents: base.subagents }),
     codemode: base.codemode,
     mcp,
     audit: base.audit,

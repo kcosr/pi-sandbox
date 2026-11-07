@@ -643,6 +643,7 @@ export async function runPiSandbox({ piArgs: args, configPath }: SandboxArgument
         : undefined;
       let beforeInteractiveQuit: ManagedMainOptions["beforeInteractiveQuit"] = () =>
         Promise.resolve(true);
+      let activeModelRuntime: ModelRuntime | undefined;
       const extension = createPiSandboxExtension({
         features: {
           config,
@@ -653,6 +654,11 @@ export async function runPiSandbox({ piArgs: args, configPath }: SandboxArgument
         cwd,
         configPath,
         userStateDir,
+        getModelRuntime: () => {
+          if (activeModelRuntime === undefined)
+            throw new Error("Managed model runtime is unavailable");
+          return activeModelRuntime;
+        },
         ...(config.sessions.retentionDays === 0 ? {} : { onSessionStart: touchSessionFile }),
         onProcessShutdown: closeRuntime,
         registerBeforeInteractiveQuit: (handler) => {
@@ -681,7 +687,10 @@ export async function runPiSandbox({ piArgs: args, configPath }: SandboxArgument
         displayVersion: DISPLAY_VERSION,
         defaultSkillPaths: config.skills.directories,
         extensionFactories: [{ name: "pi-sandbox", factory: extension }],
-        createModelRuntime: createManagedModelRuntimeFactory(modelsPath),
+        createModelRuntime: async (options = {}) => {
+          activeModelRuntime = await createConfiguredModelRuntime(modelsPath, options);
+          return activeModelRuntime;
+        },
         validateSessionCwd,
         beforeRun: createSessionMaintenance({
           agentDir: userStateDir,

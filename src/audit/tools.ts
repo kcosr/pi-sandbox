@@ -12,6 +12,7 @@ import { ManagedToolExecutionError } from "../runtime/tool-error.js";
 import { HostCommandExecutionError } from "../../packages/sandbox-extension/src/runtime/host-command/index.js";
 import { normalizeSandboxPath } from "../../packages/sandbox-extension/src/tools/executor-operations.js";
 import { auditCommand, validAuditText, type AuditClient, type AuditEvent } from "./client.js";
+import { currentManagedChild } from "../subagents/invocation.js";
 
 interface Invocation {
   readonly fields: Pick<
@@ -25,6 +26,9 @@ interface Invocation {
     | "mcp_tool"
     | "mcp_transport"
     | "parent_invocation_id"
+    | "child_id"
+    | "child_session_id"
+    | "child_task_id"
   >;
   denied: boolean;
   approval?: ApprovalDecision["source"];
@@ -197,17 +201,33 @@ export class ToolAuditor {
             /* Invalid target arguments are rejected by the tool itself. */
           }
         }
-        await this.start(ctx);
+        const child = currentManagedChild();
+        const inherited = this.invocation.getStore();
+        // A child starts a separate invocation tree even if its task was started inside spawn_agent.
+        const parent =
+          inherited?.fields.child_id === child?.childId &&
+          inherited?.fields.child_task_id === child?.childTaskId
+            ? inherited
+            : undefined;
+        const owner = child?.rootContext ?? ctx;
+        await this.start(owner);
         const fields = {
-          pi_session_id: ctx.sessionManager.getSessionId(),
+          pi_session_id: owner.sessionManager.getSessionId(),
+          ...(child === undefined
+            ? {}
+            : {
+                child_id: child.childId,
+                child_session_id: child.childSessionId,
+                child_task_id: child.childTaskId,
+              }),
           invocation_id: id,
           tool: definition.name,
           boundary,
           ...metadata,
-          ...(this.invocation.getStore() === undefined
+          ...(parent === undefined
             ? {}
             : {
-                parent_invocation_id: this.invocation.getStore()!.fields.invocation_id!,
+                parent_invocation_id: parent.fields.invocation_id!,
               }),
           ...(extension === undefined ? {} : { extension }),
           ...toolAuditMetadata(definition.name, args, this.cwd, this.home),

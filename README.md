@@ -46,12 +46,18 @@ Packaged defaults are explicit policy settings. `execution.backend` is required
 in configuration; there is no automatic backend fallback.
 
 Ordinary Pi can load the same [sandbox tools](packages/sandbox-extension/README.md)
-or the independent [Git extension](packages/git-extension/README.md). These
+or the independent [Git](packages/git-extension/README.md) and
+[subagent](packages/subagents-extension/README.md) extensions. These
 standard extensions do not impose the managed application's permission policy.
 The sandbox package's public tool factory also accepts an application-supplied
 executor. Its interface describes command execution and lifecycle operations,
 without naming a backend or providing container management. The embedding
 application owns the implementation, isolation boundary and cleanup.
+
+Optional subagents share the managed parent's approval session and execution
+boundary, with administrator-controlled concurrency and total task limits.
+`/agents` shows progress and previews. The standalone subagent package also supports
+ordinary Pi RPC parents without managed approvals.
 
 ## Isolation at a glance
 
@@ -254,6 +260,7 @@ These subject documents collectively describe the current product behavior.
 - [Versions and releases](docs/releases.md)
 - [Standalone sandbox extension](packages/sandbox-extension/README.md)
 - [Standalone Git extension](packages/git-extension/README.md)
+- [Standalone subagent extension](packages/subagents-extension/README.md)
 - [Security model](docs/security.md)
 - [Testing](docs/testing.md)
 - [Pi integration and upgrade contract](specs/pi-integration.md)

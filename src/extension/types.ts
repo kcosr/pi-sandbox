@@ -6,7 +6,7 @@ import type { ManagedExtensionInstance, PiToolExtension } from "../managed-exten
 import type { SandboxExecutor } from "../../packages/sandbox-extension/src/runtime/index.js";
 import type { SandboxExportSource } from "../../packages/sandbox-extension/src/runtime/export/contracts.js";
 import type { ExportAudit } from "../exports/contracts.js";
-import type { ExtensionCommandContext } from "@earendil-works/pi-coding-agent";
+import type { ExtensionCommandContext, ModelRuntime } from "@earendil-works/pi-coding-agent";
 import type { AuditClient } from "../audit/client.js";
 import type { BashCommandAnalyzer } from "../permissions/bash/contracts.js";
 
@@ -20,6 +20,7 @@ export interface ExtensionDependencies {
   readonly cwd: string;
   readonly configPath: string;
   readonly userStateDir: string;
+  readonly getModelRuntime?: () => ModelRuntime;
   readonly toolArguments?: readonly string[];
   readonly loadConfig: () => Promise<SandboxConfig>;
   readonly onSessionStart?: (file: string | undefined) => Promise<void>;

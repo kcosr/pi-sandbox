@@ -842,6 +842,51 @@ describe("identity MCP overrides", () => {
     ).toThrow();
   });
 
+  it("preserves main-only subagent admission while applying only the shared management policy", () => {
+    const configured: SandboxConfig = {
+      ...base,
+      subagents: { enabled: true, maxConcurrent: 2, maxTotal: 17 },
+      tools: { subagents: { mode: "ask", sessionGrant: "never", audit: true } },
+    };
+    const effective = applyIdentityOverrides(configured, {
+      tools: { subagents: { mode: "allow", sessionGrant: "never" } },
+    });
+    expect(effective.subagents).toBe(configured.subagents);
+    expect(effective.tools.subagents).toEqual({
+      mode: "allow",
+      sessionGrant: "never",
+      audit: true,
+    });
+    for (const name of [
+      "spawn_agent",
+      "steer_agent",
+      "cancel_agent",
+      "resume_agent",
+      "inspect_agent",
+    ]) {
+      expect(() =>
+        applyIdentityOverrides(configured, {
+          tools: { [name]: { mode: "allow", sessionGrant: "never" } },
+        }),
+      ).toThrow("unavailable tool");
+    }
+    expect(() =>
+      applyIdentityOverrides(base, {
+        tools: { subagents: { mode: "allow", sessionGrant: "never" } },
+      }),
+    ).toThrow("unavailable tool");
+    expect(() =>
+      parseBrokerResponse(
+        JSON.stringify({
+          version: 10,
+          status: "ok",
+          environment: { pi: {}, sandbox: {}, extensions: {} },
+          overrides: { subagents: { enabled: true }, tools: {} },
+        }),
+      ),
+    ).toThrow();
+  });
+
   it("keeps export admission main-only and rejects overrides that broaden writable host access", () => {
     const exporting = {
       ...base,

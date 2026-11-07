@@ -14,6 +14,7 @@ build input:
 ```sh
 node scripts/test/sandbox-extension-package.mjs --distribution /path/to/distribution.toml
 node scripts/test/git-extension-package.mjs --distribution /path/to/distribution.toml
+node scripts/test/subagents-extension-package.mjs --distribution /path/to/distribution.toml
 ```
 
 `verify:release -- --distribution FILE` propagates that selection to both
@@ -36,6 +37,22 @@ without requiring Bubblewrap and preserves output, cancellation and tool renderi
 
 Pi Sandbox tests are offline. They never invoke a live model provider and never
 depend on provider credentials.
+
+Subagent package acceptance runs a stock Pi RPC parent and real SDK children
+against an offline scripted provider under Node and Bun. It covers real file
+reads, transcript resume, observations outside model messages, enabled/disabled
+configuration and total-attempt rejection. SDK tests additionally exercise
+function-backed provider credentials, repository context, file-backed extended
+tools and a real local stdio MCP fixture. Controller tests cover concurrent
+admission, cancellation, startup failure, timers and durable quotas; UI tests cover
+bounded terminal-safe previews, stale controls and approval focus.
+
+The packaged Linux and native Seatbelt smoke entry points include
+`subagents-smoke.mjs`: real managed children, parent-to-child and child-to-parent
+session grants, disabled-tool exclusion, shared file operations, child previews
+and attempt limits. Host and policy tests retain live-definition checks, child
+invocation/audit context and cleanup. All providers in these tests are local
+fixtures; do not invoke live model providers.
 
 ## Verification sequence
 
@@ -601,8 +618,8 @@ coverage. Diagnostics show authored enum/any-literal forms rather than internal 
 Direct evidence tests exercise the 256-stage/64-ID bounds, malformed or duplicate
 IDs, missing custom matches, and oversized-result fallback to ordinary policy.
 Broker tests retain main definitions across overrides and reject command-set
-definitions in rule/wire inputs. Audit client and collector tests require wire 4,
-record schema 5, separate configured-command IDs and strict older-wire rejection.
+definitions in rule/wire inputs. Audit client and collector tests require wire 5,
+record schema 6, separate configured-command IDs and strict older-wire rejection.
 
 `tests/integration/bash-command-sets.test.ts` compares real Bash argv and pipeline
 behavior with the declared shapes using an owned offline executable; injection

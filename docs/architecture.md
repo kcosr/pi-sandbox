@@ -5,6 +5,9 @@
 `packages/sandbox-extension` contains the filesystem/shell tool adapters,
 Bubblewrap, Seatbelt and direct executors and worker assets. `packages/git-extension`
 contains the reusable clone implementation and its standard Pi entry point.
+`packages/subagents-extension` contains a reusable in-process Pi SDK task runner,
+its ordinary Pi entry point and its TUI/RPC presentation. The managed host in
+`src/subagents` supplies child sessions with application-owned tools and models.
 Each package installs independently. The managed application keeps its permission
 engine and approval UI in `src/permissions`, together with administrator TOML,
 identity resolution, admitted MCP connections, model restrictions and audit.
@@ -121,6 +124,47 @@ execution backend remains available for the next logical session. Results stay
 inline; no host temporary output files are presented as sandbox-readable paths.
 
 ## RPC and session lifecycle
+
+### Subagent sessions
+
+When enabled by main policy, five model-only tools (`spawn_agent`, `steer_agent`,
+`cancel_agent`, `resume_agent`, `inspect_agent`) delegate bounded work. Every child
+has a separate SDK conversation and transcript, with the parent's current model
+and reasoning setting captured at spawn or resume. Children share the launch
+workspace and execution backend. They cannot delegate recursively. There are no
+child RPC processes or extra execution services. An RPC parent and an interactive
+parent use the same child-session implementation.
+
+The generic runner owns admission, state, progress, result delivery and cancellation.
+The managed host supplies only live, wrapped tools, the administrative model
+runtime and a child-local Code Mode registry. It excludes all stock Pi tools.
+Standard children use admitted read/bash/edit/write tools; extended children also
+use the parent's admitted extension and MCP tools. A stale or withdrawn definition
+fails before dispatch. Child execution retains its actual child context while
+the root owns approval dialogs, grants, audit identity and shared resources.
+
+All children share the parent's in-memory approval engine. A remembered choice
+applies in both directions across that logical session, with the existing subject,
+command-class and catalog-revision boundaries. Child identity annotates the dialog
+and audit event; it is not part of the grant key. A new parent session clears grants.
+
+The runner reserves concurrent capacity and an attempt allowance before asynchronous
+startup. Accepted spawn and resume attempts consume the total even when startup
+fails. Completion or cancellation releases only concurrent capacity. A child still
+stopping holds its slot until its SDK session settles and is disposed. Cancellation
+does not undo file changes. Shutdown disarms callbacks and closes children before
+the parent releases shared resources. Interactive export checks first quiesce child
+work; cancelling the exit allows later tasks again.
+
+The status line shows active children, approval waits, failures and used attempts.
+`/agents` opens a selectable list and bounded read-only preview; arrows navigate,
+Enter opens a preview, Escape returns or closes, and `c` requests cancellation.
+An approval dismisses the preview to take focus. The ordinary package provides the
+same view without managed approvals. RPC clients use the versioned observation
+command documented in the [package README](../packages/subagents-extension/README.md).
+Observation entries do not become model messages; completion results do.
+
+### Parent replacement
 
 The same managed executable accepts Pi's `--mode rpc`. A supervisor selects its
 workspace using the operating-system CWD when spawning the process; Sandbox

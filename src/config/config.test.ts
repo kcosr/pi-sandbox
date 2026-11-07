@@ -10,6 +10,7 @@ import {
   type AuthoredPiEnvironmentValue,
 } from "../domain/index.js";
 import { ConfigError, loadConfig, parseConfig as parseConfigWithCatalog } from "./index.js";
+import { SUBAGENT_TOOL_NAMES } from "../domain/subagents.js";
 import {
   createManagedExtensionCatalog,
   type ManagedExtensionCatalog,
@@ -41,6 +42,56 @@ function parseConfig(
 }
 
 describe("parseConfig", () => {
+  it("admits subagents only with explicit main enablement and one group policy", () => {
+    expect(parseConfig(completeConfig()).subagents).toBeUndefined();
+    expect(parseConfig(completeConfig() + "\n[subagents]\nenabled = false\n").subagents).toEqual({
+      enabled: false,
+      maxConcurrent: 4,
+      maxTotal: 32,
+    });
+    const tools = '\n[tools.subagents]\nmode = "ask"\nsession_grant = "offer"\naudit = true\n';
+    expect(() => parseConfig(completeConfig() + "\n[subagents]\nenabled = true\n")).toThrow(
+      "config.tools.subagents is required",
+    );
+    const config = parseConfig(
+      completeConfig() +
+        tools +
+        "\n[subagents]\nenabled = true\nmax_concurrent = 2\nmax_total = 7\n",
+    );
+    expect(config.subagents).toEqual({ enabled: true, maxConcurrent: 2, maxTotal: 7 });
+    expect(config.tools.subagents).toMatchObject({
+      mode: "ask",
+      sessionGrant: "offer",
+      audit: true,
+    });
+    expect(() => parseConfig(completeConfig() + tools)).toThrow(
+      "config.tools.subagents is not a recognized field",
+    );
+    expect(() =>
+      parseConfig(completeConfig() + tools + "\n[subagents]\nenabled = false\n"),
+    ).toThrow("config.tools.subagents is not a recognized field");
+    for (const name of SUBAGENT_TOOL_NAMES) {
+      expect(config.tools).not.toHaveProperty(name);
+      expect(() =>
+        parseConfig(
+          completeConfig() +
+            tools +
+            "\n[subagents]\nenabled = true\n" +
+            `\n[tools.${name}]\nmode = "allow"\nsession_grant = "never"\naudit = false\n`,
+        ),
+      ).toThrow(`config.tools.${name} is not a recognized field`);
+    }
+    for (const fields of [
+      "enabled = 1",
+      "enabled = false\nextra = 1",
+      "enabled = false\nmax_concurrent = 0",
+      "enabled = false\nmax_total = 1025",
+    ]) {
+      expect(() => parseConfig(completeConfig() + `\n[subagents]\n${fields}\n`)).toThrow(
+        ConfigError,
+      );
+    }
+  });
   it("adds optional shared roots without rewriting aliases, overlapping roots, or literal syntax", () => {
     expect(parseConfig(completeConfig()).skills).toEqual({ directories: [] });
     for (const directories of [

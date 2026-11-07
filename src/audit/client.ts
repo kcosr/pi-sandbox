@@ -31,6 +31,9 @@ export interface AuditEvent {
   mcp_tool?: string;
   mcp_transport?: "http" | "stdio";
   parent_invocation_id?: string;
+  child_id?: string;
+  child_session_id?: string;
+  child_task_id?: string;
   approval_source?: "policy" | "prompt" | "session_grant";
   reason?: string;
   outcome?: "success" | "error" | "cancelled" | "timeout";
@@ -99,6 +102,9 @@ function validateEvent(event: AuditEvent): void {
     mcp_server: 32,
     mcp_tool: 128,
     parent_invocation_id: 256,
+    child_id: 128,
+    child_session_id: 256,
+    child_task_id: 128,
     path: 4096,
     repository: 8192,
   } as const;
@@ -163,6 +169,9 @@ function validateEvent(event: AuditEvent): void {
   )
     invalid();
   if (event.repository !== undefined && event.extension === undefined) invalid();
+  const child = [event.child_id, event.child_session_id, event.child_task_id];
+  if (child.some((value) => value !== undefined) && child.some((value) => value === undefined))
+    invalid();
   const mcp = [event.mcp_server, event.mcp_tool, event.mcp_transport];
   if (
     mcp.some((value) => value !== undefined) &&
@@ -285,7 +294,7 @@ export async function connectAuditClient(path: string): Promise<AuditClient> {
       }
       const record = response as Record<string, unknown>;
       const keys = Object.keys(record).sort().join(",");
-      if (record.version !== 4) throw new Error("Invalid audit collector version");
+      if (record.version !== 5) throw new Error("Invalid audit collector version");
       if (record.ok === false && keys === "code,ok,version") {
         if (
           !["protocol_error", "syslog_unavailable", "audit_disabled"].includes(String(record.code))
@@ -344,7 +353,7 @@ export async function connectAuditClient(path: string): Promise<AuditClient> {
         ) {
           throw new Error("Audit command exceeds size limit");
         }
-        request = `${JSON.stringify({ version: 4, event })}\n`;
+        request = `${JSON.stringify({ version: 5, event })}\n`;
         if (Buffer.byteLength(request) > MAX_REQUEST_BYTES) {
           throw new Error("Audit request exceeds size limit");
         }

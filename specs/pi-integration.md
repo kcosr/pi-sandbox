@@ -230,7 +230,7 @@ transport work; independently configured scoped environment still applies.
 User saved preferences may narrow admission but cannot enable an effectively
 disabled server. Administrative changes require restart. Broker support remains
 Linux-only; main configuration schema 14 is unchanged. The current audit contract uses
-wire 4/record 5 for configured Bash command provenance.
+wire 5/record 6 for configured Bash command provenance and child invocation identity.
 
 Host lookups are bounded to four seconds, the client deadline is ten seconds,
 and the service lifetime is fifteen seconds. Local accounts and SSSD via local
@@ -655,3 +655,27 @@ and terminal loss retain their emergency paths. RPC and print never invoke it.
 The managed application binds the current extension's user export controller to
 this callback. With saving enabled, Yes opens the picker, No permits exit, and
 Escape or an incomplete/failed save cancels exit. No automatic preservation occurs.
+
+## SDK subagents
+
+The reusable subagent package uses public Pi 1.5 SDK sessions for both ordinary
+and managed parents; it does not launch a child CLI or use internal RPC transport.
+The managed host must pass `includeBuiltinTools: false`, bind only wrapped tools
+and use the application-owned `ModelRuntime`. The existing patched SDK option
+remains authoritative across refresh and resume. No ordinary package code may
+depend on that option or import managed application code.
+
+Each child has its own tool/Code Mode context, transcript and cancellation signal.
+Approval and audit ownership remain with the root logical session. Child identity
+is trusted invocation metadata, never a new grant scope. Live MCP revisions,
+disabled tools, user exclusions and nested tool authorization must remain enforced
+in child sessions. Closing or replacing the root revokes old child admission and
+disarms completion delivery before releasing shared resources.
+
+Keep observation compatible with stock Pi: discover `/agents-rpc` through
+`get_commands`, send strict versioned control envelopes via `prompt`, and return
+correlated custom entries through `entry_appended`/`get_entries`. A handled prompt
+does not itself confirm control success. Rebind observer epochs after replacement;
+old task IDs cannot control a resumed task. Do not add managed RPC commands or
+inject observation records into the model conversation. Qualify ordinary Node/Bun
+RPC parents and the compiled managed parent with offline providers.
