@@ -4,14 +4,17 @@
 
 - Add opt-in standalone subagent completion that waits for delegated work and
   parent result incorporation, with queued-input wakeups, cancellation and
-  explicit lifecycle errors.
+  explicit lifecycle errors. ([#52](https://github.com/kcosr/pi-sandbox/pull/52))
 - Add optional SDK subagents with shared managed approvals, concurrent and total
-  new-spawn limits, compact footer status, Markdown previews and RPC observation, plus an independent vanilla Pi
-  package. Child audit provenance requires application and collector upgrades together.
+  new-spawn limits, compact footer status, Markdown previews, RPC observation and
+  an independent vanilla Pi package. Child audit provenance requires upgrading
+  the application and collector together to audit wire 5 / record schema 6.
+  ([#52](https://github.com/kcosr/pi-sandbox/pull/52))
 - Add user optional-extension toggles, process-only CLI overrides and administrator
-  guidance that follows active extension tools.
+  guidance that follows active extension tools. ([#52](https://github.com/kcosr/pi-sandbox/pull/52))
 - Resolve child state paths consistently through symlinked user-state directories
   so transcript resume and retention work with macOS temporary-directory aliases.
+  ([#52](https://github.com/kcosr/pi-sandbox/pull/52))
 
 ## 0.12.0 - 2026-11-05
 
