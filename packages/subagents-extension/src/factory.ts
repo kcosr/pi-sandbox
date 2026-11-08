@@ -11,11 +11,13 @@ import { Controller } from "./controller.js";
 import { installDelivery, type DeliveryController } from "./delivery.js";
 import { attachSubagentPresentation } from "./presentation.js";
 import { createStandaloneHost } from "./standalone.js";
+import { MAXIMUM_RESULT_CURSOR_LENGTH, renderResultDelivery } from "./results.js";
 
 interface ArgumentProperty {
   readonly type: "string" | "boolean";
   readonly minLength?: number;
   readonly maxLength?: number;
+  readonly enum?: readonly string[];
   readonly description: string;
 }
 interface ArgumentSchema {
@@ -45,6 +47,7 @@ function validateArguments<Args>(value: unknown, schema: ArgumentSchema): Args {
     const property = schema.properties[key]!;
     if (
       typeof input !== property.type ||
+      (property.enum !== undefined && !property.enum.includes(input as string)) ||
       (typeof input === "string" &&
         (input.length < (property.minLength ?? 0) ||
           input.length > (property.maxLength ?? Infinity)))
@@ -105,22 +108,12 @@ export function createSubagentsExtension(
                 !["starting", "running", "stopping"].includes(item.status) &&
                 item.callback === "armed",
             )
-            .map((item) => {
-              const output = boundedText(
-                [item.error && `Error: ${item.error}`, item.result].filter(Boolean).join("\n") ||
-                  "No final answer",
-                6000,
-              );
-              return {
-                eventId: item.taskId,
-                agentId: item.id,
-                taskId: item.taskId,
-                content:
-                  item.cancelRequestedBy === "user"
-                    ? `Subagent cancelled by user: ${item.id} / ${item.taskId}\nOutcome: ${item.status}\nThe user cancelled this task. Do not automatically restart or replace this task.\n${output}`
-                    : `Subagent result: ${item.id} / ${item.taskId}\nOutcome: ${item.status}\n${output}`,
-              };
-            }),
+            .map((item) => ({
+              eventId: item.taskId,
+              agentId: item.id,
+              taskId: item.taskId,
+              content: renderResultDelivery(item),
+            })),
         acknowledge: (id) => owner.acknowledge(id),
         disarm: () => {
           const count = owner.snapshot().filter((item) => item.callback === "armed").length;
@@ -295,12 +288,30 @@ export function createSubagentsExtension(
           };
         },
       );
-      tool<{ id: string }>(
+      tool<{ id: string; view?: "status" | "result"; cursor?: string }>(
         "inspect_agent",
         "Inspect subagent",
-        "Read status and bounded recent progress to decide whether to steer or cancel. Does not wait, acknowledge a result, or change the subagent; results arrive automatically.",
-        objectSchema({ id: id() }),
-        (owner, args) => owner.inspect(args.id),
+        "Read compact status and recent activity (default), or a saved final report with view=result. Use the cursor from a truncated result to read only its remaining text; omit the cursor to read from the beginning. Result pages return nextCursor while more remains. Does not run, resume, wait for, or acknowledge the subagent. Results arrive automatically; do not poll for completion.",
+        objectSchema(
+          {
+            id: id(),
+            view: {
+              type: "string",
+              enum: ["status", "result"],
+              description:
+                "Compact status/activity, or saved final report text only. Defaults to status.",
+            },
+            cursor: {
+              type: "string",
+              minLength: 1,
+              maxLength: MAXIMUM_RESULT_CURSOR_LENGTH,
+              description:
+                "Continuation cursor from the result notice or previous page. Requires view=result; stale after resume.",
+            },
+          },
+          ["id"],
+        ),
+        (owner, args) => owner.inspect(args.id, args.view, args.cursor),
       );
     };
     if (options.host) registerTools();

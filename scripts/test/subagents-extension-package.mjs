@@ -9,6 +9,7 @@ import { setTimeout as delay } from "node:timers/promises";
 import { fileURLToPath } from "node:url";
 import { installExtensionArtifacts } from "./extension-artifacts.mjs";
 import { testStandaloneSubagentWait } from "./subagents-wait-smoke.mjs";
+import { assertSubagentResultPages, longSubagentReport } from "./subagents-result-pages.mjs";
 
 const root = dirname(dirname(dirname(fileURLToPath(import.meta.url))));
 const args = process.argv.slice(2);
@@ -101,6 +102,7 @@ async function scenario(directory, runtime, artifact, enabled) {
   let planned = enabled
     ? { name: "spawn_agent", args: { task: "Read sample.txt and report its contents." } }
     : undefined;
+  const report = longSubagentReport("SDK_CHILD_DONE");
   let parentRequests = 0;
   let childRequests = 0;
   let childReads = 0;
@@ -141,7 +143,7 @@ async function scenario(directory, runtime, artifact, enabled) {
         else {
           assert(JSON.stringify(body.messages).includes("SDK_CHILD_READ_OK"));
           childReads++;
-          text = "SDK_CHILD_DONE";
+          text = report;
         }
       }
       response.writeHead(200, { "content-type": "text/event-stream" });
@@ -193,8 +195,8 @@ async function scenario(directory, runtime, artifact, enabled) {
                 name: "Offline fixture",
                 reasoning: false,
                 input: ["text"],
-                contextWindow: 32768,
-                maxTokens: 2048,
+                contextWindow: 262144,
+                maxTokens: 65536,
                 cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
               },
             ],
@@ -344,6 +346,59 @@ async function scenario(directory, runtime, artifact, enabled) {
       assert.equal(agent.status, "completed");
       const inspected = await observe("inspect", { id: agent.id, taskId: agent.taskId });
       assert.match(inspected.result, /SDK_CHILD_DONE/);
+      const beforePages = childRequests;
+      const transcriptBeforePages = await rpc("get_messages");
+      const notice = transcriptBeforePages.messages.find(
+        (message) =>
+          message.role === "custom" &&
+          message.customType === "pi-subagents:result" &&
+          message.details?.taskId === agent.taskId,
+      );
+      assert(notice, "The settled child must have delivered its automatic result");
+      await assertSubagentResultPages({
+        id: agent.id,
+        taskId: agent.taskId,
+        report,
+        notice: notice.content,
+        inspect: async (args) => {
+          planned = { name: "inspect_agent", args };
+          const after = messages.length;
+          await rpc("prompt", { message: "Read the saved subagent report." });
+          await waitFor(() =>
+            messages.slice(after).some((event) => event.type === "agent_settled"),
+          );
+          const result = messages
+            .slice(after)
+            .find(
+              (event) => event.type === "tool_execution_end" && event.toolName === "inspect_agent",
+            );
+          assert(result && !result.isError, JSON.stringify(result));
+          return result.result.content
+            .filter((part) => part.type === "text")
+            .map((part) => part.text)
+            .join("");
+        },
+      });
+      assert.equal(childRequests, beforePages, "Saved result pages must never rerun the child");
+      const afterPages = await observe("snapshot");
+      assert.equal(
+        afterPages.total,
+        snapshot.total,
+        "Reading results must not consume spawn quota",
+      );
+      assert.deepEqual(
+        afterPages.agents,
+        snapshot.agents,
+        "Reading results must not alter callbacks or task state",
+      );
+      const transcriptAfterPages = await rpc("get_messages");
+      assert.equal(
+        transcriptAfterPages.messages.filter(
+          (message) => message.role === "custom" && message.customType === "pi-subagents:result",
+        ).length,
+        1,
+        "Reading pages must not deliver duplicate automatic results",
+      );
       planned = {
         name: "resume_agent",
         args: { id: agent.id, message: "Report the contents again." },
@@ -415,7 +470,9 @@ async function scenario(directory, runtime, artifact, enabled) {
     assert.equal(await ended, 0, stderr);
     assert.equal(await readFile(join(workspace, "sample.txt"), "utf8"), "SDK_CHILD_READ_OK\n");
     console.log(
-      `Packed subagents (${runtime}, enabled=${enabled}): RPC parent, SDK children, bounded activity, observation and quotas passed`,
+      enabled
+        ? `Packed subagents (${runtime}, enabled=true): RPC parent, SDK children, bounded activity, exact result pages, observation and quotas passed`
+        : `Packed subagents (${runtime}, enabled=false): delegation remains unavailable, with zero child requests`,
     );
   } finally {
     lines?.close();

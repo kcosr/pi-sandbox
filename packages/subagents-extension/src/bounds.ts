@@ -1,5 +1,6 @@
 export const MAXIMUM_TASK_BYTES = 32 * 1024;
 export const MAXIMUM_RESULT_BYTES = 32 * 1024;
+export const MAXIMUM_REPORT_BYTES = 16 * 1024 * 1024;
 export const MAXIMUM_PROGRESS_BYTES = 4096;
 export function boundedText(text: string, maximum: number): string {
   const data = Buffer.from(text);
