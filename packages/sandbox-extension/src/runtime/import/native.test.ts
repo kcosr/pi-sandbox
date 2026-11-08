@@ -111,6 +111,9 @@ describe.skipIf(process.platform !== "linux" || !existsSync(bubblewrapPath))(
       await first.writeChunk(Buffer.from("cancel me"));
       const input = await first.finish();
       abort.abort();
+      expect((await executor!.execute({ argv: ["/bin/cat", input] })).stdout.toString()).toBe(
+        "cancel me",
+      );
       await first.close();
       expect((await executor!.execute({ argv: ["/bin/cat", input] })).exitCode).not.toBe(0);
       await second.writeChunk(Buffer.from("survives peer cancellation"));
