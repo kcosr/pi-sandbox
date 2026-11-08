@@ -44,15 +44,18 @@ For a launch directory `/home/user/work` and repository
 `https://github.com/example/widget.git`, Git clones into
 `/home/user/work/widget`. It derives an immediate child from the repository name
 and strips `.git`; the caller cannot choose another destination or Git options.
+Successful calls report the absolute checkout path.
 Any existing destination, including an empty directory or a symlink, is rejected.
 Local repositories, remote helpers, unsupported protocols, URL passwords,
 queries and fragments are rejected.
 
-Clone executes **on the host**, outside sandbox filesystem and networking
+The standalone clone executes **on the host**, outside sandbox filesystem and networking
 restrictions. Managed Bubblewrap and Seatbelt preserve the launch directory at the same path,
 so sandbox tools can use the checkout there. A read-only sandbox policy does not
 prevent the host clone. For an application-supplied executor, visibility depends
 on the owner's filesystem configuration; Git does not copy into that environment.
+The managed application can separately select `destination = "sandbox_home"` in
+its main Git configuration. That setting is not accepted by standalone JSON.
 
 Git uses fixed absolute executables, fixed arguments and a bounded host runner
 with a default 120-second timeout and combined 1 MiB output limit. It removes
@@ -81,6 +84,15 @@ metadata, environment restrictions and package-owned structural types. The
 `./config` export provides the standalone versioned JSON parser and private-file
 reader. No public import requires the sandbox package, a permissions package,
 managed Pi patches or the repository's private SDK.
+
+The `./sandbox-clone` export provides the Linux `executeSandboxGitClone` helper
+for trusted embeddings. The caller supplies a bounded host execution port and a
+sandbox port containing `home`, `execute` and an `imports` capability. The helper
+fetches into private host `/dev/shm` tmpfs, transfers a bounded bundle, and creates
+the checkout under sandbox `HOME/repos`. It borrows execution resources, closes
+its import session, and removes temporary acquisition data. The embedding owns
+backend admission, authorization, audit and lifecycle; this export adds no model
+tool or standalone configuration option.
 
 Pi Sandbox uses an application-owned managed adapter around this same core. Its
 TOML configuration, approval/audit wrapper and scoped host executor are separate

@@ -42,3 +42,11 @@ export {
   type SandboxExportIdentity,
 } from "./export/contracts.js";
 export { INTERNAL_EXPORT_READER_ARGUMENT } from "./export/protocol.js";
+
+export {
+  IMPORT_LIMITS,
+  SandboxImportError,
+  type SandboxImportTarget,
+  type SandboxImportSession,
+  type SandboxImportDirectory,
+} from "./import/contracts.js";

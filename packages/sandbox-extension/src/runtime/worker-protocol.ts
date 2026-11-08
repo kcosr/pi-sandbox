@@ -8,7 +8,14 @@ import {
   type ExportReply,
 } from "./export/protocol.js";
 
-export const SANDBOX_WORKER_PROTOCOL_VERSION = 5;
+import {
+  isImportOperation,
+  isImportReply,
+  type ImportOperation,
+  type ImportReply,
+} from "./import/protocol.js";
+
+export const SANDBOX_WORKER_PROTOCOL_VERSION = 6;
 export const INTERNAL_SANDBOX_WORKER_ARGUMENT = "--pi-sandbox-internal-worker";
 export const MAXIMUM_WORKER_REQUEST_FRAME_BYTES = 96 * 1_048_576;
 export const MAXIMUM_WORKER_RESPONSE_FRAME_BYTES = 1 * 1_048_576;
@@ -46,8 +53,27 @@ export interface WorkerExportFailure {
   readonly id: number;
   readonly code: string;
 }
+export interface WorkerImportRequest {
+  readonly type: "import";
+  readonly id: number;
+  readonly request: ImportOperation;
+}
+export interface WorkerImportResponse {
+  readonly type: "import-result";
+  readonly id: number;
+  readonly reply: ImportReply;
+}
+export interface WorkerImportFailure {
+  readonly type: "import-failure";
+  readonly id: number;
+  readonly code: string;
+}
 export type WorkerRequest =
-  WorkerExecuteRequest | WorkerCancelRequest | WorkerShutdownRequest | WorkerExportRequest;
+  | WorkerExecuteRequest
+  | WorkerCancelRequest
+  | WorkerShutdownRequest
+  | WorkerExportRequest
+  | WorkerImportRequest;
 
 export interface WorkerReadyResponse {
   readonly type: "ready";
@@ -86,7 +112,9 @@ export type WorkerResponse =
   | WorkerFailureResponse
   | WorkerStartedResponse
   | WorkerExportResponse
-  | WorkerExportFailure;
+  | WorkerExportFailure
+  | WorkerImportResponse
+  | WorkerImportFailure;
 
 export function encodeWorkerFrame(value: WorkerRequest | WorkerResponse): Buffer {
   const payload = Buffer.from(JSON.stringify(value), "utf8");
@@ -158,6 +186,12 @@ export function isWorkerRequest(value: unknown): value is WorkerRequest {
   if (value.type === "cancel") {
     return hasExactKeys(value, ["type", "id"]) && isRequestId(value.id);
   }
+  if (value.type === "import")
+    return (
+      hasExactKeys(value, ["type", "id", "request"]) &&
+      isRequestId(value.id) &&
+      isImportOperation(value.request)
+    );
   if (value.type === "export")
     return (
       hasExactKeys(value, ["type", "id", "request"]) &&
@@ -198,6 +232,14 @@ export function isWorkerResponse(value: unknown): value is WorkerResponse {
     );
   }
   if (!isRequestId(value.id)) return false;
+  if (value.type === "import-result")
+    return hasExactKeys(value, ["type", "id", "reply"]) && isImportReply(value.reply);
+  if (value.type === "import-failure")
+    return (
+      hasExactKeys(value, ["type", "id", "code"]) &&
+      typeof value.code === "string" &&
+      /^[a-z0-9_]{1,80}$/u.test(value.code)
+    );
   if (value.type === "export-result")
     return hasExactKeys(value, ["type", "id", "reply"]) && isExportReply(value.reply);
   if (value.type === "export-failure")

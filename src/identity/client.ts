@@ -1,4 +1,5 @@
 import { createConnection } from "node:net";
+import { assertGitDestinationBackend } from "../config/git-destination.js";
 import { assertMcpCodeModeExposure } from "../config/mcp.js";
 
 import {
@@ -194,6 +195,10 @@ export function applyIdentityOverrides<PiValue extends AuthoredPiEnvironmentValu
   assertEffectiveCommandClassPolicies(tools);
   const mcp = applyMcpOverrides(base.mcp, overrides.mcp);
   assertMcpCodeModeExposure(mcp, base.codemode);
+  assertGitDestinationBackend(
+    base.extensions,
+    applyExecutionOverride(base.execution, overrides.execution),
+  );
   if (
     base.exports.enabled &&
     ((overrides.execution?.backend ?? base.execution.backend) === "direct" ||

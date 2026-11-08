@@ -5,6 +5,7 @@ import type { HostCommandExecutor } from "../../packages/sandbox-extension/src/r
 import type { ManagedExtensionInstance, PiToolExtension } from "../managed-extensions/sdk.js";
 import type { SandboxExecutor } from "../../packages/sandbox-extension/src/runtime/index.js";
 import type { SandboxExportSource } from "../../packages/sandbox-extension/src/runtime/export/contracts.js";
+import type { SandboxImportTarget } from "../../packages/sandbox-extension/src/runtime/import/contracts.js";
 import type { ExportAudit } from "../exports/contracts.js";
 import type { ExtensionCommandContext, ModelRuntime } from "@earendil-works/pi-coding-agent";
 import type { AuditClient } from "../audit/client.js";
@@ -37,6 +38,8 @@ export interface ExtensionDependencies {
   readonly executor: SandboxExecutor;
   /** Private user-command capability, never supplied to model tools. */
   readonly getExportSource?: () => SandboxExportSource | undefined;
+  /** Trusted transfer capability for admitted managed operations, never a model tool. */
+  readonly getImportTarget?: () => SandboxImportTarget | undefined;
   readonly exportAudit?: ExportAudit;
   /** Required exactly when the effective Bash policy has a command-class policy. */
   readonly bashAnalyzer?: BashCommandAnalyzer;

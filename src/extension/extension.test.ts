@@ -40,6 +40,8 @@ import type { BashAnalysis, BashCommandAnalyzer } from "../permissions/bash/cont
 import { createBashCommandAnalyzer } from "../permissions/bash/analyzer.js";
 import type { CommandClassPolicy, SubjectPolicy } from "../permissions/index.js";
 import type { SandboxExecutor } from "./types.js";
+import gitCloneExtension from "../managed-extensions/git-clone/index.js";
+import { instantiateManagedExtension } from "../managed-extensions/sdk.js";
 
 type Handler = (event: never, context: ExtensionContext) => unknown;
 type CommandOptions = Parameters<ExtensionAPI["registerCommand"]>[1];
@@ -877,6 +879,56 @@ describe("managed environment prompt lifecycle", () => {
 });
 
 describe("Pi Sandbox extension", () => {
+  it("audits the configured scratch target before denial without exposing import authority", async () => {
+    const pi = fakePi();
+    const executor = fakeExecutor();
+    const settings = gitCloneExtension.parseConfig({
+      allowed_hosts: ["example.invalid"],
+      allowed_schemes: ["https"],
+      destination: "sandbox_home",
+    });
+    const instance = instantiateManagedExtension(gitCloneExtension, settings);
+    const base = config();
+    const cfg: SandboxConfig = {
+      ...base,
+      audit: { enabled: true, facility: "local0" },
+      extensions: { git: { id: "git", settings, toolNames: ["git_clone"] } },
+      tools: { ...base.tools, git_clone: { mode: "deny", sessionGrant: "never", audit: true } },
+    };
+    const events: AuditEvent[] = [];
+    const getImportTarget = vi.fn(() => undefined);
+    const host = { cwd: executor.cwd, execute: vi.fn(), close: async () => {} };
+    await createPiSandboxExtension({
+      cwd: executor.cwd,
+      configPath: "/etc/pi-sandbox/config.toml",
+      userStateDir: "/home/test/.pi/agent",
+      loadConfig: () => Promise.resolve(cfg),
+      executor,
+      getImportTarget,
+      managedExtensions: [instance],
+      hostExecutors: { git: host },
+      auditClient: {
+        submit: (event) => {
+          events.push(event);
+          return Promise.resolve();
+        },
+        close: async () => {},
+      },
+    })(pi.api);
+    await pi.handlers.get("session_start")?.(undefined as never, context());
+    await expect(
+      executeTool(pi, "git_clone", { repository: "https://example.invalid/team/widget.git" }),
+    ).rejects.toThrow("denied");
+    expect(events.find((event) => event.event === "tool_requested")).toMatchObject({
+      tool: "git_clone",
+      boundary: "host",
+      path: "/run/pi-sandbox/home/repos/widget",
+      repository: "https://example.invalid/team/widget.git",
+    });
+    expect(getImportTarget).not.toHaveBeenCalled();
+    expect(host.execute).not.toHaveBeenCalled();
+  });
+
   async function loggedExtension(
     options: {
       config?: SandboxConfig;

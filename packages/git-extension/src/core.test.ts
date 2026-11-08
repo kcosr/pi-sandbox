@@ -38,7 +38,9 @@ describe("reusable Git core", () => {
     const pending = executeGitClone(args, { ...runtime, signal: controller.signal });
     args.repository = "https://evil.example/substituted.git";
     await expect(pending).resolves.toEqual({
-      content: [{ type: "text", text: "Cloned repository into repo.\n\nCloning..." }],
+      content: [
+        { type: "text", text: `Cloned repository into ${runtime.cwd}/repo.\n\nCloning...` },
+      ],
       details: undefined,
     });
     expect(runtime.execute).toHaveBeenCalledExactlyOnceWith(

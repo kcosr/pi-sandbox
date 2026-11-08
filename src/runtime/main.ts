@@ -1,4 +1,7 @@
 import type { SandboxExportSource } from "../../packages/sandbox-extension/src/runtime/export/contracts.js";
+import type { SandboxImportTarget } from "../../packages/sandbox-extension/src/runtime/import/contracts.js";
+import { usesSandboxGitDestination } from "../config/git-destination.js";
+import { sandboxGitArguments } from "../../packages/git-extension/src/sandbox-clone.js";
 import { createExportAudit } from "../audit/exports.js";
 import { canonicalizeCommandPathPrepend } from "../../packages/sandbox-extension/src/runtime/command-path.js";
 import { readFile } from "node:fs/promises";
@@ -272,6 +275,7 @@ async function createProbedExecutor(
   ambientEnvironment: NodeJS.ProcessEnv,
   commandPathPrepend: readonly string[],
   onExportSource?: (source: SandboxExportSource) => void,
+  onImportTarget?: (target: SandboxImportTarget) => void,
 ): Promise<SandboxExecutor> {
   let executor: SandboxExecutor;
   const limits =
@@ -291,6 +295,7 @@ async function createProbedExecutor(
         networkMode: config.network.mode,
         cwdWritable: config.filesystem.cwdWritable,
         ...(onExportSource === undefined ? {} : { onExportSource }),
+        ...(onImportTarget === undefined ? {} : { onImportTarget }),
         hiddenPaths: config.filesystem.hiddenPaths,
         ...(buildLayout.toolBundle ? { toolBundle: buildLayout.toolBundle } : {}),
         environment,
@@ -340,6 +345,17 @@ async function createProbedExecutor(
         { cause: error },
       );
     });
+    if (usesSandboxGitDestination(config.extensions)) {
+      const result = await executor.execute({
+        argv: sandboxGitArguments(executor.home, ["--version"]),
+        timeoutMs: Math.min(10_000, config.execution.maximumTimeoutMs ?? 10_000),
+        maxOutputBytes: 4096,
+      });
+      if (result.exitCode !== 0)
+        throw new Error(
+          "Sandbox Git requires /usr/bin/env and /usr/bin/git visible inside the sandbox",
+        );
+    }
     return executor;
   } catch (error) {
     await executor.close().catch(() => undefined);
@@ -605,6 +621,7 @@ export async function runPiSandbox({ piArgs: args, configPath }: SandboxArgument
     ...(buildLayout.toolBundle ? { toolBundle: buildLayout.toolBundle } : {}),
   });
   let exportSource: SandboxExportSource | undefined;
+  let importTarget: SandboxImportTarget | undefined;
   const executor = createManagedExecutor({
     cwd,
     create: () =>
@@ -617,6 +634,11 @@ export async function runPiSandbox({ piArgs: args, configPath }: SandboxArgument
         config.exports.enabled
           ? (source) => {
               exportSource = source;
+            }
+          : undefined,
+        usesSandboxGitDestination(config.extensions)
+          ? (target) => {
+              importTarget = target;
             }
           : undefined,
       ),
@@ -679,6 +701,7 @@ export async function runPiSandbox({ piArgs: args, configPath }: SandboxArgument
         loadConfig: () => Promise.resolve(config),
         executor,
         getExportSource: () => exportSource,
+        getImportTarget: () => importTarget,
         ...(auditClient === undefined ? {} : { exportAudit: createExportAudit(auditClient) }),
         ...(accountHome === undefined ? {} : { accountHome }),
         ...(bashAnalyzer === undefined ? {} : { bashAnalyzer }),

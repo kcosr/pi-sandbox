@@ -1,3 +1,6 @@
+import { createImportTarget } from "./import/target.js";
+import { SandboxImportError, type SandboxImportTarget } from "./import/contracts.js";
+import { isImportOperation, type ImportOperation, type ImportReply } from "./import/protocol.js";
 import { spawn, type ChildProcess } from "node:child_process";
 import { createExportSource } from "./export/source.js";
 import { SandboxExportError, type SandboxExportSource } from "./export/contracts.js";
@@ -57,6 +60,16 @@ interface ValidatedRequest {
   readonly stdin: Buffer;
   readonly timeoutMs: number | undefined;
   readonly maxOutputBytes: number;
+}
+
+interface PendingImport {
+  readonly id: number;
+  readonly operation: ImportOperation;
+  state: "queued" | "sent";
+  readonly resolve: (reply: ImportReply) => void;
+  readonly reject: (error: Error) => void;
+  readonly abort: () => void;
+  readonly signal: AbortSignal | undefined;
 }
 
 interface PendingExecution {
@@ -167,6 +180,7 @@ export async function createBubblewrapExecutor(
   }
 
   let exportSource: SandboxExportSource | undefined;
+  let importTarget: SandboxImportTarget | undefined;
   const executor = new PersistentBubblewrapExecutor(
     cwd,
     bubblewrapPath,
@@ -184,10 +198,16 @@ export async function createBubblewrapExecutor(
       : (source) => {
           exportSource = source;
         },
+    options.onImportTarget === undefined
+      ? undefined
+      : (target) => {
+          importTarget = target;
+        },
   );
   try {
     await executor.start(workerCommand);
     if (exportSource !== undefined) options.onExportSource?.(exportSource);
+    if (importTarget !== undefined) options.onImportTarget?.(importTarget);
     return executor;
   } catch (cause) {
     await executor.close().catch(() => undefined);
@@ -255,6 +275,7 @@ class PersistentBubblewrapExecutor implements SandboxExecutor {
   #startupTimer: NodeJS.Timeout | undefined;
   #startupResolve: (() => void) | undefined;
   #startupReject: ((error: SandboxExecutionError) => void) | undefined;
+  readonly #importPending = new Map<number, PendingImport>();
   #exportPending:
     | {
         id: number;
@@ -280,12 +301,18 @@ class PersistentBubblewrapExecutor implements SandboxExecutor {
     private readonly toolBundle: ToolBundle | undefined,
     private readonly commandPathPrepend: readonly string[],
     receiveExportSource?: (source: SandboxExportSource) => void,
+    receiveImportTarget?: (target: SandboxImportTarget) => void,
   ) {
     let finish!: () => void;
     this.#finished = new Promise<void>((resolve) => {
       finish = resolve;
     });
     this.#finish = finish;
+    receiveImportTarget?.(
+      createImportTarget({
+        request: (operation, signal) => this.#requestImport(operation, signal),
+      }),
+    );
     receiveExportSource?.(
       createExportSource({
         writableHostPaths: cwdWritable ? [cwd] : [],
@@ -299,6 +326,60 @@ class PersistentBubblewrapExecutor implements SandboxExecutor {
         },
       }),
     );
+  }
+
+  #settleImport(id: number, error?: Error, reply?: ImportReply): void {
+    const pending = this.#importPending.get(id);
+    if (pending === undefined) return;
+    this.#importPending.delete(id);
+    pending.signal?.removeEventListener("abort", pending.abort);
+    if (error !== undefined) pending.reject(error);
+    else if (reply !== undefined) pending.resolve(reply);
+  }
+
+  #closeImports(code: string): void {
+    for (const id of this.#importPending.keys())
+      this.#settleImport(id, new SandboxImportError(code));
+  }
+
+  #requestImport(operation: ImportOperation, signal?: AbortSignal): Promise<ImportReply> {
+    if (!isImportOperation(operation))
+      return Promise.reject(new SandboxImportError("import_invalid_request"));
+    const writer = this.#writer;
+    if (this.#closed || !this.#started || this.#settled || writer === undefined)
+      return Promise.reject(new SandboxImportError("import_closed"));
+    if (signal?.aborted) return Promise.reject(new SandboxImportError("import_aborted"));
+    const id = this.#nextRequestId++;
+    return new Promise((resolve, reject) => {
+      const abort = () => {
+        const pending = this.#importPending.get(id);
+        if (pending === undefined) return;
+        if (pending.state === "queued")
+          this.#settleImport(id, new SandboxImportError("import_aborted"));
+        else
+          void this.send({ type: "cancel", id }).catch((cause: unknown) =>
+            this.workerFailed(cause),
+          );
+      };
+      this.#importPending.set(id, {
+        id,
+        operation,
+        state: "queued",
+        resolve,
+        reject,
+        abort,
+        signal,
+      });
+      signal?.addEventListener("abort", abort, { once: true });
+      void writer
+        .enqueue(() => {
+          const pending = this.#importPending.get(id);
+          if (pending === undefined) return undefined;
+          pending.state = "sent";
+          return encodeWorkerFrame({ type: "import", id, request: operation });
+        })
+        .catch((cause: unknown) => this.workerFailed(cause));
+    });
   }
 
   #settleExport(error?: Error, reply?: ExportReply): void {
@@ -523,6 +604,7 @@ class PersistentBubblewrapExecutor implements SandboxExecutor {
     if (!this.#closed) {
       this.#closed = true;
       this.#settleExport(new SandboxExportError("export_closed"));
+      this.#closeImports("import_closed");
       for (const pending of this.#pending.values()) {
         this.failPending(pending.id, new SandboxExecutionError("sandbox_closed"));
       }
@@ -575,6 +657,24 @@ class PersistentBubblewrapExecutor implements SandboxExecutor {
     }
     if (!this.#workerReady) {
       this.workerFailed(new Error("sandbox_worker_not_ready"));
+      return;
+    }
+    if (response.type === "import-result" || response.type === "import-failure") {
+      const importing = this.#importPending.get(response.id);
+      if (importing === undefined && this.#closed) return;
+      if (
+        importing === undefined ||
+        (response.type === "import-result" &&
+          response.reply.operation !== importing.operation.operation)
+      ) {
+        this.workerFailed(new Error("sandbox_import_response_invalid"));
+        return;
+      }
+      if (response.type === "import-failure")
+        this.#settleImport(response.id, new SandboxImportError(response.code));
+      else if (importing.signal?.aborted)
+        this.#settleImport(response.id, new SandboxImportError("import_aborted"));
+      else this.#settleImport(response.id, undefined, response.reply);
       return;
     }
     if (response.type === "export-result" || response.type === "export-failure") {
@@ -759,6 +859,7 @@ class PersistentBubblewrapExecutor implements SandboxExecutor {
     });
     this.#fatalError = error;
     this.#settleExport(new SandboxExportError("export_source_unavailable"));
+    this.#closeImports("import_unavailable");
     this.#writer?.fail(error);
     this.clearStartupTimer();
     this.#startupReject?.(error);
@@ -803,6 +904,7 @@ class PersistentBubblewrapExecutor implements SandboxExecutor {
       this.settlePending(pending, () => pending.reject(error));
     }
     this.#settleExport(new SandboxExportError("export_closed"));
+    this.#closeImports("import_closed");
     this.#settled = true;
     this.#writer?.fail(this.#fatalError ?? new SandboxExecutionError("sandbox_closed"));
     this.#finish();

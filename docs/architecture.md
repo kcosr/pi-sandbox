@@ -422,8 +422,9 @@ theme APIs. A formatter must select only the identifying fields that are useful
 before approval and omit payloads or credentials.
 
 The Git managed extension exposes only `git_clone({ repository })`. It validates
-the administrator's exact host and scheme allowlists, derives one immediate
-child name beneath the launch CWD from the repository basename, and executes:
+the administrator's exact host and scheme allowlists and derives one child name
+from the repository basename. Main-only `extensions.git.destination` defaults
+to `host_cwd`, which executes:
 
 ```text
 /usr/bin/git clone -- <repository> <derived-absolute-child>
@@ -434,9 +435,24 @@ ordinary Git remains available to Bash. In Bubblewrap mode the host root is
 read-only and CWD access follows `filesystem.cwd_writable`; in direct mode Git
 has the current user's ordinary host authority. Bash can run repository-local
 commands through the selected backend, but commands that require host writes
-fail when the CWD is read-only. The managed `git_clone` tool itself remains a
-host operation and is unaffected by Bubblewrap or Seatbelt filesystem settings.
+fail when the CWD is read-only. The `host_cwd` clone remains a host operation
+and is unaffected by Bubblewrap or Seatbelt filesystem settings.
 The normal tool card shows the submitted repository locator.
+
+The optional `sandbox_home` destination is Linux Bubblewrap-only. Host Git
+fetches a bare repository and creates a bundle in private verified `/dev/shm`
+storage. A generic import capability transfers bounded chunks over the existing
+worker connection into an unlinked file held open by the worker. Git then reads
+that sandbox-local descriptor and checks out into a newly reserved directory
+under `<sandbox HOME>/repos`. Descriptor-anchored directory traversal rejects
+existing targets and observed symlink substitutions. The reusable Git package
+owns repository semantics; the sandbox package owns transport and scratch
+descriptors; the managed application owns admission, approval and audit. Import
+is separate from the public command executor and is never registered as a model
+tool. No helper process, mount sharing, or additional sandbox network authority
+is introduced. Failed checkouts may leave partial directories for explicit
+cleanup. The audit boundary remains `host` because acquisition retains host
+authority, while its path identifies the actual sandbox checkout.
 
 The Git host and scheme allowlists validate only the submitted repository
 locator. The compiled Git environment neutralizes Git URL-rewrite and prompt
@@ -686,7 +702,7 @@ manifest review, host destination validation and publication. The reusable sandb
 runtime supplies a separate export-source capability through a trusted constructor
 callback; it is absent from `SandboxExecutor` and model-tool contexts.
 
-Bubblewrap worker protocol 5 carries paged inventory and bounded pull reads within
+Bubblewrap worker protocol 6 carries paged inventory and bounded pull reads within
 the existing namespace. Seatbelt starts a transient restricted reader role under
 its existing profile, packaged for both the compiled application and stock Node/Bun
 extension consumers. Direct execution exposes no private export source. Export

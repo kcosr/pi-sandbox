@@ -10,6 +10,7 @@ import type {
   ManagedToolExecutionContext,
 } from "../contracts.js";
 import { gitCloneExtension, parseGitCloneConfig } from "./index.js";
+import { parseManagedGitCloneConfig } from "./config.js";
 
 const temporaryDirectories: string[] = [];
 
@@ -63,9 +64,43 @@ const CONFIG = parseGitCloneConfig(
 );
 
 describe("built-in Git clone managed extension", () => {
+  it("defaults to host cloning and admits only the explicit managed destination enum", () => {
+    expect(parseManagedGitCloneConfig(CONFIG).destination).toBe("host_cwd");
+    expect(parseManagedGitCloneConfig({ ...CONFIG, destination: "sandbox_home" }).destination).toBe(
+      "sandbox_home",
+    );
+    for (const destination of [null, true, "sandbox", "", "/tmp", []])
+      expect(() => parseManagedGitCloneConfig({ ...CONFIG, destination })).toThrow("destination");
+    expect(() => parseManagedGitCloneConfig({ ...CONFIG, extra: true })).toThrow("extra");
+    expect(() => parseGitCloneConfig({ ...CONFIG, destination: "sandbox_home" })).toThrow(
+      "destination",
+    );
+  });
+
+  it("audits the scratch checkout and fails closed without its admitted capability", async () => {
+    const config = parseManagedGitCloneConfig({ ...CONFIG, destination: "sandbox_home" });
+    expect(
+      tool().auditTarget?.({ repository: "git@github.com:owner/project.git" }, "/work", {
+        config,
+        home: "/run/pi-sandbox/home",
+      }),
+    ).toEqual({
+      repository: "git@github.com:owner/project.git",
+      path: "/run/pi-sandbox/home/repos/project",
+    });
+    const fixture = context("/work", config);
+    await expect(
+      tool().execute({ repository: "git@github.com:owner/project.git" }, fixture.context),
+    ).rejects.toThrow("Sandbox Git destination is unavailable");
+    expect(fixture.execute).not.toHaveBeenCalled();
+  });
+
   it("selects only validated locator and the same derived destination for tool logging", () => {
     expect(
-      tool().auditTarget?.({ repository: "git@github.com:owner/project.git" }, "/work"),
+      tool().auditTarget?.({ repository: "git@github.com:owner/project.git" }, "/work", {
+        config: CONFIG,
+        home: "/run/pi-sandbox/home",
+      }),
     ).toEqual({
       repository: "git@github.com:owner/project.git",
       path: "/work/project",
@@ -74,12 +109,14 @@ describe("built-in Git clone managed extension", () => {
       tool().auditTarget?.(
         { repository: "https://user:secret@github.com/owner/project.git" },
         "/work",
+        { config: CONFIG, home: "/run/pi-sandbox/home" },
       ),
     ).toThrow();
     expect(() =>
       tool().auditTarget?.(
         { repository: "https://github.com/owner/project.git?token=secret" },
         "/work",
+        { config: CONFIG, home: "/run/pi-sandbox/home" },
       ),
     ).toThrow();
   });
@@ -189,7 +226,7 @@ describe("built-in Git clone managed extension", () => {
     expect(result.content).toEqual([
       {
         type: "text",
-        text: `Cloned repository into ${name}.\n\nCloning into checkout...`,
+        text: `Cloned repository into ${path.join(cwd, name)}.\n\nCloning into checkout...`,
       },
     ]);
   });
