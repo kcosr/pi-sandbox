@@ -6,6 +6,7 @@
 
 - Add optional sandbox-home Git clones on Linux Bubblewrap while preserving
   host-CWD cloning as the deployment default.
+  ([#56](https://github.com/kcosr/pi-sandbox/pull/56))
 - Add optional bounded subagent activity events for parent RPC clients and embedding
   applications, including completed messages, tool calls/results and task status.
   ([#54](https://github.com/kcosr/pi-sandbox/pull/54))
