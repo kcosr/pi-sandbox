@@ -894,12 +894,13 @@ executor. The Git extension accepts no configured variables. Standard
 `pi-tool` extensions have an empty Pi Sandbox configuration and environment
 contract; they use ordinary Pi extension code compiled into the application.
 
-The Git extension accepts only:
+The Git extension accepts:
 
 ```toml
 [extensions.git]
 allowed_hosts = ["github.com"]
 allowed_schemes = ["https", "ssh"]
+destination = "host_cwd"
 ```
 
 Hosts are normalized and compared as exact names; entries do not imply
@@ -908,7 +909,40 @@ HTTPS URLs, `ssh://` URLs, and SCP-style SSH locators are accepted only when
 their parsed scheme and host are allowed. Local paths, `file:` and external
 remote-helper schemes, control characters, HTTP credentials containing a
 password, and locators without a safe repository basename are rejected. The
-target is always one derived immediate child of the launch CWD.
+target name is always derived from the repository basename. The model supplies
+only `repository`; it cannot choose a target path or Git options.
+
+`destination` is an optional main-only enum. Omission selects `host_cwd`, which
+retains host cloning into an immediate child of the launch CWD, including when
+`filesystem.cwd_writable = false`. `sandbox_home` selects
+`<sandbox HOME>/repos/<repository-name>` and requires Linux Bubblewrap. Direct
+and Seatbelt configurations reject that selection; the requirement is rechecked
+after identity overrides. Broker rules, project settings, and model arguments
+cannot change the destination. Invocation approval remains under
+`[tools.git_clone]`.
+
+For `sandbox_home`, host Git fetches with its existing HTTP/SSH authentication
+into a private mode-0700 temporary directory on verified `/dev/shm` tmpfs. It
+creates a Git bundle there and transfers it in bounded chunks through the
+existing sandbox worker. The local checkout runs inside the sandbox with a
+cleared Git environment and needs no sandbox networking. The original remote
+URL, default branch, branches, tags and history are retained. `/usr/bin/env` and
+`/usr/bin/git` must be visible and executable inside the sandbox; startup probes
+them when this destination is selected. No on-disk staging or host-clone fallback
+is permitted. The standalone Git extension keeps its host-only configuration.
+
+Bundles are limited to 512 MiB after creation and during transfer, with 256 KiB
+chunks. This is not a hard acquisition, unpacked-checkout, or total memory quota:
+the initial fetch and Git unpacking can consume more space, and tmpfs capacity is
+shared with other workloads. Temporary files are removed during ordinary cleanup;
+abrupt process death can leave host staging until it is removed or the host
+reboots. Tmpfs may use swap according to host policy.
+
+Both destinations reject existing directories, files and symlinks without
+overwriting or deleting them. A failed scratch checkout can leave a partial
+directory; inspect it and remove it with normal tools before retrying. Results
+and audit targets identify the absolute checkout path. Scratch checkouts last
+for the executor process and can be saved with the existing user export workflow.
 
 This check validates the locator presented by the model, not the ultimate
 network destination. The compiled Git environment disables global and system

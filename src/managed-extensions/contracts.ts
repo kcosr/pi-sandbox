@@ -3,6 +3,8 @@ import type {
   HostCommandResult,
 } from "../../packages/sandbox-extension/src/runtime/host-command/contracts.js";
 import type { ExtensionFactory } from "@earendil-works/pi-coding-agent";
+import type { SandboxExecutor } from "../../packages/sandbox-extension/src/runtime/contracts.js";
+import type { SandboxImportTarget } from "../../packages/sandbox-extension/src/runtime/import/contracts.js";
 
 export type {
   HostCommandRequest,
@@ -50,6 +52,17 @@ export interface ManagedToolExecutionContext {
   readonly config: FrozenJsonObject;
   readonly signal: AbortSignal;
   readonly host: HostCommandExecutor;
+  /** Application-owned scratch capability, supplied only when admitted by main policy. */
+  readonly sandbox?: {
+    readonly home: string;
+    readonly execute: SandboxExecutor["execute"];
+    readonly imports: SandboxImportTarget;
+  };
+}
+
+export interface ManagedToolTargetContext {
+  readonly config: FrozenJsonObject;
+  readonly home: string;
 }
 
 /** Trusted, build-time environment policy for one managed extension. */
@@ -101,6 +114,7 @@ export interface ManagedToolDefinition<
     this: void,
     arguments_: Readonly<TArguments>,
     cwd: string,
+    context: ManagedToolTargetContext,
   ): { readonly path?: string; readonly repository?: string };
   execute(
     arguments_: Readonly<TArguments>,

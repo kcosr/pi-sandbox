@@ -44,6 +44,22 @@ try {
       (await readdir(join(directory, "node_modules/@kcosr"))).sort(),
       combined ? ["pi-git-extension", "pi-sandbox-extension"] : ["pi-git-extension"],
     );
+    if (variant === "git-only") {
+      execFileSync(
+        process.execPath,
+        [
+          "--input-type=module",
+          "-e",
+          `import assert from "node:assert/strict";
+const helper = await import("@kcosr/pi-git-extension/sandbox-clone");
+assert.equal(typeof helper.executeSandboxGitClone, "function");
+assert.equal(helper.gitSandboxCloneTarget("https://github.com/example/widget.git", "/scratch"), "/scratch/repos/widget");
+const { parseGitConfig } = await import("@kcosr/pi-git-extension/config");
+assert.throws(() => parseGitConfig({version:1, allowed_hosts:["github.com"], allowed_schemes:["https"], destination:"sandbox_home"}), /not a recognized field/);`,
+        ],
+        { cwd: directory, stdio: "pipe" },
+      );
+    }
     await scenario(directory, variant, artifacts, backend);
   }
 } finally {

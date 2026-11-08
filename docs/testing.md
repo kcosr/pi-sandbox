@@ -206,6 +206,9 @@ on Linux do not qualify native macOS execution.
 - Git locator parsing, exact scheme/host admission, safe derived destination,
   and rejection of options, local transports, bad basenames, and arbitrary
   targets;
+- managed Git destination defaults, strict main-only selection, effective-backend
+  rejection after broker merging, exact audit targets and missing-capability
+  failure without host fallback;
 - standard Pi tool-only factory capture, declaration matching, and policy wrapping;
 - command/input/output/time limits and cancellation; and
 - exact dynamic tool-catalog construction.
@@ -375,6 +378,17 @@ tests prove direct mode requires explicit host networking. macOS command-profile
 tests and native release validation require the declared Homebrew GNU tools or
 the selected, pinned native tool bundle;
 they never substitute BSD utility semantics.
+
+Linux Git destination tests serve disposable repositories over local smart HTTP
+and use the real host runner and Bubblewrap importer with read-only CWD and no
+sandbox network. They check default-branch selection when branches share an
+object, SHA-256 repositories, empty repositories, missing and detached HEAD,
+remote configuration, host staging cleanup and unchanged host workspaces. Import
+tests cover chunk and total bounds, descriptor lifetime on cancellation,
+concurrent sessions, existing targets, symlinks and directory replacement.
+Packaged runtime smoke drives `git_clone` through an offline scripted model and
+checks scratch checkout, repeated-target rejection, omitted and explicit host
+destinations, and disabled-tool policy. No remote provider or Git service is used.
 
 Host fixtures use a disposable parent with separate `workspace` and
 `outside` directories. Tests must never use the repository root or a user's home

@@ -1,3 +1,5 @@
+import { ImportFileService } from "./import/files.js";
+import { SandboxImportError } from "./import/contracts.js";
 import { readdir } from "node:fs/promises";
 import path from "node:path";
 import { ExportFileService } from "./export/files.js";
@@ -39,6 +41,8 @@ class SandboxWorker {
   #exportService: ExportFileService | undefined;
   #exportTask: Promise<void> | undefined;
   #exportRequestId: number | undefined;
+  #importService: ImportFileService | undefined;
+  readonly #imports = new Map<number, { controller: AbortController; task: Promise<void> }>();
 
   public async run(): Promise<void> {
     const cwd = process.cwd();
@@ -54,6 +58,7 @@ class SandboxWorker {
             },
           ]),
     ]);
+    this.#importService = await ImportFileService.create("/run/pi-sandbox/home");
     process.stdin.on("data", (chunk: Buffer) => this.receive(chunk));
     process.stdin.once("end", () => this.shutdown());
     process.stdin.once("error", (cause) => this.fatal(cause));
@@ -90,6 +95,7 @@ class SandboxWorker {
       // cancellation cannot affect another execution or a reaped process group.
       this.#executions.get(request.id)?.process.abort(new SandboxExecutionError("sandbox_aborted"));
       if (request.id === this.#exportRequestId) this.#exportService?.cancel();
+      this.#imports.get(request.id)?.controller.abort();
       return;
     }
     if (request.id <= this.#lastRequestId) {
@@ -97,6 +103,29 @@ class SandboxWorker {
       return;
     }
     this.#lastRequestId = request.id;
+    if (request.type === "import") {
+      const service = this.#importService;
+      if (this.#shuttingDown || service === undefined) {
+        void this.send({ type: "import-failure", id: request.id, code: "import_closed" });
+        return;
+      }
+      const controller = new AbortController();
+      const task = service
+        .request(request.request, controller.signal)
+        .then(
+          (reply) => this.send({ type: "import-result", id: request.id, reply }),
+          (error: unknown) =>
+            this.send({
+              type: "import-failure",
+              id: request.id,
+              code: error instanceof SandboxImportError ? error.code : "import_failed",
+            }),
+        )
+        .finally(() => this.#imports.delete(request.id));
+      this.#imports.set(request.id, { controller, task });
+      void task.catch((cause: unknown) => this.fatal(cause));
+      return;
+    }
     if (request.type === "export") {
       const service = this.#exportService;
       if (this.#shuttingDown || service === undefined || this.#exportTask !== undefined) {
@@ -172,11 +201,14 @@ class SandboxWorker {
     if (this.#shuttingDown) return;
     this.#shuttingDown = true;
     this.#exportService?.cancel();
+    for (const operation of this.#imports.values()) operation.controller.abort();
+    const imports = [...this.#imports.values()].map(({ task }) => task);
     const executions = [...this.#executions.values()];
     for (const execution of executions)
       execution.process.abort(new SandboxExecutionError("sandbox_closed"));
-    void Promise.all([...executions.map(({ task }) => task), this.#exportTask])
+    void Promise.all([...executions.map(({ task }) => task), this.#exportTask, ...imports])
       .then(() => this.#exportService?.close())
+      .then(() => this.#importService?.close())
       .then(() => this.killOtherSandboxProcesses())
       .then(() => {
         process.exitCode = 0;
@@ -230,6 +262,10 @@ class SandboxWorker {
     };
     this.#exportService?.cancel();
     void this.#exportService?.close().catch(() => undefined);
+    for (const operation of this.#imports.values()) operation.controller.abort();
+    void Promise.allSettled([...this.#imports.values()].map(({ task }) => task))
+      .then(() => this.#importService?.close())
+      .catch(() => undefined);
     void this.killOtherSandboxProcesses().then(finish, finish);
   }
 }

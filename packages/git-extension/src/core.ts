@@ -38,7 +38,7 @@ export interface GitCloneRuntime {
 export interface GitCloneContext extends GitCloneRuntime {
   readonly signal?: AbortSignal;
 }
-interface ParsedRepository {
+export interface ParsedRepository {
   readonly host: string;
   readonly scheme: GitScheme;
   readonly destinationName: string;
@@ -168,13 +168,7 @@ export async function executeGitClone(
     throw new Error("Git requires a canonical absolute launch directory");
   const config = parseGitCloneConfig(context.config);
   context.signal?.throwIfAborted();
-  const parsed = parseRepository(repository);
-  if (!config.allowed_schemes.includes(parsed.scheme)) {
-    throw new Error(`git clone scheme is not allowed: ${parsed.scheme}`);
-  }
-  if (!config.allowed_hosts.includes(parsed.host)) {
-    throw new Error(`git clone host is not allowed: ${parsed.host}`);
-  }
+  validateGitCloneRepository(repository, config);
 
   const destination = gitCloneTarget(repository, context.cwd);
   await requireAbsent(destination);
@@ -211,11 +205,26 @@ export async function executeGitClone(
     content: [
       {
         type: "text" as const,
-        text: `Cloned repository into ${parsed.destinationName}.${detail ? `\n\n${detail}` : ""}`,
+        text: `Cloned repository into ${destination}.${detail ? `\n\n${detail}` : ""}`,
       },
     ],
     details: undefined,
   };
+}
+
+/** Shared locator admission; callers choose their own destination authority. */
+export function validateGitCloneRepository(
+  repository: string,
+  config: GitCloneConfig,
+): ParsedRepository {
+  const parsed = parseRepository(repository);
+  if (!config.allowed_schemes.includes(parsed.scheme)) {
+    throw new Error(`git clone scheme is not allowed: ${parsed.scheme}`);
+  }
+  if (!config.allowed_hosts.includes(parsed.host)) {
+    throw new Error(`git clone host is not allowed: ${parsed.host}`);
+  }
+  return parsed;
 }
 
 export function gitCloneTarget(repository: string, cwd: string): string {

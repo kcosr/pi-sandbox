@@ -26,6 +26,7 @@ import { testManagedMcpCodemode } from "./mcp-codemode-smoke.mjs";
 import { testLocalProcessLifetime } from "./local-processes-smoke.mjs";
 import { testSharedSkills } from "./skills-smoke.mjs";
 import { testManagedSubagents } from "./subagents-smoke.mjs";
+import { testGitDestination } from "./git-destination-smoke.mjs";
 import { testRpcSessionLifecycle } from "./rpc-lifecycle-smoke.mjs";
 
 import { prepareHostIndependentSmokeConfig } from "./packaged-smoke-config.mjs";
@@ -365,6 +366,17 @@ try {
       : join(defaultsDirectory, "models.json"),
     workspace,
   });
+  await testGitDestination({
+    launch,
+    configPath: releaseManifest.layout.allowConfigOverride
+      ? overridePath
+      : join(defaultsDirectory, "config.toml"),
+    modelsPath: releaseManifest.layout.allowConfigOverride
+      ? overrideModelsPath
+      : join(defaultsDirectory, "models.json"),
+    workspace,
+    compiledExtensions: releaseManifest.extensions,
+  });
   await testManagedMcpCodemode({
     sharedSkill,
     launch,
@@ -382,7 +394,7 @@ try {
   await assert.rejects(lstat(dotenvSessionDir), { code: "ENOENT" });
 
   console.log(
-    "packaged diagnostics, RPC lifecycle, local processes, shared skills, MCP and code-mode smoke tests passed",
+    "packaged diagnostics, RPC lifecycle, local processes, shared skills, Git destinations, MCP and code-mode smoke tests passed",
   );
 } finally {
   if (child !== undefined && child.exitCode === null && child.signalCode === null) {

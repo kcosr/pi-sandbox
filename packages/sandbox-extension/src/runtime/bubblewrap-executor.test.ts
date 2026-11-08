@@ -3,6 +3,7 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
+import { SANDBOX_WORKER_PROTOCOL_VERSION } from "./worker-protocol.js";
 import { createBubblewrapExecutor } from "./bubblewrap-executor.js";
 import type { SandboxExecutor, SandboxResourceLimits } from "./contracts.js";
 
@@ -35,7 +36,7 @@ const send = value => {
 };
 fs.writeSync(3, JSON.stringify({"child-pid": process.pid}) + "\\n");
 fs.createReadStream(null, {fd:4}).resume();
-send({type:"ready",protocolVersion:5});
+send({type:"ready",protocolVersion:${SANDBOX_WORKER_PROTOCOL_VERSION}});
 let input = Buffer.alloc(0);
 const active = new Map();
 let released = false;

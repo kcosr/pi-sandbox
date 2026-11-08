@@ -89,6 +89,15 @@ reimplemented rather than mechanically reapplied.
 - Preserve Pi scheduling across backends: remove extra serial admission and fixed active/outstanding request ceilings, but retain same-file mutation coordination, approvals and bounded transport/input/output. Commands complete independently; background descendants may survive. Request-local cancellation, timeout, overflow and spawn/callback failures must not sweep peers. Linux final shutdown retains its namespace boundary; fatal worker/transport failure may abort the executor. No watcher, guardian, helper or descendant monitoring.
 - Commands have no implicit timeout. Optional managed base `execution.max_command_timeout_seconds`, standalone common `maximumTimeoutMs` and executor `limits.maximumTimeoutMs` cap each command from successful launch through drain, excluding admission/approval/coordination waits. Reject over-cap requests and obsolete lifetime/default-timeout fields. Preserve positive finite fractional caller seconds through JavaScript's timer ceiling. Keep host Git/MCP/Code Mode timing separate.
 - Preserve Pi's 100 ms post-exit idle drain reset by output, without an absolute drain deadline. Once the direct child exits never signal its former PID/process group; cancellation and close detach streams. Mac survivors retain their original grants. Keep the accepted host Git destination race; add no clone-specific termination or publication helper.
+- Main-only optional `extensions.git.destination` selects `host_cwd` (default,
+  independent of CWD writability) or Linux Bubblewrap `sandbox_home`. Keep
+  repository-only arguments, original locator admission, approvals and exact
+  audit targets. Scratch cloning uses private verified host tmpfs acquisition
+  and bounded descriptor-based worker import, never a host-write or disk-staging
+  fallback. Preserve standalone host-only config, reject unsupported effective
+  backends, and keep partial-checkout removal explicit. Bundle limits are not
+  hard acquisition or total-memory quotas; retain existing same-user mutation
+  and abrupt-exit cleanup limitations. No new helper or publication process.
 
 ## Development
 

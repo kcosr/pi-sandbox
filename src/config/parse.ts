@@ -41,6 +41,7 @@ import {
 } from "../permissions/command-classes.js";
 import { parseCodeModeConfig, parseMcpConfig } from "./mcp.js";
 import { ConfigError } from "./errors.js";
+import { assertGitDestinationBackend } from "./git-destination.js";
 import { parseBashCommandSets } from "./command-sets.js";
 import { SUBAGENTS_POLICY_SUBJECT, type SubagentsConfig } from "../domain/subagents.js";
 
@@ -702,6 +703,13 @@ export function parseConfig(
     );
   }
   const extensions = parseExtensions(own(parsed, "extensions"), catalog, issues);
+  if (extensions !== undefined && execution !== undefined) {
+    try {
+      assertGitDestinationBackend(extensions, execution);
+    } catch (error) {
+      issues.push(error instanceof Error ? error.message : String(error));
+    }
+  }
   validateExtensionEnvironment(environment, extensions, catalog, issues);
   const selectedDefinitions =
     extensions === undefined

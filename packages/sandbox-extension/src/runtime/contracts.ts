@@ -1,3 +1,4 @@
+import type { SandboxImportTarget } from "./import/contracts.js";
 import type { SandboxExportSource } from "./export/contracts.js";
 export const NETWORK_MODES = Object.freeze(["none", "local", "host"] as const);
 export type NetworkMode = (typeof NETWORK_MODES)[number];
@@ -65,6 +66,8 @@ export interface CreateBubblewrapExecutorOptions {
   readonly workerCommand?: readonly [string, ...string[]];
   /** Trusted host-only capability receiver. Never passed to tool contexts. */
   readonly onExportSource?: (source: SandboxExportSource) => void;
+  /** Trusted host-only scratch input capability. Never passed to model tools. */
+  readonly onImportTarget?: (target: SandboxImportTarget) => void;
 }
 
 export interface SandboxCommandRequest {

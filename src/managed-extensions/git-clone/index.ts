@@ -4,11 +4,15 @@ import {
   GIT_HOST_ENVIRONMENT,
   gitCloneCallSummary,
   gitCloneTarget,
-  parseGitCloneConfig,
   requiredGitExecutables,
   type GitCloneArguments,
 } from "../../../packages/git-extension/src/core.js";
+import {
+  executeSandboxGitClone,
+  gitSandboxCloneTarget,
+} from "../../../packages/git-extension/src/sandbox-clone.js";
 import { defineManagedExtension, defineManagedHostEnvironment, defineManagedTool } from "../sdk.js";
+import { gitClonePolicy, parseManagedGitCloneConfig } from "./config.js";
 
 export { parseGitCloneConfig } from "../../../packages/git-extension/src/core.js";
 
@@ -19,23 +23,40 @@ export const gitCloneExtension = defineManagedExtension({
   id: "git",
   version: "1.2.0",
   hostEnvironment: defineManagedHostEnvironment(GIT_HOST_ENVIRONMENT),
-  parseConfig: parseGitCloneConfig,
-  requiredHostExecutables: (config) => requiredGitExecutables(parseGitCloneConfig(config)),
+  parseConfig: parseManagedGitCloneConfig,
+  requiredHostExecutables: (config) =>
+    requiredGitExecutables(gitClonePolicy(parseManagedGitCloneConfig(config))),
   tools: Object.freeze([
     defineManagedTool<GitCloneArguments>({
       ...GIT_CLONE_TOOL,
+      description:
+        "Clone an approved HTTP or SSH Git repository into a derived directory at the administrator-selected destination. Use the returned absolute checkout path. The destination and Git options cannot be selected.",
       diagnosticScope: "git.clone",
       formatCall: gitCloneCallSummary,
-      auditTarget(arguments_, cwd) {
+      auditTarget(arguments_, cwd, context) {
+        const config = parseManagedGitCloneConfig(context.config);
         return {
           repository: arguments_.repository,
-          path: gitCloneTarget(arguments_.repository, cwd),
+          path:
+            config.destination === "sandbox_home"
+              ? gitSandboxCloneTarget(arguments_.repository, context.home)
+              : gitCloneTarget(arguments_.repository, cwd),
         };
       },
-      execute(arguments_, context) {
+      async execute(arguments_, context) {
+        const config = parseManagedGitCloneConfig(context.config);
+        if (config.destination === "sandbox_home") {
+          if (context.sandbox === undefined)
+            throw new Error("Sandbox Git destination is unavailable");
+          return executeSandboxGitClone(arguments_, {
+            ...context,
+            config: gitClonePolicy(config),
+            sandbox: context.sandbox,
+          });
+        }
         return executeGitClone(arguments_, {
           ...context,
-          config: parseGitCloneConfig(context.config),
+          config: gitClonePolicy(config),
         });
       },
     }),

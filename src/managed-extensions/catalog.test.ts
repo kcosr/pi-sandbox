@@ -101,6 +101,7 @@ describe("managed extension catalog", () => {
       instance.extension.tools[0]?.auditTarget?.(
         { repository: "https://github.com/owner/project.git" },
         "/work",
+        { config: instance.config, home: "/run/pi-sandbox/home" },
       ),
     ).toEqual({ repository: "https://github.com/owner/project.git", path: "/work/project" });
   });

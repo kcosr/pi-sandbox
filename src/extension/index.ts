@@ -81,6 +81,7 @@ interface ExtensionState {
   managedExtensions: readonly ManagedExtensionInstance[];
   piToolExtensions: readonly PiToolExtension[];
   hostExecutors: Readonly<Record<string, HostCommandExecutor>>;
+  getImportTarget: ExtensionDependencies["getImportTarget"];
   started: boolean;
   stopped: boolean;
   auditor: ToolAuditor | undefined;
@@ -400,6 +401,15 @@ function managedPiTool(
       );
       const host = state.hostExecutors[instance.extension.id];
       if (host === undefined) throw new Error("Pi Sandbox host executor is not initialized");
+      const imports = state.getImportTarget?.();
+      const sandbox =
+        imports === undefined || state.executor === undefined
+          ? undefined
+          : Object.freeze({
+              home: state.executor.home,
+              execute: state.executor.execute.bind(state.executor),
+              imports,
+            });
       const result = await definition.execute(
         arguments_,
         Object.freeze({
@@ -407,6 +417,7 @@ function managedPiTool(
           config: instance.config,
           signal: signal ?? new AbortController().signal,
           host,
+          ...(sandbox === undefined ? {} : { sandbox }),
         }),
       );
       return { content: [...result.content], details: result.details };
@@ -452,6 +463,7 @@ export function createPiSandboxExtension(dependencies: ExtensionDependencies): E
       policy: undefined,
       config: undefined,
       managedExtensions: dependencies.managedExtensions ?? [],
+      getImportTarget: dependencies.getImportTarget,
       piToolExtensions: dependencies.piToolExtensions ?? [],
       hostExecutors: Object.freeze(
         Object.fromEntries(
@@ -766,7 +778,13 @@ export function createPiSandboxExtension(dependencies: ExtensionDependencies): E
                         ? managedBoundary
                         : "host",
                       extension,
-                      auditTarget,
+                      auditTarget === undefined || managed === undefined
+                        ? undefined
+                        : (args, cwd) =>
+                            auditTarget(args, cwd, {
+                              config: managed.config,
+                              home: dependencies.executor.home,
+                            }),
                     )
                   : definition,
               );

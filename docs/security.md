@@ -288,7 +288,7 @@ allowlist still does not constrain SSH aliases and jumps, DNS resolution,
 proxies, redirects, or behavior of the contacted repository. It is a locator
 admission rule, not a network-destination or egress guarantee.
 
-The clone-only tool retains its derived destination and rejects any existing
+In default `host_cwd` mode the clone-only tool retains its derived destination and rejects any existing
 destination, including symlinks, at validation. A surviving sandbox background
 process can race that check and Git startup by creating a symlink that redirects
 the host clone into another empty directory writable by the host user. This is
@@ -297,6 +297,32 @@ background writers from earlier calls. No clone-specific background termination,
 staging, publication helper, or guardian is used. This decision does not establish
 arbitrary existing-file overwrite capability; future fetch/pull tools require
 their own assessment.
+
+Main-only `extensions.git.destination = "sandbox_home"` instead creates the
+checkout inside Linux Bubblewrap private HOME. It retains host networking and
+authentication only for acquisition: a bare clone and bundle in verified host
+`/dev/shm` tmpfs, in an owner-only temporary directory. There is no disk fallback.
+The sandbox receives bounded chunks into an unlinked, descriptor-held file and
+performs the offline checkout with fixed Git arguments and a cleared environment.
+Import is a trusted application capability, separate from model tools and user
+exports. Audit still records host authority plus the actual scratch target path.
+
+Scratch directory walks are anchored to open descriptors and reject symlinks,
+existing final entries and observed replacements. These checks do not isolate
+Git from concurrent processes running as the same sandbox user: those processes
+can still mutate repository descendants while Git operates. A read-only CWD
+keeps ordinary host mounts read-only even during such races. With writable CWD,
+the existing host-write grant remains; selecting a scratch destination does not
+create an additional per-command confinement boundary. Host mode's accepted
+destination race remains unchanged.
+
+The 512 MiB bundle ceiling bounds completed bundle size and bytes imported, not
+initial acquisition, unpacked repository size, or aggregate memory. Shared tmpfs
+can fill and the workload can pressure memory; tmpfs can also use swap under host
+policy. Temporary resources are cleaned up on ordinary success, failure and
+cancellation. Abrupt owner death can leave host staging until external cleanup
+or reboot. The worker closes its unlinked transfer descriptors during shutdown.
+Partial visible checkouts are never recursively removed automatically.
 
 `git_clone` retains Pi's sequential-tool declaration. An ordinary Pi batch that
 includes it runs sequentially. Pi 1.5.0's nested Code Mode runner serializes it
