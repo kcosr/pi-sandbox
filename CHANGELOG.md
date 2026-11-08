@@ -10,6 +10,8 @@
 
 ### Fixed
 
+- Increase automatic subagent reports to 16 KiB with explicit truncation notices
+  and cursor-based `inspect_agent` retrieval of saved final-answer text.
 - Reject missing explicit subagent configuration and recover stale state ownership
   after process death or PID reuse. Close existing sessions before updating;
   older ownership markers without process identity are no longer accepted.

@@ -451,8 +451,8 @@ files, modification times, and scheduling state; malformed files and cleanup
 failures are skipped. It does not guarantee deletion by a deadline or override
 host filesystem permissions. Zero retention disables the maintenance entirely.
 
-Managed child transcripts and previews use the same retention age in a separate
-bounded, shallow sweep. The current root and directories with an owner record are
+Managed child transcripts, retained final reports and previews use the same
+retention age in a separate bounded, shallow sweep. The current root and directories with an owner record are
 skipped. Expired child conversations are removed while a small spawn-count
 ledger remains; housekeeping must never refund the total quota. This ledger and
 parent spawn entries also protect counts across ordinary reload/resume. A saved

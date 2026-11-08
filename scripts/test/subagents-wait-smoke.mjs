@@ -6,6 +6,7 @@ import { createServer } from "node:http";
 import { join } from "node:path";
 import { createInterface } from "node:readline";
 import { setTimeout as delay } from "node:timers/promises";
+import { longSubagentReport } from "./subagents-result-pages.mjs";
 
 /** Real, unpatched Pi RPC parent and packed SDK children; every provider is local. */
 export async function testStandaloneSubagentWait({ root, directory, runtime, artifact }) {
@@ -230,8 +231,8 @@ async function scenario({ root, directory, runtime, artifact, waitForChildren })
                 name: "Offline wait fixture",
                 reasoning: false,
                 input: ["text"],
-                contextWindow: 32768,
-                maxTokens: 2048,
+                contextWindow: 262144,
+                maxTokens: 65536,
                 cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
               },
             ],
@@ -372,7 +373,7 @@ async function scenario({ root, directory, runtime, artifact, waitForChildren })
     function release(id) {
       const response = held.get(id);
       assert(response && !response.destroyed, `Missing live child response: ${id}`);
-      send(response, resultMarker(id));
+      send(response, id === "A" ? longSubagentReport(resultMarker(id)) : resultMarker(id));
     }
     async function startPhase(next) {
       phase = next;
@@ -509,6 +510,24 @@ async function scenario({ root, directory, runtime, artifact, waitForChildren })
       assert.equal(beforeResume.active, 0);
       resumeTarget = beforeResume.agents.find((agent) => agent.label === "WAIT_FIXTURE_CHILD_A");
       assert(resumeTarget);
+      const transcript = await rpc("get_messages");
+      const longResult = transcript.messages.find(
+        (message) =>
+          message.role === "custom" &&
+          message.customType === "pi-subagents:result" &&
+          message.details?.taskId === resumeTarget.taskId,
+      );
+      assert(longResult);
+      assert.match(longResult.content, /Report truncated[\s\S]*inspect_agent\(/u);
+      assert(Buffer.byteLength(longResult.content) <= 16 * 1024);
+      assert(
+        !messages
+          .slice(staggered)
+          .some(
+            (event) => event.type === "tool_execution_start" && event.toolName === "inspect_agent",
+          ),
+        "Unread report pages must not prevent normal final settlement",
+      );
       const resumed = await startPhase("resume");
       await waitFor(
         () => held.has("RESUME") && assistantText("PARENT_RESUME_ANSWER", resumed),

@@ -55,6 +55,18 @@ while awaiting approval, startup failures, and guidance following effective tool
 The mandatory upstream footer-width suite covers inline extension status, ANSI
 width handling, and narrow-terminal placement without losing native stats/model text.
 
+Final-report acceptance returns a multibyte, JSON-escape-heavy report exceeding
+100 KiB from real SDK children. Both stock Pi runtimes, the bare extracted package
+and the compiled managed smoke reconstruct the exact report from the automatic
+prefix plus cursor pages, and separately from page zero. They require an explicit
+truncation notice with a usable `inspect_agent` call, whole-response 16 KiB bounds,
+stable repeat reads, unchanged compact status inspection, no child rerun, no
+callback duplication and unchanged spawn counts. Waiting-mode acceptance also
+proves unread report pages do not delay final `agent_settled`. Unit tests cover
+capture beyond 128 blocks, the exact 16 MiB retention ceiling and overflow,
+artifact/manifest failure distinctions, invalid or stale cursors, reload, orphan
+files, generation cleanup and retention.
+
 The opt-in standalone `waitForChildren` policy is exercised against unpatched Pi
 RPC: staggered child completion, parent continuations that delegate again,
 resuming children without consuming another spawn allowance, child failures,

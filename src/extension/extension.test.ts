@@ -531,7 +531,9 @@ describe("managed initial tool activation", () => {
               ? { task: "Review" }
               : name === "resume_agent" || name === "steer_agent"
                 ? { id: "missing", message: "Continue" }
-                : { id: "missing" },
+                : name === "inspect_agent"
+                  ? { id: "missing", view: "result" }
+                  : { id: "missing" },
             undefined,
             undefined,
             ctx,
@@ -603,11 +605,15 @@ describe("managed initial tool activation", () => {
         expect(SUBAGENT_TOOL_NAMES.filter((name) => pi.tools.has(name))).toEqual(expected);
         expect(pi.tools.has("subagents")).toBe(false);
         if (mode === "deny")
-          await expect(
-            pi.tools
-              .get("inspect_agent")!
-              .execute("call", { id: "missing" }, undefined, undefined, ctx),
-          ).rejects.toThrow("Pi Sandbox denied inspect_agent: policy_denied");
+          for (const inspectArgs of [
+            { id: "missing" },
+            { id: "missing", view: "result", cursor: "v1:task:10" },
+          ])
+            await expect(
+              pi.tools
+                .get("inspect_agent")!
+                .execute("call", inspectArgs, undefined, undefined, ctx),
+            ).rejects.toThrow("Pi Sandbox denied inspect_agent: policy_denied");
         await pi.handlers.get("session_shutdown")!(undefined as never, ctx);
       } finally {
         await rm(directory, { recursive: true, force: true });

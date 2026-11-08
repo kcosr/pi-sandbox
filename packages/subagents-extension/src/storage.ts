@@ -1,10 +1,13 @@
 import {
   chmodSync,
   closeSync,
+  constants,
   existsSync,
+  fstatSync,
   mkdirSync,
   openSync,
   realpathSync,
+  readSync,
   renameSync,
   unlinkSync,
   writeFileSync,
@@ -12,7 +15,7 @@ import {
 import { randomUUID } from "node:crypto";
 import { join } from "node:path";
 import type { SubagentSnapshot } from "./contracts.js";
-import { readBoundedFile } from "./bounds.js";
+import { MAXIMUM_REPORT_BYTES, readBoundedFile } from "./bounds.js";
 import { isProcessIdentity, previousOwnerIsDead, processIdentity } from "./owner.js";
 
 const MAXIMUM_STATE_BYTES = 64 * 1024 * 1024;
@@ -35,6 +38,7 @@ const RECORD_FIELDS = new Set([
   "assistantTruncated",
   "thinkingTruncated",
   "result",
+  "resultBytes",
   "error",
   "callback",
   "cancelRequestedBy",
@@ -135,6 +139,97 @@ export class SubagentStore {
     chmodSync(path, 0o700);
     return join(path, "session.jsonl");
   }
+  private resultFile(id: string, taskId: string): string {
+    if (typeof id !== "string" || typeof taskId !== "string" || !ID.test(id) || !ID.test(taskId))
+      throw new Error("Invalid subagent report identity");
+    return join(this.directory, id, `report-${taskId}.txt`);
+  }
+  public writeResult(id: string, taskId: string, text: string): number {
+    const path = this.resultFile(id, taskId);
+    const bytes = Buffer.byteLength(text);
+    if (bytes === 0 || bytes > MAXIMUM_REPORT_BYTES)
+      throw new Error("Subagent report exceeds its file limit");
+    this.sessionFile(id);
+    const temporary = `${path}.${randomUUID()}.tmp`;
+    try {
+      writeFileSync(temporary, text, { mode: 0o600, flag: "wx" });
+      renameSync(temporary, path);
+    } catch (error) {
+      try {
+        unlinkSync(temporary);
+      } catch {
+        // Preserve the publication failure; temporary-file removal is best effort.
+      }
+      throw error;
+    }
+    return bytes;
+  }
+  /** Read only a requested UTF-8 range; the controller gates manifest/generation eligibility. */
+  public readResult(
+    id: string,
+    taskId: string,
+    totalBytes: number,
+    offset: number,
+    maximumBytes: number,
+  ): string {
+    const path = this.resultFile(id, taskId);
+    if (!Number.isSafeInteger(totalBytes) || totalBytes <= 0 || totalBytes > MAXIMUM_REPORT_BYTES)
+      throw new Error("Full subagent report is unavailable");
+    if (!Number.isSafeInteger(offset) || offset < 0 || offset >= totalBytes)
+      throw new Error("Invalid subagent result cursor offset");
+    if (
+      !Number.isSafeInteger(maximumBytes) ||
+      maximumBytes <= 0 ||
+      maximumBytes > MAXIMUM_REPORT_BYTES
+    )
+      throw new Error("Invalid subagent result page limit");
+    let file: number;
+    try {
+      file = openSync(path, constants.O_RDONLY | constants.O_NONBLOCK | constants.O_NOFOLLOW);
+    } catch {
+      throw new Error("Full subagent report is unavailable");
+    }
+    try {
+      const stat = fstatSync(file);
+      if (!stat.isFile() || stat.size !== totalBytes)
+        throw new Error("Full subagent report is unavailable: saved size changed");
+      const buffer = Buffer.alloc(Math.min(maximumBytes + 1, totalBytes - offset));
+      let length = 0;
+      while (length < buffer.length) {
+        const count = readSync(file, buffer, length, buffer.length - length, offset + length);
+        if (count === 0) throw new Error("Full subagent report is unavailable: saved text changed");
+        length += count;
+      }
+      const after = fstatSync(file);
+      if (
+        after.size !== stat.size ||
+        after.mtimeMs !== stat.mtimeMs ||
+        after.ctimeMs !== stat.ctimeMs
+      )
+        throw new Error("Full subagent report is unavailable: saved text changed");
+      if ((buffer[0]! & 0xc0) === 0x80)
+        throw new Error("Invalid subagent result cursor UTF-8 offset");
+      let end = Math.min(maximumBytes, length);
+      while (end > 0 && end < length && (buffer[end]! & 0xc0) === 0x80) end--;
+      if (end === 0) throw new Error("Subagent result page limit cannot fit a UTF-8 character");
+      try {
+        return new TextDecoder("utf-8", { fatal: true, ignoreBOM: true }).decode(
+          buffer.subarray(0, end),
+        );
+      } catch {
+        throw new Error("Full subagent report is unavailable: invalid UTF-8");
+      }
+    } finally {
+      closeSync(file);
+    }
+  }
+  public removeResult(id: string, taskId: string): void {
+    try {
+      unlinkSync(this.resultFile(id, taskId));
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+    }
+  }
   public read(): StoredSubagents {
     if (!existsSync(this.stateFile)) return { version: 2, used: 0, records: [] };
     const data: unknown = JSON.parse(readBoundedFile(this.stateFile, MAXIMUM_STATE_BYTES));
@@ -198,6 +293,13 @@ export class SubagentStore {
         Buffer.byteLength(item.thinking) > 4096 ||
         (item.result !== undefined &&
           (typeof item.result !== "string" || Buffer.byteLength(item.result) > 32768)) ||
+        (item.resultBytes !== undefined &&
+          (!Number.isSafeInteger(item.resultBytes) ||
+            typeof item.result !== "string" ||
+            item.result.length === 0 ||
+            item.resultBytes < Buffer.byteLength(item.result) ||
+            item.resultBytes > MAXIMUM_REPORT_BYTES ||
+            !["completed", "failed", "cancelled"].includes(item.status))) ||
         (item.error !== undefined &&
           (typeof item.error !== "string" || Buffer.byteLength(item.error) > 1024)) ||
         (item.finishedAt !== undefined && !Number.isFinite(item.finishedAt))
