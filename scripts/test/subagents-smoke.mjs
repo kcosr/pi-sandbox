@@ -7,6 +7,7 @@ import { createInterface } from "node:readline";
 import { setTimeout as delay } from "node:timers/promises";
 import { setTimeout, clearTimeout } from "node:timers";
 import { parse, stringify } from "@iarna/toml";
+import { assertSubagentResultPages, longSubagentReport } from "./subagents-result-pages.mjs";
 
 const management = ["spawn_agent", "steer_agent", "cancel_agent", "resume_agent", "inspect_agent"];
 const policy = (mode) => ({
@@ -19,6 +20,7 @@ const policy = (mode) => ({
 export async function testManagedSubagents({ launch, configPath, modelsPath, workspace }) {
   const originalConfig = await readFile(configPath, "utf8");
   const originalModels = await readFile(modelsPath, "utf8");
+  const report = longSubagentReport("MANAGED_CHILD_DONE");
   let planned = [];
   let failure;
   let sequence = 0;
@@ -220,11 +222,7 @@ export async function testManagedSubagents({ launch, configPath, modelsPath, wor
       } else {
         send({
           role: "assistant",
-          content: testingDisabled
-            ? "DISABLED_CHECK_DONE"
-            : parent
-              ? "PARENT_DONE"
-              : "MANAGED_CHILD_DONE",
+          content: testingDisabled ? "DISABLED_CHECK_DONE" : parent ? "PARENT_DONE" : report,
         });
         send({}, "stop");
       }
@@ -277,8 +275,8 @@ export async function testManagedSubagents({ launch, configPath, modelsPath, wor
                 name: "Offline fixture",
                 reasoning: false,
                 input: ["text"],
-                contextWindow: 32768,
-                maxTokens: 2048,
+                contextWindow: 262144,
+                maxTokens: 65536,
                 cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
               },
             ],
@@ -392,6 +390,52 @@ export async function testManagedSubagents({ launch, configPath, modelsPath, wor
     const item = state.agents[0];
     const preview = await observe("inspect", { id: item.id, taskId: item.taskId });
     assert.match(preview.result, /MANAGED_CHILD_DONE/);
+    const beforePages = childRequests;
+    const transcriptBeforePages = await running.request("get_messages");
+    const notice = transcriptBeforePages.messages.find(
+      (message) =>
+        message.role === "custom" &&
+        message.customType === "pi-subagents:result" &&
+        message.details?.taskId === item.taskId,
+    );
+    assert(notice, "Managed child must deliver its report through the ordinary parent channel");
+    await assertSubagentResultPages({
+      id: item.id,
+      taskId: item.taskId,
+      report,
+      notice: notice.content,
+      inspect: async (args) => {
+        const after = running.messages.length;
+        await prompt("Read the saved subagent report.", [{ name: "inspect_agent", args }]);
+        const result = running.messages
+          .slice(after)
+          .find(
+            (event) => event.type === "tool_execution_end" && event.toolName === "inspect_agent",
+          );
+        assert(result && !result.isError, JSON.stringify(result));
+        return result.result.content
+          .filter((part) => part.type === "text")
+          .map((part) => part.text)
+          .join("");
+      },
+    });
+    assert.equal(childRequests, beforePages, "Managed result reads must not restart a child");
+    assert.equal(running.prompts.length, 2, "Result inspection uses the admitted subagents policy");
+    const afterPages = await observe();
+    assert.equal(afterPages.total, state.total, "Result reads must preserve spawn quota");
+    assert.deepEqual(
+      afterPages.agents,
+      state.agents,
+      "Result reads must preserve callbacks and task state",
+    );
+    const transcriptAfterPages = await running.request("get_messages");
+    assert.equal(
+      transcriptAfterPages.messages.filter(
+        (message) => message.role === "custom" && message.customType === "pi-subagents:result",
+      ).length,
+      2,
+      "Result reads must not duplicate either child's automatic report",
+    );
     // A child grant must also cover a later parent read.
     await prompt("Read the marker in the parent.", [
       { name: "read", args: { path: "subagent-input.txt" } },
@@ -509,7 +553,7 @@ export async function testManagedSubagents({ launch, configPath, modelsPath, wor
     await running.stop();
     running = undefined;
     console.log(
-      "Managed subagents: shared grants, real tools, extension visibility/guidance, CLI overrides, user cancellation callbacks, previews and spawn quotas passed",
+      "Managed subagents: shared grants, real tools, extension visibility/guidance, CLI overrides, user cancellation callbacks, exact result pages, previews and spawn quotas passed",
     );
   } finally {
     await running?.stop();

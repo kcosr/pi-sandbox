@@ -30,6 +30,8 @@ export interface SubagentSnapshot {
   readonly assistantTruncated: boolean;
   readonly thinkingTruncated: boolean;
   readonly result?: string;
+  /** Byte length of the committed complete report for this task generation. */
+  readonly resultBytes?: number;
   readonly error?: string;
   readonly callback: "armed" | "disarmed" | "acknowledged";
   /** Explicit UI/RPC intent; notification remains subject to the task's callback state. */
@@ -111,7 +113,7 @@ export interface SubagentController {
     readonly total: number;
     readonly maxTotal: number;
   };
-  inspect(id: string): string;
+  inspect(id: string, view?: "status" | "result", cursor?: string): string;
   subscribe(listener: (snapshots: readonly SubagentSnapshot[]) => void): () => void;
   /** Observe bounded child events without changing execution; no historical replay. */
   subscribeActivity(

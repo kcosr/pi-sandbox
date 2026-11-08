@@ -184,6 +184,18 @@ same view without managed approvals. RPC clients use the versioned observation
 command documented in the [package README](../packages/subagents-extension/README.md).
 Observation entries do not become model messages; completion results do.
 
+Automatic final reports have a 16 KiB total message budget. Longer reports include
+an explicit truncation notice with an `inspect_agent` result-view cursor for the
+missing text. The default inspection remains a compact status/activity preview;
+`view: "result"` returns saved answer text in bounded pages without rerunning work
+or changing callback delivery. Full reports up to 16 MiB are stored per task
+alongside the child transcript. A larger report or failed report-file write is
+explicitly unavailable, preserving the child's execution outcome and bounded
+preview. State-manifest and lifecycle failures still fail the operation. See the
+[package report contract](../packages/subagents-extension/README.md#final-reports)
+for pagination and failure behavior. Report inspection uses the same admitted
+`tools.subagents` policy as the other management operations.
+
 Spawn-only quotas use version-2 subagent state and `pi-subagents:spawn` parent
 journal entries. Earlier development version-1 state is rejected during session
 initialization, leaving managed tools unavailable; start a new parent conversation.

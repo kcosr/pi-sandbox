@@ -119,7 +119,9 @@ describe("subagent controller", () => {
       await controller.waitForIdle();
       await controller.shutdown();
       const store = new SubagentStore(directory, "parent");
-      store.write(1, [{ ...controller.snapshot()[0]!, status, activity: status }]);
+      const saved = { ...controller.snapshot()[0]!, status, activity: status };
+      if (!["completed", "failed", "cancelled"].includes(status)) delete saved.resultBytes;
+      store.write(1, [saved]);
       store.close();
       const count = entries.length;
       const restored = new Controller(eventApi, host, "parent", context);

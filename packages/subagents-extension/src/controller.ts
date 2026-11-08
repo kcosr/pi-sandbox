@@ -11,6 +11,7 @@ import type {
 } from "./contracts.js";
 import { SubagentProgress } from "./progress.js";
 import { SubagentStore } from "./storage.js";
+import { MAXIMUM_RESULT_RESPONSE_BYTES, renderResultPage, resultOffset } from "./results.js";
 
 function deferred<T>() {
   let resolve!: (value: T) => void;
@@ -334,6 +335,13 @@ export class Controller implements SubagentController {
       this.notify();
       throw error;
     }
+    if (previous) {
+      try {
+        this.store.removeResult(previous.value.id, previous.value.taskId);
+      } catch {
+        // Admission is durable: an undeleted prior generation can no longer be read.
+      }
+    }
     this.notify();
     const request: SubagentSessionRequest = {
       id,
@@ -441,67 +449,87 @@ export class Controller implements SubagentController {
       failure = boundedText(error instanceof Error ? error.message : String(error), 1024);
       child.ready.reject(new Error(failure));
     } finally {
-      let cleanupFailed = false;
-      if (deadline) clearTimeout(deadline);
-      unsubscribe?.();
-      if (child.session) {
-        try {
-          await this.cleanupSession(child.session, request);
-        } catch (error) {
-          this.lifecycleFault("cleanup", error);
-          child.value = {
-            ...child.value,
-            status: "stopping",
-            activity: "cleanup failed",
-            callback: "disarmed",
-            error: boundedText(String(error), 1024),
-          };
-          cleanupFailed = true;
+      try {
+        let cleanupFailed = false;
+        if (deadline) clearTimeout(deadline);
+        unsubscribe?.();
+        if (child.session) {
           try {
-            this.persist();
-          } finally {
-            this.notify();
-            child.finished.resolve();
+            await this.cleanupSession(child.session, request);
+          } catch (error) {
+            this.lifecycleFault("cleanup", error);
+            child.value = {
+              ...child.value,
+              status: "stopping",
+              activity: "cleanup failed",
+              callback: "disarmed",
+              error: boundedText(String(error), 1024),
+            };
+            cleanupFailed = true;
+            try {
+              this.persist();
+            } finally {
+              this.notify();
+              child.finished.resolve();
+            }
           }
         }
-      }
-      if (!cleanupFailed) {
-        const cancelled = child.abort.signal.aborted;
-        child.active = false;
-        child.value = {
-          ...child.value,
-          status: cancelled ? "cancelled" : failure ? "failed" : "completed",
-          activity: cancelled ? "cancelled" : failure ? "failed" : "completed",
-          tools: [],
-          updatedAt: Date.now(),
-          finishedAt: Date.now(),
-          ...(child.progress.lastAnswer ? { result: child.progress.lastAnswer } : {}),
-          ...(failure && !cancelled ? { error: failure } : {}),
-        };
-        try {
-          this.persist();
-        } catch (error) {
+        if (!cleanupFailed) {
+          const cancelled = child.abort.signal.aborted;
+          let resultBytes: number | undefined;
+          if (child.progress.fullAnswer !== undefined) {
+            try {
+              resultBytes = this.store.writeResult(
+                child.value.id,
+                child.value.taskId,
+                child.progress.fullAnswer,
+              );
+            } catch {
+              // Retention is separate from execution. Delivery explicitly reports the
+              // unavailable full report; lifecycle/manifest failures still fail closed.
+            }
+          }
+          child.active = false;
           child.value = {
             ...child.value,
-            status: "failed",
-            activity: "saving result failed",
-            callback: "disarmed",
-            error: boundedText(String(error), 1024),
+            status: cancelled ? "cancelled" : failure ? "failed" : "completed",
+            activity: cancelled ? "cancelled" : failure ? "failed" : "completed",
+            tools: [],
+            updatedAt: Date.now(),
+            finishedAt: Date.now(),
+            ...(child.progress.lastAnswer ? { result: child.progress.lastAnswer } : {}),
+            ...(resultBytes === undefined ? {} : { resultBytes }),
+            ...(failure && !cancelled ? { error: failure } : {}),
           };
+          try {
+            this.persist();
+          } catch (error) {
+            const uncommitted = { ...child.value };
+            delete uncommitted.resultBytes;
+            child.value = {
+              ...uncommitted,
+              status: "failed",
+              activity: "saving result failed",
+              callback: "disarmed",
+              error: boundedText(String(error), 1024),
+            };
+          }
+          // A timed-out shutdown retains ownership until its last straggler really
+          // settles. Only then may another controller reopen this conversation.
+          try {
+            this.releaseStoreIfSettled();
+          } catch (error) {
+            child.value = {
+              ...child.value,
+              callback: "disarmed",
+              error: boundedText(`Releasing subagent state failed: ${String(error)}`, 1024),
+            };
+          }
+          this.notify();
+          child.finished.resolve();
         }
-        // A timed-out shutdown retains ownership until its last straggler really
-        // settles. Only then may another controller reopen this conversation.
-        try {
-          this.releaseStoreIfSettled();
-        } catch (error) {
-          child.value = {
-            ...child.value,
-            callback: "disarmed",
-            error: boundedText(`Releasing subagent state failed: ${String(error)}`, 1024),
-          };
-        }
-        this.notify();
-        child.finished.resolve();
+      } finally {
+        child.progress.releaseAnswer();
       }
     }
   }
@@ -615,8 +643,33 @@ export class Controller implements SubagentController {
       throw new Error("Subagent is not accepting steering; resume settled work instead");
     await child.session.steer(message);
   }
-  public inspect(id: string): string {
-    const { value } = this.require(id);
+  public inspect(id: string, view: "status" | "result" = "status", cursor?: string): string {
+    if (!["status", "result"].includes(view) || (cursor !== undefined && view !== "result"))
+      throw new Error("A result cursor requires view=result; view must be status or result");
+    const { value, active } = this.require(id);
+    if (view === "result") {
+      // A retained controller reference must not read an orphan after ownership
+      // has passed to another controller, or expose state that failed to commit.
+      this.assertHealthy();
+      const offset = resultOffset(cursor, value.taskId);
+      if (active || isActiveStatus(value.status))
+        throw new Error(
+          "Subagent result is not ready; results arrive automatically after settlement",
+        );
+      if (value.status === "interrupted")
+        throw new Error("Full subagent report unavailable: the task was interrupted");
+      if (!value.result) throw new Error("No final answer is available for this subagent task");
+      if (value.resultBytes === undefined)
+        throw new Error("Full subagent report unavailable: the complete report was not retained");
+      const text = this.store.readResult(
+        value.id,
+        value.taskId,
+        value.resultBytes,
+        offset,
+        MAXIMUM_RESULT_RESPONSE_BYTES,
+      );
+      return renderResultPage(value, text, offset);
+    }
     for (let budget = 1000; budget >= 0; budget -= 100) {
       const result = JSON.stringify({
         id: value.id,

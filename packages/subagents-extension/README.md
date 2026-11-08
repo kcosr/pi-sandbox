@@ -74,8 +74,8 @@ fields are rejected. The optional startup and cancellation waits default to
 Positive timers must not exceed 2147483647 milliseconds. Timing out a cancellation
 wait does not free a still-running child. State defaults to `subagents/` below the
 Pi agent directory, with private directory/file modes. It contains ordinary child
-conversation transcripts and bounded progress records. The progress manifest is
-limited to 64 MiB independently of the spawn quota; inability to persist state
+conversation transcripts, bounded progress records and retained final reports.
+The progress manifest is limited to 64 MiB independently of the spawn quota; inability to persist state
 fails the operation explicitly. Saved spawn counts and parent journal entries
 preserve the quota across reload/resume. Child state uses
 format version 2 with spawn-only counts; earlier development version 1 child state
@@ -87,6 +87,46 @@ standalone entry does not automatically expire child transcripts; the embedding 
 may own retention. A crash interrupts running tasks; continuing requires an
 explicit resume. Resuming an existing child never consumes the spawn quota, even
 when that quota is full; it still requires a free concurrency slot.
+
+## Final reports
+
+Automatic result messages contain up to 16 KiB total, including the task identity,
+outcome and any error or truncation notice. Longer reports include an explicit
+notice with the exact call to read the missing tail:
+
+```js
+inspect_agent({ id: "a-12345678", view: "result", cursor: "<cursor from the notice>" });
+```
+
+`inspect_agent({id})`, or explicit `view: "status"`, remains a compact status and
+activity preview limited to 4 KiB. `view: "result"` reads saved final-answer text,
+without tool logs, progress or thinking. Omit `cursor` to start at the beginning.
+Each result is a JSON object containing `id`, `taskId`, `status`, `totalBytes`,
+`offset` (UTF-8 bytes), `text`, and `nextCursor` only when another page remains.
+Each serialized page is limited to 16 KiB including JSON escaping and metadata.
+Pass `nextCursor` unchanged to read the following page; the automatic notice's
+cursor skips the prefix already delivered to the parent. A cursor is accepted
+only with explicit `view: "result"`.
+
+Retrieval reads saved text without rerunning the child, spending another spawn
+allowance, changing callback delivery or adding a parent turn automatically.
+Unread pages do not delay `waitForChildren` settlement. Cursors remain valid
+across parent restarts while that task is retained, and become stale when the
+child is resumed. Active and interrupted tasks have no retrievable final report.
+The modal and RPC observation previews remain compact; they do not page reports.
+
+The selected final report is retained separately from its 32 KiB progress-record
+prefix, up to 16 MiB per task. Only answer text is retained, including text beyond
+the preview's block limit. Selection preserves the last nonempty assistant answer.
+A report exceeding 16 MiB, or a report-file write failure, leaves its bounded prefix
+available with an explicit **full report unavailable** notice and no continuation
+cursor. The child's execution outcome is preserved; missing or unreadable saved
+reports fail retrieval explicitly. Records created before full-report retention
+also report unavailable, without reconstructing their transcript or rerunning work.
+Lifecycle/state-manifest and cleanup failures retain their existing failure
+semantics. Resuming a child attempts to remove its previous report after the new
+task is durably admitted. Managed retention removes reports with child transcripts;
+standalone retention remains the embedding application's responsibility.
 
 ## Interactive presentation
 
@@ -149,7 +189,7 @@ to handle.
 
 If cancellation exceeds `cancelTimeoutMs`, the run reports unfinished cleanup;
 the child retains capacity until it actually settles, and a later run can recover.
-Actual storage or cleanup faults require restarting the affected session and are
+State-manifest or cleanup faults require restarting the affected session and are
 reported again on each attempted run. In waiting mode, this includes errors Pi
 reports from child `session_shutdown` handlers: disposing the local session does
 not prove that a failed extension cleanup released its resources. The default

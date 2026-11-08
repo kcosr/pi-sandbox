@@ -2,6 +2,7 @@ import {
   boundedTail,
   boundedText,
   MAXIMUM_PROGRESS_BYTES,
+  MAXIMUM_REPORT_BYTES,
   MAXIMUM_RESULT_BYTES,
 } from "./bounds.js";
 
@@ -17,6 +18,8 @@ export class SubagentProgress {
   public thinkingTruncated = false;
   public activity = "starting";
   public lastAnswer = "";
+  /** Complete selected answer, retained only until the controller publishes its report. */
+  public fullAnswer: string | undefined;
   public stopReason: string | undefined;
   public error: string | undefined;
   private readonly active = new Map<string, string>();
@@ -82,7 +85,7 @@ export class SubagentProgress {
     ) {
       const message = event.message;
       this.blocks.clear();
-      let answer = "";
+      const selectedAnswer = Array.isArray(message.content) && this.captureAnswer(message.content);
       if (Array.isArray(message.content))
         for (const [index, part] of message.content.entries()) {
           if (index >= 128) {
@@ -92,10 +95,6 @@ export class SubagentProgress {
           }
           if (!object(part)) continue;
           if (part.type === "text" && typeof part.text === "string") {
-            answer = boundedText(
-              answer + boundedText(part.text, MAXIMUM_RESULT_BYTES),
-              MAXIMUM_RESULT_BYTES,
-            );
             this.blocks.set(index, {
               type: "text",
               value: boundedTail(part.text, MAXIMUM_PROGRESS_BYTES),
@@ -112,10 +111,7 @@ export class SubagentProgress {
               this.thinkingTruncated = true;
           }
         }
-      if (answer) {
-        this.lastAnswer = answer;
-        this.preview("text");
-      }
+      if (selectedAnswer) this.preview("text");
       this.preview("thinking");
       this.stopReason = typeof message.stopReason === "string" ? message.stopReason : undefined;
       this.error =
@@ -135,6 +131,45 @@ export class SubagentProgress {
     if (this.active.size) this.activity = "running tools";
     else if (event.type === "tool_execution_end") this.activity = "thinking";
   }
+  public releaseAnswer(): void {
+    this.fullAnswer = undefined;
+  }
+
+  private captureAnswer(content: readonly unknown[]): boolean {
+    let chunks: string[] | undefined = [];
+    const prefix: string[] = [];
+    let prefixCharacters = 0;
+    let bytes = 0;
+    let previousLast = 0;
+    let selected = false;
+    for (const part of content) {
+      if (!object(part) || part.type !== "text" || typeof part.text !== "string" || !part.text)
+        continue;
+      selected = true;
+      const text = part.text;
+      const first = text.charCodeAt(0);
+      // Concatenating text blocks can complete a surrogate pair across their
+      // boundary: two replacement characters (6 bytes) become one scalar (4).
+      bytes += Buffer.byteLength(text);
+      if (previousLast >= 0xd800 && previousLast <= 0xdbff && first >= 0xdc00 && first <= 0xdfff)
+        bytes -= 2;
+      previousLast = text.charCodeAt(text.length - 1);
+      if (bytes > MAXIMUM_REPORT_BYTES) chunks = undefined;
+      else chunks?.push(text);
+      // A bounded UTF-16 prefix is enough to recover the first 32 KiB of UTF-8
+      // even after overflow, without allocating or retaining the oversized text.
+      if (prefixCharacters <= MAXIMUM_RESULT_BYTES) {
+        const head = text.slice(0, MAXIMUM_RESULT_BYTES + 1 - prefixCharacters);
+        prefix.push(head);
+        prefixCharacters += head.length;
+      }
+    }
+    if (!selected) return false;
+    this.fullAnswer = chunks?.join("");
+    this.lastAnswer = boundedText(this.fullAnswer ?? prefix.join(""), MAXIMUM_RESULT_BYTES);
+    return true;
+  }
+
   private preview(type: "text" | "thinking"): void {
     let value = "";
     for (const [, block] of [...this.blocks].sort(([left], [right]) => left - right))

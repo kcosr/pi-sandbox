@@ -37,6 +37,7 @@ async function fixture(id = "parent", alias = false) {
   const store = new SubagentStore(root, id);
   const sessionFile = store.sessionFile("a-child");
   await writeFile(sessionFile, "private transcript\n");
+  const resultBytes = store.writeResult("a-child", "task", "full retained report");
   store.write(17, [
     {
       id: "a-child",
@@ -50,6 +51,8 @@ async function fixture(id = "parent", alias = false) {
       startedAt: 1,
       updatedAt: 2,
       assistant: "result",
+      result: "full retained report",
+      resultBytes,
       thinking: "",
       assistantTruncated: false,
       thinkingTruncated: false,
@@ -111,6 +114,9 @@ describe("managed subagent retention", () => {
       now: f.now + DAY,
     });
     await expect(stat(f.sessionFile)).rejects.toMatchObject({ code: "ENOENT" });
+    await expect(stat(join(f.parent, "a-child", "report-task.txt"))).rejects.toMatchObject({
+      code: "ENOENT",
+    });
     expect(JSON.parse(await readFile(join(f.parent, "state.json"), "utf8"))).toEqual({
       version: 2,
       used: 17,
@@ -121,7 +127,7 @@ describe("managed subagent retention", () => {
       cursor: "",
     });
   }, 15000);
-  it("expires transcript and preview data while permanently preserving the consumed quota", async () => {
+  it("expires transcripts, reports and preview data while permanently preserving the consumed quota", async () => {
     const f = await fixture();
     await cleanExpiredSubagents({
       userStateDir: f.directory,
@@ -130,6 +136,9 @@ describe("managed subagent retention", () => {
       now: f.now,
     });
     await expect(stat(f.sessionFile)).rejects.toMatchObject({ code: "ENOENT" });
+    await expect(stat(join(f.parent, "a-child", "report-task.txt"))).rejects.toMatchObject({
+      code: "ENOENT",
+    });
     expect(JSON.parse(await readFile(join(f.parent, "state.json"), "utf8"))).toEqual({
       version: 2,
       used: 17,

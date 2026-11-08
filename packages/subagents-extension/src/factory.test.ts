@@ -24,6 +24,10 @@ describe("subagent tool argument boundaries", () => {
     ["resume_agent", { id: "child", message: 1 }],
     ["cancel_agent", { id: "a".repeat(129) }],
     ["inspect_agent", { id: "" }],
+    ["inspect_agent", { id: "child", view: "transcript" }],
+    ["inspect_agent", { id: "child", view: "result", cursor: 1 }],
+    ["inspect_agent", { id: "child", view: "result", cursor: "" }],
+    ["inspect_agent", { id: "child", view: "result", cursor: "x".repeat(161) }],
   ])("rejects invalid direct %s arguments before creating a controller", async (name, input) => {
     const tools = new Map<string, ToolDefinition>();
     const createSession = vi.fn(() => Promise.reject(new Error("must not create a child")));
