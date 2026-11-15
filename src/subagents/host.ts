@@ -97,6 +97,7 @@ export function createManagedSubagentHost(options: ManagedSubagentHostOptions): 
       enabled: true,
       waitForChildren: false,
       forwardActivity: false,
+      forwardDialogs: false,
       maxConcurrent: policy.maxConcurrent,
       maxTotal: policy.maxTotal,
       startupTimeoutMs: 30000,

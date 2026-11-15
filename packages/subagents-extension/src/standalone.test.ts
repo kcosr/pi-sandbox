@@ -45,6 +45,7 @@ async function fixture(
     directory: string,
     agentDir: string,
   ) => { paths?: string[]; factories?: InlineExtension[] },
+  config: { forwardDialogs?: boolean } = {},
 ) {
   const directory = mkdtempSync(join(tmpdir(), "subagent-sdk-"));
   cleanup.push(() => rmSync(directory, { recursive: true, force: true }));
@@ -141,14 +142,156 @@ async function fixture(
     session.dispose();
   });
   const host = createStandaloneHost(
-    parseSubagentConfig({ startupTimeoutMs: 5000 }, join(directory, "children")),
+    parseSubagentConfig({ startupTimeoutMs: 5000, ...config }, join(directory, "children")),
   );
   const controller = new Controller(api, host, context.sessionManager.getSessionId());
   cleanup.push(() => controller.shutdown());
   return { directory, cwd, api, context, controller, requests, session, host };
 }
 
+function questionTool(directory: string) {
+  const path = join(directory, "question-tool.mjs");
+  writeFileSync(
+    path,
+    `export default function(pi) {
+      pi.registerTool({
+        name: "question_fixture", label: "Question fixture", description: "Ask the host a question",
+        exposure: "model-only",
+        parameters: {type: "object", properties: {}, additionalProperties: false},
+        execute: async (_id, _args, _signal, _update, ctx) => {
+          const answer = await ctx.ui.input("Exact question title", "Exact placeholder");
+          const editor = await ctx.ui.editor("Do not forward", "prefill");
+          ctx.ui.notify("Do not forward");
+          return {content: [{type: "text", text: JSON.stringify({hasUI: ctx.hasUI, answer: answer ?? null, editor: editor ?? null})}], details: {}};
+        }
+      });
+    }`,
+  );
+  return { paths: [path] };
+}
+
 describe("ordinary Pi SDK children", () => {
+  it.each([
+    { forwardDialogs: true, parentUI: true, hasUI: true, answer: "HOST_ANSWER" },
+    { forwardDialogs: false, parentUI: true, hasUI: false, answer: null },
+    { forwardDialogs: true, parentUI: false, hasUI: false, answer: null },
+  ])(
+    "forwards inherited model-only dialogs after the parent turn only when enabled and UI is present ($forwardDialogs/$parentUI)",
+    async ({ forwardDialogs, parentUI, hasUI, answer }) => {
+      const f = await fixture(
+        (_context, count) =>
+          count === 2
+            ? [{ type: "toolCall", id: "ask", name: "question_fixture", arguments: {} }]
+            : [{ type: "text", text: "TURN_FINISHED" }],
+        questionTool,
+        { forwardDialogs },
+      );
+      const input = vi.fn(() => Promise.resolve("HOST_ANSWER"));
+      const editor = vi.fn(() => Promise.resolve("must not forward"));
+      const notify = vi.fn();
+      if (parentUI)
+        await f.session.bindExtensions({
+          mode: "rpc",
+          uiContext: { ...f.session.extensionRunner.getUIContext(), input, editor, notify },
+        });
+      await f.session.prompt("Finish the parent turn before starting a child");
+      expect(f.context.isIdle()).toBe(true);
+      const declaration = f.api.getAllTools().find((tool) => tool.name === "question_fixture")!;
+      expect(declaration.exposure).toBe("model-only");
+      const create = f.host.createSession.bind(f.host);
+      f.host.createSession = async (request) => {
+        const session = await create(request);
+        const inherited = session.extensionRunner.getToolDefinition("question_fixture")!;
+        expect(inherited.parameters).toEqual(declaration.parameters);
+        expect(inherited.description).toBe(declaration.description);
+        expect(inherited.exposure).toBe(declaration.exposure);
+        return session;
+      };
+      await f.controller.spawn("Ask the host", true, f.context);
+      await f.controller.waitForIdle();
+      expect(f.controller.snapshot()[0]!.status).toBe("completed");
+      const results = f.requests
+        .at(-1)!
+        .messages.filter((message) => message.role === "toolResult")
+        .flatMap((message) => message.content);
+      expect(results).toContainEqual({
+        type: "text",
+        text: JSON.stringify({ hasUI, answer, editor: null }),
+      });
+      expect(input).toHaveBeenCalledTimes(hasUI ? 1 : 0);
+      if (hasUI)
+        expect(input).toHaveBeenCalledWith("Exact question title", "Exact placeholder", {
+          signal: expect.any(AbortSignal) as AbortSignal,
+        });
+      expect(editor).not.toHaveBeenCalled();
+      expect(notify).not.toHaveBeenCalled();
+    },
+  );
+
+  it("keeps non-extended children without inherited tools or UI when dialog forwarding is enabled", async () => {
+    const f = await fixture(() => [{ type: "text", text: "STANDARD_CHILD" }], questionTool, {
+      forwardDialogs: true,
+    });
+    const input = vi.fn(() => Promise.resolve("unexpected"));
+    await f.session.bindExtensions({
+      mode: "rpc",
+      uiContext: { ...f.session.extensionRunner.getUIContext(), input },
+    });
+    const create = f.host.createSession.bind(f.host);
+    f.host.createSession = async (request) => {
+      const session = await create(request);
+      expect(session.extensionRunner.hasUI()).toBe(false);
+      expect(session.extensionRunner.getToolDefinition("question_fixture")).toBeUndefined();
+      return session;
+    };
+    await f.controller.spawn("Use only standard tools", false, f.context);
+    await f.controller.waitForIdle();
+    expect(f.controller.snapshot()[0]!.status).toBe("completed");
+    expect(input).not.toHaveBeenCalled();
+  });
+
+  it.each(["child cancellation", "parent shutdown"])(
+    "settles a pending inherited dialog on %s even when the host ignores cancellation",
+    async (action) => {
+      const f = await fixture(
+        (_context, count) =>
+          count === 1
+            ? [{ type: "toolCall", id: "ask", name: "question_fixture", arguments: {} }]
+            : [{ type: "text", text: "CHILD_DONE" }],
+        questionTool,
+        { forwardDialogs: true },
+      );
+      let entered!: () => void;
+      const pending = new Promise<void>((resolve) => {
+        entered = resolve;
+      });
+      let answer!: (value: string) => void;
+      const response = new Promise<string>((resolve) => {
+        answer = resolve;
+      });
+      let forwarded!: AbortSignal;
+      await f.session.bindExtensions({
+        mode: "rpc",
+        uiContext: {
+          ...f.session.extensionRunner.getUIContext(),
+          input: (_title, _placeholder, options) => {
+            forwarded = options!.signal!;
+            entered();
+            return response;
+          },
+        },
+      });
+      const child = await f.controller.spawn("Ask the host", true, f.context);
+      await pending;
+      if (action === "parent shutdown") await f.controller.shutdown();
+      else await f.controller.cancel(child.id);
+      expect(forwarded.aborted).toBe(true);
+      expect(f.controller.snapshot()[0]!.status).toBe("cancelled");
+      expect(f.controller.statistics().active).toBe(0);
+      answer("too late");
+    },
+  );
+
   it("honors cancellation during prompt preflight before the SDK has an active run", async () => {
     const f = await fixture(() => [{ type: "text", text: "must not request the provider" }]);
     let release!: () => void;

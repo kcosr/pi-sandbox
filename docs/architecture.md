@@ -136,6 +136,12 @@ child RPC processes or extra execution services. An RPC parent and an interactiv
 parent use the same child-session implementation.
 
 The generic runner owns admission, state, progress, result delivery and cancellation.
+Its standalone host optionally forwards extended children's select, confirm and
+input dialogs through the live parent UI; `forwardDialogs` defaults to false.
+Inherited extensions can query their owning child and task identities through a
+private per-session event bus before startup, independently of UI forwarding.
+The [package contract](../packages/subagents-extension/README.md#child-session-context)
+defines the public query and lifecycle. These capabilities require no Pi patches.
 The managed host supplies only live, wrapped tools, the administrative model
 runtime and a child-local Code Mode registry. It excludes all stock Pi tools.
 Standard children use admitted read/bash/edit/write tools; extended children also

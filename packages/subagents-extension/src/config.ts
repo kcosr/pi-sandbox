@@ -10,6 +10,7 @@ const FIELDS = new Set([
   "enabled",
   "waitForChildren",
   "forwardActivity",
+  "forwardDialogs",
   "maxConcurrent",
   "maxTotal",
   "startupTimeoutMs",
@@ -48,6 +49,8 @@ export function parseSubagentConfig(
     throw new Error("Invalid subagent waitForChildren");
   if (raw.forwardActivity !== undefined && typeof raw.forwardActivity !== "boolean")
     throw new Error("Invalid subagent forwardActivity");
+  if (raw.forwardDialogs !== undefined && typeof raw.forwardDialogs !== "boolean")
+    throw new Error("Invalid subagent forwardDialogs");
   const directory = raw.stateDirectory ?? defaultDirectory;
   if (typeof directory !== "string" || !isAbsolute(directory) || directory.includes("\0"))
     throw new Error("Subagent stateDirectory must be absolute");
@@ -63,6 +66,7 @@ export function parseSubagentConfig(
     enabled: raw.enabled ?? true,
     waitForChildren: raw.waitForChildren ?? false,
     forwardActivity: raw.forwardActivity ?? false,
+    forwardDialogs: raw.forwardDialogs ?? false,
     maxConcurrent: integer("maxConcurrent", 4, 1, 32),
     maxTotal: integer("maxTotal", 32, 1, 1024),
     startupTimeoutMs: integer("startupTimeoutMs", 30_000, 1, MAXIMUM_TIMER_MS),

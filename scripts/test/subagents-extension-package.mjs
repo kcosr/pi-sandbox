@@ -9,6 +9,7 @@ import { setTimeout as delay } from "node:timers/promises";
 import { fileURLToPath } from "node:url";
 import { installExtensionArtifacts } from "./extension-artifacts.mjs";
 import { testStandaloneSubagentWait } from "./subagents-wait-smoke.mjs";
+import { testStandaloneSubagentDialogs } from "./subagents-dialogs-smoke.mjs";
 import { assertSubagentResultPages, longSubagentReport } from "./subagents-result-pages.mjs";
 
 const root = dirname(dirname(dirname(fileURLToPath(import.meta.url))));
@@ -52,6 +53,12 @@ try {
   await assert.rejects(access(join(extracted, "node_modules")));
   await assert.rejects(access(join(bare, "node_modules")));
   for (const [index, runtime] of runtimes.entries()) {
+    await testStandaloneSubagentDialogs({
+      root,
+      directory: join(extracted, `dialogs-${index}`),
+      runtime,
+      artifact: { ...artifacts["subagents-extension"], directory: bare },
+    });
     await testStandaloneSubagentWait({
       root,
       directory: join(temporary, `wait-${index}`),

@@ -27,16 +27,28 @@ it("opts into activity forwarding only through a boolean", () => {
     expect(() => parseSubagentConfig({ forwardActivity })).toThrow();
 });
 
+it("opts into dialog forwarding only through a boolean", () => {
+  expect(parseSubagentConfig({}).forwardDialogs).toBe(false);
+  expect(parseSubagentConfig({ forwardDialogs: true }).forwardDialogs).toBe(true);
+  expect(parseSubagentConfig({ forwardDialogs: false }).forwardDialogs).toBe(false);
+  for (const forwardDialogs of ["true", "false", 0, 1, null, [], {}])
+    expect(() => parseSubagentConfig({ forwardDialogs })).toThrow();
+});
+
 it("requires an explicitly configured file instead of silently falling back", () => {
   const directory = mkdtempSync(join(tmpdir(), "subagent-config-"));
   directories.push(directory);
   const file = join(directory, "config.json");
   vi.stubEnv("PI_SUBAGENTS_CONFIG", file);
   expect(() => readSubagentConfig(directory, false)).toThrow();
-  writeFileSync(file, JSON.stringify({ waitForChildren: true, forwardActivity: true }));
+  writeFileSync(
+    file,
+    JSON.stringify({ waitForChildren: true, forwardActivity: true, forwardDialogs: true }),
+  );
   expect(readSubagentConfig(directory, false)).toMatchObject({
     waitForChildren: true,
     forwardActivity: true,
+    forwardDialogs: true,
   });
   writeFileSync(file, "{broken");
   expect(() => readSubagentConfig(directory, false)).toThrow();

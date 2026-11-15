@@ -26,6 +26,8 @@ import {
   type SubagentSessionRequest,
 } from "./contracts.js";
 import { readBoundedFile } from "./bounds.js";
+import { createForwardedDialogUI } from "./dialogs.js";
+import { createSubagentContextBus } from "./context.js";
 
 const BUILTINS = new Set(["read", "bash", "edit", "write", "grep", "find", "ls", "powershell"]);
 const MCP_RESOURCES = new Set([
@@ -280,6 +282,11 @@ export function createStandaloneHost(config: SubagentConfig): SubagentHost {
       const resources = new DefaultResourceLoader({
         cwd: request.cwd,
         agentDir,
+        eventBus: createSubagentContextBus({
+          childId: request.id,
+          parentSessionId: request.parentSessionId,
+          taskId: request.taskId,
+        }),
         settingsManager: settings,
         noExtensions: true,
         noSkills: true,
@@ -328,7 +335,14 @@ export function createStandaloneHost(config: SubagentConfig): SubagentHost {
         ],
       });
       try {
-        await session.bindExtensions({ mode: "rpc" });
+        const uiContext =
+          config.forwardDialogs && request.extended
+            ? createForwardedDialogUI(request, session.extensionRunner.getUIContext())
+            : undefined;
+        await session.bindExtensions({
+          mode: "rpc",
+          ...(uiContext ? { uiContext } : {}),
+        });
         bindProvider();
         const until = Date.now() + config.startupTimeoutMs;
         while (true) {
