@@ -6,6 +6,7 @@
 
 - Add opt-in dialog forwarding for extended standalone subagents and runtime
   child-context discovery for inherited extensions.
+  ([#57](https://github.com/kcosr/pi-sandbox/pull/57))
 - Add optional sandbox-home Git clones on Linux Bubblewrap while preserving
   host-CWD cloning as the deployment default.
   ([#56](https://github.com/kcosr/pi-sandbox/pull/56))
