@@ -99,9 +99,10 @@ a parent UI available, the extended child's `ctx.hasUI` is true.
 Titles, messages, choices, placeholders, timeouts and answers pass through
 unchanged. Each request has independent cancellation, so multiple children may
 ask concurrently. The parent's session UI remains available after the spawning
-turn ends. Child cancellation, a caller-supplied abort signal, an explicit dialog
-timeout, unavailable or stale parent UI, or a forwarding failure settles with
-the ordinary default: `false` for confirmation and `undefined` otherwise. Normal
+turn ends. A new call with unavailable or stale parent UI returns the ordinary
+default: `false` for confirmation and `undefined` otherwise. Pending requests
+settle with that default on child cancellation, a caller-supplied abort signal,
+an explicit dialog timeout, or a forwarding failure. Normal
 parent-session shutdown cancels the children and their pending dialogs. SDK hosts
 must emit the normal session shutdown lifecycle before disposing their parent.
 A connected client that does not answer may wait indefinitely without a supplied
