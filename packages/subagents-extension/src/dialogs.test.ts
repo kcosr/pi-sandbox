@@ -196,6 +196,46 @@ describe("child dialog forwarding", () => {
     expect(getEventListeners(f.child.signal, "abort")).toHaveLength(0);
   });
 
+  it.each([-1, Infinity, NaN, 2 ** 31])(
+    "leaves timeout %s to the parent without inventing a local deadline",
+    async (timeout) => {
+      vi.useFakeTimers();
+      let forwarded!: AbortSignal;
+      const f = fixture({
+        input: (_title, _placeholder, options) => {
+          expect(options!.timeout).toBe(timeout);
+          forwarded = options!.signal!;
+          return new Promise(() => {});
+        },
+      });
+      let settled = false;
+      const answer = f.ui.input("title", undefined, { timeout }).then((value) => {
+        settled = true;
+        return value;
+      });
+      expect(vi.getTimerCount()).toBe(0);
+      await vi.advanceTimersByTimeAsync(10);
+      expect(settled).toBe(false);
+      expect(forwarded.aborted).toBe(false);
+      f.child.abort();
+      expect(await answer).toBeUndefined();
+      expect(forwarded.aborted).toBe(true);
+      expect(getEventListeners(f.child.signal, "abort")).toHaveLength(0);
+    },
+  );
+
+  it("keeps the maximum supported timer until cancellation", async () => {
+    vi.useFakeTimers();
+    const f = fixture({ input: () => new Promise(() => {}) });
+    const answer = f.ui.input("title", undefined, { timeout: 2 ** 31 - 1 });
+    expect(vi.getTimerCount()).toBe(1);
+    await vi.advanceTimersByTimeAsync(10);
+    expect(vi.getTimerCount()).toBe(1);
+    f.child.abort();
+    expect(await answer).toBeUndefined();
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
   it.each(["throw", "reject"])(
     "returns the default when the parent UI fails by %s",
     async (failure) => {

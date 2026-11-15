@@ -1,5 +1,6 @@
 import type { ExtensionUIContext, ExtensionUIDialogOptions } from "@earendil-works/pi-coding-agent";
 import type { SubagentSessionRequest } from "./contracts.js";
+import { MAXIMUM_TIMER_MS } from "./config.js";
 
 function parentUI(request: SubagentSessionRequest): ExtensionUIContext | undefined {
   try {
@@ -43,9 +44,16 @@ function forward<T>(
       cancel();
       return;
     }
-    // Pi treats omitted/zero timeout as no deadline. Enforce a supplied deadline
-    // locally too, so a host that ignores dialog options cannot strand the child.
-    if (options?.timeout) timer = setTimeout(cancel, options.timeout);
+    // Add a local deadline only when JavaScript can represent it. Other values
+    // retain the parent's interpretation instead of becoming an accidental 1 ms timer.
+    const timeout = options?.timeout;
+    if (
+      timeout !== undefined &&
+      Number.isFinite(timeout) &&
+      timeout > 0 &&
+      timeout <= MAXIMUM_TIMER_MS
+    )
+      timer = setTimeout(cancel, timeout);
     try {
       void invoke(ui, { ...options, signal: forwarded.signal }).then((value) => {
         if (!parentUI(request)) cancel();

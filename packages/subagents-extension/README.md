@@ -107,6 +107,8 @@ parent-session shutdown cancels the children and their pending dialogs. SDK host
 must emit the normal session shutdown lifecycle before disposing their parent.
 A connected client that does not answer may wait indefinitely without a supplied
 timeout; UI availability is not a client-liveness guarantee.
+Positive finite timeouts up to 2147483647 milliseconds also get a local deadline;
+other timeout values retain the parent's interpretation without an added timer.
 
 `editor` remains unavailable because Pi 1.5 does not provide its cancellation
 options. Notifications, widgets, status, editor mutation, custom UI and other UI
