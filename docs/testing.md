@@ -55,6 +55,20 @@ while awaiting approval, startup failures, and guidance following effective tool
 The mandatory upstream footer-width suite covers inline extension status, ANSI
 width handling, and narrow-terminal placement without losing native stats/model text.
 
+Opt-in dialog acceptance uses a file-backed `model-only` tool under stock Pi RPC
+and extracted packages on Node and Bun. It verifies unchanged titles, concurrent
+requests answered out of order, a parent turn ending before children ask,
+cancelled and late replies, and shutdown with a pending dialog. The same tool
+reads immutable child identity during factory loading, startup and execution,
+rejects child writes while allowing a parent write, and observes a new task ID
+after resume without consuming spawn quota. Forwarding-off controls still expose
+child identity and return default answers without emitting dialog requests.
+SDK and unit tests cover select/confirm/input arguments and answers, missing or
+stale parent UI, caller/child cancellation, explicit timeouts, forwarding failures,
+unaffected siblings, standard-child exclusion and unsupported UI methods.
+Context tests cover duplicate module imports, sibling isolation, malformed query
+responses and disposal; managed tests keep application-owned approval routing.
+
 Final-report acceptance returns a multibyte, JSON-escape-heavy report exceeding
 100 KiB from real SDK children. Both stock Pi runtimes, the bare extracted package
 and the compiled managed smoke reconstruct the exact report from the automatic

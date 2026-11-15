@@ -45,7 +45,7 @@ Standalone configuration is read from trusted `.pi/subagents.json`, or an
 explicit `PI_SUBAGENTS_CONFIG` path. A supplied path is required: missing, unreadable
 or invalid explicit configuration fails initialization instead of using defaults.
 Configuration supports `enabled`,
-`waitForChildren`, `forwardActivity`, `maxConcurrent`, `maxTotal`, `startupTimeoutMs`, `cancelTimeoutMs`, `taskTimeoutMs`,
+`waitForChildren`, `forwardActivity`, `forwardDialogs`, `maxConcurrent`, `maxTotal`, `startupTimeoutMs`, `cancelTimeoutMs`, `taskTimeoutMs`,
 `stateDirectory`, and `tools`. Defaults allow four concurrent tasks and 32 total
 new spawns per parent session. Accepted spawn attempts count before startup;
 cancellation, completion and failed startup do not refund the total.
@@ -87,6 +87,75 @@ standalone entry does not automatically expire child transcripts; the embedding 
 may own retention. A crash interrupts running tasks; continuing requires an
 explicit resume. Resuming an existing child never consumes the spawn quota, even
 when that quota is full; it still requires a free concurrency slot.
+
+## Inherited tool dialogs
+
+Set `"forwardDialogs": true` to let an extended standalone child's inherited
+tools call the parent's `ctx.ui.select`, `confirm`, and `input`. The option
+defaults to false, independently of activity forwarding and waiting for children.
+Standard children keep their existing UI behavior. With forwarding enabled and
+a parent UI available, the extended child's `ctx.hasUI` is true.
+
+Titles, messages, choices, placeholders, timeouts and answers pass through
+unchanged. Each request has independent cancellation, so multiple children may
+ask concurrently. The parent's session UI remains available after the spawning
+turn ends. Child cancellation, a caller-supplied abort signal, an explicit dialog
+timeout, unavailable or stale parent UI, or a forwarding failure settles with
+the ordinary default: `false` for confirmation and `undefined` otherwise. Normal
+parent-session shutdown cancels the children and their pending dialogs. SDK hosts
+must emit the normal session shutdown lifecycle before disposing their parent.
+A connected client that does not answer may wait indefinitely without a supplied
+timeout; UI availability is not a client-liveness guarantee.
+
+`editor` remains unavailable because Pi 1.5 does not provide its cancellation
+options. Notifications, widgets, status, editor mutation, custom UI and other UI
+methods retain the child's default behavior. `hasUI` therefore indicates the
+supported dialog surface, not a terminal or access to every parent UI method.
+Forwarding does not add child labels or metadata to dialog requests. RPC request
+IDs correlate replies; they do not identify the originating child.
+
+This option belongs to the ordinary package. Managed Pi keeps its existing shared
+approval scope and application-owned authorization routing; it does not enable
+this dialog adapter or add a managed configuration field.
+
+## Child session context
+
+Inherited extensions can identify their owning child session independently of
+UI availability or dialog forwarding:
+
+```ts
+import { getSubagentContext } from "@kcosr/pi-subagents-extension/context";
+
+export default function (pi) {
+  const child = getSubagentContext(pi);
+  // undefined in an ordinary parent; otherwise a frozen object containing
+  // childId, parentSessionId and taskId.
+}
+```
+
+The standalone host provides this runtime context before inherited extension
+factories run, so it is also available in `session_start` and tool execution.
+Every child task gets a private Pi event bus. Resuming preserves `childId` and
+changes `taskId`; siblings cannot overwrite each other's context. Cancellation
+does not erase identity while tools or shutdown hooks are still running. A
+disposed session's Pi API is stale and cannot be queried. Identity is not inferred
+from environment variables, paths, prompts or saved transcript entries.
+
+The context describes the session owning the supplied extension API. A closure
+holding a parent's API still describes that parent when invoked elsewhere;
+managed copied tool definitions retain their application-owned invocation context.
+Use identity to choose execution behavior while preserving inherited tool
+parameters, descriptions and exposure. This is metadata for trusted extension
+code, not an authorization grant; each tool or host still enforces its own policy.
+
+Custom SDK hosts can create the same private bus with
+`createSubagentContextBus({ childId, parentSessionId, taskId })` and supply it as
+`DefaultResourceLoader.eventBus` before loading extensions. Keep the bus for the
+whole child session, including shutdown hooks, and clear it only after disposal.
+The public `SUBAGENT_CONTEXT_QUERY` channel, `pi-subagents:context:v1`, accepts a
+synchronous callback receiving that exact object for consumers without a package
+import. No responder means no child context; malformed or multiple responses
+fail explicitly. Independent copies of the package use the same protocol.
 
 ## Final reports
 

@@ -155,6 +155,7 @@ describe("managed subagent host", () => {
   it("admits only managed standard tools with the shared runtime and no builtins", async () => {
     const f = await fixture();
     await f.host.createSession(f.request);
+    expect(f.host.config.forwardDialogs).toBe(false);
     expect([...f.childTools.keys()]).toEqual(["read", "bash", "edit", "write"]);
     const options = vi.mocked(createAgentSession).mock.calls[0]![0]!;
     expect(options).toMatchObject({

@@ -67,6 +67,8 @@ export interface SubagentConfig {
   readonly waitForChildren: boolean;
   /** Persist bounded child activity as namespaced parent-session custom entries. */
   readonly forwardActivity: boolean;
+  /** Forward extended-child select, confirm, and input dialogs to the parent UI. */
+  readonly forwardDialogs: boolean;
   readonly maxConcurrent: number;
   /** Lifetime limit on accepted new spawns; resuming a child does not consume it. */
   readonly maxTotal: number;

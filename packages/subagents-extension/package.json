@@ -24,6 +24,7 @@
     "./contracts": "./dist/contracts.js",
     "./controller": "./dist/controller.js",
     "./config": "./dist/config.js",
+    "./context": "./dist/context.js",
     "./activity": "./dist/activity.js"
   },
   "files": [
