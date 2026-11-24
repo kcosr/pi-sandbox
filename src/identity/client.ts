@@ -36,7 +36,7 @@ import {
   commandClassPreconditionIssues,
 } from "../permissions/command-classes.js";
 
-export const IDENTITY_BROKER_PROTOCOL_VERSION = 10;
+export const IDENTITY_BROKER_PROTOCOL_VERSION = 11;
 export const IDENTITY_BROKER_TIMEOUT_MS = 10_000;
 export const MAXIMUM_IDENTITY_RESPONSE_BYTES = 512 * 1024;
 
@@ -46,14 +46,14 @@ export interface BrokerIdentity {
 }
 
 interface BrokerSuccessResponse {
-  readonly version: 10;
+  readonly version: 11;
   readonly status: "ok";
   readonly environment: ManagedEnvironment<ResolvedPiEnvironmentValue>;
   readonly overrides: IdentityOverrides;
 }
 
 interface BrokerErrorResponse {
-  readonly version: 10;
+  readonly version: 11;
   readonly status: "error";
   readonly code: "identity_store_unavailable" | "protocol_error";
 }
@@ -147,7 +147,7 @@ export function parseBrokerResponse(source: string): BrokerResponse {
       throw invalidResponse();
     }
     return Object.freeze({
-      version: 10,
+      version: 11,
       status: "ok",
       environment: parseBrokerEnvironment(value.environment),
       overrides: parseIdentityOverrides(value.overrides),
@@ -209,7 +209,7 @@ export function applyIdentityOverrides<PiValue extends AuthoredPiEnvironmentValu
     );
   }
   return Object.freeze({
-    configVersion: 14,
+    configVersion: 15,
     ...(base.extensionGuidance === undefined ? {} : { extensionGuidance: base.extensionGuidance }),
     ...(base.subagents === undefined ? {} : { subagents: base.subagents }),
     codemode: base.codemode,
@@ -269,7 +269,15 @@ function applyExecutionOverride(
 function parseIdentityOverrides(value: unknown): IdentityOverrides {
   if (
     !isRecord(value) ||
-    !hasAllowedKeys(value, ["models_file", "execution", "network", "filesystem", "mcp", "tools"])
+    !hasAllowedKeys(value, [
+      "models_file",
+      "execution",
+      "network",
+      "filesystem",
+      "mcp",
+      "tools",
+      "workspace",
+    ])
   ) {
     throw invalidResponse();
   }
@@ -315,6 +323,9 @@ function parseIdentityOverrides(value: unknown): IdentityOverrides {
   }
 
   const mcp = Object.hasOwn(value, "mcp") ? parseMcpOverrides(value.mcp) : undefined;
+  const workspace = Object.hasOwn(value, "workspace")
+    ? parseWorkspaceOverrides(value.workspace)
+    : undefined;
 
   const tools: Partial<Record<string, SubjectPolicy>> = {};
   if (Object.hasOwn(value, "tools")) {
@@ -332,7 +343,38 @@ function parseIdentityOverrides(value: unknown): IdentityOverrides {
     ...(network === undefined ? {} : { network }),
     ...(filesystem === undefined ? {} : { filesystem }),
     ...(mcp === undefined ? {} : { mcp }),
+    ...(workspace === undefined ? {} : { workspace }),
     tools: Object.freeze(tools),
+  });
+}
+
+function parseWorkspaceOverrides(value: unknown): NonNullable<IdentityOverrides["workspace"]> {
+  if (
+    !isRecord(value) ||
+    Object.keys(value).length === 0 ||
+    !hasAllowedKeys(value, ["allowed", "default"])
+  ) {
+    throw invalidResponse();
+  }
+  const validName = (name: unknown): name is string =>
+    typeof name === "string" && /^[a-z][a-z0-9_-]{0,31}$/u.test(name);
+  let allowed: readonly string[] | undefined;
+  if (Object.hasOwn(value, "allowed")) {
+    const names = value.allowed;
+    if (!Array.isArray(names) || names.length > 32 || !names.every(validName))
+      throw invalidResponse();
+    if (names.some((name, index) => index > 0 && names[index - 1]! >= name))
+      throw invalidResponse();
+    allowed = Object.freeze([...names]);
+  }
+  let defaultName: string | undefined;
+  if (Object.hasOwn(value, "default")) {
+    if (!validName(value.default)) throw invalidResponse();
+    defaultName = value.default;
+  }
+  return Object.freeze({
+    ...(allowed === undefined ? {} : { allowed }),
+    ...(defaultName === undefined ? {} : { default: defaultName }),
   });
 }
 

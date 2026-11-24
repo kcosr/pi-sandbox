@@ -10,7 +10,8 @@ is not a launcher or wrapper.
 
 Global policy and global scoped environment belong in
 `<config_dir>/config.toml`. Both rule directories are optional. If no rules
-match, the main configuration is inherited unchanged.
+match, the main allowed/default workspace choices and the selected mode's policy
+are inherited unchanged.
 
 The broker is not built or packaged on macOS. macOS configuration
 must use `identity.mode = "disabled"` and therefore uses only the main
@@ -116,7 +117,7 @@ Unknown macro syntax is an error. Other values remain literal. See
 User and group rules can reference a separate file for a Pi-scoped variable:
 
 ```toml
-version = 10
+version = 11
 group = "developers"
 
 [environment.pi]
@@ -149,11 +150,11 @@ root-only file there fails naturally. Put shared root-only values in matching
 broker rules. Authorized users can obtain their own resolved values from the
 socket; storing a secret in a separate file does not hide it from its recipients.
 
-Protocol 10 distinguishes ordinary expandable strings from file-derived
+Protocol 11 distinguishes ordinary expandable strings from file-derived
 `{ "literal": "resolved value" }` values in the response's `environment.pi`.
 The latter is a wire-only shape: TOML accepts `{ file = "…" }`, not `literal`,
 and the application never accepts a file reference from the socket. Upgrade the
-application and broker together. Rule version 10 and main schema 14 are unchanged.
+application and broker together. Rule version 11 and main schema 15 are required.
 
 ## User and group rules
 
@@ -164,7 +165,7 @@ For example, with Bash disabled and read requiring approval in the main policy:
 `/etc/pi-sandbox/groups.d/admin.toml`:
 
 ```toml
-version = 10
+version = 11
 group = "admin"
 
 [overrides.tools.bash]
@@ -175,7 +176,7 @@ session_grant = "offer"
 `/etc/pi-sandbox/groups.d/log-readers.toml`:
 
 ```toml
-version = 10
+version = 11
 group = "log-readers"
 
 [overrides.tools.read]
@@ -190,7 +191,7 @@ can grant the same kind of exception:
 `/etc/pi-sandbox/users.d/alice.toml`:
 
 ```toml
-version = 10
+version = 11
 user = "alice"
 
 [overrides.tools.write]
@@ -224,6 +225,61 @@ Per-user MCP credential values can use `environment.pi`, explicitly referenced
 by an administrator's server mappings; these values do not select servers or
 grant tool calls.
 
+### Workspace mode selection
+
+Rules may select which main-defined workspace modes an account can use and its
+default. They cannot define modes or change descriptions:
+
+```toml
+version = 11
+group = "developers"
+
+[overrides.workspace]
+allowed = ["sandbox"]
+default = "sandbox"
+```
+
+The workspace table accepts only `allowed` and `default`, with at least one
+present. Names match `[a-z][a-z0-9_-]{0,31}`. An allowed array has at most 32
+distinct entries; duplicates within a file are invalid, even in an unmatched
+file. Empty allowed arrays are valid explicit contributions of no grants.
+
+If any matching files supply allowed arrays, their union replaces the main
+allowed list. Otherwise the main list is inherited. Overlap across different
+files is deduplicated. A restrictive user or group list cannot revoke a mode
+granted by another matching file. The main allowed list is a default, not a
+ceiling; the main mode definitions are the inventory boundary. The application
+rejects unknown names in a matching patch; structurally valid unmatched names
+are checked against the inventory only if the rule later matches.
+
+No matching explicit default means inherit the main default. Matching explicit
+defaults must all agree. Different defaults in overlapping groups are a conflict;
+neither a user rule nor an explicit CLI selection takes precedence. Set defaults
+only where memberships agree or do not overlap. The effective default must be
+defined and allowed even when the caller selects another mode with
+`--workspace-mode`. An all-empty allowed union denies startup; there is no
+mode-less fallback.
+
+The client resolves allowed/default choices first, selects a complete composed
+mode, then applies the other account overrides once. Existing CWD and tool
+overrides therefore apply to every selected mode. A `cwd_writable = true` rule
+can make an exports-enabled mode invalid, and a tool override can replace a
+mode's intended approval policy. Review those rules before granting additional
+modes. Mode names and descriptions do not guarantee final permissions.
+
+`--list-workspace-modes` uses the same authenticated selection metadata to show
+only permitted modes, their main-authored descriptions and the effective
+default. It does not start models or executors. Descriptions, definitions and
+named-tool `audit.tools` choices remain main-only.
+
+Broker union, default conflicts and combined bounds retain the existing
+`identity_store_unavailable` error. Inventory, empty access, invalid effective
+default and forbidden CLI selections have distinct application diagnostics.
+The wire uses optional `workspace.allowed` and `workspace.default`, preserving
+omission versus an empty array. Allowed arrays are sorted in ASCII order and
+deduplicated; the client rejects noncanonical lists. The combined patch has the
+same 32-name bound and remains inside the complete response limit.
+
 ### MCP server enablement
 
 To admit a server for selected accounts or groups, keep its complete definition
@@ -231,7 +287,7 @@ in the main `[mcp.servers]` table with `enabled = false`, then add a rule such a
 `groups.d/developers.toml`:
 
 ```toml
-version = 10
+version = 11
 group = "developers"
 
 [overrides.mcp.servers.docs]
@@ -276,7 +332,7 @@ Use the same server-local default and ordered rule structure as the main policy,
 with complete `mode`/`session_grant` pairs and no `audit` field:
 
 ```toml
-version = 10
+version = 11
 group = "developers"
 
 [overrides.mcp.servers.docs]
@@ -333,27 +389,30 @@ written. Oversized rules or aggregates fail resolution; they are not truncated.
 The wire representation is deliberately different from authored TOML:
 `policy_layers` retains each matching file's ordered rules and optional default,
 without its identity or filename. Only the broker emits that representation.
-Upgrade the application and broker together for protocol 10 and update all
-preserved rule files to version 10; older versions are rejected. Main schema 14
-is unchanged.
+Upgrade the application and broker together for protocol 11 and update all
+preserved rule files to version 11; older versions are rejected. Main schema 15
+is required.
 
 ### Combining matching rules
 
 All matching user and group rules participate equally. Combine their explicit
-settings first, then overlay the result on the main configuration. Defaults do
-not compete in this comparison, and user rules do not apply last.
+settings first, use workspace overrides to select a mode, then overlay the
+remaining patch on that composed mode. Defaults do not compete in this
+comparison, and user rules do not apply last.
 
 | Setting                         | Combination                                                                                                     |
 | ------------------------------- | --------------------------------------------------------------------------------------------------------------- |
 | Tool invocation policy          | Most permissive complete pair wins: `disabled/never` < `deny/never` < `ask/never` < `ask/offer` < `allow/never` |
 | Bash known read-only class      | Join of present class policies, kept only if strictly more permissive than the combined Bash policy             |
+| Workspace allowed modes         | Union matching explicit lists, replacing the main list; omitted lists contribute nothing                        |
+| Workspace default               | Matching explicit names must agree; otherwise inherit the main default                                          |
 | Network mode                    | Most permissive wins: `none` < `local` < `host`                                                                 |
 | CWD writable                    | `true` wins over `false`                                                                                        |
 | MCP tool invocation policy      | Resolve first match/default per file, then join complete pairs; global audit remains unchanged                  |
 | MCP server enabled              | `true` wins over `false` for each explicitly overridden server                                                  |
 | Execution backend or model file | Different explicit values are a configuration error                                                             |
 | Scoped environment variable     | Different values for the same scope, extension, and variable are a configuration error                          |
-| Omitted setting                 | Inherits from the main configuration if no matching rule specifies it                                           |
+| Omitted setting                 | Inherits from the selected composed mode if no matching rule specifies it                                       |
 
 Rules can replace a default restriction, but cannot revoke permission granted
 by another matching rule. For a common staff/admin setup, keep staff access in
@@ -363,7 +422,9 @@ Execution overrides contain only `backend`; an empty execution table is rejected
 The command timeout maximum belongs to base policy and cannot be overridden by
 user/group files or broker responses. Removed lifetime fields are rejected.
 
-Parent tool `audit` flags and the global `[audit]` settings remain unchanged.
+Named-tool logging comes from the main `audit.tools` map; global `[audit]`
+settings remain unchanged. Neither workspace selection nor account rules can
+alter those choices. MCP audit stays in its main first-match/default policies.
 Rules cannot select extensions, change extension configuration, redirect the
 broker socket, change mount locations or host visibility, or change the fixed
 human-shell behavior. Environment values cannot enable tools or grant approval.
@@ -376,7 +437,7 @@ user/group rules cannot replace or erase them.
 Unknown fields, invalid policy combinations, malformed environment names,
 reserved runtime-injection variables, exposed permissions, and symlinks are
 rejected. All `.toml` files are structurally validated, including unmatched
-rules; the application checks matching tool and MCP server names against the
+rules; the application checks matching workspace, tool and MCP server names against the
 active main policy. The two directories together allow at most 256 rule files
 and 4 MiB of TOML, with at most
 1 MiB per file. Combined environment values and responses also retain their
@@ -386,10 +447,10 @@ size limits.
 
 A rule may give its own Bash policy a
 [known read-only class policy](configuration.md#known-read-only-bash-commands).
-Rule files use `version = 10`:
+Rule files use `version = 11`:
 
 ```toml
-version = 10
+version = 11
 group = "developers"
 
 [overrides.tools.bash]
@@ -419,7 +480,7 @@ Normalization never rejects. For example, a rule with Bash `allow` and another
 with Bash `deny` plus class `allow` combine to Bash `allow` with no class policy.
 
 The broker response carries the class in the same Bash entry, under
-protocol version 10, and omits it when absent:
+protocol version 11, and omits it when absent:
 
 ```json
 {
@@ -438,8 +499,8 @@ protocol version 10, and omits it when absent:
 The client accepts `known_read_only` only for `bash`, with exactly `mode` and
 `session_grant`, and rejects a class policy that is not normalized as
 `identity_broker_response_invalid`. A returned Bash policy replaces the base
-Bash invocation policy, including its built-in class policy. Main-policy
-`command_sets` definitions are preserved separately: rules and wire responses
+Bash invocation policy, including its built-in class policy. Main-authored
+`command_sets` definitions from the selected mode are preserved separately: rules and wire responses
 cannot define, clear or replace their grammar. Effective `disabled` still disables
 Bash and leaves those definitions inert. When matching rules set Bash
 but none supplies `known_read_only`, or normalization drops it, the user has no
@@ -474,14 +535,15 @@ timeout fails startup rather than silently dropping group rules.
 
 The broker receives the compiled configuration directory as its executable
 argument and reads both protected rule directories for each connection. Its
-protocol is newline-delimited JSON version 10 with operation `resolve-identity`;
+protocol is newline-delimited JSON version 11 with operation `resolve-identity`;
 requests contain no claimed identity. It returns only the combined matching
 patch, not unrelated rule contents or annotations. Administrators can atomically
 replace files without restarting the socket.
 
-The Bun client independently validates the response, overlays the patch on the
-main configuration, expands configured home-relative values, and validates
-effective policy. It then applies the `pi`
+The Bun client independently validates the response, resolves workspace access
+and selection, overlays the remaining patch on that composed mode, expands
+configured home-relative values, and validates effective policy. Platform guards
+run before broker access and again after overrides. It then applies the `pi`
 environment while loading models and validates extension environments before
 starting executors and Pi. Unavailable brokers, invalid rules or responses,
 conflicting matching values, and invalid effective models stop startup. Missing

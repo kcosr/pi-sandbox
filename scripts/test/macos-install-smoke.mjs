@@ -22,6 +22,9 @@ import { renderLayoutText } from "../build/layout-render.mjs";
 import { skillCandidateFixture, verifySkillInstallation } from "./skill-install-fixtures.mjs";
 
 const repositoryRoot = resolve(dirname(fileURLToPath(import.meta.url)), "../..");
+const defaultPolicy = (
+  await readFile(join(repositoryRoot, "config/default/config.direct.toml"), "utf8")
+).replace(/\[skills\][\s\S]*?(?=\n\[)/u, "");
 const temporaryRoot = await mkdtemp(join(tmpdir(), "pi-sandbox-macos-install-"));
 
 try {
@@ -57,6 +60,26 @@ try {
   if (!(await readFile(config, "utf8")).includes("# preserved")) {
     throw new Error("ordinary macOS upgrade replaced configuration");
   }
+
+  // Installer control-flow coverage; full schema rejection is exercised by parser/runtime tests.
+  const validPolicy = await readFile(config, "utf8");
+  const oldPolicy = validPolicy.replace("config_version = 15", "config_version = 14");
+  const executable = join(installBase, "pi-sandbox");
+  const retainedBinary = `${await readFile(executable, "utf8")}# retained binary marker\n`;
+  await writeFile(executable, retainedBinary);
+  await writeFile(config, oldPolicy);
+  expectFailure(
+    join(release, "install.sh"),
+    [],
+    { DESTDIR: installRoot },
+    "config.config_version must be the integer 15",
+  );
+  if (
+    (await readFile(config, "utf8")) !== oldPolicy ||
+    (await readFile(executable, "utf8")) !== retainedBinary
+  )
+    throw new Error("macOS old-schema rejection modified retained configuration or binary");
+  await writeFile(config, validPolicy);
 
   const fixedDate = "20000101_000000";
   const fakeBin = join(temporaryRoot, "fake-bin");
@@ -298,7 +321,7 @@ done
 config_dir=${shellQuote(layout?.configDir ?? "/etc/pi-sandbox")}
 config="$root$config_dir/config.toml"
 ${skillCandidateFixture(layout?.libexecDir ?? "/usr/local/libexec/pi-sandbox")}
-grep -q '^config_version = 14$' "$root$config_dir/config.toml"
+grep -q '^config_version = 15$' "$config" || { echo 'config.config_version must be the integer 15' >&2; exit 1; }
 grep -q '"providers"' "$root$config_dir/models.json"
 case "$operation" in
   --validate-installation) ;;
@@ -310,7 +333,7 @@ esac
   );
   await writeFile(
     join(payload, "defaults/config.toml"),
-    `config_version = 14\nmodels_file = "/etc/pi-sandbox/models.json"\n\n[codemode]\nenabled = false\n\n[mcp.servers]\n\n[exports]\nenabled = false\n\n[sessions]\nretention_days = 0\n\n[audit]\nenabled = false\nfacility = "local0"\n\n[filesystem]\ncwd_writable = true\nhidden_paths = []\ndenied_paths = []\n\n[execution]\nbackend = "${backend}"\n\n[identity]\nmode = "disabled"\n\n[network]\nmode = "host"\n\n[environment.pi]\n\n[environment.sandbox]\n\n[environment.extensions]\n\n[extensions]\n`,
+    defaultPolicy.replace('backend = "direct"', `backend = "${backend}"`),
   );
   await writeFile(join(payload, "defaults/models.json"), '{"providers":{}}\n');
   await writeFile(join(payload, "package.json"), '{"name":"pi-sandbox"}\n');

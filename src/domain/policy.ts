@@ -104,6 +104,7 @@ export interface BrokerIdentityConfig {
 export type IdentityConfig = DisabledIdentityConfig | BrokerIdentityConfig;
 
 export interface IdentityOverrides {
+  readonly workspace?: WorkspaceOverrides;
   readonly modelsFile?: string;
   readonly execution?: Pick<ExecutionConfig, "backend">;
   readonly network?: NetworkConfig;
@@ -136,7 +137,7 @@ export interface ManagedEnvironment<PiValue = string> {
 }
 
 export interface SandboxConfig<PiValue = string> {
-  readonly configVersion: 14;
+  readonly configVersion: 15;
   /** Administrator-authored prompt additions, keyed by optional extension ID. */
   readonly extensionGuidance?: Readonly<Record<string, string>>;
   readonly subagents?: SubagentsConfig;
@@ -154,6 +155,39 @@ export interface SandboxConfig<PiValue = string> {
   readonly environment: ManagedEnvironment<PiValue>;
   readonly extensions: Readonly<Record<string, ExtensionConfig>>;
   readonly tools: ToolPolicies;
+}
+
+export interface WorkspaceOverrides {
+  readonly allowed?: readonly string[];
+  readonly default?: string;
+}
+
+export interface WorkspaceMode<PiValue = string> {
+  readonly description?: string;
+  readonly config: SandboxConfig<PiValue>;
+}
+
+/** All authored modes are complete and validated before identity resolution. */
+export interface AuthoredSandboxConfig<PiValue = string> {
+  readonly workspace: {
+    readonly default: string;
+    readonly allowed: readonly string[];
+    readonly modes: Readonly<Record<string, WorkspaceMode<PiValue>>>;
+  };
+}
+
+export interface WorkspaceModeSummary {
+  readonly name: string;
+  readonly description?: string;
+}
+
+export interface WorkspaceAccess {
+  readonly default: string;
+  readonly allowed: readonly WorkspaceModeSummary[];
+}
+
+export interface WorkspaceSelection extends WorkspaceModeSummary {
+  readonly source: "cli" | "default";
 }
 
 export function isToolName(value: string, toolNames: readonly string[] = TOOL_NAMES): boolean {

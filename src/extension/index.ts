@@ -657,6 +657,8 @@ export function createPiSandboxExtension(dependencies: ExtensionDependencies): E
               mcpServerCount: Object.keys(config.mcp.servers).length,
               cwd: dependencies.cwd,
               configPath: dependencies.configPath,
+              workspaceSelection: dependencies.workspaceSelection,
+              exports: config.exports,
               modelsFile: config.modelsFile,
               execution: config.execution,
               filesystem: config.filesystem,

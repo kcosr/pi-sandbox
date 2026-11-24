@@ -1309,51 +1309,60 @@
         <section class="slide" data-title="Configuration" aria-labelledby="slide-7-title">
           <header>
             <p class="eyebrow">Configuration example</p>
-            <h2 id="slide-7-title">Global policy with an optional user exception</h2>
+            <h2 id="slide-7-title">Named workspace policy with an account exception</h2>
           </header>
           <div class="code-layout">
             <pre
               class="compact"
               aria-label="Example global Pi Sandbox configuration"
             ><code># /etc/pi-sandbox/config.toml — excerpt
-config_version = 14
+config_version = 15
 models_file = "/etc/pi-sandbox/models.json"
 
-[codemode]
+[audit]
 enabled = false
+facility = "local0"
+[audit.tools]
+read = false
+write = true
+bash = true
+git_clone = true
+# Also declare grep, find, ls, and edit in both tool maps.
 
-[mcp.servers]
-audit = { enabled = false, facility = "local0" }
-filesystem = { cwd_writable = true, hidden_paths = [], denied_paths = [] }
+[filesystem]
+cwd_writable = true
+hidden_paths = []
+denied_paths = []
 [exports]
 enabled = false
-
-[sessions]
-retention_days = 365
 [execution]
 backend = "bubblewrap"
 [identity]
 mode = "broker"
 [network]
 mode = "none"
-[environment.pi]
-[environment.sandbox]
-[environment.extensions]
+
+[workspace]
+default = "host"
+allowed = ["host"]
+[workspace.modes.host]
+description = "Work in the host project with approvals."
+
 [extensions.git]
 allowed_hosts = ["github.com", "git.example.com"]
 allowed_schemes = ["https", "ssh"]
 [tools]
-read = { mode = "allow", session_grant = "never", audit = false }
-write = { mode = "ask", session_grant = "offer", audit = true }
-bash = { mode = "disabled", session_grant = "never", audit = true }
-git_clone = { mode = "ask", session_grant = "never", audit = true }
-# A complete file also declares grep, find, ls, and edit.</code></pre>
+read = { mode = "allow", session_grant = "never" }
+write = { mode = "ask", session_grant = "offer" }
+bash = { mode = "disabled", session_grant = "never" }
+git_clone = { mode = "ask", session_grant = "never" }
+# Other required common tables are omitted from this excerpt.</code></pre>
             <div>
               <pre
                 class="compact"
                 aria-label="Example group Pi Sandbox override"
               ><code># groups.d/admin.toml — optional
-version = 10
+version = 11
 group = "admin"
 
 [overrides.tools.git_clone]
@@ -1362,10 +1371,10 @@ session_grant = "never"</code></pre>
               <div class="callout" style="margin-top: 18px">
                 <strong>Effective policy</strong>
                 <span
-                  >The main TOML supplies defaults. Matching user and group rules combine explicit
-                  permissions using least restrictive wins; omitted settings inherit defaults. Linux
-                  rules may also enable or disable globally defined MCP servers; true wins among
-                  matching rules.</span
+                  >Common defaults compose each named mode. Account rules resolve allowed/default
+                  choices, then overlay the selected mode's permissions using least restrictive
+                  wins. Audit stays common. List permitted names and descriptions with
+                  --list-workspace-modes; select one with --workspace-mode.</span
                 >
               </div>
               <p

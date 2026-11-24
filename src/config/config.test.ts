@@ -1,6 +1,8 @@
-import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { execFile } from "node:child_process";
+import { mkdtemp, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { promisify } from "node:util";
 
 import { afterEach, describe, expect, it } from "vitest";
 
@@ -9,7 +11,12 @@ import {
   type SandboxConfig,
   type AuthoredPiEnvironmentValue,
 } from "../domain/index.js";
-import { ConfigError, loadConfig, parseConfig as parseConfigWithCatalog } from "./index.js";
+import {
+  ConfigError,
+  loadConfig,
+  resolveWorkspaceSelection,
+  parseConfig as parseConfigWithCatalog,
+} from "./index.js";
 import { SUBAGENT_TOOL_NAMES } from "../domain/subagents.js";
 import {
   createManagedExtensionCatalog,
@@ -28,9 +35,10 @@ function completeConfig(
 ): string {
   const sections = TOOL_NAMES.map(
     (toolName) =>
-      `[tools.${toolName}]\naudit = false\n${overrides[toolName] ?? 'mode = "allow"\nsession_grant = "never"'}`,
+      `[tools.${toolName}]\n${overrides[toolName] ?? 'mode = "allow"\nsession_grant = "never"'}`,
   );
-  return `config_version = 14\nmodels_file = "/etc/pi-sandbox/models.json"\n\n[codemode]\nenabled = false\n\n[mcp.servers]\n\n[exports]\nenabled = false\n\n[sessions]\nretention_days = 0\n\n[audit]\nenabled = false\nfacility = "local0"\n\n[filesystem]\ncwd_writable = true\nhidden_paths = []\ndenied_paths = []\n\n[execution]\nbackend = "bubblewrap"\n\n[identity]\nmode = "disabled"\n\n[network]\nmode = "none"\n\n[environment.pi]\n\n[environment.sandbox]\n\n[environment.extensions]\n\n[extensions]\n\n${sections.join("\n\n")}\n`;
+  const audit = TOOL_NAMES.map((name) => `${name} = false`).join("\n");
+  return `config_version = 15\nmodels_file = "/etc/pi-sandbox/models.json"\n\n[codemode]\nenabled = false\n\n[mcp.servers]\n\n[exports]\nenabled = false\n\n[sessions]\nretention_days = 0\n\n[audit]\nenabled = false\nfacility = "local0"\n\n[audit.tools]\n${audit}\n\n[workspace]\ndefault = "host"\nallowed = ["host"]\n\n[workspace.modes.host]\n\n[filesystem]\ncwd_writable = true\nhidden_paths = []\ndenied_paths = []\n\n[execution]\nbackend = "bubblewrap"\n\n[identity]\nmode = "disabled"\n\n[network]\nmode = "none"\n\n[environment.pi]\n\n[environment.sandbox]\n\n[environment.extensions]\n\n[extensions]\n\n${sections.join("\n\n")}\n`;
 }
 
 function parseConfig(
@@ -38,7 +46,7 @@ function parseConfig(
   source = "<string>",
   catalog: ManagedExtensionCatalog = EMPTY_EXTENSION_CATALOG,
 ): SandboxConfig<AuthoredPiEnvironmentValue> {
-  return parseConfigWithCatalog(sourceText, source, catalog);
+  return resolveWorkspaceSelection(parseConfigWithCatalog(sourceText, source, catalog)).config;
 }
 
 describe("parseConfig", () => {
@@ -65,12 +73,14 @@ describe("parseConfig", () => {
       maxConcurrent: 4,
       maxTotal: 32,
     });
-    const tools = '\n[tools.subagents]\nmode = "ask"\nsession_grant = "offer"\naudit = true\n';
+    const withSubagentAudit = () =>
+      completeConfig().replace("[audit.tools]", "[audit.tools]\nsubagents = true");
+    const tools = '\n[tools.subagents]\nmode = "ask"\nsession_grant = "offer"\n';
     expect(() => parseConfig(completeConfig() + "\n[subagents]\nenabled = true\n")).toThrow(
       "config.tools.subagents is required",
     );
     const config = parseConfig(
-      completeConfig() +
+      withSubagentAudit() +
         tools +
         "\n[subagents]\nenabled = true\nmax_concurrent = 2\nmax_total = 7\n",
     );
@@ -80,20 +90,20 @@ describe("parseConfig", () => {
       sessionGrant: "offer",
       audit: true,
     });
-    expect(() => parseConfig(completeConfig() + tools)).toThrow(
+    expect(() => parseConfig(withSubagentAudit() + tools)).toThrow(
       "config.tools.subagents is not a recognized field",
     );
     expect(() =>
-      parseConfig(completeConfig() + tools + "\n[subagents]\nenabled = false\n"),
+      parseConfig(withSubagentAudit() + tools + "\n[subagents]\nenabled = false\n"),
     ).toThrow("config.tools.subagents is not a recognized field");
     for (const name of SUBAGENT_TOOL_NAMES) {
       expect(config.tools).not.toHaveProperty(name);
       expect(() =>
         parseConfig(
-          completeConfig() +
+          withSubagentAudit() +
             tools +
             "\n[subagents]\nenabled = true\n" +
-            `\n[tools.${name}]\nmode = "allow"\nsession_grant = "never"\naudit = false\n`,
+            `\n[tools.${name}]\nmode = "allow"\nsession_grant = "never"\n`,
         ),
       ).toThrow(`config.tools.${name} is not a recognized field`);
     }
@@ -166,7 +176,7 @@ describe("parseConfig", () => {
       source.replace("[exports]\nenabled = false", "[exports]\nenabled = false\npath = '/'"),
       source.replace("[exports]\nenabled = false", "[exports]\nenabled = true"),
       admitted.replace('backend = "bubblewrap"', 'backend = "direct"'),
-      source.replace("config_version = 14", "config_version = 13"),
+      source.replace("config_version = 15", "config_version = 13"),
     ])
       expect(() => parseConfig(invalid)).toThrow();
   });
@@ -256,7 +266,7 @@ operands = { min = 0, max = 0 }
         "denied_paths = []",
         `denied_paths = ${JSON.stringify(Array.from({ length: 64 }, (_, i) => `/private/${i}`))}`,
       ),
-      seatbelt.replace("config_version = 14", "config_version = 11"),
+      seatbelt.replace("config_version = 15", "config_version = 11"),
       completeConfig().replace("denied_paths = []", 'denied_paths = ["/Users/private"]'),
     ])
       expect(() => parseConfig(source)).toThrow();
@@ -275,7 +285,7 @@ operands = { min = 0, max = 0 }
     );
 
     expect(config).toEqual({
-      configVersion: 14,
+      configVersion: 15,
       skills: { directories: [] },
       exports: { enabled: false },
       codemode: { enabled: false, timeoutMs: 300000 },
@@ -327,12 +337,7 @@ operands = { min = 0, max = 0 }
       "config.sessions.retention_days is required",
     );
     expect(() =>
-      parseConfig(
-        source.replace(
-          "[exports]\nenabled = false\n\n[sessions]\nretention_days = 0",
-          "sessions = false",
-        ),
-      ),
+      parseConfig("sessions = false\n" + source.replace("[sessions]\nretention_days = 0\n\n", "")),
     ).toThrow("config.sessions must be a table");
     expect(() =>
       parseConfig(source.replace("retention_days = 0", "retention_days = 0\nextra = true")),
@@ -392,7 +397,7 @@ operands = { min = 0, max = 0 }
       ).toBe(facility);
     }
     for (const [before, after, issue] of [
-      ['[audit]\nenabled = false\nfacility = "local0"\n\n', "", "config.audit is required"],
+      ['[audit]\nenabled = false\nfacility = "local0"\n\n', "", "config.audit.enabled is required"],
       [
         "[audit]\nenabled = false",
         '[audit]\nenabled = "false"',
@@ -404,8 +409,8 @@ operands = { min = 0, max = 0 }
         'facility = "local0"\npath = "/tmp/events"',
         "config.audit.path is not a recognized field",
       ],
-      ["audit = false\n", "", "config.tools.read.audit is required"],
-      ["audit = false", 'audit = "false"', "config.tools.read.audit must be a boolean"],
+      ["read = false\n", "", "config.audit.tools.read is required"],
+      ["read = false", 'read = "false"', "config.audit.tools.read must be a boolean"],
     ]) {
       expect(() => parseConfig(source.replace(before!, after!))).toThrow(issue);
     }
@@ -443,8 +448,8 @@ operands = { min = 0, max = 0 }
           .replace('mode = "none"', 'mode = "host"'),
       ),
     ).toThrow("config.filesystem.hidden_paths must be empty");
-    expect(() => parseConfig(source.replace("config_version = 14", "config_version = 8"))).toThrow(
-      "integer 14",
+    expect(() => parseConfig(source.replace("config_version = 15", "config_version = 8"))).toThrow(
+      "integer 15",
     );
   });
 
@@ -509,11 +514,11 @@ operands = { min = 0, max = 0 }
 
   it("rejects unsupported config versions and types", () => {
     expect(() =>
-      parseConfig(completeConfig().replace("config_version = 14", 'config_version = "9"')),
-    ).toThrow("config.config_version must be the integer 14");
+      parseConfig(completeConfig().replace("config_version = 15", 'config_version = "9"')),
+    ).toThrow("config.config_version must be the integer 15");
     expect(() =>
-      parseConfig(completeConfig().replace("config_version = 14", "config_version = 4")),
-    ).toThrow("config.config_version must be the integer 14");
+      parseConfig(completeConfig().replace("config_version = 15", "config_version = 4")),
+    ).toThrow("config.config_version must be the integer 15");
   });
 
   it("requires models_file to be a normalized absolute file path", () => {
@@ -546,7 +551,7 @@ operands = { min = 0, max = 0 }
   it("rejects unknown fields at every schema level", () => {
     expect(() =>
       parseConfig(
-        completeConfig().replace("config_version = 14", "config_version = 14\nunexpected = true"),
+        completeConfig().replace("config_version = 15", "config_version = 15\nunexpected = true"),
       ),
     ).toThrow("config.unexpected is not a recognized field");
     expect(() =>
@@ -593,10 +598,12 @@ operands = { min = 0, max = 0 }
       getExtension: (id: string) => (id === "git" ? extension : undefined),
       getTool: () => undefined,
     } as unknown as ManagedExtensionCatalog;
-    const source = `${completeConfig().replace(
-      "[environment.extensions]",
-      '[environment.extensions.git]\nGIT_TOKEN = "configured"',
-    )}\n[extensions.git]\nallowed_hosts = ["github.com"]\n\n[tools.git_clone]\naudit = false\nmode = "ask"\nsession_grant = "never"\n`;
+    const source = `${completeConfig()
+      .replace("[audit.tools]", "[audit.tools]\ngit_clone = false")
+      .replace(
+        "[environment.extensions]",
+        '[environment.extensions.git]\nGIT_TOKEN = "configured"',
+      )}\n[extensions.git]\nallowed_hosts = ["github.com"]\n\n[tools.git_clone]\nmode = "ask"\nsession_grant = "never"\n`;
     const config = parseConfig(source, "managed.toml", catalog);
     expect(config.extensions).toEqual({
       git: { id: "git", settings: { allowedHosts: ["github.com"] }, toolNames: ["git_clone"] },
@@ -622,10 +629,7 @@ operands = { min = 0, max = 0 }
     ).toThrow("config.extensions.git must contain only allowed_hosts");
     expect(() =>
       parseConfig(
-        source.replace(
-          '[tools.git_clone]\naudit = false\nmode = "ask"\nsession_grant = "never"',
-          "",
-        ),
+        source.replace('[tools.git_clone]\nmode = "ask"\nsession_grant = "never"', ""),
         "managed.toml",
         catalog,
       ),
@@ -703,7 +707,7 @@ operands = { min = 0, max = 0 }
 
   it("rejects every missing tool policy", () => {
     for (const toolName of TOOL_NAMES) {
-      const section = `[tools.${toolName}]\naudit = false\nmode = "allow"\nsession_grant = "never"`;
+      const section = `[tools.${toolName}]\nmode = "allow"\nsession_grant = "never"`;
       expect(() => parseConfig(completeConfig().replace(section, ""))).toThrow(
         `config.tools.${toolName} is required`,
       );
@@ -711,18 +715,18 @@ operands = { min = 0, max = 0 }
   });
 
   it("rejects missing root fields and tables with the wrong shape", () => {
-    expect(() => parseConfig(completeConfig().replace("config_version = 14\n", ""))).toThrow(
+    expect(() => parseConfig(completeConfig().replace("config_version = 15\n", ""))).toThrow(
       "config.config_version is required",
     );
     expect(() =>
       parseConfig(
-        'config_version = 14\nmodels_file = "/etc/pi-sandbox/models.json"\nexecution = "direct"\nidentity = "disabled"\nnetwork = "none"\nextensions = "none"\ntools = "all"\n',
+        'config_version = 15\nmodels_file = "/etc/pi-sandbox/models.json"\nexecution = "direct"\nidentity = "disabled"\nnetwork = "none"\nextensions = "none"\ntools = "all"\n[workspace]\ndefault = "host"\nallowed = ["host"]\n[workspace.modes.host]\n',
       ),
     ).toThrow("config.tools must be a table");
     expect(() =>
       parseConfig(
         completeConfig().replace(
-          '[tools.read]\naudit = false\nmode = "allow"\nsession_grant = "never"',
+          '[tools.read]\nmode = "allow"\nsession_grant = "never"',
           'tools.read = "allow"',
         ),
       ),
@@ -752,12 +756,7 @@ operands = { min = 0, max = 0 }
       parseConfig(completeConfig().replace('backend = "bubblewrap"', 'backend = "direct"')),
     ).toThrow('config.network.mode must be "host" when config.execution.backend is "direct"');
     expect(() =>
-      parseConfig(
-        completeConfig().replace(
-          '[audit]\nenabled = false\nfacility = "local0"\n\n[filesystem]\ncwd_writable = true\nhidden_paths = []\ndenied_paths = []\n\n[execution]\nbackend = "bubblewrap"\n\n',
-          "",
-        ),
-      ),
+      parseConfig(completeConfig().replace('[execution]\nbackend = "bubblewrap"\n\n', "")),
     ).toThrow("config.execution is required");
     expect(() =>
       parseConfig(completeConfig().replace('backend = "bubblewrap"', 'backend = "container"')),
@@ -801,8 +800,8 @@ operands = { min = 0, max = 0 }
       ).toThrow("process_lifetime is not a recognized field");
     }
     expect(() =>
-      parseConfig(completeConfig().replace("config_version = 14", "config_version = 12")),
-    ).toThrow("must be the integer 14");
+      parseConfig(completeConfig().replace("config_version = 15", "config_version = 12")),
+    ).toThrow("must be the integer 15");
   });
 
   it("accepts ordered literal main command paths without reading the installation filesystem", () => {
@@ -941,12 +940,12 @@ operands = { min = 0, max = 0 }
   });
 
   describe("known read-only class policy", () => {
-    const BASH = '[tools.bash]\naudit = false\nmode = "allow"\nsession_grant = "never"';
+    const BASH = '[tools.bash]\nmode = "allow"\nsession_grant = "never"';
 
     function withClass(main: string, table: string, extra = ""): string {
       return completeConfig().replace(
         BASH,
-        `[tools.bash]\naudit = false\n${main}\n\n[tools.bash.known_read_only]\n${table}${extra}`,
+        `[tools.bash]\n${main}\n\n[tools.bash.known_read_only]\n${table}${extra}`,
       );
     }
 
@@ -1022,7 +1021,7 @@ operands = { min = 0, max = 0 }
         parseConfig(
           completeConfig().replace(
             BASH,
-            '[tools.bash]\naudit = false\nmode = "deny"\nsession_grant = "never"\nknown_read_only = "allow"',
+            '[tools.bash]\nmode = "deny"\nsession_grant = "never"\nknown_read_only = "allow"',
           ),
         ),
       ).toThrow("config.tools.bash.known_read_only must be a table");
@@ -1061,10 +1060,7 @@ operands = { min = 0, max = 0 }
           const source = withClass(
             'mode = "ask"\nsession_grant = "never"',
             'mode = "allow"\nsession_grant = "never"',
-          ).replace(
-            `[tools.${tool}]\naudit = false\nmode = "allow"`,
-            `[tools.${tool}]\naudit = false\nmode = "${mode}"`,
-          );
+          ).replace(`[tools.${tool}]\nmode = "allow"`, `[tools.${tool}]\nmode = "${mode}"`);
           expect(() => parseConfig(source)).toThrow(
             `config.tools.bash.known_read_only.mode "allow" requires config.tools.${tool}.mode "allow" (it is "${mode}")`,
           );
@@ -1091,14 +1087,77 @@ operands = { min = 0, max = 0 }
 });
 
 describe("loadConfig", () => {
+  async function fileFixture(contents: string | Uint8Array = completeConfig()) {
+    const directory = await mkdtemp(join(tmpdir(), "pi-sandbox-config-"));
+    temporaryDirectories.push(directory);
+    const path = join(directory, "config.toml");
+    await writeFile(path, contents);
+    return { directory, path };
+  }
+
+  it("accepts regular files through ordinary symlinks and rejects directories", async () => {
+    const { directory, path } = await fileFixture();
+    const alias = join(directory, "alias.toml");
+    await symlink(path, alias);
+    expect((await loadConfig(alias, EMPTY_EXTENSION_CATALOG)).workspace.default).toBe("host");
+    await expect(loadConfig(directory, EMPTY_EXTENSION_CATALOG)).rejects.toThrow(
+      "configuration must be a regular file",
+    );
+  });
+
+  it.runIf(process.platform === "linux" || process.platform === "darwin")(
+    "rejects a FIFO without waiting for a writer",
+    async () => {
+      const { directory } = await fileFixture();
+      const fifo = join(directory, "config.fifo");
+      await promisify(execFile)("mkfifo", [fifo]);
+      await expect(loadConfig(fifo, EMPTY_EXTENSION_CATALOG)).rejects.toThrow(
+        "configuration must be a regular file",
+      );
+    },
+    5000,
+  );
+
+  it.each([{ invalid: [0xff] }, { invalid: [0xc3, 0x28] }, { invalid: [0xe2, 0x82] }])(
+    "rejects malformed UTF-8 even in an otherwise ignorable comment: $invalid",
+    async ({ invalid }) => {
+      const { path } = await fileFixture(
+        Buffer.concat([
+          Buffer.from(completeConfig() + "\n# malformed bytes: "),
+          Buffer.from(invalid),
+          Buffer.from("\n"),
+        ]),
+      );
+      await expect(loadConfig(path, EMPTY_EXTENSION_CATALOG)).rejects.toThrow(
+        "configuration file must contain valid UTF-8",
+      );
+    },
+  );
+
+  it("retains the file-source size boundary for regular UTF-8 files", async () => {
+    const contents = completeConfig();
+    const { path } = await fileFixture(
+      contents + " ".repeat(1024 * 1024 - Buffer.byteLength(contents)),
+    );
+    expect((await loadConfig(path, EMPTY_EXTENSION_CATALOG)).workspace.default).toBe("host");
+    await writeFile(path, contents + " ".repeat(1024 * 1024 + 1 - Buffer.byteLength(contents)));
+    await expect(loadConfig(path, EMPTY_EXTENSION_CATALOG)).rejects.toThrow(
+      "configuration exceeds 1048576 bytes",
+    );
+  });
+
   it("loads and validates a UTF-8 configuration file", async () => {
     const directory = await mkdtemp(join(tmpdir(), "pi-sandbox-config-"));
     temporaryDirectories.push(directory);
     const path = join(directory, "config.toml");
     await writeFile(path, completeConfig(), "utf8");
 
-    await expect(loadConfig(path, EMPTY_EXTENSION_CATALOG)).resolves.toMatchObject({
-      configVersion: 14,
+    await expect(
+      loadConfig(path, EMPTY_EXTENSION_CATALOG).then(
+        (authored) => resolveWorkspaceSelection(authored).config,
+      ),
+    ).resolves.toMatchObject({
+      configVersion: 15,
       skills: { directories: [] },
       exports: { enabled: false },
       codemode: { enabled: false, timeoutMs: 300000 },

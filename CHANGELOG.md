@@ -2,8 +2,15 @@
 
 ## Unreleased
 
+### Breaking changes
+
+- Require main schema 15 and broker/rule version 11 for named workspace modes
+  and shared `audit.tools`; migrate existing policy explicitly.
+
 ### Added
 
+- Add administrator-defined workspace modes, per-account mode access/defaults,
+  CLI selection and listing with descriptions, and effective-mode diagnostics.
 - Add opt-in dialog forwarding for extended standalone subagents and runtime
   child-context discovery for inherited extensions.
   ([#57](https://github.com/kcosr/pi-sandbox/pull/57))

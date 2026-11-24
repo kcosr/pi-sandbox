@@ -99,8 +99,9 @@ or redirect this selection. The strict configuration has a required normalized
 absolute `models_file`; selecting a TOML does not alter model-path semantics,
 service sockets, or the broker/collector's own configuration directories. In broker mode, a root-managed drop-in
 selected by the kernel-authenticated account and its primary/supplementary groups may replace the model file,
-execution backend, network mode, CWD write access, and complete invocation
-permissions for a subset of model tools. The main TOML supplies the global scoped environment. An optional
+execution backend, network mode, CWD write access, workspace allowed/default
+metadata, MCP server enablement/approval and complete invocation permissions for
+a subset of model tools. The main TOML supplies the global scoped environment. An optional
 user/group TOML drop-in may overlay that environment. No other field is
 overridable.
 
@@ -128,6 +129,65 @@ The executable does not check that administrative files are owned by root or
 have particular modes. Deployment is responsible for installing them with the
 intended ownership and permissions.
 
+## Workspace mode resolution
+
+Managed main schema 15 requires workspace definitions, a nonempty allowed list
+and an allowed default. Every operational launch selects one defined mode.
+Preserve the prefix `[--config FILE] [--workspace-mode NAME] [Pi arguments...]`;
+accept the selector's equals form, reject duplicates/misplacement and consume it
+before Pi. Both prefix scans respect the pinned Pi unconditional value-option
+table and a real end-of-options marker. Pi's `--mode rpc` remains independent;
+optional-extension switches keep their ordinary positions. Reject selectors
+combined with metadata/installation or private worker/export-reader operations.
+Exact `--version` remains independent of configuration, identity and CWD.
+
+Authoring permits partial common values only for CWD writability, exports and
+Bash/write/edit invocation policies. Compose every main-defined mode, including
+disallowed ones, before any runtime consumer receives configuration. Validate
+all authored entries, required effective fields, cross-table constraints and
+current-platform compatibility before broker resolution. Installation/backend
+validation checks all modes on the current platform without resolving account
+selection or secret files. The shared authored backend remains the backend-query
+result. Main source is bounded to 1 MiB before parsing, including bounded reads.
+
+Modes may override only filesystem.cwd_writable, exports.enabled and complete
+Bash/write/edit invocation entries. Omitted Bash class or command sets in a
+replacement are removed. Each mode may have an optional bounded single-line
+description (256 UTF-8 bytes, no control/format or line/paragraph separator
+characters); it is main-only display metadata. No inter-mode inheritance,
+general profiles, user/project definitions or mode-less bypass is admitted.
+
+Resolve optional broker workspace allowed/default metadata first. Union matching
+explicit allowed lists, preserving omitted versus empty; reject duplicate names
+within a file and require canonical distinct wire lists. Explicit defaults must
+agree, and the effective default must be defined and allowed even with a CLI
+selection. Validate matching names against own properties of the main inventory.
+Then select one complete mode, apply remaining broker policy once and recheck
+effective platform/policy constraints. Account/macros, main secret references,
+actual CWD/trusted paths and executors resolve only for that selected policy.
+
+Named-tool audit moves to exhaustive common audit.tools, covering the exact
+configured subject inventory even for disabled/user-hidden tools and when global
+audit is false. Reject old inline tool audit; attach the map's choices to runtime
+ToolPolicy without changing audit wire 5/record 6. MCP audit stays in server rules.
+Command-set IDs reused across common/mode entries must have identical normalized
+definitions within one snapshot. Records still omit mode/configuration identity.
+
+`--list-workspace-modes` is a standalone managed operation after optional
+--config. It validates main policy/platform and authenticated access/defaults,
+prints only permitted names/descriptions with the effective default marker,
+and starts no model, session, MCP or executor. It performs no application-side
+environment-file, account-macro or runtime CWD resolution; the existing broker
+still resolves matching rule values. Reject other selectors, Pi arguments,
+metadata/private operations and duplicate listing flags. Keep the operational
+root guard. Help describes selection and listing; no new Pi patch is required.
+
+Keep mode selection and final policy fixed across conversation replacement,
+reload, executor recreation and managed children. A new process resolves current
+policy anew. `/sandbox` reports mode, CLI/default source, optional description,
+final CWD access and terminal-only export state; mounts/policy reflect final
+account overrides. Add no automatic output or mode labels to model prompts.
+
 ## User state
 
 Pi's normal `PI_CODING_AGENT_DIR` environment variable remains supported. It
@@ -143,7 +203,7 @@ logs, and caches. It must not affect:
 Interactive authentication and retained credentials therefore remain
 per-user, while the administrator controls the available model definitions.
 
-Schema 9 expands bare `~` and a leading `~/` in main-policy hidden paths and
+The main configuration expands bare `~` and a leading `~/` in main-policy hidden paths and
 configured scoped environment string values, including user/group values after the
 broker merge. Resolve the invoking effective user's home from the OS account
 database once at operational startup, before applying any configured environment
@@ -155,7 +215,7 @@ not the upstream Pi patch series; it does not extend to model/configuration/
 installation paths, arbitrary extension settings, inherited environment, or
 compiled fixed extension values.
 
-The main schema-10 configuration requires `[sessions].retention_days`, an integer
+The main configuration requires `[sessions].retention_days`, an integer
 from `0` through `36500`, defaulted to `365` in packaged TOML. User/group rules
 cannot override it. Zero disables both cleanup and last-use timestamp updates.
 Otherwise, use session-file modification time as the retention clock, refreshing
@@ -188,10 +248,10 @@ per socket connection. It obtains UID from Linux `SO_PEERCRED` and invokes the
 fixed `/usr/bin/getent` host NSS resolver to identify the account and its primary
 and supplementary groups. The compiled configuration directory is its process
 argument. It reads optional protected `users.d/*.toml` and `groups.d/*.toml`
-version-10 rules, selecting exactly one `user`/`uid` or `group`/`gid` per file. Filenames are
+version-11 rules, selecting exactly one `user`/`uid` or `group`/`gid` per file. Filenames are
 labels. Names and numeric selectors have identical precedence.
 
-The protocol uses newline-delimited JSON version 10 and operation
+The protocol uses newline-delimited JSON version 11 and operation
 `resolve-identity`, with no caller-claimed identity. The client keeps its write
 side open; the broker responds after reading the newline. Successful responses
 contain only one combined matching environment/override patch. Missing rule
@@ -203,8 +263,8 @@ pairs order as `disabled/never` < `deny/never` < `ask/never` < `ask/offer` <
 `allow/never`; `host` wins for networking and `true` for CWD writability and each
 explicit MCP server enablement override.
 Different explicit backend/model values or values of the same scoped environment
-key fail resolution. User rules have no extra precedence. Logging flags remain
-parent-only. Revalidate the complete effective configuration after the merge.
+key fail resolution. User rules have no extra precedence. Named-tool logging
+remains in common `audit.tools`; MCP audit stays in its main server policies. Revalidate the complete effective configuration after the merge.
 Environment entries never select extensions, enable tools, or grant approval.
 
 MCP authored overrides are server-local optional `enabled`, `default_policy`,
@@ -223,13 +283,13 @@ matching server IDs in the application. Admit 32 servers, 256 layers/server,
 512 KiB response including newline before writing. Keep connection definitions,
 credential mappings, exposure, timeouts, and audit main-policy-only. See the
 [identity broker contract](../docs/identity-broker.md#mcp-tool-approval-policies)
-for grammar, limits, ordering examples and the strict version-10/protocol-10 cutover.
+for grammar, limits, ordering examples and the strict version-11/protocol-11 cutover.
 Revalidate enabled code-mode exposure against main-policy code-mode availability.
 Disabled servers skip their executable, identity, credential-reference, and
 transport work; independently configured scoped environment still applies.
 User saved preferences may narrow admission but cannot enable an effectively
 disabled server. Administrative changes require restart. Broker support remains
-Linux-only; main configuration schema 14 is unchanged. The current audit contract uses
+Linux-only; main configuration requires schema 15. The current audit contract uses
 wire 5/record 6 for configured Bash command provenance and child invocation identity.
 
 Host lookups are bounded to four seconds, the client deadline is ten seconds,
@@ -249,10 +309,10 @@ behavior apply; deployment protects broker targets from untrusted redirection.
 Readers require regular files, cap raw bytes at 8194 and resolved values at
 1–8192 UTF-8 bytes, preserve BOM and all other content except one terminal LF or
 CRLF, reject NUL/invalid UTF-8, and recheck aggregate limits. Failures are path-
-and content-free. Wire protocol 10 permits only strings or exact `{literal}`
+and content-free. Wire protocol 11 permits only strings or exact `{literal}`
 objects in Pi values. File-derived bytes bypass home/account/machine expansion;
-final runtime environments remain string maps. Config/rule versions remain
-13/10. Installation/backend validation and packaging are symbolic: no referenced
+final runtime environments remain string maps. Config/rule versions are
+15/11. Installation/backend validation and packaging are symbolic: no referenced
 secret file is read or copied. See the [file contract](../docs/configuration.md#file-backed-pi-environment-values).
 
 The effective model catalog is loaded with the `pi` scope applied to the
@@ -478,7 +538,7 @@ write/edit coordination across complete mutations and bounded transport frames,
 arguments, input and output. Backpressure must not eagerly encode arbitrarily many
 requests, and whole-frame control priority must keep cancellation/close responsive.
 
-Managed schema 14 removes `process_lifetime`; standalone schema 6 removes
+Managed schema 15 rejects `process_lifetime`; standalone schema 6 removes
 `processLifetime`. One lifecycle permits background descendants to survive normal
 completion and logical session changes. Per-request cancellation, timeout,
 overflow, callback/spawn failure affect only that request; nonzero exit is normal.
@@ -510,14 +570,15 @@ survivors, final Linux teardown, unchanged approvals and same-file coordination.
 
 ## CWD filesystem access
 
-Administrative configuration requires `[filesystem].cwd_writable`, with `true`
-in packaged defaults. Root-managed user/group rules may replace that setting under
+Every composed workspace mode requires `[filesystem].cwd_writable`, supplied by
+common defaults or its mode overlay. Packaged host modes use `true`; confined
+sandbox modes use `false`. Root-managed user/group rules may replace that setting under
 `[overrides.filesystem]`. Effective direct execution requires `true`.
 
 The Bubblewrap backend always creates an explicit same-path CWD bind after its
 private mounts: writable with `--bind`, read-only with `--ro-bind`. This preserves
 visibility for `/tmp`-based workspaces independently of write permission and does
-not by itself change host visibility. Schema 9 also requires
+not by itself change host visibility. The main configuration also requires
 `[filesystem].hidden_paths` (empty by default), a main-policy-only list of paths to
 canonical directories or regular files. Directories use private read-only tmpfs
 masks; files use separate empty inputs to `--ro-bind-data`. Both retain the
@@ -536,7 +597,7 @@ bind would mask private `/tmp`. Existing root and private-system-path overlap
 rejections remain enforced. The setting applies to built-ins and user shell;
 managed host tools retain their declared host authority.
 
-Managed schema 14 additionally requires `[filesystem].denied_paths`, empty for
+Managed schema 15 requires `[filesystem].denied_paths`, empty for
 Bubblewrap/direct. macOS Seatbelt rejects hidden paths
 and local networking, and accepts canonical existing directory denials. A denied
 ancestor admits only CWD; explicit interior denials remain effective. Denials are

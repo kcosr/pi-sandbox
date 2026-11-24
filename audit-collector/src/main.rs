@@ -207,6 +207,9 @@ fn valid_export_details(kind: &str, details: &ExportDetails) -> bool {
 struct AuditConfig {
     enabled: bool,
     facility: String,
+    // The application owns exact catalog coverage; the collector validates shape.
+    #[serde(rename = "tools")]
+    _tools: std::collections::BTreeMap<String, bool>,
 }
 
 #[derive(Serialize)]
@@ -226,11 +229,14 @@ fn invalid() -> io::Error {
 }
 
 fn facility(config: &str) -> io::Result<Option<u32>> {
+    if config.len() as u64 > MAX_CONFIG_BYTES {
+        return Err(invalid());
+    }
     let value: toml::Value = toml::from_str(config).map_err(|_| invalid())?;
     if value
         .get("config_version")
         .and_then(toml::Value::as_integer)
-        != Some(14)
+        != Some(15)
     {
         return Err(invalid());
     }
@@ -1272,22 +1278,61 @@ mod tests {
     #[test]
     fn configuration_owns_facility_and_requires_current_schema() {
         assert_eq!(
-            facility("config_version=14\n[audit]\nenabled=true\nfacility='local7'").unwrap(),
+            facility("config_version=15\n[audit]\nenabled=true\nfacility='local7'\n[audit.tools]\nbash=true").unwrap(),
             Some(23)
         );
         assert_eq!(
-            facility("config_version=14\n[audit]\nenabled=false\nfacility='local0'").unwrap(),
+            facility("config_version=15\n[audit]\nenabled=false\nfacility='local0'\n[audit.tools]")
+                .unwrap(),
             None
         );
         for text in [
             "config_version=10\n[audit]\nenabled=true\nfacility='local0'",
             "config_version=11\n[audit]\nenabled=true\nfacility='local0'",
             "config_version=12\n[audit]\nenabled=true\nfacility='local0'",
-            "config_version=14\n[audit]\nenabled=true\nfacility='auth'",
-            "config_version=14\n[audit]\nenabled=true\nfacility='local0'\npath='/tmp/log'",
+            "config_version=14\n[audit]\nenabled=true\nfacility='local0'\n[audit.tools]\nbash=true",
+            "config_version=15\n[audit]\nenabled=true\nfacility='auth'\n[audit.tools]",
+            "config_version=15\n[audit]\nenabled=true\nfacility='local0'\npath='/tmp/log'\n[audit.tools]",
         ] {
             assert!(facility(text).is_err());
         }
+    }
+
+    #[test]
+    fn named_tool_audit_map_is_required_and_structural_even_when_disabled() {
+        for enabled in [false, true] {
+            let prefix =
+                format!("config_version=15\n[audit]\nenabled={enabled}\nfacility='local0'\n");
+            for body in [
+                "",
+                "tools = []",
+                "[audit.tools]\nbash='yes'",
+                "[audit.tools.bash]\nenabled=true",
+            ] {
+                assert!(facility(&format!("{prefix}{body}")).is_err());
+            }
+            // Exact catalog coverage belongs to the compiled application, not this reader.
+            assert!(
+                facility(&format!(
+                    "{prefix}[audit.tools]\ncustom_extension_tool=true\nread=false"
+                ))
+                .is_ok()
+            );
+        }
+    }
+
+    #[test]
+    fn main_source_bound_matches_the_application_limit() {
+        let mut source = String::from(
+            "config_version=15\n[audit]\nenabled=false\nfacility='local0'\n[audit.tools]\n",
+        );
+        source.extend(std::iter::repeat_n(
+            ' ',
+            MAX_CONFIG_BYTES as usize - source.len(),
+        ));
+        assert_eq!(facility(&source).unwrap(), None);
+        source.push(' ');
+        assert!(facility(&source).is_err());
     }
 
     #[test]

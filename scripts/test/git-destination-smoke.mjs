@@ -152,7 +152,8 @@ export async function testGitDestination({
   config.extensions = {
     git: { allowed_hosts: ["127.0.0.1"], allowed_schemes: ["http"], destination: "sandbox_home" },
   };
-  config.tools.git_clone = { mode: "ask", session_grant: "never", audit: false };
+  config.tools.git_clone = { mode: "ask", session_grant: "never" };
+  config.audit.tools.git_clone = false;
   const args = [
     "--provider",
     "fixture",

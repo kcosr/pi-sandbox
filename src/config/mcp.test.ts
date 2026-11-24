@@ -2,7 +2,12 @@ import { readFileSync } from "node:fs";
 import { stringify } from "@iarna/toml";
 import { describe, expect, it } from "vitest";
 import { createManagedExtensionCatalog } from "../managed-extensions/catalog.js";
-import { parseConfig } from "./parse.js";
+import { parseConfig as parseAuthoredConfig } from "./parse.js";
+import { resolveWorkspaceSelection } from "./workspace.js";
+
+function parseConfig(...args: Parameters<typeof parseAuthoredConfig>) {
+  return resolveWorkspaceSelection(parseAuthoredConfig(...args)).config;
+}
 import { parseCodeModeConfig, parseMcpConfig } from "./mcp.js";
 
 const policy = { mode: "ask", session_grant: "offer", audit: true };
@@ -25,15 +30,15 @@ const parse = (server: Record<string, unknown>) =>
   parseMcpConfig({ servers: { docs: server } }, code).servers.docs!;
 
 describe("MCP administrative configuration", () => {
-  it("requires new top-level sections and schema 14, with packaged features disabled", () => {
+  it("requires new top-level sections and schema 15, with packaged features disabled", () => {
     const fixture = readFileSync("config/default/config.toml", "utf8");
     const catalog = createManagedExtensionCatalog([]);
     const config = parseConfig(fixture, "fixture", catalog);
     expect(config.codemode).toEqual({ enabled: false, timeoutMs: 300000 });
     expect(config.mcp.servers).toEqual({});
     expect(() =>
-      parseConfig(fixture.replace("config_version = 14", "config_version = 9"), "fixture", catalog),
-    ).toThrow("integer 14");
+      parseConfig(fixture.replace("config_version = 15", "config_version = 9"), "fixture", catalog),
+    ).toThrow("integer 15");
     expect(() =>
       parseConfig(fixture.replace("[mcp.servers]", "[mcp]"), "fixture", catalog),
     ).toThrow("servers is required");

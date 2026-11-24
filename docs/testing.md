@@ -249,6 +249,43 @@ text/tool events, and parent waiting/input/cancellation with forwarding enabled.
 The process-identity probes for macOS and Windows require native qualification;
 Linux tests do not qualify those platforms.
 
+### Workspace modes
+
+Configuration tests qualify schema 15 with partial common values, complete
+invocation replacement, optional bounded descriptions, own-property mode lookup,
+all-mode validation and exhaustive common audit coverage. Invalid unused entries
+and disallowed modes must fail. Verify command-set ID consistency across every
+authored Bash entry, normalized equivalent forms, complete class/command-set
+removal after replacement, and the 1 MiB source boundary with bounded file reads.
+MCP auditing and runtime tool audit choices must remain unchanged.
+
+Broker/client tests use rule/protocol 11 and cover allowed-list inheritance,
+empty grants, cross-file union, within-file duplicate rejection even when
+unmatched, canonical wire lists, default agreement/conflicts and aggregate bounds.
+Application tests reject unknown inventory names, empty effective access and
+invalid defaults even with a permitted CLI selection, then apply ordinary
+account tool/filesystem policy after selection. Platform failures must occur
+before broker access and during installation/backend queries; recheck platform
+constraints after overrides.
+
+CLI tests preserve prefix ordering, conditional/unconditional Pi value handling,
+real and consumed end-of-options markers, optional-extension switches, exact
+policy-free version queries and private-entry guards. Listing must show only
+permitted names/descriptions and the effective default, without models, main
+environment-file reads, MCP or executor startup. Keep operational root rejection,
+reject incompatible listing arguments and preserve ordinary machine-readable
+streams. Diagnostics report selection metadata and final policy without adding
+mode labels to the model prompt.
+
+`scripts/test/workspace-modes-smoke.mjs` runs against the packaged managed
+executable from both Linux and Seatbelt smoke entry points. It checks schema-14
+rejection, listing without model or main-secret files, permitted descriptions
+and default, real writable/read-only behavior, and fixed selection across
+`new_session`. Native backends remain separately qualified on supported hosts.
+Installer checks reject retained old schema before binary replacement; migrated
+single-mode policies and fresh per-platform defaults retain their documented
+behavior. Ordinary extension consumers retain their own configuration contract.
+
 ### Integration
 
 A deterministic fake Pi API loads the built extension without contacting a

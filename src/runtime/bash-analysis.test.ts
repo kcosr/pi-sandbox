@@ -30,7 +30,7 @@ function runtime(
   };
   return {
     config: {
-      configVersion: 14,
+      configVersion: 15,
       skills: { directories: [] },
       exports: { enabled: false },
       codemode: { enabled: false, timeoutMs: 300000 },

@@ -119,7 +119,7 @@ export function managedExtensionSelection(args: readonly string[]): {
   return { overrides, piArguments };
 }
 
-function* managedArguments(
+export function* managedArguments(
   args: readonly string[],
 ): Generator<readonly [string, string | undefined]> {
   for (let index = 0; index < args.length; index += 1) {

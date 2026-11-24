@@ -16,6 +16,8 @@ import {
   type FilesystemConfig,
   type NetworkConfig,
   type SandboxConfig,
+  type AuthoredSandboxConfig,
+  type WorkspaceMode,
   type AuthoredPiEnvironmentValue,
   type SessionsConfig,
   type SkillsConfig,
@@ -26,6 +28,7 @@ import {
   type SessionGrantPolicy,
   type ToolPolicy,
   type ToolPolicies,
+  type SubjectPolicy,
   isNormalizedAbsoluteFilePath,
   isNormalizedHiddenPath,
   isReservedHiddenDirectoryPath,
@@ -44,6 +47,8 @@ import { ConfigError } from "./errors.js";
 import { assertGitDestinationBackend } from "./git-destination.js";
 import { parseBashCommandSets } from "./command-sets.js";
 import { SUBAGENTS_POLICY_SUBJECT, type SubagentsConfig } from "../domain/subagents.js";
+import type { BashCommandSet } from "../permissions/bash/command-set-contracts.js";
+import { isWorkspaceModeName, MAXIMUM_WORKSPACE_MODES } from "./workspace.js";
 
 type UnknownRecord = Record<string, unknown>;
 
@@ -63,9 +68,11 @@ const ROOT_KEYS = [
   "extensions",
   "tools",
 ] as const;
-const POLICY_KEYS = ["mode", "session_grant", "audit"] as const;
+const POLICY_KEYS = ["mode", "session_grant"] as const;
 const COMMAND_CLASS_POLICY_KEYS = ["mode", "session_grant"] as const;
 const IDENTITY_MODES = ["disabled", "broker"] as const;
+const MODE_TOOLS = ["bash", "write", "edit"] as const;
+export const MAXIMUM_CONFIG_BYTES = 1024 * 1024;
 
 function parseSubagents(value: unknown, issues: string[]): SubagentsConfig | undefined {
   if (value === undefined) return undefined;
@@ -158,7 +165,7 @@ function parseSubjectPolicy(
   path: string,
   toolName: string,
   issues: string[],
-): ToolPolicy | undefined {
+): SubjectPolicy | undefined {
   if (!isRecord(value)) {
     issues.push(`${path} must be a table`);
     return undefined;
@@ -199,15 +206,9 @@ function parseSubjectPolicy(
     return undefined;
   }
 
-  const audit = own(value, "audit");
-  if (typeof audit !== "boolean") {
-    issues.push(`${path}.audit must be a boolean`);
-    return undefined;
-  }
   return Object.freeze({
     mode,
     sessionGrant,
-    audit,
     ...(commandClasses === undefined ? {} : { commandClasses }),
     ...(commandSets === undefined ? {} : { commandSets }),
   });
@@ -270,6 +271,7 @@ function parseCommandClassPolicies(
 function parseToolPolicies(
   value: unknown,
   toolNames: readonly string[],
+  audit: Readonly<Record<string, boolean>>,
   issues: string[],
 ): ToolPolicies | undefined {
   if (!isRecord(value)) {
@@ -287,8 +289,9 @@ function parseToolPolicies(
       toolName,
       issues,
     );
-    if (policy !== undefined) {
-      entries[toolName] = policy;
+    const auditEnabled = audit[toolName];
+    if (policy !== undefined && auditEnabled !== undefined) {
+      entries[toolName] = Object.freeze({ ...policy, audit: auditEnabled });
     }
   }
 
@@ -379,7 +382,7 @@ function parseAudit(value: unknown, issues: string[]): AuditConfig | undefined {
     issues.push("config.audit must be a table");
     return undefined;
   }
-  inspectKeys(value, ["enabled", "facility"], "config.audit", issues);
+  inspectKeys(value, ["enabled", "facility", "tools"], "config.audit", issues);
   const enabled = own(value, "enabled");
   const facility = enumValue(
     own(value, "facility"),
@@ -390,6 +393,26 @@ function parseAudit(value: unknown, issues: string[]): AuditConfig | undefined {
   if (typeof enabled !== "boolean") issues.push("config.audit.enabled must be a boolean");
   if (typeof enabled !== "boolean" || facility === undefined) return undefined;
   return Object.freeze({ enabled, facility });
+}
+
+function parseAuditTools(
+  value: unknown,
+  toolNames: readonly string[],
+  issues: string[],
+): Readonly<Record<string, boolean>> {
+  const tools = isRecord(value) ? own(value, "tools") : undefined;
+  if (!isRecord(tools)) {
+    issues.push("config.audit.tools must be a table");
+    return Object.freeze({});
+  }
+  inspectKeys(tools, toolNames, "config.audit.tools", issues);
+  const entries: Array<[string, boolean]> = [];
+  for (const name of toolNames) {
+    const enabled = own(tools, name);
+    if (typeof enabled !== "boolean") issues.push(`config.audit.tools.${name} must be a boolean`);
+    else entries.push([name, enabled]);
+  }
+  return Object.freeze(Object.fromEntries(entries));
 }
 
 function parseExports(value: unknown, issues: string[]): ExportsConfig | undefined {
@@ -576,22 +599,11 @@ function parseExecution(value: unknown, issues: string[]): ExecutionConfig | und
       });
 }
 
-export function parseConfig(
-  sourceText: string,
+function parseCompleteConfig(
+  parsed: UnknownRecord,
   source: string,
   catalog: ManagedExtensionCatalog,
 ): SandboxConfig<AuthoredPiEnvironmentValue> {
-  let parsed: unknown;
-  try {
-    parsed = parseToml(sourceText);
-  } catch (error) {
-    throw new ConfigError(source, ["TOML syntax is invalid"], error);
-  }
-
-  if (!isRecord(parsed)) {
-    throw new ConfigError(source, ["config must be a table"]);
-  }
-
   const issues: string[] = [];
   inspectKeys(parsed, ROOT_KEYS, "config", issues, ["skills", "subagents", "extension_guidance"]);
   const guidanceValue = own(parsed, "extension_guidance");
@@ -623,8 +635,8 @@ export function parseConfig(
   }
 
   const configVersion = own(parsed, "config_version");
-  if (configVersion !== 14) {
-    issues.push("config.config_version must be the integer 14");
+  if (configVersion !== 15) {
+    issues.push("config.config_version must be the integer 15");
   }
 
   const modelsFileValue = own(parsed, "models_file");
@@ -699,7 +711,7 @@ export function parseConfig(
   }
   if (exports?.enabled && (execution?.backend === "direct" || filesystem?.cwdWritable !== false)) {
     issues.push(
-      "config.exports.enabled requires a confined backend and filesystem.cwd_writable = false",
+      "config.exports.enabled requires a confined backend and config.filesystem.cwd_writable = false",
     );
   }
   const extensions = parseExtensions(own(parsed, "extensions"), catalog, issues);
@@ -722,7 +734,8 @@ export function parseConfig(
       extension.kind === "managed" ? extension.tools.map((tool) => tool.name) : extension.toolNames,
     ),
   ];
-  const tools = parseToolPolicies(own(parsed, "tools"), toolNames, issues);
+  const auditTools = parseAuditTools(own(parsed, "audit"), toolNames, issues);
+  const tools = parseToolPolicies(own(parsed, "tools"), toolNames, auditTools, issues);
 
   if (
     issues.length > 0 ||
@@ -745,7 +758,7 @@ export function parseConfig(
   }
 
   return Object.freeze({
-    configVersion: 14,
+    configVersion: 15,
     ...(guidanceValue === undefined ? {} : { extensionGuidance: Object.freeze(extensionGuidance) }),
     codemode,
     mcp,
@@ -762,5 +775,226 @@ export function parseConfig(
     environment,
     extensions,
     tools,
+  });
+}
+
+/** Stable comparison of parsed set-valued fields, without executable/path resolution. */
+function canonicalCommandSet(rule: BashCommandSet): string {
+  return JSON.stringify({
+    commands: [...rule.commands].sort(),
+    mode: rule.mode,
+    sessionGrant: rule.sessionGrant,
+    requiredFlags: [...rule.requiredFlags].sort(),
+    optionalFlags: [...rule.optionalFlags].sort(),
+    options: Object.fromEntries(
+      Object.keys(rule.options)
+        .sort()
+        .map((name) => {
+          const option = rule.options[name]!;
+          return [
+            name,
+            option.kind === "values"
+              ? { kind: option.kind, values: [...option.values].sort() }
+              : { kind: option.kind },
+          ];
+        }),
+    ),
+    operands: { min: rule.operands.min, max: rule.operands.max },
+  });
+}
+
+function modeProvenance(issue: string, name: string, mode: UnknownRecord): string {
+  const mapped = issue.replace(
+    /config\.(filesystem\.cwd_writable|exports\.enabled|tools\.(?:bash|write|edit))\b/gu,
+    (path, field: string) => {
+      const [table, key] = field.split(".");
+      const overlay = own(mode, table!);
+      return isRecord(overlay) && Object.hasOwn(overlay, key!)
+        ? `config.workspace.modes.${name}.${field}`
+        : path;
+    },
+  );
+  return `workspace mode ${JSON.stringify(name)}: ${mapped}`;
+}
+
+/** Parse authored policy once, then validate every complete mode before selection. */
+export function parseConfig(
+  sourceText: string,
+  source: string,
+  catalog: ManagedExtensionCatalog,
+): AuthoredSandboxConfig<AuthoredPiEnvironmentValue> {
+  if (Buffer.byteLength(sourceText) > MAXIMUM_CONFIG_BYTES)
+    throw new ConfigError(source, [`configuration exceeds ${MAXIMUM_CONFIG_BYTES} bytes`]);
+  let parsed: unknown;
+  try {
+    parsed = parseToml(sourceText);
+  } catch (error) {
+    throw new ConfigError(source, ["TOML syntax is invalid"], error);
+  }
+  if (!isRecord(parsed)) throw new ConfigError(source, ["config must be a table"]);
+  const issues: string[] = [];
+  inspectKeys(
+    parsed,
+    [...ROOT_KEYS.filter((key) => key !== "exports"), "workspace"],
+    "config",
+    issues,
+    ["exports", "skills", "subagents", "extension_guidance"],
+  );
+  if (own(parsed, "config_version") !== 15) {
+    issues.push("config.config_version must be the integer 15");
+    throw new ConfigError(source, issues);
+  }
+  const workspace = own(parsed, "workspace");
+  if (!isRecord(workspace)) {
+    issues.push("config.workspace must be a table");
+    throw new ConfigError(source, issues);
+  }
+  inspectKeys(workspace, ["default", "allowed", "modes"], "config.workspace", issues);
+  const defaultName = own(workspace, "default");
+  if (!isWorkspaceModeName(defaultName))
+    issues.push("config.workspace.default must be a valid mode identifier");
+  const allowed = own(workspace, "allowed");
+  if (
+    !Array.isArray(allowed) ||
+    allowed.length === 0 ||
+    allowed.length > MAXIMUM_WORKSPACE_MODES ||
+    !allowed.every(isWorkspaceModeName) ||
+    new Set(allowed).size !== allowed.length
+  )
+    issues.push("config.workspace.allowed must contain 1–32 distinct mode identifiers");
+  const modes = own(workspace, "modes");
+  if (
+    !isRecord(modes) ||
+    Object.keys(modes).length === 0 ||
+    Object.keys(modes).length > MAXIMUM_WORKSPACE_MODES
+  ) {
+    issues.push("config.workspace.modes must contain 1–32 mode definitions");
+    throw new ConfigError(source, issues);
+  }
+  if (typeof defaultName === "string" && !Object.hasOwn(modes, defaultName))
+    issues.push(`config.workspace.default names an undefined mode: ${JSON.stringify(defaultName)}`);
+  if (Array.isArray(allowed)) {
+    for (const name of allowed) {
+      if (typeof name === "string" && !Object.hasOwn(modes, name))
+        issues.push(`config.workspace.allowed names an undefined mode: ${JSON.stringify(name)}`);
+    }
+    if (!allowed.includes(defaultName))
+      issues.push("config.workspace.default must belong to config.workspace.allowed");
+  }
+
+  // Check authored entries even when every mode replaces them. Only effective
+  // relationships (such as read-tool prerequisites and exports/CWD) wait for composition.
+  const commonFilesystem = own(parsed, "filesystem");
+  if (isRecord(commonFilesystem))
+    parseFilesystem(
+      {
+        ...commonFilesystem,
+        cwd_writable: Object.hasOwn(commonFilesystem, "cwd_writable")
+          ? commonFilesystem.cwd_writable
+          : true,
+      },
+      issues,
+    );
+  else issues.push("config.filesystem must be a table");
+  if (Object.hasOwn(parsed, "exports")) parseExports(parsed.exports, issues);
+  const commandSets = new Map<string, { canonical: string; path: string }>();
+  const inspectPolicy = (value: unknown, path: string, name: string) => {
+    const policy = parseSubjectPolicy(value, path, name, issues);
+    for (const [id, rule] of Object.entries(policy?.commandSets ?? {})) {
+      const location = `${path}.command_sets.${id}`;
+      const canonical = canonicalCommandSet(rule);
+      const previous = commandSets.get(id);
+      if (previous !== undefined && previous.canonical !== canonical)
+        issues.push(`${location} conflicts with the command-set definition at ${previous.path}`);
+      else commandSets.set(id, { canonical, path: location });
+    }
+  };
+  const commonTools = own(parsed, "tools");
+  if (isRecord(commonTools)) {
+    for (const [name, value] of Object.entries(commonTools))
+      inspectPolicy(value, `config.tools.${name}`, name);
+  } else issues.push("config.tools must be a table");
+
+  for (const [name, mode] of Object.entries(modes)) {
+    const path = `config.workspace.modes.${name}`;
+    if (!isWorkspaceModeName(name)) issues.push(`${path} has an invalid mode identifier`);
+    if (!isRecord(mode)) {
+      issues.push(`${path} must be a table`);
+      continue;
+    }
+    inspectAllowedKeys(mode, ["description", "filesystem", "exports", "tools"], path, issues);
+    if (Object.hasOwn(mode, "description")) {
+      const description = mode.description;
+      if (
+        typeof description !== "string" ||
+        description.trim().length === 0 ||
+        Buffer.byteLength(description) > 256 ||
+        /[\p{Cc}\p{Cf}\p{Zl}\p{Zp}\uD800-\uDFFF]/u.test(description)
+      )
+        issues.push(
+          `${path}.description must be nonblank single-line text of at most 256 bytes without control characters`,
+        );
+    }
+    for (const [table, field] of [
+      ["filesystem", "cwd_writable"],
+      ["exports", "enabled"],
+    ] as const) {
+      if (!Object.hasOwn(mode, table)) continue;
+      const entry = mode[table];
+      if (!isRecord(entry)) issues.push(`${path}.${table} must be a table`);
+      else {
+        inspectKeys(entry, [field], `${path}.${table}`, issues);
+        if (typeof own(entry, field) !== "boolean")
+          issues.push(`${path}.${table}.${field} must be a boolean`);
+      }
+    }
+    if (Object.hasOwn(mode, "tools")) {
+      const entries = mode.tools;
+      if (!isRecord(entries) || Object.keys(entries).length === 0)
+        issues.push(`${path}.tools must be a nonempty table`);
+      else {
+        inspectAllowedKeys(entries, MODE_TOOLS, `${path}.tools`, issues);
+        for (const [tool, value] of Object.entries(entries))
+          inspectPolicy(value, `${path}.tools.${tool}`, tool);
+      }
+    }
+  }
+  if (issues.length > 0) throw new ConfigError(source, issues);
+
+  const common = { ...parsed };
+  delete common.workspace;
+  const resolved: Array<[string, WorkspaceMode<AuthoredPiEnvironmentValue>]> = [];
+  for (const [name, rawMode] of Object.entries(modes)) {
+    const mode = rawMode as UnknownRecord;
+    const composed = {
+      ...common,
+      filesystem: {
+        ...(commonFilesystem as UnknownRecord),
+        ...(mode.filesystem as UnknownRecord | undefined),
+      },
+      ...(mode.exports === undefined ? {} : { exports: mode.exports }),
+      tools: { ...(commonTools as UnknownRecord), ...(mode.tools as UnknownRecord | undefined) },
+    };
+    try {
+      const config = parseCompleteConfig(composed, source, catalog);
+      resolved.push([
+        name,
+        Object.freeze({
+          ...(mode.description === undefined ? {} : { description: mode.description as string }),
+          config,
+        }),
+      ]);
+    } catch (error) {
+      if (!(error instanceof ConfigError)) throw error;
+      issues.push(...error.issues.map((issue) => modeProvenance(issue, name, mode)));
+    }
+  }
+  if (issues.length > 0) throw new ConfigError(source, issues);
+  return Object.freeze({
+    workspace: Object.freeze({
+      default: defaultName as string,
+      allowed: Object.freeze([...(allowed as string[])].sort()),
+      modes: Object.freeze(Object.fromEntries(resolved)),
+    }),
   });
 }

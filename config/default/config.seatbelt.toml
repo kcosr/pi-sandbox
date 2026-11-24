@@ -1,4 +1,4 @@
-config_version = 14
+config_version = 15
 models_file = "/etc/pi-sandbox/models.json"
 
 [codemode]
@@ -19,6 +19,15 @@ retention_days = 365
 [audit]
 enabled = false
 facility = "local0"
+
+[audit.tools]
+read = false
+grep = false
+find = false
+ls = false
+write = true
+edit = true
+bash = true
 
 [filesystem]
 cwd_writable = true
@@ -45,34 +54,51 @@ mode = "none"
 [tools.read]
 mode = "allow"
 session_grant = "never"
-audit = false
 
 [tools.grep]
 mode = "allow"
 session_grant = "never"
-audit = false
 
 [tools.find]
 mode = "allow"
 session_grant = "never"
-audit = false
 
 [tools.ls]
 mode = "allow"
 session_grant = "never"
-audit = false
 
 [tools.write]
 mode = "ask"
 session_grant = "never"
-audit = true
 
 [tools.edit]
 mode = "ask"
 session_grant = "never"
-audit = true
 
 [tools.bash]
 mode = "disabled"
 session_grant = "never"
-audit = true
+
+[workspace]
+default = "host"
+allowed = ["host", "sandbox"]
+
+[workspace.modes.host]
+description = "Work in the host project with approval for changes."
+
+[workspace.modes.sandbox]
+description = "Work in temporary storage and explicitly save deliverables."
+
+[workspace.modes.sandbox.filesystem]
+cwd_writable = false
+
+[workspace.modes.sandbox.exports]
+enabled = true
+
+[workspace.modes.sandbox.tools.write]
+mode = "allow"
+session_grant = "never"
+
+[workspace.modes.sandbox.tools.edit]
+mode = "allow"
+session_grant = "never"

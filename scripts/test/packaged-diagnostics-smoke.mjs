@@ -28,6 +28,7 @@ import { testSharedSkills } from "./skills-smoke.mjs";
 import { testManagedSubagents } from "./subagents-smoke.mjs";
 import { testGitDestination } from "./git-destination-smoke.mjs";
 import { testRpcSessionLifecycle } from "./rpc-lifecycle-smoke.mjs";
+import { testWorkspaceModes } from "./workspace-modes-smoke.mjs";
 
 import { prepareHostIndependentSmokeConfig } from "./packaged-smoke-config.mjs";
 
@@ -172,14 +173,13 @@ try {
     "--",
     sandboxExecutable,
     ...configArguments,
-    "--mode",
-    "rpc",
   ];
-  const launch = (extra = []) =>
+  const launchManaged = (extra = []) =>
     spawn(bubblewrapExecutable, [...launcherArguments, ...extra], {
       env: environment,
       stdio: ["pipe", "pipe", "pipe"],
     });
+  const launch = (extra = []) => launchManaged(["--mode", "rpc", ...extra]);
   child = launch(["--session", sessionFixtures.selected]);
   exitPromise = waitForExit(child);
   void exitPromise.catch((error) => {
@@ -390,6 +390,13 @@ try {
     userState,
     username: accountRecord[0],
     uid: process.geteuid(),
+  });
+  await testWorkspaceModes({
+    launch: launchManaged,
+    configPath: releaseManifest.layout.allowConfigOverride
+      ? overridePath
+      : join(defaultsDirectory, "config.toml"),
+    workspace,
   });
   await assert.rejects(lstat(dotenvSessionDir), { code: "ENOENT" });
 

@@ -307,6 +307,13 @@ Version-3 distribution manifests explicitly select `allow_config_override`;
 when true, a leading `--config FILE` selects a different TOML for this process.
 The flag is consumed before Pi argument handling, and invalid selected input
 fails closed. Managed builds set the switch to false and reject the flag.
+The following optional `--workspace-mode NAME` selector chooses an admitted
+main-defined mode; otherwise the effective configured default is used.
+Main schema 15 separates authored common defaults and mode overlays from complete
+effective runtime policy. Parsing is bounded to 1 MiB, validates every authored
+entry and composes every mode, including disallowed definitions. Common settings
+need not be launchable alone. Current-platform guards run before broker access
+and for installation/backend queries; invalid main policy fails before selection.
 When configured, the Bun process asks the
 separate static Rust broker for the caller's combined user/group rules. The broker uses kernel
 peer credentials, resolves account and primary/supplementary membership through
@@ -314,10 +321,15 @@ the host NSS resolver, and reads protected root-owned rules. It accepts one
 newline-delimited request without requiring a client half-close. Matching
 explicit permissions combine using least restrictive wins; conflicting backend,
 model, or scoped environment values fail. It returns the environment and optional model,
-execution, network, filesystem, MCP enablement/approval, and atomic tool-policy patch. If no rules match, the broker
+execution, network, filesystem, workspace allowed/default, MCP enablement/approval,
+and atomic tool-policy patch. Protocol and rule files use version 11. If no rules match, the broker
 returns an empty patch. The Bun process validates the response independently,
-overlays it on the global policy and scoped environment from the main TOML, constructs one effective
-configuration, and loads only its selected model catalog. Pi-scoped values are
+resolves effective workspace allowed/default metadata, selects a composed mode,
+then applies the remaining policy patch once. Matching explicit allowed arrays
+union before replacing the main list; explicit defaults must agree. Descriptions
+and definitions stay in main policy. Backend/platform and other effective policy
+constraints are rechecked after overrides. The application constructs one
+immutable effective configuration and loads only its selected model catalog. Pi-scoped values are
 applied to the trusted host Pi process, sandbox-scoped values are added to the
 cleared Bubblewrap/Seatbelt environment or overlaid on the inherited direct-command
 environment, and extension-scoped values are admitted only
@@ -325,6 +337,23 @@ for their named extension. The patched Pi runtime omits its internal model
 catalog. `PI_CODING_AGENT_DIR` still selects user credentials, sessions,
 settings, skills, themes, and logs, but cannot redirect administrative policy,
 broker selection, or models. Missing or invalid effective inputs abort startup.
+
+Mode overlays change only CWD writability, exports, and complete Bash/write/edit
+invocation entries. Main `audit.tools` is normalized into existing effective tool
+audit flags, so policy engines, executors and audit transport receive complete
+policy without knowing the authored overlay shape. A supplied Bash entry replaces
+its class and command-set exceptions as well. Command-set IDs must describe the
+same normalized rule wherever reused within one main snapshot.
+
+`--list-workspace-modes` performs main validation and authenticated mode-access
+resolution, then prints only permitted names/descriptions and the default. It
+does not load models, resolve main environment-file references, create sessions,
+connect MCP or construct executors. The existing broker still resolves its rule
+values. Selection and listing are process launch operations, not Pi interface
+modes. The selected mode and final policy remain fixed across conversation
+replacement, reload, executor recreation and managed children; a new process
+resolves them again. `/sandbox` displays metadata and final behavior without
+adding mode labels to the model environment prompt or automatic startup output.
 
 Before applying the effective environment or starting executors, operational
 startup expands bare `~`, leading `~/`, and account macros in configured scoped
@@ -705,6 +734,13 @@ structured records to local syslog and acknowledges successful submission.
 Server logging infrastructure owns persistence, rotation, retention, and
 forwarding. This service is independent of user/group configuration resolution;
 it is not an execution backend and does not run tool operations.
+
+The collector's main-config reader requires schema 15 and structurally checks
+the Boolean `audit.tools` map. The application owns exact catalog coverage,
+including disabled and user-hidden configured tools. MCP audit remains in its
+server rules. Audit wire 5 and record schema 6 stay unchanged; records do not
+identify the workspace mode or configuration revision. Reused command-set IDs
+are consistent within one configuration snapshot, not across deployments.
 
 ## Explicit private-file saving
 
