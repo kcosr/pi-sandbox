@@ -8,10 +8,11 @@
     "#pi-sandbox-compiled-layout": "./src/build-layout/default.ts"
   },
   "engines": {
-    "node": ">=24"
+    "node": ">=24",
+    "bun": ">=1.4.4"
   },
   "scripts": {
-    "build": "npm run build:application && node scripts/build-broker.mjs && node scripts/build-audit-collector.mjs",
+    "build": "npm run build:application && node scripts/build-service.mjs",
     "build:application": "node scripts/clean-dist.mjs && tsc -p tsconfig.build.json && node scripts/build-bundles.mjs",
     "build:release": "node scripts/build-release.mjs",
     "format": "prettier --write .",
@@ -19,11 +20,9 @@
     "lint": "eslint .",
     "test": "vitest run",
     "test:e2e": "vitest run tests/e2e",
-    "test:audit-collector": "node scripts/test-audit-collector.mjs",
-    "test:broker": "node scripts/test-broker.mjs",
     "test:build-composition": "node scripts/test/build-composition.mjs",
     "test:distribution": "node scripts/test/distribution.mjs && node --test scripts/test/tool-bundle.mjs scripts/test/skills.mjs",
-    "test:install": "npm run test:install:linux && npm run test:install:macos",
+    "test:install": "npm run test:install:linux && npm run test:install:macos && node --test scripts/test/service-install.mjs",
     "test:install:linux": "node scripts/test/install-smoke.mjs",
     "test:install:macos": "node scripts/test/macos-install-smoke.mjs",
     "test:integration": "vitest run tests/integration",
@@ -34,10 +33,13 @@
     "verify:release": "node scripts/verify-release.mjs",
     "test:extension": "node scripts/test/sandbox-extension-package.mjs && node scripts/test/git-extension-package.mjs && node scripts/test/subagents-extension-package.mjs",
     "test:version": "node --test scripts/test/version.mjs",
-    "build:extensions": "node scripts/build-extensions.mjs"
+    "build:extensions": "node scripts/build-extensions.mjs",
+    "test:service": "node scripts/test-service.mjs",
+    "build:service-release": "node scripts/build-service-release.mjs"
   },
   "dependencies": {
-    "@iarna/toml": "2.2.5"
+    "@iarna/toml": "2.2.5",
+    "undici": "8.12.3"
   },
   "devDependencies": {
     "@earendil-works/pi-ai": "1.5.0",

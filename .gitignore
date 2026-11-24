@@ -1,8 +1,6 @@
 node_modules/
 dist/
 coverage/
-/broker/target/
-/audit-collector/target/
 .pi/
 
 .tmp/
@@ -16,3 +14,7 @@ release/
 *.zip
 
 /packages/*/provenance.json
+
+/service/target/
+
+__pycache__/

@@ -5,7 +5,7 @@ import { parse as parseToml, stringify } from "@iarna/toml";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createManagedExtensionCatalog } from "../managed-extensions/catalog.js";
 import { loadConfig } from "./load.js";
-import { MAXIMUM_CONFIG_BYTES, parseConfig } from "./parse.js";
+import { MAXIMUM_CONFIG_BYTES, parseConfig as parseLocalConfig } from "./parse.js";
 import { resolveWorkspaceAccess, resolveWorkspaceSelection } from "./workspace.js";
 
 vi.mock("node:fs/promises", async (importOriginal) => {
@@ -132,7 +132,7 @@ describe("workspace mode composition", () => {
         deniedPaths: [],
       });
       expect(config.exports).toEqual({ enabled: mode.exports });
-      expect(config.audit).toEqual({ enabled: false, facility: "local0" });
+      expect(config.audit).toEqual({ enabled: false });
       // These explicit prior/default expectations also detect missing audit-map integration,
       // session offers or inherited Bash exceptions in any packaged mode.
       expect(config.tools).toEqual({
@@ -463,3 +463,7 @@ describe("bounded main configuration", () => {
     expect(close).toHaveBeenCalledOnce();
   });
 });
+
+function parseConfig(...args: Parameters<typeof parseLocalConfig>) {
+  return parseLocalConfig(...args).policy;
+}

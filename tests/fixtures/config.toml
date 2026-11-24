@@ -1,4 +1,4 @@
-config_version = 15
+config_version = 16
 models_file = "/etc/pi-sandbox/models.json"
 
 [codemode]
@@ -14,7 +14,6 @@ retention_days = 0
 
 [audit]
 enabled = false
-facility = "local0"
 
 [filesystem]
 cwd_writable = true
@@ -24,8 +23,8 @@ denied_paths = []
 [execution]
 backend = "bubblewrap"
 
-[identity]
-mode = "disabled"
+[model_auth]
+personal_providers = []
 
 [network]
 mode = "none"

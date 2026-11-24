@@ -16,9 +16,16 @@ const RESERVED_ARGUMENTS = new Set([
   "--no-builtin-tools",
   "-nbt",
   "--offline",
+  "--api-key",
 ]);
 
-const RESERVED_PREFIXES = ["--extension=", "--no-extensions=", "--no-builtin-tools=", "--offline="];
+const RESERVED_PREFIXES = [
+  "--api-key=",
+  "--extension=",
+  "--no-extensions=",
+  "--no-builtin-tools=",
+  "--offline=",
+];
 
 // Pinned Pi options that consume the next argument even when it starts with '-'.
 const VALUE_ARGUMENTS = new Set([
@@ -71,7 +78,11 @@ export function validateManagedArguments(args: readonly string[]): void {
       throw new UnsafeManagedArgumentError(argument);
     }
   }
-  if (args[0] !== "--validate-installation") {
+  if (
+    !["--validate-installation", "--validate-service", "--validate-bootstrap"].includes(
+      args[0] ?? "",
+    )
+  ) {
     for (const [argument] of managedArguments(args)) {
       if (argument === "--candidate-payload" || argument.startsWith("--candidate-payload=")) {
         throw new UnsafeManagedArgumentError(argument);

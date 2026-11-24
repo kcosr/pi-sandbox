@@ -1,7 +1,6 @@
 import { createHash } from "node:crypto";
 import { readFile, readdir } from "node:fs/promises";
 import { dirname, join, resolve } from "node:path";
-import { parse as parseToml } from "@iarna/toml";
 
 const property = (name, value) => ({ name: `pi-sandbox:${name}`, value: String(value) });
 const digest = (value) => createHash("sha256").update(value).digest("hex");
@@ -102,48 +101,6 @@ export async function createSbom({
         property("manifest-sha256", extension.manifestSha256),
       ],
     });
-  }
-  if (platform.startsWith("linux")) {
-    for (const crate of ["broker", "audit-collector"]) {
-      const cargoLock = parseToml(
-        await readFile(join(repositoryRoot, crate, "Cargo.lock"), "utf8"),
-      );
-      const binary = crate === "broker" ? "identity-broker" : crate;
-      add({
-        type: "application",
-        "bom-ref": `binary:${binary}`,
-        name: `pi-sandbox-${binary}`,
-        version: packageJson.version,
-        hashes: [
-          {
-            alg: "SHA-256",
-            content: digest(await readFile(join(payload, `pi-sandbox-${binary}`))),
-          },
-        ],
-        properties: [property("cargo-inventory", crate)],
-      });
-      for (const pkg of cargoLock.package) {
-        const ref = `cargo:${crate}:${pkg.name}@${pkg.version}`;
-        add({
-          type: "library",
-          "bom-ref": ref,
-          name: pkg.name,
-          version: pkg.version,
-          ...(pkg.source?.startsWith("registry+")
-            ? { purl: `pkg:cargo/${pkg.name}@${pkg.version}` }
-            : {}),
-          ...(pkg.checksum ? { hashes: [{ alg: "SHA-256", content: pkg.checksum }] } : {}),
-          properties: [
-            property("artifact", `binary:${binary}`),
-            property("evidence", "Cargo.lock"),
-            property(
-              "scope-note",
-              "Build and runtime dependency inventory; includes procedural macros and build-only crates.",
-            ),
-          ],
-        });
-      }
-    }
   }
   if (bubblewrap?.mode === "bundled")
     add({

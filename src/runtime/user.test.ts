@@ -18,7 +18,7 @@ describe("runtime user admission", () => {
 
   it("admits only the root-run administrative commands used by installers", () => {
     expect(() => assertRuntimeUser(["--validate-installation"], 0)).not.toThrow();
-    expect(() => assertRuntimeUser(["--print-execution-backend"], 0)).not.toThrow();
+    expect(() => assertRuntimeUser(["--print-build-capabilities"], 0)).not.toThrow();
     expect(() => assertRuntimeUser(["--validate-installation-extra"], 0)).toThrow(
       "refusing to run as root",
     );

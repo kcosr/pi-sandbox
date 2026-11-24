@@ -1,17 +1,25 @@
 #!/bin/sh
 set -eu
+configuration_source=local
+expected_arch=x64
+expected_platform=darwin
 bundled_commands=''
 bundle_has() { case " $bundled_commands " in *" $1 "*) return 0 ;; *) return 1 ;; esac; }
 
 usage() {
-  echo "usage: install.sh [--replace-config]" >&2
+  echo "usage: install.sh [--replace-config | --validation-user NAME ...]" >&2
   exit 2
 }
 
 replace_config=0
+validation_users=
 while [ "$#" -gt 0 ]; do
   case "$1" in
-    --replace-config) replace_config=1; shift ;;
+    --replace-config) [ "$configuration_source" = local ] || { echo "--replace-config requires a local configuration build" >&2; exit 2; }; replace_config=1; shift ;;
+    --validation-user)
+      [ "$configuration_source" = service ] && [ "$#" -ge 2 ] || usage
+      case "$2" in ""|-*|*[!a-zA-Z0-9_.-]*) usage ;; esac
+      validation_users="$validation_users $2"; shift 2 ;;
     *) usage ;;
   esac
 done
@@ -47,9 +55,16 @@ defaults_models="$payload/defaults/models.json"
 [ -f "$checksums" ] && [ ! -L "$checksums" ] || { echo "release SHA256SUMS is missing" >&2; exit 1; }
 [ -d "$payload" ] && [ ! -L "$payload" ] || { echo "release payload is missing" >&2; exit 1; }
 [ -f "$candidate" ] && [ -x "$candidate" ] && [ ! -L "$candidate" ] || { echo "release executable is invalid" >&2; exit 1; }
-for required in "$defaults_config" "$defaults_models" "$payload/release-manifest.json" "$payload/sbom.cdx.json"; do
+for required in "$payload/release-manifest.json" "$payload/sbom.cdx.json"; do
   [ -f "$required" ] && [ ! -L "$required" ] || { echo "release payload is incomplete" >&2; exit 1; }
 done
+if [ "$configuration_source" = local ]; then
+  for required in "$defaults_config" "$defaults_models"; do
+    [ -f "$required" ] && [ ! -L "$required" ] || { echo "local defaults are missing" >&2; exit 1; }
+  done
+else
+  [ ! -e "$payload/defaults" ] || { echo "service builds must not contain local defaults" >&2; exit 1; }
+fi
 [ -z "$(find "$payload" ! -type d ! -type f -print -quit)" ] || {
   echo "release payload contains an unsupported file type" >&2
   exit 1
@@ -134,7 +149,7 @@ expected_link="../libexec/pi-sandbox/pi-sandbox"
 path_exists() { [ -e "$1" ] || [ -L "$1" ]; }
 require_regular() { [ -f "$1" ] && [ ! -L "$1" ] || { echo "$2 must be a regular file" >&2; exit 1; }; }
 
-for parent in "$libexec_parent" "$bin_target" "$etc_target"; do
+for parent in "$libexec_parent" "$bin_target"; do
   if path_exists "$parent"; then [ -d "$parent" ] && [ ! -L "$parent" ] || { echo "invalid installation parent: $parent" >&2; exit 1; }; fi
 done
 if path_exists "$launcher"; then
@@ -144,6 +159,7 @@ if path_exists "$install_base"; then [ -d "$install_base" ] && [ ! -L "$install_
 
 config_present=0
 models_present=0
+if [ "$configuration_source" = local ]; then
 if path_exists "$config"; then require_regular "$config" configuration; config_present=1; fi
 if path_exists "$models"; then require_regular "$models" models.json; models_present=1; fi
 if [ "$config_present" -eq 0 ] && [ "$models_present" -eq 1 ] && [ "$replace_config" -eq 0 ]; then
@@ -151,8 +167,13 @@ if [ "$config_present" -eq 0 ] && [ "$models_present" -eq 1 ] && [ "$replace_con
   exit 1
 fi
 
-mkdir -p "$libexec_parent" "$bin_target" "$etc_target"
-chmod 0755 "$libexec_parent" "$bin_target" "$etc_target"
+  if path_exists "$etc_target"; then [ -d "$etc_target" ] && [ ! -L "$etc_target" ] || { echo "configuration parent must be a regular directory" >&2; exit 1; }; fi
+  mkdir -p "$etc_target"
+  chmod 0755 "$etc_target"
+fi
+
+mkdir -p "$libexec_parent" "$bin_target"
+chmod 0755 "$libexec_parent" "$bin_target"
 lock_dir="$libexec_parent/.pi-sandbox.install.lock"
 mkdir "$lock_dir" 2>/dev/null || { echo "another Pi Sandbox installation is in progress" >&2; exit 1; }
 stage=
@@ -192,24 +213,30 @@ cleanup() {
 trap cleanup EXIT
 trap 'exit 1' HUP INT TERM
 
+capabilities=$("$candidate" --print-build-capabilities)
+case "$capabilities" in *\"configuration_source\":\"$configuration_source\"*) ;; *) echo "candidate configuration source mismatch" >&2; exit 1 ;; esac
+case "$capabilities" in *\"platform\":\"$expected_platform\"*) ;; *) echo "candidate platform mismatch" >&2; exit 1 ;; esac
+case "$capabilities" in *\"architecture\":\"$expected_arch\"*) ;; *) echo "candidate architecture mismatch" >&2; exit 1 ;; esac
+if [ -n "$destdir" ] && [ -n "$validation_users" ]; then echo "--validation-user is not valid with DESTDIR" >&2; exit 2; fi
+if [ "$configuration_source" = local ]; then
 if [ "$config_present" -eq 1 ] && [ "$replace_config" -eq 0 ]; then
   if [ -n "$destdir" ]; then
-    "$candidate" --validate-installation --root "$destdir" --candidate-payload "$payload"
-    execution_backend=$("$candidate" --print-execution-backend --root "$destdir")
+    execution_backend=$("$candidate" --validate-installation --root "$destdir" --candidate-payload "$payload")
   else
-    "$candidate" --validate-installation --candidate-payload "$payload"
-    execution_backend=$("$candidate" --print-execution-backend)
+    execution_backend=$("$candidate" --validate-installation --candidate-payload "$payload")
   fi
 else
   validation_root=$(mktemp -d "${TMPDIR:-/tmp}/pi-sandbox-validate.XXXXXX")
   mkdir -p "$validation_root/etc/pi-sandbox"
   install -m 0644 "$defaults_config" "$validation_root/etc/pi-sandbox/config.toml"
   install -m 0644 "$defaults_models" "$validation_root/etc/pi-sandbox/models.json"
-  "$candidate" --validate-installation --root "$validation_root" --candidate-payload "$payload"
-  execution_backend=$("$candidate" --print-execution-backend --root "$validation_root")
+  execution_backend=$("$candidate" --validate-installation --root "$validation_root" --candidate-payload "$payload")
+fi
+else
+  execution_backend=service
 fi
 case "$execution_backend" in
-  direct|seatbelt) ;;
+  direct|seatbelt|service) ;;
   *) echo "unsupported macOS execution backend: $execution_backend" >&2; exit 1 ;;
 esac
 if [ -z "$destdir" ]; then
@@ -262,8 +289,19 @@ if [ "$skills_present" -eq 1 ]; then
   done < "$payload/skills-modes.txt"
 fi
 
+if [ "$configuration_source" = service ] && [ -z "$destdir" ]; then
+  if [ "$skills_present" -eq 1 ] && [ -z "$validation_users" ]; then
+    echo "service builds containing skills require --validation-user NAME before publication" >&2; exit 2
+  fi
+  for validation_user in $validation_users; do
+    validation_uid=$(id -u "$validation_user") || { echo "validation user does not exist" >&2; exit 2; }
+    [ "$validation_uid" -ne 0 ] || { echo "validation user must be non-root" >&2; exit 2; }
+    (cd / && sudo -H -u "$validation_user" sh -c 'exec env -i HOME="$HOME" USER="$USER" LOGNAME="$LOGNAME" PATH=/usr/bin:/bin "$@"' sh "$stage/pi-sandbox" --validate-service --candidate-payload "$stage")
+  done
+fi
+
 install_defaults=0
-if [ "$config_present" -eq 0 ] || [ "$replace_config" -eq 1 ]; then
+if [ "$configuration_source" = local ] && { [ "$config_present" -eq 0 ] || [ "$replace_config" -eq 1 ]; }; then
   install_defaults=1
   config_stage=$(mktemp "$etc_target/.config.toml.XXXXXX")
   models_stage=$(mktemp "$etc_target/.models.json.XXXXXX")
@@ -303,5 +341,4 @@ complete=1
 echo "installed Pi Sandbox $execution_backend execution package:"
 echo "  $install_base/pi-sandbox"
 echo "  $launcher -> $install_base/pi-sandbox"
-echo "  $config"
-echo "  $models"
+if [ "$configuration_source" = local ]; then echo "  $config"; echo "  $models"; fi

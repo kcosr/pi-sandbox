@@ -24,7 +24,7 @@ import { parse as parseToml } from "@iarna/toml";
 
 import { loadExtensionManifests } from "./build/extension-composition.mjs";
 import { createSbom } from "./build/sbom.mjs";
-import { loadDistribution } from "./build/distribution.mjs";
+import { loadDistribution, releaseLayout } from "./build/distribution.mjs";
 import { renderLayoutText } from "./build/layout-render.mjs";
 import { copyToolBundle, validateNativeToolBundle } from "./build/tool-bundle.mjs";
 import {
@@ -43,8 +43,6 @@ const commonRequiredReleaseFiles = Object.freeze([
   "payload/pi-sandbox/pi-sandbox",
   "payload/pi-sandbox/package.json",
   "payload/pi-sandbox/photon_rs_bg.wasm",
-  "payload/pi-sandbox/defaults/config.toml",
-  "payload/pi-sandbox/defaults/models.json",
   "payload/pi-sandbox/licenses/LICENSE",
   "payload/pi-sandbox/release-manifest.json",
   "payload/pi-sandbox/sbom.cdx.json",
@@ -81,12 +79,26 @@ the repository.
 
 export class ReleaseArgumentError extends Error {}
 
+export function assertBunVersion(version) {
+  const parts = /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$/u.exec(version)?.slice(1).map(Number);
+  if (
+    !parts ||
+    !parts.every(Number.isSafeInteger) ||
+    !(parts[0] > 1 || (parts[0] === 1 && (parts[1] > 4 || (parts[1] === 4 && parts[2] >= 4))))
+  ) {
+    throw new Error(
+      `Bun 1.4.4 or newer stable is required for managed TLS trust isolation; found ${version}`,
+    );
+  }
+  return version;
+}
+
 export function parseReleaseArguments(argv) {
   const options = {
     sourceArchive: undefined,
     out: join(repositoryRoot, "release"),
     config: undefined,
-    models: join(repositoryRoot, "config/default/models.json"),
+    models: undefined,
     distribution: defaultDistribution,
   };
   for (let index = 0; index < argv.length; index += 1) {
@@ -287,10 +299,13 @@ function hostPlatform() {
   throw new Error(`unsupported release platform: ${process.platform}-${process.arch}`);
 }
 
-function releaseRequirements(os, bubblewrap) {
+function releaseRequirements(os, bubblewrap, configuration) {
   const nativeHelper = os === "linux" ? "linux-platform-x11.node" : "darwin-platform.node";
   const requiredFiles = [
     ...commonRequiredReleaseFiles,
+    ...(configuration.source === "local"
+      ? ["payload/pi-sandbox/defaults/config.toml", "payload/pi-sandbox/defaults/models.json"]
+      : []),
     `payload/pi-sandbox/native/${os}/prebuilds/${os}-${process.arch}/${nativeHelper}`,
   ];
   if (os === "darwin") {
@@ -302,21 +317,11 @@ function releaseRequirements(os, bubblewrap) {
   return {
     files: [
       ...requiredFiles,
-      "payload/pi-sandbox/pi-sandbox-identity-broker",
-      "payload/pi-sandbox/pi-sandbox-audit-collector",
-      "payload/pi-sandbox/systemd/pi-sandbox-audit.socket",
-      "payload/pi-sandbox/systemd/pi-sandbox-audit@.service",
-      "payload/pi-sandbox/systemd/pi-sandbox-identity-broker.socket",
-      "payload/pi-sandbox/systemd/pi-sandbox-identity-broker@.service",
-      "payload/pi-sandbox/licenses/identity-broker/THIRD-PARTY-NOTICES.md",
       ...(bubblewrap.mode === "bundled"
         ? ["payload/pi-sandbox/bwrap", "payload/pi-sandbox/licenses/bubblewrap/LICENSE"]
         : []),
     ],
-    directories: [
-      ...commonRequiredReleaseDirectories,
-      "payload/pi-sandbox/licenses/identity-broker",
-    ],
+    directories: commonRequiredReleaseDirectories,
   };
 }
 
@@ -379,34 +384,6 @@ async function copyPrivateEntrypoint(sourceRoot) {
   );
 }
 
-async function copyBrokerLicenses(payload) {
-  const licensesRoot = join(payload, "licenses");
-  const sourceRoot = join(repositoryRoot, "broker/vendor");
-  const targetRoot = join(licensesRoot, "identity-broker");
-  await mkdir(targetRoot, { recursive: true });
-  await copyFile(join(repositoryRoot, "LICENSE"), join(licensesRoot, "LICENSE"));
-  await copyFile(
-    join(repositoryRoot, "broker/THIRD-PARTY-NOTICES.md"),
-    join(targetRoot, "THIRD-PARTY-NOTICES.md"),
-  );
-
-  const packages = await readdir(sourceRoot, { withFileTypes: true });
-  for (const packageEntry of packages.filter((entry) => entry.isDirectory())) {
-    const packageSource = join(sourceRoot, packageEntry.name);
-    const licenseFiles = (await readdir(packageSource, { withFileTypes: true })).filter(
-      (entry) => entry.isFile() && /^(?:LICENSE|COPYING|UNLICENSE)(?:[-.].*)?$/u.test(entry.name),
-    );
-    if (licenseFiles.length === 0) {
-      throw new Error(`vendored broker package has no license file: ${packageEntry.name}`);
-    }
-    const packageTarget = join(targetRoot, packageEntry.name);
-    await mkdir(packageTarget);
-    for (const license of licenseFiles) {
-      await copyFile(join(packageSource, license.name), join(packageTarget, license.name));
-    }
-  }
-}
-
 async function renderFile(source, target, layout, os, mode = 0o644) {
   const contents = renderLayoutText(await readFile(source, "utf8"), layout, os);
   await writeFile(target, contents, { mode });
@@ -458,14 +435,13 @@ async function inspectReleaseArchive(
     throw new Error("release manifest is invalid", { cause });
   }
   const expectedIdentity = {
-    manifestVersion: 4,
+    manifestVersion: 5,
     product: "pi-sandbox",
     version: expectedRelease.version,
     buildVersion: expectedRelease.buildVersion,
     platform: expectedRelease.platform,
     architecture: expectedRelease.architecture,
     executionBackends: expectedRelease.executionBackends,
-    identityBroker: expectedRelease.identityBroker,
     bubblewrap: expectedRelease.bubblewrap,
     toolBundle: expectedRelease.toolBundle,
     skillsBundle: expectedRelease.skillsBundle,
@@ -482,7 +458,6 @@ async function inspectReleaseArchive(
     platform: manifest.platform,
     architecture: manifest.architecture,
     executionBackends: manifest.executionBackends,
-    identityBroker: manifest.identityBroker,
     bubblewrap: manifest.bubblewrap,
     toolBundle: manifest.toolBundle,
     skillsBundle: manifest.skillsBundle,
@@ -512,6 +487,10 @@ export async function buildRelease(argv, { verifyPatchedSource, verifyPackagedRe
     return;
   }
 
+  // Older Bun runtimes union ambient/system roots into an explicitly selected CA
+  // set. Refuse them before creating temporary trees or mutating build outputs.
+  const bunVersion = assertBunVersion((await capture("bun", ["--version"])).trim());
+
   const lockPath = join(repositoryRoot, "pi-source.lock.json");
   const packagePath = join(repositoryRoot, "package.json");
   const lock = JSON.parse(await readFile(lockPath, "utf8"));
@@ -520,19 +499,26 @@ export async function buildRelease(argv, { verifyPatchedSource, verifyPackagedRe
   const distribution = await loadDistribution(options.distribution, target.os);
   const skillsBundle = await loadSkillsBundle(distribution.skillsSource);
   validateNativeToolBundle(distribution.toolBundle, target.os, process.arch);
-  options.config ??= join(
-    repositoryRoot,
-    target.os === "darwin" ? "config/default/config.seatbelt.toml" : "config/default/config.toml",
-  );
+  const configuration = distribution.layout.configuration;
+  let packagedConfig;
   validateLock(lock);
-  await assertRegularFile(options.config, "default configuration");
-  await assertRegularFile(options.models, "default models catalog");
-  const packagedConfig = parseToml(await readFile(options.config, "utf8"));
-  validateSkillsConfiguration(skillsBundle, packagedConfig, distribution.layout);
-  if (packagedConfig.models_file !== distribution.layout.defaultModelsPath) {
-    throw new Error(
-      `default configuration models_file must be ${distribution.layout.defaultModelsPath}`,
+  if (configuration.source === "local") {
+    options.config ??= join(
+      repositoryRoot,
+      target.os === "darwin" ? "config/default/config.seatbelt.toml" : "config/default/config.toml",
     );
+    options.models ??= join(repositoryRoot, "config/default/models.json");
+    await assertRegularFile(options.config, "default configuration");
+    await assertRegularFile(options.models, "default models catalog");
+    packagedConfig = parseToml(await readFile(options.config, "utf8"));
+    validateSkillsConfiguration(skillsBundle, packagedConfig, distribution.layout);
+    if (packagedConfig.models_file !== configuration.defaultModelsPath) {
+      throw new Error(
+        `default configuration models_file must be ${configuration.defaultModelsPath}`,
+      );
+    }
+  } else if (options.config !== undefined || options.models !== undefined) {
+    throw new ReleaseArgumentError("service-source builds reject --config and --models");
   }
   const composedExtensions = await loadExtensionManifests(distribution.extensionManifests);
   if (target.os === "linux") {
@@ -674,46 +660,9 @@ export async function buildRelease(argv, { verifyPatchedSource, verifyPackagedRe
       throw new Error("private Bun bundle must use one compiled Pi runtime and embed QuickJS WASM");
     }
 
+    await mkdir(join(payload, "licenses"), { recursive: true });
+    await copyFile(join(repositoryRoot, "LICENSE"), join(payload, "licenses/LICENSE"));
     if (os === "linux") {
-      process.stdout.write("Compiling the static identity broker\n");
-      await run(
-        process.execPath,
-        [
-          join(repositoryRoot, "scripts/build-broker.mjs"),
-          join(payload, "pi-sandbox-identity-broker"),
-        ],
-        { env: cleanEnvironment },
-      );
-      await run(
-        process.execPath,
-        [
-          join(repositoryRoot, "scripts/build-audit-collector.mjs"),
-          join(payload, "pi-sandbox-audit-collector"),
-        ],
-        { env: cleanEnvironment },
-      );
-      const systemdTarget = join(payload, "systemd");
-      await mkdir(systemdTarget);
-      for (const unit of [
-        "pi-sandbox-identity-broker.socket",
-        "pi-sandbox-identity-broker@.service",
-      ]) {
-        await renderFile(
-          join(repositoryRoot, "packaging/systemd", unit),
-          join(systemdTarget, unit),
-          distribution.layout,
-          os,
-        );
-      }
-      for (const unit of ["pi-sandbox-audit.socket", "pi-sandbox-audit@.service"]) {
-        await renderFile(
-          join(repositoryRoot, "packaging/systemd", unit),
-          join(systemdTarget, unit),
-          distribution.layout,
-          os,
-        );
-      }
-      await copyBrokerLicenses(payload);
       if (distribution.bubblewrap.mode === "bundled") {
         await copyFile(distribution.bubblewrap.binary, join(payload, "bwrap"));
         await chmod(join(payload, "bwrap"), 0o755);
@@ -721,36 +670,45 @@ export async function buildRelease(argv, { verifyPatchedSource, verifyPackagedRe
         await mkdir(bubblewrapLicenses);
         await copyFile(distribution.bubblewrap.licenseFile, join(bubblewrapLicenses, "LICENSE"));
       }
-    } else {
-      await mkdir(join(payload, "licenses"), { recursive: true });
-      await copyFile(join(repositoryRoot, "LICENSE"), join(payload, "licenses/LICENSE"));
     }
 
-    const defaults = join(payload, "defaults");
     await copyToolBundle(distribution.toolBundle, join(payload, "tools"));
     await copySkillsBundle(skillsBundle, payload);
-    await mkdir(defaults);
-    await copyFile(options.config, join(defaults, "config.toml"));
-    await copyFile(options.models, join(defaults, "models.json"));
-
     const validationRoot = join(temporaryDirectory, "candidate-validation");
-    const validationConfigDirectory = join(validationRoot, distribution.layout.configDir.slice(1));
-    await mkdir(validationConfigDirectory, { recursive: true });
-    await copyFile(options.config, join(validationConfigDirectory, "config.toml"));
-    await copyFile(options.models, join(validationConfigDirectory, "models.json"));
+    if (configuration.source === "local") {
+      const defaults = join(payload, "defaults");
+      await mkdir(defaults);
+      await copyFile(options.config, join(defaults, "config.toml"));
+      await copyFile(options.models, join(defaults, "models.json"));
+      const validationConfigDirectory = join(validationRoot, configuration.configDir.slice(1));
+      await mkdir(validationConfigDirectory, { recursive: true });
+      await copyFile(options.config, join(validationConfigDirectory, "config.toml"));
+      await copyFile(options.models, join(validationConfigDirectory, "models.json"));
+    }
     if (
       (await capture(join(payload, "pi-sandbox"), ["--version"])).trim() !==
       buildVersion.displayVersion
     ) {
       throw new Error("compiled executable does not report the captured build version");
     }
-    process.stdout.write("Validating the compiled executable and packaged defaults\n");
-    await run(
-      join(payload, "pi-sandbox"),
-      ["--validate-installation", "--root", validationRoot, "--candidate-payload", payload],
-      { env: cleanEnvironment },
+    const capabilities = JSON.parse(
+      await capture(join(payload, "pi-sandbox"), ["--print-build-capabilities"]),
     );
-
+    if (
+      capabilities.configuration_source !== configuration.source ||
+      capabilities.platform !== os ||
+      capabilities.architecture !== process.arch
+    ) {
+      throw new Error("compiled executable capabilities do not match the distribution");
+    }
+    if (configuration.source === "local") {
+      process.stdout.write("Validating the compiled executable and packaged defaults\n");
+      await run(
+        join(payload, "pi-sandbox"),
+        ["--validate-installation", "--root", validationRoot, "--candidate-payload", payload],
+        { env: cleanEnvironment },
+      );
+    }
     for (const [name, source] of [
       [
         "install.sh",
@@ -780,7 +738,7 @@ export async function buildRelease(argv, { verifyPatchedSource, verifyPackagedRe
       patches,
       extensions: extensionBuildInventory.extensions,
       platform,
-      bunVersion: (await capture("bun", ["--version"])).trim(),
+      bunVersion,
       sourceCommit: (await capture("git", ["rev-parse", "HEAD"])).trim(),
       sourceDirty: (await capture("git", ["status", "--porcelain"])).trim().length > 0,
       bubblewrap: os === "linux" ? distribution.bubblewrap.release : null,
@@ -794,14 +752,13 @@ export async function buildRelease(argv, { verifyPatchedSource, verifyPackagedRe
 
     const releaseManifestPath = join(payload, "release-manifest.json");
     const releaseManifest = {
-      manifestVersion: 4,
+      manifestVersion: 5,
       product: "pi-sandbox",
       version: packageJson.version,
       buildVersion,
       platform,
       architecture: process.arch,
       executionBackends: [os === "linux" ? "bubblewrap" : "seatbelt", "direct"],
-      identityBroker: os === "linux",
       bubblewrap: os === "linux" ? distribution.bubblewrap.release : null,
       toolBundle: distribution.toolBundle?.release ?? null,
       skillsBundle: skillsBundle?.release ?? null,
@@ -813,7 +770,7 @@ export async function buildRelease(argv, { verifyPatchedSource, verifyPackagedRe
         sourceArchiveSha256: lock.sourceArchiveSha256,
       },
       extensions: extensionBuildInventory.extensions,
-      layout: distribution.layout,
+      layout: releaseLayout(distribution.layout),
       privateBundleSha256: extensionBuildInventory.privateBundleSha256,
       patches,
       files: await fileInventory(payload),
@@ -848,6 +805,12 @@ export async function buildRelease(argv, { verifyPatchedSource, verifyPackagedRe
       stagingDirectory,
       "pi-sandbox",
     ]);
+    if (
+      configuration.source === "service"
+        ? configuration.endpoint.transport === "https"
+        : configuration.auditEndpoint?.transport === "https"
+    )
+      await chmod(archive, 0o600);
     const extractedRelease = await inspectReleaseArchive(
       archive,
       expectedInventory,
@@ -858,7 +821,6 @@ export async function buildRelease(argv, { verifyPatchedSource, verifyPackagedRe
         platform,
         architecture: process.arch,
         executionBackends: [os === "linux" ? "bubblewrap" : "seatbelt", "direct"],
-        identityBroker: os === "linux",
         bubblewrap: os === "linux" ? distribution.bubblewrap.release : null,
         toolBundle: distribution.toolBundle?.release ?? null,
         skillsBundle: skillsBundle?.release ?? null,
@@ -870,10 +832,10 @@ export async function buildRelease(argv, { verifyPatchedSource, verifyPackagedRe
           sourceArchiveSha256: lock.sourceArchiveSha256,
         },
         extensions: extensionBuildInventory.extensions,
-        layout: distribution.layout,
+        layout: releaseLayout(distribution.layout),
         privateBundleSha256: extensionBuildInventory.privateBundleSha256,
       },
-      releaseRequirements(os, distribution.bubblewrap),
+      releaseRequirements(os, distribution.bubblewrap, configuration),
     );
     await verifyPackagedRelease?.({
       repositoryRoot,
@@ -881,11 +843,24 @@ export async function buildRelease(argv, { verifyPatchedSource, verifyPackagedRe
       os,
       packagedConfig,
       layout: distribution.layout,
+      sourceRoot,
+      codingAgentRoot,
+      bunTarget,
+      bunTsconfig,
+      distribution,
+      options,
     });
     const archiveSha256 = await sha256(archive);
     await writeFile(join(options.out, "SHA256SUMS"), `${archiveSha256}  ${archiveName}\n`, {
       mode: 0o644,
     });
+    if (os === "linux") {
+      await run(
+        process.execPath,
+        [join(repositoryRoot, "scripts/build-service-release.mjs"), "--out", options.out],
+        { env: cleanEnvironment },
+      );
+    }
     process.stdout.write(`Created and inspected ${archive}\nSHA-256 ${archiveSha256}\n`);
     await run(
       process.execPath,

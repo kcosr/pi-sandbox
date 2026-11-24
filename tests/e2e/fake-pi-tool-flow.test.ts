@@ -140,7 +140,11 @@ describe.skipIf(!REAL_BWRAP_AVAILABLE)(
       fakePi = new FakePi();
       await createPiSandboxExtension({
         cwd: workspace,
-        configPath: "/etc/pi-sandbox/config.toml",
+        provenance: {
+          source: "local",
+          configPath: "/etc/pi-sandbox/config.toml",
+          modelsPath: "/etc/pi-sandbox/models.json",
+        },
         workspaceSelection: { name: "host", source: "default" },
         userStateDir: "/home/test/.pi/agent",
         loadConfig: () => Promise.resolve(allowAllConfig()),
@@ -284,7 +288,11 @@ describe.skipIf(!REAL_BWRAP_AVAILABLE).each(["/var/tmp", "/tmp"])(
       fakePi = new FakePi();
       await createPiSandboxExtension({
         cwd: workspace,
-        configPath: "/etc/pi-sandbox/config.toml",
+        provenance: {
+          source: "local",
+          configPath: "/etc/pi-sandbox/config.toml",
+          modelsPath: "/etc/pi-sandbox/models.json",
+        },
         workspaceSelection: { name: "host", source: "default" },
         userStateDir: "/home/test/.pi/agent",
         loadConfig: () =>
@@ -439,7 +447,11 @@ describe.skipIf(!REAL_BWRAP_AVAILABLE)(
       const fakePi = new FakePi();
       await createPiSandboxExtension({
         cwd: workspace,
-        configPath: "/etc/pi-sandbox/config.toml",
+        provenance: {
+          source: "local",
+          configPath: "/etc/pi-sandbox/config.toml",
+          modelsPath: "/etc/pi-sandbox/models.json",
+        },
         workspaceSelection: { name: "host", source: "default" },
         userStateDir: "/home/test/.pi/agent",
         loadConfig: () => Promise.resolve(config),
@@ -750,17 +762,18 @@ function nonInteractiveContext(): ExtensionContext {
 function allowAllConfig(): SandboxConfig {
   const allow = { audit: false, mode: "allow", sessionGrant: "never" } as const;
   return {
-    configVersion: 15,
+    configVersion: 16,
+    modelAuth: { personalProviders: [] },
     skills: { directories: [] },
     exports: { enabled: false },
     codemode: { enabled: false, timeoutMs: 300000 },
     mcp: { servers: {} },
     sessions: { retentionDays: 0 },
     filesystem: { cwdWritable: true, hiddenPaths: [], deniedPaths: [] },
-    audit: { enabled: false, facility: "local0" },
-    modelsFile: "/etc/pi-sandbox/models.json",
+    audit: { enabled: false },
+
     execution: { backend: "bubblewrap" },
-    identity: { mode: "disabled" },
+
     network: { mode: "none" },
     environment: { pi: {}, sandbox: {}, extensions: {} },
     extensions: {},

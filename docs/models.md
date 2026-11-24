@@ -2,36 +2,34 @@
 
 ## Administrative model catalog
 
-Pi Sandbox does not use Pi's internal model catalog. It loads the complete
-catalog from the absolute `models_file` in the selected TOML policy. By default,
-that policy is the distribution's compiled `config_dir/config.toml`, normally:
+The build-selected configuration source supplies the complete catalog. A service
+build obtains the parsed catalog in its authenticated bootstrap response. A local
+build reads the required absolute `models_file` in its selected TOML policy, as
+the invoking user. Both paths validate the same strict Pi catalog object and
+pass one immutable in-memory snapshot to Pi. Refresh, session replacement and
+managed children reuse that snapshot; they do not reread a file or fetch policy.
+A new application process obtains new administrative inputs.
 
-```toml
-models_file = "/etc/pi-sandbox/models.json"
-```
+Pi's internal model catalog, user `models.json`, persistent model caches and
+OpenRouter's downloaded catalog cannot add providers or models. Neither
+`PI_CODING_AGENT_DIR` nor Pi settings redirect the administrative source. Only a
+local distribution compiled with `allow_config_override = true` accepts a leading
+`--config FILE`; that capability delegates policy choice to its caller.
 
-A build with `allow_config_override = true` permits an explicit leading
-`--config FILE` to select a different TOML and therefore a different
-`models_file`. The model path remains absolute. Managed builds reject the CLI
-option. Environment variables, Pi settings, and automatic project discovery
-cannot redirect either path. When broker mode is enabled,
-the root-managed drop-in for the calling UID may select another catalog.
-`--model` resolves against the effective catalog and its configured providers.
-
-Files under the compiled `libexec_dir/defaults/` are installation templates,
-not runtime configuration. A normal upgrade preserves the active files under
-the compiled `config_dir`; `install.sh --replace-config` explicitly backs them up and
-replaces them with the packaged defaults.
-
-See [user and group environment and overrides](identity-broker.md) for optional broker
-drop-ins, startup failure behavior, and use of arbitrary root-managed `pi`-scoped
-variables in `apiKey` or custom provider headers.
-
-The packaged catalog contains one unauthenticated localhost model as a functional
-schema example. Administrators are expected to replace it with the deployment's
-actual model definitions.
+The public local distribution includes one unauthenticated localhost model as a
+schema example. Administrators replace it with their deployment's catalog.
+User-owned additions or merges into an administrator catalog are not supported.
 
 ## Provider example
+
+```toml
+[model_auth]
+personal_providers = []
+
+[environment.pi]
+MODEL_TOKEN = { file = "/etc/pi-sandbox/secrets/model-token" }
+MODEL_USER = "{{username}}"
+```
 
 ```json
 {
@@ -39,7 +37,8 @@ actual model definitions.
     "managed-openai-compatible": {
       "baseUrl": "https://models.example.net/v1",
       "api": "openai-completions",
-      "apiKey": "$MANAGED_API_KEY",
+      "apiKey": "$MODEL_TOKEN",
+      "headers": { "X-Agent-Access-User": "$MODEL_USER" },
       "models": [
         {
           "id": "example-model",
@@ -48,12 +47,7 @@ actual model definitions.
           "input": ["text"],
           "contextWindow": 32768,
           "maxTokens": 8192,
-          "cost": {
-            "input": 0,
-            "output": 0,
-            "cacheRead": 0,
-            "cacheWrite": 0
-          }
+          "cost": { "input": 0, "output": 0, "cacheRead": 0, "cacheWrite": 0 }
         }
       ]
     }
@@ -62,129 +56,131 @@ actual model definitions.
 ```
 
 Provider and model fields follow the pinned Pi release's `models.json` schema.
-Pi Sandbox validates the file at startup and fails rather than combining it
-with built-in models.
+The optional `$schema` editor hint is accepted without fetching a schema. Unknown
+APIs, malformed catalogs and forbidden authentication expressions fail startup.
+For OpenAI-compatible completions, the client sends the resolved key as a bearer
+value; explicitly configured provider/model headers are retained.
 
-For editor validation and completion, the top-level object may include
-`"$schema": "https://pi.dev/schemas/models.schema.json"`. This is an editor hint;
-startup still uses the pinned Pi validator and does not fetch the schema.
-OpenRouter's per-key remote or cached model lists do not add models to the
-managed catalog. Each catalog entry must remain explicitly configured.
+When configured providers share a model ID, use `--model provider/model` to
+resolve ambiguity. Pi also retains explicit custom model-ID behavior within a
+configured provider. The configured catalog controls discovery, not the provider
+service's model-ID authorization; that service must enforce its own access limits.
 
-## Pi 1.3 model selection
+## Administrative credentials
 
-When several configured providers offer the same model ID, Pi prefers a provider
-with credentials and otherwise reports the ambiguity. Use `--model provider/model`
-to make the selection explicit. Pi also retains its custom model-ID behavior:
-an explicit unknown ID under a configured provider can use that provider's
-settings without adding a catalog entry. The catalog is not a strict model-ID
-execution allowlist; the provider service must enforce any model access limits.
+Both configuration profiles use the same authentication rules. Model config
+values may be literal strings or `$VARIABLE` references to the captured,
+expanded `environment.pi` map. Ambient shell variables never repair a missing
+key or header, and later `process.env` changes do not alter the snapshot.
+Command expressions beginning with `!` are rejected in provider keys, provider
+headers, model headers and `modelOverrides` headers, including unused entries.
+Resolved bytes are opaque and are never interpolated or executed again.
 
-Pi 1.3 changes the built-in `kimi-coding` provider implementation to
-`openai-completions` at `https://api.kimi.com/coding/v1`. Administrators using
-that provider must review any explicit API and base URL overrides; a Chat
-Completions base URL must include `/v1`. Installation preserves existing model
-files and does not rewrite those overrides.
+A missing administrative key makes that credential source unavailable. A missing
+provider header makes that provider unavailable; a missing model header hides
+only that model. Another usable configured provider or sibling model remains
+available. Diagnostics identify the provider/model and missing variable name,
+without exposing values.
 
-## API keys
+By default, authentication uses only the administrative snapshot. The launcher
+rejects `--api-key`; SDK/runtime key and authentication-environment overrides are
+also rejected. Native SDK defaults cannot introduce shell keys, arbitrary profiles,
+ADC discovery or metadata credentials. Configured unauthenticated/proxy modes
+remain supported. Pi-scoped values stay out of sandbox commands and managed
+extension commands except through their explicit credential projection rules.
 
-`apiKey` supports Pi's standard value resolution:
+The service-access Basic credential is separate from model-provider credentials.
+It is compiled into service builds (or a local build's optional audit endpoint)
+and cannot come from returned policy. See [managed service](managed-service.md).
 
-- Environment variable: `"apiKey": "$MANAGED_API_KEY"`
-- Host-side command: `"apiKey": "!cat ~/.config/example/token"`
-- Literal value: `"apiKey": "secret"` (not recommended for packaged catalogs)
+Pi's ordinary model-transport proxy settings remain available. They relay requests
+to the configured provider origin; they do not select a catalog or supply a
+missing managed credential. Configuration and audit service connections use their
+own fixed endpoint and trust settings and ignore these proxy settings.
 
-Environment variables must be present in the `pi-sandbox` host process. They
-may come from the invoking environment or the effective configured
-`environment.pi` scope. Managed values overlay same-named ambient values while
-Pi runs and are restored afterward. Pi-scoped values are used by host-side
-provider requests and are excluded from sandboxed tools, shell commands, and
-managed extension host commands.
+## Personal credentials
 
-Commands beginning with `!` run host-side as the invoking user. Use a trusted,
-bounded command and ensure it prints only the key. This is useful when a key is
-stored in a user-readable file or secret manager. There is no separate
-`apiKeyFile` field.
-
-For `api: "openai-completions"`, the resolved API key is sent as:
-
-```http
-Authorization: Bearer <api-key>
-```
-
-The `openai-completions` client supplies this header automatically.
-`authHeader: true` explicitly requests the same header for custom provider
-composition. Other provider headers may be configured in `headers`.
-
-Pi's user credential store remains under `PI_CODING_AGENT_DIR` and may also
-supply credentials through Pi's login flow. The administrator-selected model
-catalog remains fixed regardless of the user-state directory.
-
-## macOS machine identity
-
-For an endpoint that accepts the Mac hardware UUID as its bearer value, configure
-the managed policy:
+Personal authentication requires explicit main-policy admission for each
+configured provider:
 
 ```toml
-[environment.pi]
-PI_MACHINE_ID = "{{machine_id}}"
+[model_auth]
+personal_providers = ["anthropic", "amazon-bedrock"]
 ```
 
-Then use these fields in the provider's `models.json` definition:
+The default list is empty. The list cannot be supplied by account rules and must
+name providers in every catalog selectable by those rules. `/login`, `/logout`
+and native `auth` commands honor that admission. Native provider methods remain
+available where their configured endpoint and routing are compatible. Authored
+`oauth: "radius"` also requires admission rather than being silently ignored.
 
-```json
-{
-  "api": "openai-completions",
-  "apiKey": "$PI_MACHINE_ID",
-  "authHeader": true
-}
-```
+An admitted stored personal credential wins over the administrative credential.
+Absence falls back to the configured administrative source; invalid credentials
+or refresh/authentication failures do not. Personal records cannot add providers,
+models, arbitrary environment variables or routing overrides. Native methods that
+repeat a region/project/location must agree with administrative settings; missing
+required administrative routing makes the provider unavailable. Authentication
+headers cannot conflict with configured headers, and OAuth-derived endpoints
+must match the effective configured endpoint for every model of the provider.
 
-The application reads `IOPlatformUUID` on the host at startup and expands the
-administrator's environment value before loading the model catalog. The managed
-value overrides an ambient `PI_MACHINE_ID`; exporting another value does not
-replace the configured macro. `models.json` itself is not macro-expanded, and
-Pi's existing credential-store and provider authentication behavior is unchanged.
+The managed store reads bounded regular UTF-8 `auth.json` data under Pi's user
+state directory. Keys and OAuth tokens are literal data, including strings that
+look like `$VARIABLE` or `!command`. Unadmitted provider records are not resolved;
+writes preserve unrelated records and use locking with atomic replacement.
+Read-only `auth check --no-refresh` does not mutate or refresh credentials.
+`auth print-api-key --model ...` also discovers administrative providers without
+requiring a personal store entry. Explicit credential-printing commands reveal
+the selected credential to their caller by design.
 
-Only macOS supports `{{machine_id}}`. A requested but unavailable machine ID
-fails policy startup; policy that does not use it performs no lookup. The
-identifier is shared by users of that machine and normally survives OS updates,
-but may change with hardware or VM identity replacement. It is not a secret or
-cryptographic device attestation: a client can copy the value. The endpoint
-must explicitly accept it; configuring the UUID does not grant access to a
-service that requires another credential. Administrators control whether to
-send this persistent identifier to a provider.
+## Cloud provider sources
+
+Bedrock supports explicit administrative bearer/access-key credentials and its
+configured proxy mode. Personal opt-in retains an explicitly selected native AWS
+profile, including supported role, SSO and web-identity profiles. Profile files
+are read with bounds from the OS account home, and selected source-profile chains
+are checked before loading. `credential_process`, environment credential sources,
+cycles and the unconstrained default-chain login choice are rejected. Model
+region and endpoint remain administrative; SDK endpoint environment overrides
+cannot redirect requests.
+
+Vertex supports explicit administrative keys or self-contained service-account
+JSON in `GOOGLE_APPLICATION_CREDENTIALS_JSON`. Malformed configured JSON fails
+startup even if a personal credential is available. Personal opt-in retains an
+explicitly selected credentials file or native ADC-file choice, including native
+non-executable supported credential types and external-account authorized-user ADC.
+Selected AWS federation uses the file's explicit metadata source without repairing
+its identity or region from ambient AWS values. Executable credential sources are
+rejected. Explicit administrative project/location and endpoint remain fixed;
+there is no ambient ADC or metadata fallback.
+
+OAuth login and refresh use the same captured environment for supported host and
+callback settings. Native OAuth state/token refresh behavior is retained without
+import-time shell-variable overrides. Cloud and OAuth network operations occur
+only for explicitly selected admitted credential methods, not catalog validation.
+
+## Account and machine values
+
+Use `{{username}}`/`{{uid}}` in authored Pi environment strings for the invoking
+OS account. On macOS, optional `{{machine_id}}` expands the host hardware UUID.
+The catalog itself is not macro-expanded. File-derived values remain literal.
+A required unavailable machine ID fails resolution; unused macros do no lookup.
+These identifiers are copyable values, not credentials or device attestation.
+An endpoint must separately authenticate and authorize any asserted identity.
 
 ## Troubleshooting
 
-If Pi reports that no models are available:
-
-1. Confirm which catalog is active:
-
-   ```sh
-   grep '^models_file' /etc/pi-sandbox/config.toml
-   ```
-
-2. Inspect that active file, not the template under `/usr/libexec`:
-
-   ```sh
-   jq '.providers | keys' /etc/pi-sandbox/models.json
-   ```
-
-3. For an environment-based key, either export it in the process environment
-   used to launch Pi Sandbox or configure that name under the effective
-   global `environment.pi` scope in `/etc/pi-sandbox/config.toml`, optionally
-   overridden in `/etc/pi-sandbox/users.d/*.toml` and `/etc/pi-sandbox/groups.d/*.toml`.
-
-4. For a command-based key, run the command as the invoking user and verify that
-   it exits successfully and prints only the key.
-
-Missing authentication can leave configured models unavailable. Invalid JSON,
-schema or composition errors, and an unreadable catalog cause startup to fail
-instead of falling back to other models.
+Use `/sandbox` to identify the configuration source and selected workspace mode.
+For a local source, inspect its reported TOML and catalog paths; for a service
+source, inspect the listener's administrative files on the service host. A new
+process is required after administrative edits. Confirm required key and header
+names are in `environment.pi`, rather than exporting a shell variable. For
+personal login, confirm the provider is configured and explicitly admitted.
+Malformed catalogs fail startup; unavailable credentials leave only the affected
+providers/models unavailable. No error triggers a local or built-in fallback.
 
 ## Session export
 
-External session sharing is disabled in the managed distribution. `/share` is
-not advertised and returns a disabled message if entered. Local `/export`
-remains available for HTML or JSONL output.
+External session sharing is disabled. `/share` is not advertised and returns a
+disabled message. Native `/export` remains available for HTML or JSONL output;
+the separate user-only `/sandbox save` feature follows its own policy and audit
+contract.

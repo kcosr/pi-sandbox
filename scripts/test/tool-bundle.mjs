@@ -17,16 +17,15 @@ import { tmpdir } from "node:os";
 import { dirname, join, relative } from "node:path";
 import { test } from "node:test";
 import { copyToolBundle, loadToolBundle, validateNativeToolBundle } from "../build/tool-bundle.mjs";
-import { createCompiledLayoutModule } from "../build/distribution.mjs";
+import { createCompiledLayoutModule, loadDistribution } from "../build/distribution.mjs";
+import { verifyManagedServiceMatrix } from "./managed-service-matrix.mjs";
 import { renderLayoutText } from "../build/layout-render.mjs";
 
 test("installer rendering keeps spaces and shell metacharacters literal", () => {
   const layout = {
     libexecDir: '/opt/quoted "tools" $(exit 19)/libexec',
     launcherPath: "/opt/launchers/bin/pi-sandbox",
-    configDir: "/etc/pi-sandbox",
-    identitySocketPath: "/run/pi-sandbox-identity/broker.sock",
-    auditSocketPath: "/run/pi-sandbox-audit/collector.sock",
+    configuration: { source: "local", configDir: "/etc/pi-sandbox", allowConfigOverride: false },
   };
   const script = renderLayoutText(
     `#!/bin/sh\nset -eu\nroot_prefix=\ninstall_base="$root_prefix/usr/local/libexec/pi-sandbox"\nexpected_link="../libexec/pi-sandbox/pi-sandbox"\nprintf '%s\\n%s\\n' "$install_base" "$expected_link"\n`,
@@ -103,6 +102,41 @@ async function fixture(run) {
   }
 }
 
+test("service fixture descriptors preserve the pinned tool command selection", () =>
+  fixture(async ({ temporary, load }) => {
+    const repositoryRoot = join(temporary, "repository");
+    const codingAgentRoot = join(temporary, "agent");
+    await mkdir(join(repositoryRoot, "dist/private"), { recursive: true });
+    await mkdir(join(codingAgentRoot, "dist/pi-sandbox"), { recursive: true });
+    await writeFile(join(repositoryRoot, "dist/private/private-cli.js"), "fixture");
+    await writeFile(join(codingAgentRoot, "dist/pi-sandbox/private-cli.js"), "fixture");
+    const toolBundle = await load();
+    const stop = new Error("descriptor checked before native compilation");
+    let checked = false;
+    await assert.rejects(
+      verifyManagedServiceMatrix(
+        {
+          repositoryRoot,
+          codingAgentRoot,
+          os: "darwin",
+          distribution: { toolBundle, extensionManifests: [], layout: toolBundle.layout },
+        },
+        {},
+        async (_command, args) => {
+          if (args[0]?.endsWith("build-bundles.mjs")) {
+            const distribution = await loadDistribution(args[2], "darwin");
+            assert.deepEqual(distribution.toolBundle.commands, toolBundle.commands);
+            assert.equal(distribution.toolBundle.inventorySha256, toolBundle.inventorySha256);
+            checked = true;
+            throw stop;
+          }
+        },
+      ),
+      (error) => error === stop,
+    );
+    assert(checked);
+  }));
+
 test("pinned bundles preserve copies and separate executor/host command metadata", () =>
   fixture(async ({ temporary, load }) => {
     const bundle = await load();
@@ -121,11 +155,9 @@ test("pinned bundles preserve copies and separate executor/host command metadata
     assert.doesNotMatch(module, /bundle with spaces/u);
     const layout = {
       ...bundle.layout,
-      configDir: "/etc/pi-sandbox",
+      configuration: { source: "local", configDir: "/etc/pi-sandbox", allowConfigOverride: false },
       libexecDir: "/usr/local/libexec/pi-sandbox",
       launcherPath: "/usr/local/bin/pi-sandbox",
-      identitySocketPath: "/run/pi-sandbox-identity/broker.sock",
-      auditSocketPath: "/run/pi-sandbox-audit/collector.sock",
     };
     assert.equal(
       renderLayoutText("bundled_commands=''", layout, "darwin"),

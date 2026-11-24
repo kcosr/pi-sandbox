@@ -4,7 +4,7 @@ import { buildLayout, type CompiledLayout } from "../build-layout/index.js";
 import { managedArguments, validateManagedArguments } from "./arguments.js";
 
 export interface SandboxArguments {
-  readonly configPath: string;
+  readonly configPath?: string;
   readonly piArgs: string[];
   readonly workspaceMode?: string;
   readonly listWorkspaceModes?: true;
@@ -13,7 +13,9 @@ export interface SandboxArguments {
 const MODE_INCOMPATIBLE_ARGUMENTS = new Set([
   "--version",
   "--validate-installation",
-  "--print-execution-backend",
+  "--validate-service",
+  "--validate-bootstrap",
+  "--print-build-capabilities",
   "--pi-sandbox-internal-worker",
   "--pi-sandbox-internal-export-reader",
 ]);
@@ -21,14 +23,16 @@ const MODE_INCOMPATIBLE_ARGUMENTS = new Set([
 /** Consume managed launch prefixes before Pi sees arguments. */
 export function parseSandboxArguments(
   args: readonly string[],
-  layout: Pick<CompiledLayout, "configPath" | "allowConfigOverride"> = buildLayout,
+  layout: Pick<CompiledLayout, "configuration"> = buildLayout,
   cwd?: string,
 ): SandboxArguments {
-  let configPath = layout.configPath;
+  const configuration = layout.configuration;
+  const allowConfigOverride = configuration.source === "local" && configuration.allowConfigOverride;
+  let configPath = configuration.source === "local" ? configuration.configPath : undefined;
   let piArgs = [...args];
   const first = args[0];
   if (first === "--config" || first?.startsWith("--config=") === true) {
-    if (!layout.allowConfigOverride) throw new Error("This build does not permit --config");
+    if (!allowConfigOverride) throw new Error("This build does not permit --config");
     const value = first === "--config" ? args[1] : first.slice("--config=".length);
     if (
       value === undefined ||
@@ -55,7 +59,7 @@ export function parseSandboxArguments(
   for (const [argument] of managedArguments(piArgs)) {
     if (argument === "--config" || argument.startsWith("--config=")) {
       throw new Error(
-        layout.allowConfigOverride
+        allowConfigOverride
           ? "--config must appear once, before Pi arguments"
           : "This build does not permit --config",
       );
@@ -78,7 +82,7 @@ export function parseSandboxArguments(
   }
   validateManagedArguments(piArgs);
   return {
-    configPath,
+    ...(configPath === undefined ? {} : { configPath }),
     piArgs,
     ...(workspaceMode === undefined ? {} : { workspaceMode }),
     ...(listWorkspaceModes === undefined ? {} : { listWorkspaceModes }),

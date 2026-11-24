@@ -1,8 +1,8 @@
 import { parse as parseToml } from "@iarna/toml";
+import { assertJsonValue } from "../service/json.js";
 import { snapshotCommandPathPrepend } from "../../packages/sandbox-extension/src/runtime/command-path.js";
 
 import {
-  AUDIT_FACILITIES,
   type AuditConfig,
   COMMAND_CLASS_MODES,
   POLICY_MODES,
@@ -10,7 +10,6 @@ import {
   NETWORK_MODES,
   SESSION_GRANT_POLICIES,
   TOOL_NAMES,
-  type IdentityConfig,
   type ExtensionConfig,
   type ExecutionConfig,
   type FilesystemConfig,
@@ -54,7 +53,6 @@ type UnknownRecord = Record<string, unknown>;
 
 const ROOT_KEYS = [
   "config_version",
-  "models_file",
   "codemode",
   "mcp",
   "audit",
@@ -62,7 +60,7 @@ const ROOT_KEYS = [
   "exports",
   "execution",
   "filesystem",
-  "identity",
+  "model_auth",
   "network",
   "environment",
   "extensions",
@@ -70,7 +68,6 @@ const ROOT_KEYS = [
 ] as const;
 const POLICY_KEYS = ["mode", "session_grant"] as const;
 const COMMAND_CLASS_POLICY_KEYS = ["mode", "session_grant"] as const;
-const IDENTITY_MODES = ["disabled", "broker"] as const;
 const MODE_TOOLS = ["bash", "write", "edit"] as const;
 export const MAXIMUM_CONFIG_BYTES = 1024 * 1024;
 
@@ -350,8 +347,8 @@ function parseExtensions(
   return Object.freeze(result);
 }
 
-function validateExtensionEnvironment(
-  environment: ReturnType<typeof parseAuthoredManagedEnvironment> | undefined,
+export function validateExtensionEnvironment(
+  environment: Pick<ReturnType<typeof parseAuthoredManagedEnvironment>, "extensions"> | undefined,
   extensions: Readonly<Record<string, ExtensionConfig>> | undefined,
   catalog: ManagedExtensionCatalog,
   issues: string[],
@@ -382,17 +379,13 @@ function parseAudit(value: unknown, issues: string[]): AuditConfig | undefined {
     issues.push("config.audit must be a table");
     return undefined;
   }
-  inspectKeys(value, ["enabled", "facility", "tools"], "config.audit", issues);
+  inspectKeys(value, ["enabled", "tools"], "config.audit", issues);
   const enabled = own(value, "enabled");
-  const facility = enumValue(
-    own(value, "facility"),
-    AUDIT_FACILITIES,
-    "config.audit.facility",
-    issues,
-  );
-  if (typeof enabled !== "boolean") issues.push("config.audit.enabled must be a boolean");
-  if (typeof enabled !== "boolean" || facility === undefined) return undefined;
-  return Object.freeze({ enabled, facility });
+  if (typeof enabled !== "boolean") {
+    issues.push("config.audit.enabled must be a boolean");
+    return undefined;
+  }
+  return Object.freeze({ enabled });
 }
 
 function parseAuditTools(
@@ -467,15 +460,29 @@ function parseSessions(value: unknown, issues: string[]): SessionsConfig | undef
   return Object.freeze({ retentionDays });
 }
 
-function parseIdentity(value: unknown, issues: string[]): IdentityConfig | undefined {
+function parseModelAuth(value: unknown, issues: string[]): SandboxConfig["modelAuth"] | undefined {
   if (!isRecord(value)) {
-    issues.push("config.identity must be a table");
+    issues.push("config.model_auth must be a table");
     return undefined;
   }
-
-  inspectKeys(value, ["mode"], "config.identity", issues);
-  const mode = enumValue(own(value, "mode"), IDENTITY_MODES, "config.identity.mode", issues);
-  return mode === undefined ? undefined : Object.freeze({ mode });
+  inspectKeys(value, ["personal_providers"], "config.model_auth", issues);
+  const providers = value.personal_providers;
+  if (
+    !Array.isArray(providers) ||
+    providers.length > 256 ||
+    !providers.every(
+      (p): p is string =>
+        typeof p === "string" &&
+        p.length > 0 &&
+        Buffer.byteLength(p) <= 256 &&
+        !/[\p{Cc}\uD800-\uDFFF]/u.test(p),
+    ) ||
+    new Set(providers).size !== providers.length
+  ) {
+    issues.push("config.model_auth.personal_providers must be distinct provider IDs");
+    return undefined;
+  }
+  return Object.freeze({ personalProviders: Object.freeze([...providers]) });
 }
 
 function parseNetwork(value: unknown, issues: string[]): NetworkConfig | undefined {
@@ -635,14 +642,8 @@ function parseCompleteConfig(
   }
 
   const configVersion = own(parsed, "config_version");
-  if (configVersion !== 15) {
-    issues.push("config.config_version must be the integer 15");
-  }
-
-  const modelsFileValue = own(parsed, "models_file");
-  const modelsFile = isNormalizedAbsoluteFilePath(modelsFileValue) ? modelsFileValue : undefined;
-  if (modelsFile === undefined) {
-    issues.push("config.models_file must be a normalized absolute file path");
+  if (configVersion !== 16) {
+    issues.push("config.config_version must be the integer 16");
   }
 
   let codemode;
@@ -662,7 +663,7 @@ function parseCompleteConfig(
   const skills = parseSkills(own(parsed, "skills"), issues);
   const subagents = parseSubagents(own(parsed, "subagents"), issues);
   const sessions = parseSessions(own(parsed, "sessions"), issues);
-  const identity = parseIdentity(own(parsed, "identity"), issues);
+  const modelAuth = parseModelAuth(own(parsed, "model_auth"), issues);
   const execution = parseExecution(own(parsed, "execution"), issues);
   const filesystem = parseFilesystem(own(parsed, "filesystem"), issues);
   const network = parseNetwork(own(parsed, "network"), issues);
@@ -739,14 +740,13 @@ function parseCompleteConfig(
 
   if (
     issues.length > 0 ||
-    modelsFile === undefined ||
     codemode === undefined ||
     mcp === undefined ||
     audit === undefined ||
     sessions === undefined ||
     skills === undefined ||
     exports === undefined ||
-    identity === undefined ||
+    modelAuth === undefined ||
     execution === undefined ||
     network === undefined ||
     filesystem === undefined ||
@@ -758,7 +758,7 @@ function parseCompleteConfig(
   }
 
   return Object.freeze({
-    configVersion: 15,
+    configVersion: 16,
     ...(guidanceValue === undefined ? {} : { extensionGuidance: Object.freeze(extensionGuidance) }),
     codemode,
     mcp,
@@ -767,9 +767,8 @@ function parseCompleteConfig(
     skills,
     ...(subagents === undefined ? {} : { subagents }),
     exports,
-    modelsFile,
     execution,
-    identity,
+    modelAuth,
     network,
     filesystem,
     environment,
@@ -817,19 +816,48 @@ function modeProvenance(issue: string, name: string, mode: UnknownRecord): strin
   return `workspace mode ${JSON.stringify(name)}: ${mapped}`;
 }
 
-/** Parse authored policy once, then validate every complete mode before selection. */
+export interface LocalPolicySource {
+  readonly modelsFile: string;
+  readonly policy: AuthoredSandboxConfig<AuthoredPiEnvironmentValue>;
+}
+
+/** The local adapter consumes the sole file-source field before common validation. */
 export function parseConfig(
   sourceText: string,
   source: string,
   catalog: ManagedExtensionCatalog,
-): AuthoredSandboxConfig<AuthoredPiEnvironmentValue> {
+): LocalPolicySource {
   if (Buffer.byteLength(sourceText) > MAXIMUM_CONFIG_BYTES)
     throw new ConfigError(source, [`configuration exceeds ${MAXIMUM_CONFIG_BYTES} bytes`]);
   let parsed: unknown;
   try {
     parsed = parseToml(sourceText);
-  } catch (error) {
-    throw new ConfigError(source, ["TOML syntax is invalid"], error);
+  } catch {
+    throw new ConfigError(source, ["TOML syntax is invalid"]);
+  }
+  try {
+    assertJsonValue(parsed);
+  } catch {
+    throw new ConfigError(source, ["TOML must contain valid JSON-compatible policy values"]);
+  }
+  if (isRecord(parsed) && !Object.hasOwn(parsed, "models_file"))
+    throw new ConfigError(source, ["config.models_file is required"]);
+  if (!isRecord(parsed) || !isNormalizedAbsoluteFilePath(parsed.models_file))
+    throw new ConfigError(source, ["config.models_file must be a normalized absolute file path"]);
+  const { models_file: modelsFile, ...policy } = parsed;
+  return Object.freeze({ modelsFile, policy: parseSourcePolicy(policy, source, catalog) });
+}
+
+/** Validate every authored mode identically for local and service sources. */
+export function parseSourcePolicy(
+  parsed: unknown,
+  source: string,
+  catalog: ManagedExtensionCatalog,
+): AuthoredSandboxConfig<AuthoredPiEnvironmentValue> {
+  try {
+    assertJsonValue(parsed);
+  } catch {
+    throw new ConfigError(source, ["policy contains invalid JSON values"]);
   }
   if (!isRecord(parsed)) throw new ConfigError(source, ["config must be a table"]);
   const issues: string[] = [];
@@ -840,8 +868,8 @@ export function parseConfig(
     issues,
     ["exports", "skills", "subagents", "extension_guidance"],
   );
-  if (own(parsed, "config_version") !== 15) {
-    issues.push("config.config_version must be the integer 15");
+  if (own(parsed, "config_version") !== 16) {
+    issues.push("config.config_version must be the integer 16");
     throw new ConfigError(source, issues);
   }
   const workspace = own(parsed, "workspace");

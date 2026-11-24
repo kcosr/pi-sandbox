@@ -24,7 +24,7 @@ native test fixtures through test-only `PI_SANDBOX_TEST_TOOL_BUNDLE`; product
 runtime code does not read this variable. Package paths must be outside writable
 workspaces, and Node/Bun acceptance must test the extracted package.
 
-Linux sandbox acceptance requires Bubblewrap, Node 24 and Bun 1.3.14+ and checks
+Linux sandbox acceptance requires Bubblewrap, Node 24 and Bun 1.4.4+ stable and checks
 both worker runtimes, conversation replacement and persistent background jobs.
 Direct acceptance also exercises ordinary and nested parallel tool calls.
 Git acceptance uses local HTTP repositories and scripted local model responses
@@ -132,9 +132,30 @@ controls plus upstream/theme suites, and the platform's packaged executable
 checks. No test list was removed or made opt-in by this separation.
 `scripts/test/release-workflow.mjs` checks import/CLI behavior, failure cleanup,
 verification environment propagation, platform selection and fixture isolation.
-Temporary packaged-smoke TOML disables both identity and audit dependencies
-while retaining their other fields; the shipped policy is untouched. Service
-protocol, fail-closed audit and broker behavior retain their dedicated suites.
+The exact local production artifact retains its isolated runtime smoke with
+auditing disabled in a temporary policy copy. Production service endpoints are
+never contacted by release verification. Every build also qualifies separate
+fixed-local, override-enabled local with HTTPS auditing, and HTTPS service fixture
+artifacts; Linux additionally qualifies Unix service clients. Fixture descriptors
+use the same source, patches and native inventory but private temporary paths and
+fresh CA/certificate/password inputs. They are not the production bytes and are
+never distributed. Exact production checks cover version/capabilities, source
+controls, offline bootstrap validation and integrity/provenance.
+
+Linux verification requires rootful mount isolation, `sudo -n`, Python 3 and
+OpenSSL. The real daemon and a distinct non-root account operate within a random
+protected `/run/pi-sandbox-verify/<run-id>` tree, with a private `/dev/log` mount.
+Missing privilege is a failure, not a skip or single-UID user-namespace substitute.
+`scripts/test/managed-service-matrix.mjs` builds fixture binaries and its Python
+driver qualifies real Unix/HTTPS bootstrap, identity and audit recovery with local
+scripted model responses. macOS uses a test-only HTTPS protocol fixture on each
+native architecture; this does not qualify a native macOS daemon.
+
+`service/tests/root-smoke.py` separately exercises the real root daemon at the
+supported 16-listener, 4,096-connection and 8,192-session ceilings, recording memory,
+thread and descriptor high-water marks under the unit's descriptor limit. Its
+synthetic pressure UIDs hold sockets without making account-dependent requests.
+Actual Unix identity/request checks and account separation remain in the matrix.
 
 On macOS the verifier requires real Seatbelt controls and both Node/Bun runtime
 fixtures. It selects Bun from `PI_SANDBOX_TEST_BUN`, `PI_SANDBOX_BUN`, or the
@@ -147,7 +168,7 @@ namespace probes. This is a test-host dependency, not an application runtime
 dependency.
 
 Shared-skill verification includes strict main-policy parsing, identity carry-through
-and broker rejection, invoking-user root checks, installation candidate checks,
+and service-rule rejection, invoking-user root checks, installation candidate checks,
 and prepared-tree/mode inventory validation. Both staged installers cover mode
 restoration, upgrade removal, retained-policy checks and malformed inventories.
 The patched-source checkpoint runs native skills, SDK, package-manager and
@@ -176,7 +197,7 @@ on Linux do not qualify native macOS execution.
 - required hidden paths, strict path syntax and uniqueness, immutable
   main-policy inheritance, direct-mode rejection, and mount ordering around CWD;
 - account-home expansion for configured hidden paths and all scoped environment
-  values after broker merge, independence from ambient `HOME` and CWD, literal
+  values after account override merging, independence from ambient `HOME` and CWD, literal
   nonmatching strings, post-expansion bounds, and installation validation without
   account-home lookup;
 - required session retention, integer bounds, explicit zero-disable behavior,
@@ -198,15 +219,14 @@ on Linux do not qualify native macOS execution.
   installer-owned validation commands admitted as root;
 - strict system-versus-bundled Bubblewrap distribution selection and immutable
   compiled runtime path;
-- strict broker protocol and user/group TOML parsing, named/numeric selectors,
+- strict service protocol and user/group TOML parsing, named/numeric selectors,
   primary/supplementary membership, least-restrictive joins, conflict rejection,
   and bounded host resolver failures,
   global-plus-combined-rule scoped environment overlay, missing-drop-in inheritance,
   environment bounds and reserved-name rejection, dynamic
   User/group rule execution and tool override validation, effective backend/network
   validation, active-policy cross-checking, atomic
-  per-user override merging, and the compiled Bun client's no-half-close request
-  flow;
+  per-user override merging, and the compiled Bun client's bounded HTTP/1.1 request flow;
 - bounded MCP user/group approval layers and separate enabled flags, per-file
   first-match/default resolution, complete-pair joins before main defaults,
   Unicode pattern parity, canonical whole-layer deduplication, global audit
@@ -221,7 +241,7 @@ on Linux do not qualify native macOS execution.
   and rejection of options, local transports, bad basenames, and arbitrary
   targets;
 - managed Git destination defaults, strict main-only selection, effective-backend
-  rejection after broker merging, exact audit targets and missing-capability
+  rejection after account override merging, exact audit targets and missing-capability
   failure without host fallback;
 - standard Pi tool-only factory capture, declaration matching, and policy wrapping;
 - command/input/output/time limits and cancellation; and
@@ -236,7 +256,7 @@ File-backed Pi environment tests cover strict authored `{file}` versus wire
 `{literal}` parsing, Pi-only admission, literal preservation including BOM and
 macro-looking bytes, LF/CRLF handling, empty/NUL/UTF-8 and byte limits, regular-file
 checks, ordinary symlink/permission behavior, and path-free failure messages.
-Runtime tests cover broker overlay before base reads, matching-only broker
+Runtime tests cover service overlay before base reads, matching-only service
 reads, conflict checks before I/O, per-request snapshots and fresh subsequent
 reads, post-resolution aggregate limits, symbolic installation validation,
 explicit MCP mapping and unchanged sandbox/extension environment isolation.
@@ -251,7 +271,7 @@ Linux tests do not qualify those platforms.
 
 ### Workspace modes
 
-Configuration tests qualify schema 15 with partial common values, complete
+Configuration tests qualify schema 16 with partial common values, complete
 invocation replacement, optional bounded descriptions, own-property mode lookup,
 all-mode validation and exhaustive common audit coverage. Invalid unused entries
 and disallowed modes must fail. Verify command-set ID consistency across every
@@ -265,7 +285,7 @@ unmatched, canonical wire lists, default agreement/conflicts and aggregate bound
 Application tests reject unknown inventory names, empty effective access and
 invalid defaults even with a permitted CLI selection, then apply ordinary
 account tool/filesystem policy after selection. Platform failures must occur
-before broker access and during installation/backend queries; recheck platform
+before service access and during installation/backend queries; recheck platform
 constraints after overrides.
 
 CLI tests preserve prefix ordering, conditional/unconditional Pi value handling,
@@ -312,7 +332,7 @@ provider. It proves that:
 
 Host-tool integration uses a mocked host executor and local fixtures only. It
 proves that `git_clone` constructs `/usr/bin/git clone --` with one derived
-child. Tests do not contact Git hosts or a broker service.
+child. Tests do not contact Git hosts or a managed service.
 
 ### Real Seatbelt (macOS)
 
@@ -453,15 +473,15 @@ build separately runs the compiled managed executable without contacting a
 model provider. Together these checks verify:
 
 - the selected distribution layout and launcher symlink;
-- the static broker executable and managed systemd unit symlinks;
+- separate client/service archives, the static service executable and ordinary unit;
 - that no runtime download, target-side build, Node runtime, wrapper, or
   generation tree is required;
-- first-install creation of packaged administrative defaults;
-- preservation of `/etc/pi-sandbox` during an ordinary upgrade;
+- first-install creation of defaults only for local-source client builds;
+- preservation of local policy during ordinary upgrades and rejection of config replacement/removal flags in service builds;
 - non-creation, non-replacement, and non-removal of the optional root-managed
   `users.d` and `groups.d` directories;
 - rejection of obsolete user/group file/protocol versions and validation of
-  scoped environments during broker-mode release checks;
+  scoped environments during service qualification;
 - validated, backed-up replacement through `--replace-config`;
 - compiled administrative config-path loading and its required `models_file` and
   network mode, required extension selection, and exact dynamic tool policy;
@@ -495,7 +515,7 @@ approval and dispatch, formats, references and nullable values. Managed worker
 tests reject ambient capacity overrides while retaining actual-exit accounting.
 Release checks also prove the configured-only catalog across model types
 and refreshes, build and inspect the static
-Rust broker, and inspect the final Bun application and release archive. The
+Rust service, and inspect the final Bun application and release archive. The
 packaged executable diagnostic also proves that only the administrative model
 catalog is exposed. Its offline RPC lifecycle checks create new sessions, resume
 same-workspace transcripts, clone/fork, reject a foreign-workspace resume without
@@ -520,12 +540,20 @@ release test remains offline.
 
 ## Local release verification
 
-Linux release testing runs locally with Node.js 24, Rust/Cargo 1.85 or newer,
+Linux release testing runs locally with Node.js 24, Bun 1.4.4 or newer stable, Rust/Cargo 1.85 or newer,
 and Bubblewrap through `npm run verify:release`. macOS release testing runs on
-the target architecture with Node.js 24, Bun, and the system prerequisites or
+the target architecture with Node.js 24, Bun 1.4.4 or newer stable, and the system prerequisites or
 selected native tool bundle. It builds and validates the native archive with
 Seatbelt selected by default and qualifies both Seatbelt and explicit direct
 execution. Generated artifacts are not committed.
+
+The release builder rejects older or prerelease Bun versions before mutating build
+outputs. Qualify trust in the compiled executable: selected custom CA A accepts
+its server and rejects CA B even when B is supplied through startup CA environment
+variables, and explicit bundled public roots reject the ephemeral private CA.
+Include hostile proxy variables and `NODE_TLS_REJECT_UNAUTHORIZED=0`; neither may
+change the selected service route or trust. These probes complement Node transport
+tests, since the Bun runtime embedded in a release has its own native TLS behavior.
 
 If a test must skip because the developer host lacks Bubblewrap or user
 namespaces, the output must explain the missing prerequisite. Release
@@ -538,12 +566,15 @@ parent logging inheritance, selected tool filtering, target path metadata, bound
 text, Pi-session correlation, permission decisions, and execution outcomes.
 Human shell calls remain excluded. Failure tests require acknowledged intent
 before execution and prove that completion-submission failures do not retry
-operations. Collector tests exercise kernel peer credentials, bounded protocol
+operations. Explicit external input reopens/checks a failed audit session without
+replaying events; concurrent old completions and session switches cannot install a
+stale handle. Registered commands and native session preflight keep their existing
+behavior. Local and service profiles share these ACK gates and recovery state. Service tests exercise kernel peer credentials, bounded protocol
 frames, structured single-line datagrams, facilities, and local-submission
 acknowledgments without relying on a remote logging service.
 
-Linux verification builds both static Rust services and validates their systemd
-units and installation lifecycle. Release checks apply the pinned-source patch
+Linux verification builds the static Rust service and validates its ordinary systemd
+unit and independent installation lifecycle. Release checks apply the pinned-source patch
 that disables session sharing and test that the share operation is not invoked.
 SBOM tests check component discovery against bundle inputs and copied assets;
 release archive inspection verifies the generated inventory is checksummed and
@@ -552,7 +583,7 @@ shipped with the matching application.
 ## Managed MCP and code mode
 
 Machine-ID controls cover symbolic installation validation, expansion after
-broker merging, one shared lazy lookup across scopes and MCP, environment
+account override merging, one shared lazy lookup across scopes and MCP, environment
 precedence, unsupported/failed lookup and server-local stdio failure. Reader
 fixtures check fixed executable/arguments, cleared environment, output/deadline
 bounds and strict UUID parsing without committing a real machine identifier.
@@ -658,8 +689,8 @@ Managed integration tests prove:
 
 - strict parsing of `[tools.bash.known_read_only]`, rejection under other tools,
   every validation rule and its message, and the read-tool precondition on both
-  the base policy and the effective policy after broker overrides;
-- strict broker-response parsing, rejection of unnormalized class policies, and
+  the base policy and the effective policy after account overrides;
+- strict service-response parsing, rejection of unnormalized class policies, and
   wholesale Bash replacement including an absent class policy;
 - the join, request binding of the class into the frozen fingerprint, scoped
   session grants, revisions that include class policies, and prompt labels;
@@ -670,7 +701,7 @@ Managed integration tests prove:
 - per-backend execution contexts that match the environments the executors
   construct;
 - paired audit fields only on Bash decision events, with versions bounded to the
-  collector's range; and
+  service's range; and
 - `/sandbox policy` class rows, grants, registry version and command names,
   with output unchanged when no class policy is configured.
 
@@ -725,8 +756,8 @@ coverage. Diagnostics show authored enum/any-literal forms rather than internal 
 Direct evidence tests exercise the 256-stage/64-ID bounds, malformed or duplicate
 IDs, missing custom matches, and oversized-result fallback to ordinary policy.
 Broker tests retain main definitions across overrides and reject command-set
-definitions in rule/wire inputs. Audit client and collector tests require wire 5,
-record schema 6, separate configured-command IDs and strict older-wire rejection.
+definitions in rule/wire inputs. Audit client and service tests require API 1,
+record schema 7, separate configured-command IDs and strict older-wire rejection.
 
 `tests/integration/bash-command-sets.test.ts` compares real Bash argv and pipeline
 behavior with the declared shapes using an owned offline executable; injection

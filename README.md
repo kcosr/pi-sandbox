@@ -110,16 +110,16 @@ flowchart LR
 - All seven Pi tools (`read`, `grep`, `find`, `ls`, `write`, `edit`, and `bash`)
   and user `!` commands use the selected backend. The model-visible `bash` tool
   can be disabled while typed tools remain available; human `!` remains fixed-allow.
-- Administrative policy always starts at the config path compiled from the
-  build-selected distribution manifest; its
-  required `models_file` selects the complete model catalog. Pi's internal model
-  catalog is disabled.
-- The main configuration defines the global scoped environment. On Linux, an optional
-  root broker can combine named or numeric user/group rules into a patch for environment, model
-  catalog, execution backend, network mode, CWD write access, MCP server enablement and approval policies,
-  and complete per-tool policy overrides without exposing other users' files.
-  Pi, sandbox, and individual managed-extension variables remain isolated; the
-  environment never enables a tool or grants approval.
+- The build fixes either a local-file or service configuration source. Both
+  produce one validated in-memory policy/environment/model snapshot, with Pi's
+  internal and personal model catalogs disabled. A service failure has no local
+  fallback; only expressly configurable local builds accept `--config`.
+- The optional unified Linux service resolves account rules and accepts audit
+  events over Unix or HTTPS. Unix uses kernel peer identity; HTTPS trusts
+  authenticated username assertions and supports Linux/macOS clients. Model
+  credentials are administrative by default; personal login requires named
+  provider admission. Scoped variables remain isolated and never grant tools.
+
 - The Pi Sandbox extension is forced inline. User- and directory-local
   extensions, built-in extension factories, stock tool implementations, and Pi
   package-management commands are disabled.
@@ -151,8 +151,8 @@ detailed guarantees and trust assumptions.
 A locally built deployment archive contains a precompiled Bun application built from an exactly pinned,
 minimally patched Pi release, the separately maintained Pi Sandbox extension,
 and the extension manifests selected by its distribution manifest.
-Linux packages also include a small static Rust identity broker that is
-inactive unless configured:
+Client packages are independent of the separately packaged concurrent Linux
+configuration/audit service:
 
 ```text
 pi-sandbox
@@ -189,9 +189,9 @@ Run the installer as root, but launch `pi-sandbox` as the intended unprivileged
 user. The executable permits its installer-only validation commands as root but
 refuses to start Pi with effective UID `0`.
 
-A normal upgrade preserves the compiled configuration directory. Use
-`install.sh --replace-config`
-only when intentionally deploying the configuration packaged with a release.
+A normal local-profile upgrade preserves the compiled configuration directory.
+Use `install.sh --replace-config` only when intentionally replacing local defaults.
+Service-profile client packages contain no local policy or model defaults.
 See [installation and operation](docs/installation.md).
 
 Pi Sandbox has its own release version. A clean checkout at `v0.13.0` uses Pi
@@ -212,10 +212,12 @@ The default distribution's administrative inputs are:
 /etc/pi-sandbox/models.json
 ```
 
-A version-3 distribution manifest with `allow_config_override = true` enables
-a leading `--config FILE` option for caller-selected policy. Managed builds
-set it to `false` and reject the flag. The selected TOML still requires an
-absolute `models_file`; no built-in model catalog is enabled.
+Distribution schema 4 requires a per-platform `configuration` descriptor. The
+public distribution uses `source = "local"`, fixed `config_dir`, and
+`allow_config_override = false`. Custom local builds may set the flag true to
+admit a leading `--config FILE`; local TOML still requires an absolute
+`models_file`. A service build instead compiles one Unix/HTTPS endpoint and
+obtains all administrative inputs from it. No runtime source switch exists.
 
 Every launch selects an administrator-defined workspace mode. Use
 `--list-workspace-modes` to show permitted names, descriptions and the effective
@@ -226,14 +228,15 @@ temporary work, explicit user export), with host as default. Seatbelt keeps
 model Bash disabled in both packaged modes; direct packages offer only host.
 Mode names are administrator-authored and do not guarantee final permissions.
 
-Broker mode may additionally use root-managed
-`/etc/pi-sandbox/users.d/*.toml` and `/etc/pi-sandbox/groups.d/*.toml` drop-ins. Both directories are optional;
-without a matching file the main allowed/default choices and selected mode's
-policy apply unchanged. Account rules may override mode access/default and then
-the selected mode's ordinary tool and filesystem policy.
-See [user and group environment and overrides](docs/identity-broker.md).
+Service listeners may apply administrator-owned username/account/group rules
+before final mode/policy resolution. Local profiles have no rule lookup. No match
+inherits main defaults. Service builds use one endpoint for configuration and
+audit; local builds can compile an optional endpoint for auditing alone.
+See [managed configuration and audit service](docs/managed-service.md).
 
-Policy configuration is strict: main schema 15 and broker/rule version 11.
+Policy configuration is strict: main schema 16 and service rule version 12.
+The service protocol is version 1 with audit records at schema 7.
+
 Every composed mode requires complete tool permissions; shared `audit.tools`
 explicitly covers every configured named subject. Missing, unreadable, invalid,
 and unknown policy fields stop startup. Details
@@ -270,7 +273,7 @@ These subject documents collectively describe the current product behavior.
 - [Architecture](docs/architecture.md)
 - [Configuration and approvals](docs/configuration.md)
 - [Models and authentication](docs/models.md)
-- [User and group environment and overrides](docs/identity-broker.md)
+- [Managed configuration and audit service](docs/managed-service.md)
 - [Installation and operation](docs/installation.md)
 - [Versions and releases](docs/releases.md)
 - [Standalone sandbox extension](packages/sandbox-extension/README.md)

@@ -1,476 +1,260 @@
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { FakeService, deferred } from "../service/fixture.test-support.js";
+import { ServiceError } from "../service/protocol.js";
+import { AuditManager, type AuditEvent } from "./client.js";
 import { createExportAudit } from "./exports.js";
-import type * as FsPromises from "node:fs/promises";
-import { mkdtemp, rm } from "node:fs/promises";
-import { createServer, type Server, type Socket } from "node:net";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-
-vi.mock("node:fs/promises", async (original) => ({
-  ...(await original<typeof FsPromises>()),
-  lstat: vi.fn(),
-}));
-import { lstat } from "node:fs/promises";
-import { connectAuditClient, type AuditClient, type AuditEvent } from "./client.js";
-
-const event = { event: "session_started", pi_session_id: "pi-1", cwd: "/workspace" } as const;
-const acknowledgment = `${JSON.stringify({ version: 5, ok: true, audit_session_id: "audit-1" })}\n`;
-let directory: string;
-let server: Server | undefined;
-let client: AuditClient | undefined;
-const sockets = new Set<Socket>();
-
-beforeEach(async () => {
-  directory = await mkdtemp(join(tmpdir(), "pi-audit-client-"));
-  vi.mocked(lstat).mockImplementation((path) =>
-    Promise.resolve({
-      uid: 0,
-      mode: String(path).endsWith("audit.sock") ? 0o666 : 0o755,
-      isSocket: () => String(path).endsWith("audit.sock"),
-      isSymbolicLink: () => false,
-      isDirectory: () => !String(path).endsWith("audit.sock"),
-    } as Awaited<ReturnType<typeof lstat>>),
-  );
-});
-afterEach(async () => {
-  await client?.close();
-  client = undefined;
-  for (const socket of sockets) socket.destroy();
-  sockets.clear();
-  if (server) await new Promise<void>((resolve) => server!.close(() => resolve()));
-  server = undefined;
-  await rm(directory, { recursive: true, force: true });
-  vi.useRealTimers();
-  vi.restoreAllMocks();
-});
-async function listen(handler: (socket: Socket) => void) {
-  const path = join(directory, "audit.sock");
-  server = createServer((socket) => {
-    sockets.add(socket);
-    handler(socket);
-  });
-  await new Promise<void>((resolve) => server!.listen(path, resolve));
-  return path;
+const event: AuditEvent = {
+  event: "tool_requested",
+  pi_session_id: "pi-1",
+  invocation_id: "call",
+  tool: "bash",
+  boundary: "bubblewrap",
+};
+function fixture() {
+  const service = new FakeService();
+  const client = new AuditManager(service, "/workspace", { source: "local" });
+  return { service, client };
 }
-
-describe("audit client", () => {
-  it("transports bounded user export events independently of model tools", async () => {
-    const received: unknown[] = [];
-    const path = await listen((socket) =>
-      socket.on("data", (data) => {
-        received.push(JSON.parse(data.toString()));
-        socket.write(acknowledgment);
-      }),
-    );
-    client = await connectAuditClient(path);
-    const audit = createExportAudit(client);
-    const common = { operationId: "save-1", sessionId: "pi-1", destination: "/output" };
-    const prior = { dev: "1", ino: "2", size: "3", mtimeNs: "4", ctimeNs: "5" };
-    await audit({
-      ...common,
-      type: "export_intent",
-      roots: ["home"],
-      entryCount: 1,
-      fileCount: 1,
-      totalBytes: 3,
-      manifestDigest: "a".repeat(64),
-    });
-    await audit({ ...common, type: "export_replace_intent", path: "a.txt", prior });
-    await audit({
-      ...common,
-      type: "export_replace_complete",
-      path: "a.txt",
-      prior,
-      outcome: "saved",
-    });
-    await audit({
-      ...common,
-      type: "export_complete",
-      savedFiles: 1,
-      savedBytes: 3,
-      failedFiles: 0,
-      notSavedFiles: 0,
-      cancelled: false,
-    });
-    expect(received).toHaveLength(4);
-    const wire = received[0] as { version: number; event: AuditEvent };
-    expect(wire.version).toBe(5);
-    expect(wire.event).toMatchObject({
-      event: "export_intent",
-      pi_session_id: "pi-1",
-      user_export: { operationId: "save-1", destination: "/output" },
-    });
-    const bad = [
-      { ...wire.event, tool: "bash" },
-      { ...wire.event, event: "tool_completed" },
-      { ...wire.event, user_export: { ...wire.event.user_export, roots: ["host"] } },
-      { ...wire.event, user_export: { ...wire.event.user_export, totalBytes: 4 * 1024 ** 3 + 1 } },
-      { ...wire.event, user_export: { ...wire.event.user_export, fileContent: "secret" } },
-      {
-        event: "export_replace_intent",
-        pi_session_id: "pi-1",
-        user_export: { operationId: "s", destination: "/out", path: "../escape", prior },
-      },
-      { event: "export_complete", pi_session_id: "pi-1" },
-    ];
-    for (const invalid of bad)
-      await expect(client.submit(invalid as AuditEvent)).rejects.toThrow("Invalid audit event");
-    expect(received).toHaveLength(4);
+afterEach(() => vi.useRealTimers());
+describe("audit generations and explicit reconnection", () => {
+  it("keeps startup usable, gates tools, and reconnects only on explicit submission", async () => {
+    const { service, client } = fixture();
+    service.before = () => Promise.reject(new Error("offline"));
+    await client.setSession("pi-1");
+    await expect(client.captureInvocation("pi-1")).rejects.toThrow("resubmit");
+    expect(service.calls).toHaveLength(1);
+    service.before = undefined;
+    const binding = await client.checkpoint();
+    await client.submit(binding, event);
+    expect(service.calls.map((x) => x.operation)).toEqual([
+      "audit_open",
+      "audit_open",
+      "audit_event",
+    ]);
+    expect(service.calls[1]!.input).toMatchObject({ audit_generation: 2 });
   });
-
-  it.each([
-    { path: "/bad\0path" },
-    { path: "/bad\ud800path" },
-    { path: "/" + "x".repeat(4096) },
-    { command: "pwd\0", command_truncated: false },
-    { command: "pwd\ud800", command_truncated: false },
-    { repository: "x".repeat(8193), extension: "git-clone" },
-    { child_id: "only-one-field" },
-    { child_id: "child", child_task_id: "task", child_session_id: "s".repeat(257) },
-  ])("rejects invalid metadata locally without poisoning the connection", async (metadata) => {
-    const received: unknown[] = [];
-    const path = await listen((socket) =>
-      socket.on("data", (data) => {
-        received.push(JSON.parse(data.toString()));
-        socket.write(acknowledgment);
-      }),
-    );
-    client = await connectAuditClient(path);
-    await expect(
-      client.submit({
-        event: "tool_requested",
-        pi_session_id: "pi-1",
-        tool: "bash",
-        invocation_id: "call-1",
-        ...metadata,
-      }),
-    ).rejects.toThrow("Invalid audit event");
-    await client.submit(event);
-    expect(received).toEqual([{ version: 5, event }]);
-  });
-
-  it("preserves Bubblewrap as the tool execution boundary", async () => {
-    const received: unknown[] = [];
-    const path = await listen((socket) =>
-      socket.on("data", (data) => {
-        received.push(JSON.parse(data.toString()));
-        socket.write(acknowledgment);
-      }),
-    );
-    client = await connectAuditClient(path);
-    const call: AuditEvent = {
-      event: "tool_requested",
-      pi_session_id: "pi-1",
-      invocation_id: "call-1",
-      tool: "bash",
-      boundary: "bubblewrap",
-      child_id: "child",
-      child_task_id: "task",
-      child_session_id: "child-session",
+  it("serializes acknowledgments without replay and invalidates all queued work on failure", async () => {
+    const { service, client } = fixture();
+    await client.setSession("pi-1");
+    const binding = await client.captureInvocation("pi-1");
+    const hold = deferred();
+    service.before = async (op) => {
+      if (op === "audit_event") await hold.promise;
     };
-    await client.submit(call);
-    expect(received).toEqual([{ version: 5, event: call }]);
+    const first = client.submit(binding, event);
+    const second = client.submit(binding, event);
+    const results = Promise.allSettled([first, second]);
+    expect(service.calls.filter((x) => x.operation === "audit_event")).toHaveLength(1);
+    hold.reject(new Error("lost ACK"));
+    expect((await results).every((x) => x.status === "rejected")).toBe(true);
+    service.before = undefined;
+    const recovered = await client.checkpoint();
+    await expect(client.submit(binding, event)).rejects.toThrow();
+    await client.submit(recovered, event);
+    expect(service.calls.filter((x) => x.operation === "audit_event")).toHaveLength(2);
+    expect(service.events.filter((x) => x.event === "tool_requested")).toHaveLength(1);
   });
-
-  it.each(["http", "stdio"] as const)(
-    "sends typed %s MCP metadata and trusted parent correlation on wire version 5",
-    async (transport) => {
-      const requests: unknown[] = [];
-      const path = await listen((socket) =>
-        socket.on("data", (data) => {
-          requests.push(JSON.parse(data.toString()));
-          socket.write(acknowledgment);
-        }),
-      );
-      client = await connectAuditClient(path);
-      const call: AuditEvent = {
-        event: "tool_requested",
-        pi_session_id: "pi-1",
-        invocation_id: "nested-1",
-        tool: "mcp__docs__search",
-        boundary: "host",
-        mcp_server: "docs",
-        mcp_tool: "search/raw",
-        mcp_transport: transport,
-        parent_invocation_id: "script-1",
-      };
-      await client.submit(call);
-      expect(requests).toEqual([{ version: 5, event: call }]);
-    },
-  );
-
-  it.each([
-    { mcp_server: "docs" },
-    { mcp_server: "docs", mcp_tool: "search" },
-    { mcp_server: "Docs", mcp_tool: "search", mcp_transport: "http" },
-    { mcp_server: "docs", mcp_tool: "search\nraw", mcp_transport: "http" },
-    { mcp_server: "docs", mcp_tool: "é".repeat(65), mcp_transport: "http" },
-    { mcp_server: "docs", mcp_tool: "search", mcp_transport: "websocket" },
-    { mcp_server: "docs", mcp_tool: "search", mcp_transport: "stdio", boundary: "bubblewrap" },
-    { mcp_server: "docs", mcp_tool: "search", mcp_transport: "stdio", extension: "compiled" },
-    { parent_invocation_id: "call-1" },
-    { parent_invocation_id: "" },
-    { parent_invocation_id: "x".repeat(257) },
-    { arguments: { secret: "must-never-be-logged" } },
-    { source: "script-secret" },
-    { result: "result-secret" },
-  ])(
-    "rejects incomplete, conflicting, or payload-bearing new metadata %# without sending",
-    async (metadata) => {
-      const requests: unknown[] = [];
-      const path = await listen((socket) =>
-        socket.on("data", (data) => {
-          requests.push(JSON.parse(data.toString()));
-          socket.write(acknowledgment);
-        }),
-      );
-      client = await connectAuditClient(path);
-      const call = {
-        event: "tool_requested",
-        pi_session_id: "pi-1",
-        tool: "mcp__docs__search",
-        invocation_id: "call-1",
-        boundary: "host",
-        ...metadata,
-      } as AuditEvent;
-      await expect(client.submit(call)).rejects.toThrow("Invalid audit event");
-      await client.submit(event);
-      expect(requests).toEqual([{ version: 5, event }]);
-    },
-  );
-
-  it.each([
-    ["tool_execution_intent", "known_read_only", 1, { approval_source: "policy" }],
-    ["tool_denied", "unclassified", 1, { approval_source: "policy", reason: "policy_denied" }],
-    ["tool_execution_intent", "unclassified", 1, { approval_source: "session_grant" }],
-    ["tool_execution_intent", "known_read_only", 0xffff_ffff, { approval_source: "prompt" }],
-  ] as const)(
-    "sends %s Bash decisions with %s command class metadata version %i",
-    async (name, commandClass, version, decision) => {
-      const requests: unknown[] = [];
-      const path = await listen((socket) =>
-        socket.on("data", (data) => {
-          requests.push(JSON.parse(data.toString()));
-          socket.write(acknowledgment);
-        }),
-      );
-      client = await connectAuditClient(path);
-      const call: AuditEvent = {
-        event: name,
-        pi_session_id: "pi-1",
-        invocation_id: "call-1",
-        tool: "bash",
-        boundary: "bubblewrap",
-        ...decision,
-        command_class: commandClass,
-        known_read_only_version: version,
-      };
-      await client.submit(call);
-      expect(requests).toEqual([{ version: 5, event: call }]);
-    },
-  );
-
-  it.each([
-    { command_class: "known_read_only" },
-    { command_class: "configured_command", known_read_only_version: 2 },
-    { command_class: "configured_command", known_read_only_version: 2, command_set_ids: [] },
-    {
-      command_class: "configured_command",
-      known_read_only_version: 2,
-      command_set_ids: ["x", "x"],
-    },
-    {
-      command_class: "configured_command",
-      known_read_only_version: 2,
-      command_set_ids: ["../bad"],
-    },
-    { command_class: "configured_command", known_read_only_version: 2, command_set_ids: "x" },
-    { command_class: "known_read_only", known_read_only_version: 2, command_set_ids: ["x"] },
-    { known_read_only_version: 1 },
-    { command_class: "read_only", known_read_only_version: 1 },
-    { command_class: "known_read_only", known_read_only_version: 0 },
-    { command_class: "known_read_only", known_read_only_version: -1 },
-    { command_class: "known_read_only", known_read_only_version: 1.5 },
-    { command_class: "known_read_only", known_read_only_version: "1" },
-    { command_class: "known_read_only", known_read_only_version: 0x1_0000_0000 },
-    { command_class: "known_read_only", known_read_only_version: Number.MAX_SAFE_INTEGER + 1 },
-    { command_class: "unclassified", known_read_only_version: 1, tool: "write" },
-    { command_class: "unclassified", known_read_only_version: 1, event: "tool_requested" },
-    { command_class: "unclassified", known_read_only_version: 1, event: "tool_completed" },
-    {
-      command_class: "unclassified",
-      known_read_only_version: 1,
-      event: "session_started",
-      cwd: "/workspace",
-    },
-  ])("rejects invalid command class metadata %# without sending", async (metadata) => {
-    const requests: unknown[] = [];
-    const path = await listen((socket) =>
-      socket.on("data", (data) => {
-        requests.push(JSON.parse(data.toString()));
-        socket.write(acknowledgment);
-      }),
-    );
-    client = await connectAuditClient(path);
-    const call = {
-      event: "tool_execution_intent",
-      pi_session_id: "pi-1",
-      tool: "bash",
-      invocation_id: "call-1",
-      boundary: "bubblewrap",
-      approval_source: "policy",
-      ...metadata,
-    } as AuditEvent;
-    await expect(client.submit(call)).rejects.toThrow("Invalid audit event");
-    await client.submit(event);
-    expect(requests).toEqual([{ version: 5, event }]);
-  });
-
-  it("sends configured command provenance separately from built-in safety", async () => {
-    const requests: unknown[] = [];
-    const path = await listen((socket) =>
-      socket.on("data", (data) => {
-        requests.push(JSON.parse(data.toString()));
-        socket.write(acknowledgment);
-      }),
-    );
-    client = await connectAuditClient(path);
-    const call: AuditEvent = {
-      event: "tool_execution_intent",
-      pi_session_id: "pi-1",
-      tool: "bash",
-      invocation_id: "call-1",
-      boundary: "bubblewrap",
-      approval_source: "policy",
-      command_class: "configured_command",
-      known_read_only_version: 2,
-      command_set_ids: ["utility_read"],
+  it("shares concurrent checkpoints and opens exactly once after server restart", async () => {
+    const { service, client } = fixture();
+    await client.setSession("pi-1");
+    service.handles.clear();
+    const hold = deferred();
+    service.before = async (op) => {
+      if (op === "audit_check") await hold.promise;
     };
-    await client.submit(call);
-    expect(requests).toEqual([{ version: 5, event: call }]);
-  });
-
-  it("serializes submissions and waits for fragmented acknowledgments", async () => {
-    const requests: unknown[] = [];
-    const path = await listen((socket) =>
-      socket.on("data", (data) => {
-        requests.push(JSON.parse(data.toString()));
-        socket.write(acknowledgment.slice(0, 10));
-        setTimeout(() => socket.write(acknowledgment.slice(10)), 5);
-      }),
-    );
-    client = await connectAuditClient(path);
-    await Promise.all([client.submit(event), client.submit(event)]);
-    expect(requests).toEqual([
-      { version: 5, event },
-      { version: 5, event },
+    const a = client.checkpoint(),
+      b = client.checkpoint();
+    expect(a).toBe(b);
+    hold.resolve();
+    expect(await a).toBe(await b);
+    expect(service.calls.map((x) => x.operation)).toEqual([
+      "audit_open",
+      "audit_check",
+      "audit_open",
     ]);
   });
-
-  it.each([
-    '{"version":1,"ok":true,"audit_session_id":"a"}\n',
-    '{"version":5,"ok":false,"code":"syslog_unavailable"}\n',
-    '{"version":5,"ok":true,"audit_session_id":"a","extra":true}\n',
-    "not json\n",
-    acknowledgment + acknowledgment,
-    "x".repeat(4097),
-  ])("poisons the client after a rejected or malformed response", async (response) => {
-    let requests = 0;
-    const path = await listen((socket) =>
-      socket.on("data", () => {
-        requests++;
-        socket.write(response);
-      }),
-    );
-    client = await connectAuditClient(path);
-    await expect(client.submit(event)).rejects.toThrow();
-    await expect(client.submit(event)).rejects.toThrow();
-    expect(requests).toBe(1);
+  it("does not retry authentication or ordinary audit-check failures", async () => {
+    const { service, client } = fixture();
+    await client.setSession("pi-1");
+    service.before = () => Promise.reject(new ServiceError("authentication_required"));
+    await expect(client.checkpoint()).rejects.toThrow();
+    expect(service.calls.map((x) => x.operation)).toEqual(["audit_open", "audit_check"]);
+    await expect(client.captureInvocation("pi-1")).rejects.toThrow();
   });
-
-  it("rejects changed collector session identity", async () => {
-    let count = 0;
-    const path = await listen((socket) =>
-      socket.on("data", () => {
-        socket.write(count++ ? acknowledgment.replace("audit-1", "audit-2") : acknowledgment);
-      }),
-    );
-    client = await connectAuditClient(path);
-    await client.submit(event);
-    await expect(client.submit(event)).rejects.toThrow("session changed");
+  it("rejects a successful check invalidated by a concurrent event failure", async () => {
+    const { service, client } = fixture();
+    await client.setSession("pi-1");
+    const binding = await client.captureInvocation("pi-1");
+    const hold = deferred();
+    service.before = async (op) => {
+      if (op === "audit_check") await hold.promise;
+      if (op === "audit_event") throw new Error("sink");
+    };
+    const checkpoint = client.checkpoint();
+    const result = Promise.allSettled([checkpoint]);
+    await expect(client.submit(binding, event)).rejects.toThrow();
+    hold.resolve();
+    expect((await result)[0].status).toBe("rejected");
+    expect(client.diagnostics().connected).toBe(false);
   });
-
-  it("rejects disconnection before acknowledgement", async () => {
-    const path = await listen((socket) => socket.on("data", () => socket.destroy()));
-    client = await connectAuditClient(path);
-    await expect(client.submit(event)).rejects.toThrow("connection closed");
+  it("fences an in-flight open across a session change", async () => {
+    const { service, client } = fixture();
+    const hold = deferred();
+    service.before = async (op, input) => {
+      if (op === "audit_open" && "pi_session_id" in input && input.pi_session_id === "pi-1")
+        await hold.promise;
+    };
+    const start = client.setSession("pi-1");
+    await client.setSession("pi-2");
+    hold.resolve();
+    await start;
+    const binding = await client.captureInvocation("pi-2");
+    expect(binding.piSessionId).toBe("pi-2");
+    await expect(client.captureInvocation("pi-1")).rejects.toThrow();
   });
-
-  it("bounds command bytes before sending", async () => {
-    let received = false;
-    const path = await listen((socket) =>
-      socket.on("data", () => {
-        received = true;
-      }),
-    );
-    client = await connectAuditClient(path);
-    await expect(client.submit({ ...event, command: "é".repeat(2049) })).rejects.toThrow(
-      "command exceeds",
-    );
-    expect(received).toBe(false);
+  it("does not let an old late event failure poison a replacement session", async () => {
+    const { service, client } = fixture();
+    await client.setSession("pi-1");
+    const old = await client.captureInvocation("pi-1");
+    const hold = deferred();
+    service.before = async (op, input) => {
+      if (op === "audit_event" && "event" in input && input.event.pi_session_id === "pi-1")
+        await hold.promise;
+    };
+    const pending = client.submit(old, event);
+    const result = Promise.allSettled([pending]);
+    await client.setSession("pi-2");
+    hold.reject(new Error("old socket"));
+    await result;
+    expect(service.calls.some((x) => x.operation === "audit_close")).toBe(false);
+    const current = await client.captureInvocation("pi-2");
+    await client.submit(current, { ...event, pi_session_id: "pi-2" });
+    expect(client.isCurrent(current)).toBe(true);
   });
-
-  it("bounds escaped command text bytes before sending", async () => {
-    const path = await listen(() => {});
-    client = await connectAuditClient(path);
-    await expect(client.submit({ ...event, command: "\n".repeat(2049) })).rejects.toThrow(
-      "command exceeds",
-    );
+  it("preserves failure across session switches until an explicit checkpoint", async () => {
+    const { service, client } = fixture();
+    await client.setSession("pi-1");
+    const old = await client.captureInvocation("pi-1");
+    service.before = () => Promise.reject(new Error("sink"));
+    await expect(client.submit(old, event)).rejects.toThrow();
+    service.before = undefined;
+    await client.setSession("pi-2");
+    expect(service.calls).toHaveLength(2);
+    await expect(client.captureInvocation("pi-2")).rejects.toThrow();
+    expect((await client.checkpoint()).piSessionId).toBe("pi-2");
   });
-
-  it("fails a missing acknowledgment at the deadline without retrying", async () => {
-    const path = await listen(() => {});
-    client = await connectAuditClient(path);
+  it("bounds queue residence and detaches the whole generation on expiry", async () => {
     vi.useFakeTimers();
-    const submitted = client.submit(event);
-    const rejection = expect(submitted).rejects.toThrow("acknowledgment timed out");
-    await vi.advanceTimersByTimeAsync(10_000);
-    await rejection;
-    await expect(client.submit(event)).rejects.toThrow("acknowledgment timed out");
+    const { service, client } = fixture();
+    await client.setSession("pi-1");
+    const binding = await client.captureInvocation("pi-1");
+    const hold = deferred();
+    service.before = async (op) => {
+      if (op === "audit_event") await hold.promise;
+    };
+    const first = client.submit(binding, event),
+      second = client.submit(binding, event);
+    const results = Promise.allSettled([first, second]);
+    await vi.advanceTimersByTimeAsync(30_001);
+    expect(client.isCurrent(binding)).toBe(false);
+    hold.resolve();
+    expect((await results).every((x) => x.status === "rejected")).toBe(true);
   });
-
-  it("bounds the whole request before sending", async () => {
-    const path = await listen(() => {});
-    client = await connectAuditClient(path);
-    await expect(client.submit({ ...event, path: "x".repeat(32_768) })).rejects.toThrow(
-      "request exceeds",
+  it("bounds queued events, captures immutable inputs and assigns sequence only at dispatch", async () => {
+    const { service, client } = fixture();
+    await client.setSession("pi-1");
+    const binding = await client.captureInvocation("pi-1");
+    const hold = deferred();
+    service.before = async (op) => {
+      if (op === "audit_event") await hold.promise;
+    };
+    const mutable = { ...event, path: "/original" };
+    const work = [client.submit(binding, mutable)];
+    mutable.path = "/changed";
+    for (let i = 1; i < 65; i++) work.push(client.submit(binding, event));
+    const results = Promise.allSettled(work);
+    hold.resolve();
+    expect((await results).every((x) => x.status === "rejected")).toBe(true);
+    expect(service.calls[1]!.input).toMatchObject({ sequence: 1, event: { path: "/original" } });
+    expect(service.calls.filter((x) => x.operation === "audit_event")).toHaveLength(1);
+  });
+  it("closes only idle handles and never reopens after process shutdown", async () => {
+    const { service, client } = fixture();
+    await client.setSession("pi-1");
+    await client.close();
+    await client.close();
+    expect(service.calls.map((x) => x.operation)).toEqual(["audit_open", "audit_close"]);
+    await expect(client.checkpoint()).rejects.toThrow();
+  });
+  it("checks export readiness once per reviewed publication and keeps the resulting binding", async () => {
+    const { service, client } = fixture();
+    await client.setSession("pi-1");
+    const audit = await createExportAudit(client, "pi-1");
+    await audit({
+      type: "export_intent",
+      sessionId: "pi-1",
+      operationId: "save",
+      destination: "/out",
+      roots: ["home"],
+      entryCount: 0,
+      fileCount: 0,
+      totalBytes: 0,
+      manifestDigest: "a".repeat(64),
+    });
+    await client.setSession("pi-2");
+    await expect(
+      audit({
+        type: "export_complete",
+        sessionId: "pi-1",
+        operationId: "save",
+        destination: "/out",
+        savedFiles: 0,
+        savedBytes: 0,
+        failedFiles: 0,
+        notSavedFiles: 0,
+        cancelled: false,
+      }),
+    ).rejects.toThrow();
+    expect(service.calls.filter((x) => x.operation === "audit_check")).toHaveLength(1);
+  });
+  it("rejects a delayed export confirmation from an outgoing session without rebinding", async () => {
+    const { service, client } = fixture();
+    await client.setSession("pi-1");
+    await client.setSession("pi-2");
+    const binding = await client.captureInvocation("pi-2");
+    const calls = service.calls.length;
+    await expect(createExportAudit(client, "pi-1")).rejects.toThrow("resubmit");
+    expect(service.calls).toHaveLength(calls);
+    expect(client.isCurrent(binding)).toBe(true);
+    await createExportAudit(client, "pi-2");
+    expect(service.calls.at(-1)?.operation).toBe("audit_check");
+  });
+  it.each([
+    { path: "/bad\0path" },
+    { path: "/bad\ud800" },
+    { path: "/" + "x".repeat(4096) },
+    { command: "x\0", command_truncated: false },
+    { repository: "x".repeat(8193), extension: "git" },
+    { child_id: "alone" },
+    { child_id: "child", child_task_id: "task", child_session_id: "s".repeat(257) },
+  ])("rejects invalid metadata without losing the handle: %j", async (metadata) => {
+    const { client } = fixture();
+    await client.setSession("pi-1");
+    const binding = await client.captureInvocation("pi-1");
+    await expect(client.submit(binding, { ...event, ...metadata })).rejects.toThrow(
+      "Invalid audit event",
     );
+    await client.submit(binding, event);
   });
-
-  it("rejects symlink sockets and non-normalized paths", async () => {
-    vi.mocked(lstat).mockResolvedValue({
-      uid: 0,
-      mode: 0o666,
-      isSocket: () => true,
-      isSymbolicLink: () => true,
-      isDirectory: () => false,
-    } as Awaited<ReturnType<typeof lstat>>);
-    await expect(connectAuditClient(join(directory, "audit.sock"))).rejects.toThrow(
-      "root-owned Unix socket",
-    );
-    await expect(connectAuditClient("/run/../run/audit.sock")).rejects.toThrow("normalized");
-  });
-
-  it("rejects writable ancestors before connecting", async () => {
-    vi.mocked(lstat).mockResolvedValue({
-      uid: 0,
-      mode: 0o777,
-      isSocket: () => true,
-      isSymbolicLink: () => false,
-      isDirectory: () => true,
-    } as Awaited<ReturnType<typeof lstat>>);
-    await expect(connectAuditClient(join(directory, "audit.sock"))).rejects.toThrow(
-      "protected directories",
-    );
-  });
+  it.each(["x".repeat(4097), "\n".repeat(2049)])(
+    "bounds escaped command bytes",
+    async (command) => {
+      const { client } = fixture();
+      await client.setSession("pi-1");
+      const binding = await client.captureInvocation("pi-1");
+      await expect(
+        client.submit(binding, { ...event, command, command_truncated: false }),
+      ).rejects.toThrow("size limit");
+    },
+  );
 });

@@ -1,4 +1,3 @@
-import { createHash } from "node:crypto";
 import assert from "node:assert/strict";
 import { mkdtemp, mkdir, writeFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -113,15 +112,6 @@ test("release inventory ties source and executable identity to selected shipped 
         (item) => item.name === "pi-sandbox:source-sha256" && item.value === "1".repeat(64),
       ),
     );
-    await mkdir(join(root, "broker"));
-    await mkdir(join(root, "audit-collector"));
-    for (const crate of ["broker", "audit-collector"])
-      await writeFile(
-        join(root, crate, "Cargo.lock"),
-        'version = 4\n[[package]]\nname = "libc"\nversion = "0.2.1"\nsource = "registry+https://example.org/index"\nchecksum = "' +
-          "e".repeat(64) +
-          '"\n',
-      );
     await mkdir(join(root, "export-html/vendor"), { recursive: true });
     await writeFile(join(root, "export-html/vendor/marked.min.js"), "/* marked v18.0.5 */");
     await mkdir(join(root, "node_modules/@silvia-odwyer/photon-node"), { recursive: true });
@@ -130,30 +120,14 @@ test("release inventory ties source and executable identity to selected shipped 
       JSON.stringify({ name: "@silvia-odwyer/photon-node", version: "0.3.4" }),
     );
     await writeFile(join(root, "photon_rs_bg.wasm"), "wasm fixture");
-    for (const name of ["identity-broker", "audit-collector"])
-      await writeFile(join(root, `pi-sandbox-${name}`), `${name} executable`);
     const linux = await createSbom({
       ...args,
       platform: "linux-x64",
       bubblewrap: { mode: "bundled", version: "0.11.0", sha256: "f".repeat(64) },
     });
-    for (const name of ["identity-broker", "audit-collector"]) {
-      const binary = linux.components.find((c) => c["bom-ref"] === `binary:${name}`);
-      assert.equal(binary.type, "application");
-      assert.equal(binary.name, `pi-sandbox-${name}`);
-      assert.equal(
-        binary.hashes[0].content,
-        createHash("sha256").update(`${name} executable`).digest("hex"),
-      );
-      assert.ok(
-        linux.components.some((c) =>
-          c.properties?.some(
-            (p) => p.name === "pi-sandbox:artifact" && p.value === binary["bom-ref"],
-          ),
-        ),
-      );
-    }
-    assert.equal(linux.components.filter((c) => c.name === "libc").length, 2);
+    assert.ok(
+      !linux.components.some((c) => c.name.includes("broker") || c.name.includes("collector")),
+    );
     assert.equal(linux.components.find((c) => c.name === "marked").version, "18.0.5");
     assert.equal(linux.components.find((c) => c["bom-ref"] === "asset:photon").version, "0.3.4");
     assert.equal(
@@ -161,11 +135,6 @@ test("release inventory ties source and executable identity to selected shipped 
       64,
     );
     assert.equal(linux.components.find((c) => c.name === "bubblewrap").version, "0.11.0");
-    assert.ok(
-      linux.components
-        .find((c) => c.name === "libc")
-        .properties.some((p) => p.value.includes("build-only")),
-    );
   } finally {
     await rm(root, { recursive: true, force: true });
   }

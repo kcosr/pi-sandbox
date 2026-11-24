@@ -1,0 +1,86 @@
+config_version = 16
+models_file = "/etc/pi-sandbox-service/main/audit-only-models.json"
+
+[codemode]
+enabled = false
+
+[mcp.servers]
+
+[exports]
+enabled = false
+
+[skills]
+# Additional shared roots; personal skills and Pi settings retain precedence.
+directories = []
+
+[sessions]
+retention_days = 365
+
+[audit]
+enabled = true
+
+[audit.tools]
+read = false
+grep = false
+find = false
+ls = false
+write = true
+edit = true
+bash = true
+
+[filesystem]
+cwd_writable = true
+hidden_paths = []
+denied_paths = []
+
+[execution]
+backend = "direct"
+
+[network]
+mode = "host"
+
+[environment.pi]
+
+[environment.sandbox]
+
+[environment.extensions]
+
+[extensions]
+
+[tools.read]
+mode = "allow"
+session_grant = "never"
+
+[tools.grep]
+mode = "allow"
+session_grant = "never"
+
+[tools.find]
+mode = "allow"
+session_grant = "never"
+
+[tools.ls]
+mode = "allow"
+session_grant = "never"
+
+[tools.write]
+mode = "ask"
+session_grant = "never"
+
+[tools.edit]
+mode = "ask"
+session_grant = "never"
+
+[tools.bash]
+mode = "disabled"
+session_grant = "never"
+
+[workspace]
+default = "host"
+allowed = ["host"]
+
+[workspace.modes.host]
+description = "Work in the host project with approval for changes."
+
+[model_auth]
+personal_providers = []

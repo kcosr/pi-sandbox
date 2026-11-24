@@ -5,15 +5,15 @@ import type {
   ExtensionFactory,
   main,
   ModelRuntime,
+  FileAuthStorageBackend,
 } from "@earendil-works/pi-coding-agent";
 import type { ManagedCodemodeOptions } from "../../src/codemode/index.js";
 import type { ManagedMcpFactory, ManagedMcpOptions } from "../../src/mcp/runtime.js";
+import type { ManagedMain, ManagedMainOptions } from "../../src/runtime/main.js";
 import type {
-  ManagedMain,
-  ManagedMainOptions,
   ManagedModelRuntimeFactory,
   ManagedModelRuntimeOptions,
-} from "../../src/runtime/main.js";
+} from "../../src/runtime/model-runtime.js";
 
 type Assert<T extends true> = T;
 type Assignable<From, To> = 0 extends 1 & (From | To) ? false : [From] extends [To] ? true : false;
@@ -54,6 +54,19 @@ export type ManagedPiContract = [
   >,
   Assert<Assignable<ManagedModelRuntimeOptions, PiModels>>,
   Assert<KeysKnown<ManagedModelRuntimeOptions, PiModels>>,
+  Assert<KeysKnown<ManagedModelRuntimeOptions["authPolicy"], NonNullable<PiModels["authPolicy"]>>>,
+  Assert<
+    Assignable<
+      { maximumBytes: number; atomicWrites: true },
+      NonNullable<ConstructorParameters<typeof FileAuthStorageBackend>[1]>
+    >
+  >,
+  Assert<
+    KeysKnown<
+      { maximumBytes: number; atomicWrites: true },
+      NonNullable<ConstructorParameters<typeof FileAuthStorageBackend>[1]>
+    >
+  >,
   Assert<Assignable<ManagedModelRuntimeFactory, NonNullable<PiMain["createModelRuntime"]>>>,
   Assert<Assignable<ManagedCodemodeOptions, PiCodemode>>,
   Assert<KeysKnown<ManagedCodemodeOptions, PiCodemode>>,

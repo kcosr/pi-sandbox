@@ -1,0 +1,25 @@
+manifest_version = 1
+
+# Deployment must provision protected files before enabling the unit.
+[[listeners]]
+id = "local_linux"
+transport = "unix"
+platform = "linux"
+socket_path = "/run/pi-sandbox/service.sock"
+audit_facility = "local0"
+policy_file = "/etc/pi-sandbox-service/main/audit-only-policy.toml"
+
+# To add HTTPS, provision a certificate/key pair and a random shared password,
+# then add a listener. No usable credential is supplied by this package.
+# [[listeners]]
+# id = "remote_macos"
+# transport = "https"
+# platform = "darwin"
+# listen_address = "0.0.0.0:9443"
+# audit_facility = "local0"
+# policy_file = "/etc/pi-sandbox-service/main/macos.toml"
+# certificate_file = "/etc/pi-sandbox-service/main/tls/certificate.pem"
+# private_key_file = "/etc/pi-sandbox-service/main/tls/key.pem"
+# [[listeners.credentials]]
+# name = "managed-clients-v1"
+# password_file = "/etc/pi-sandbox-service/main/credentials/v1"

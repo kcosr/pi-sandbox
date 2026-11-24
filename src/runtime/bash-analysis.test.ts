@@ -30,17 +30,18 @@ function runtime(
   };
   return {
     config: {
-      configVersion: 15,
+      configVersion: 16,
+      modelAuth: { personalProviders: [] },
       skills: { directories: [] },
       exports: { enabled: false },
       codemode: { enabled: false, timeoutMs: 300000 },
       mcp: { servers: {} },
       sessions: { retentionDays: 0 },
-      audit: { enabled: false, facility: "local0" },
-      modelsFile: "/etc/pi-sandbox/models.json",
+      audit: { enabled: false },
+
       filesystem: { cwdWritable: true, deniedPaths: [], hiddenPaths: [] },
       execution: { backend },
-      identity: { mode: "disabled" },
+
       network: { mode: backend === "direct" ? "host" : "none" },
       environment: { pi: {}, sandbox: {}, extensions: {} },
       extensions: {},

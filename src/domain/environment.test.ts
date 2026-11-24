@@ -4,7 +4,7 @@ import {
   overlayManagedEnvironment,
   parseManagedEnvironment,
   parseAuthoredManagedEnvironment,
-  parseBrokerManagedEnvironment,
+  parseResolvedManagedEnvironment,
 } from "./environment.js";
 
 describe("managed administrative environment", () => {
@@ -109,7 +109,7 @@ describe("Pi environment value sources", () => {
 
   it("keeps authored, wire and final resolved parsers distinct", () => {
     const literal = { literal: "~/{{unknown}}" };
-    expect(parseBrokerManagedEnvironment(environment({ TOKEN: literal })).pi.TOKEN).toEqual(
+    expect(parseResolvedManagedEnvironment(environment({ TOKEN: literal })).pi.TOKEN).toEqual(
       literal,
     );
     for (const value of [
@@ -119,7 +119,7 @@ describe("Pi environment value sources", () => {
       { literal: "nul\0value" },
       { literal: "x".repeat(8193) },
     ]) {
-      expect(() => parseBrokerManagedEnvironment(environment({ TOKEN: value }))).toThrow(
+      expect(() => parseResolvedManagedEnvironment(environment({ TOKEN: value }))).toThrow(
         "managed_environment_invalid",
       );
     }
@@ -128,7 +128,7 @@ describe("Pi environment value sources", () => {
     );
   });
   it("rejects references and opaque values outside the Pi scope", () => {
-    for (const parse of [parseAuthoredManagedEnvironment, parseBrokerManagedEnvironment]) {
+    for (const parse of [parseAuthoredManagedEnvironment, parseResolvedManagedEnvironment]) {
       for (const value of [{ file: "/etc/token" }, { literal: "token" }]) {
         expect(() => parse({ pi: {}, sandbox: { TOKEN: value }, extensions: {} })).toThrow(
           "managed_environment_invalid",

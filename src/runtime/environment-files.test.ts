@@ -9,7 +9,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   overlayManagedEnvironment,
   parseAuthoredManagedEnvironment,
-  parseBrokerManagedEnvironment,
+  parseResolvedManagedEnvironment,
 } from "../domain/index.js";
 import { readEnvironmentFile, resolveEnvironmentFiles } from "./environment-files.js";
 
@@ -106,7 +106,7 @@ describe("file-backed Pi environment", () => {
     const read = vi.fn(readEnvironmentFile);
     const merged = overlayManagedEnvironment(
       authored({ FIRST: { file: path }, SECOND: { file: path }, REPLACED: { file: missing } }),
-      parseBrokerManagedEnvironment({
+      parseResolvedManagedEnvironment({
         pi: { REPLACED: { literal: "opaque" } },
         sandbox: {},
         extensions: {},

@@ -5,17 +5,18 @@ import { formatSandboxMounts, formatSandboxPolicy, formatSandboxSummary } from "
 
 function diagnosticConfig(): SandboxConfig {
   return {
-    configVersion: 15,
+    configVersion: 16,
+    modelAuth: { personalProviders: [] },
     skills: { directories: [] },
     exports: { enabled: false },
     codemode: { enabled: false, timeoutMs: 300000 },
     mcp: { servers: {} },
     sessions: { retentionDays: 0 },
-    audit: { enabled: false, facility: "local0" },
-    modelsFile: "/etc/pi-sandbox/models.json",
+    audit: { enabled: false },
+
     filesystem: { cwdWritable: true, deniedPaths: [], hiddenPaths: [] },
     execution: { backend: "bubblewrap" },
-    identity: { mode: "disabled" },
+
     network: { mode: "none" },
     environment: { pi: {}, sandbox: {}, extensions: {} },
     extensions: {},
@@ -37,8 +38,12 @@ describe("sandbox diagnostics", () => {
     const summary = formatSandboxSummary({
       initialized: true,
       cwd: "/work/project",
-      configPath: "/etc/pi-sandbox/config.toml",
-      modelsFile: "/etc/pi-sandbox/models.json",
+      provenance: {
+        source: "local",
+        configPath: "/etc/pi-sandbox/config.toml",
+        modelsPath: "/etc/pi-sandbox/models.json",
+      },
+
       workspaceSelection: {
         name: "review",
         source: "cli",
@@ -47,7 +52,7 @@ describe("sandbox diagnostics", () => {
       exports: { enabled: true },
       filesystem: { cwdWritable: false, hiddenPaths: [], deniedPaths: [] },
       execution: { backend: "bubblewrap" },
-      identity: { mode: "broker" },
+
       network: { mode: "none" },
       extensions: [],
       userStateDir: "/home/alice/.pi/agent",
@@ -109,13 +114,17 @@ describe("sandbox diagnostics", () => {
       formatSandboxSummary({
         initialized: true,
         cwd: "/work/project",
-        configPath: "/etc/pi-sandbox/config.toml",
+        provenance: {
+          source: "local",
+          configPath: "/etc/pi-sandbox/config.toml",
+          modelsPath: "/etc/pi-sandbox/models.json",
+        },
         workspaceSelection: { name: "host", source: "default" },
         exports: { enabled: false },
-        modelsFile: "/etc/pi-sandbox/models.json",
+
         filesystem: { cwdWritable: true, deniedPaths: [], hiddenPaths: [] },
         execution: { backend: "bubblewrap" },
-        identity: { mode: "disabled" },
+
         network: { mode: "none" },
         extensions: [],
         userStateDir: "/home/alice/.pi/agent",
@@ -136,10 +145,11 @@ Code mode:       disabled
 MCP servers:     0
 Execution:       Bubblewrap sandbox
 Network:         disabled (private namespace)
+Config source:   local
 Config:          /etc/pi-sandbox/config.toml
 Models:          /etc/pi-sandbox/models.json
+Audit:           disabled
 Extensions:      none
-Identity:        disabled
 User state:      /home/alice/.pi/agent
 
 Use /sandbox mounts or /sandbox policy for details.`);
@@ -149,20 +159,24 @@ Use /sandbox mounts or /sandbox policy for details.`);
     const output = formatSandboxSummary({
       initialized: true,
       cwd: "/work/project\nNetwork: enabled",
-      configPath: "/etc/pi-sandbox/config.toml",
+      provenance: {
+        source: "local",
+        configPath: "/etc/pi-sandbox/config.toml",
+        modelsPath: "/etc/pi-sandbox/models\u001b[31m.json",
+      },
       workspaceSelection: { name: "host", source: "default" },
       exports: { enabled: false },
-      modelsFile: "/etc/pi-sandbox/models\u001b[31m.json",
+
       filesystem: { cwdWritable: true, deniedPaths: [], hiddenPaths: [] },
       execution: { backend: "bubblewrap" },
-      identity: { mode: "broker" },
+
       network: { mode: "host" },
       extensions: ["git", "service-api"],
       userStateDir: "/home/alice\u2028forged",
     });
     expect(output).toContain("/work/project\\u000aNetwork: enabled");
     expect(output).toContain("models\\u001b[31m.json");
-    expect(output).toContain("broker via /run/pi-sandbox-identity/broker.sock");
+    expect(output).toContain("Config source:   local");
     expect(output).toContain("Extensions:      git, service-api");
     expect(output).toContain("/home/alice\\u2028forged");
     expect(output).not.toContain("/work/project\nNetwork: enabled");
@@ -267,13 +281,17 @@ Use /sandbox mounts or /sandbox policy for details.`);
     const summary = formatSandboxSummary({
       initialized: true,
       cwd: "/work/project",
-      configPath: "/etc/pi-sandbox/config.toml",
+      provenance: {
+        source: "local",
+        configPath: "/etc/pi-sandbox/config.toml",
+        modelsPath: "/etc/pi-sandbox/models.json",
+      },
       workspaceSelection: { name: "host", source: "default" },
       exports: { enabled: false },
-      modelsFile: config.modelsFile,
+
       execution: config.execution,
       filesystem: config.filesystem,
-      identity: config.identity,
+
       network: config.network,
       extensions: [],
       userStateDir: "/home/alice/.pi/agent",
@@ -296,13 +314,17 @@ Use /sandbox mounts or /sandbox policy for details.`);
     const summary = formatSandboxSummary({
       initialized: true,
       cwd: "/work/project",
-      configPath: "/etc/pi-sandbox/config.toml",
+      provenance: {
+        source: "local",
+        configPath: "/etc/pi-sandbox/config.toml",
+        modelsPath: "/etc/pi-sandbox/models.json",
+      },
       workspaceSelection: { name: "host", source: "default" },
       exports: { enabled: false },
-      modelsFile: config.modelsFile,
+
       execution: config.execution,
       filesystem: config.filesystem,
-      identity: config.identity,
+
       network: config.network,
       extensions: [],
       userStateDir: "/home/alice/.pi/agent",
@@ -326,13 +348,17 @@ Use /sandbox mounts or /sandbox policy for details.`);
     const summary = formatSandboxSummary({
       initialized: true,
       cwd: "/work/project",
-      configPath: "/etc/pi-sandbox/config.toml",
+      provenance: {
+        source: "local",
+        configPath: "/etc/pi-sandbox/config.toml",
+        modelsPath: "/etc/pi-sandbox/models.json",
+      },
       workspaceSelection: { name: "host", source: "default" },
       exports: { enabled: false },
-      modelsFile: config.modelsFile,
+
       execution: config.execution,
       filesystem: config.filesystem,
-      identity: config.identity,
+
       network: config.network,
       extensions: [],
       userStateDir: "/Users/alice/.pi/agent",

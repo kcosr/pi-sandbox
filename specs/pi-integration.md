@@ -41,8 +41,10 @@ identity at build time, never during operational startup. Preserve Pi's internal
 release versions remain independent from upstream and extension package
 versions; see [versions and releases](../docs/releases.md).
 
-The release contains one prebuilt Bun application named `pi-sandbox`. The Pi
-Sandbox extension remains a separately maintained source module but is imported
+The release contains one prebuilt Bun application named `pi-sandbox`, built with
+Bun 1.4.4 or newer so explicit service CA lists replace the runtime trust store.
+Compiled tests must cover public/custom roots under hostile startup CA settings.
+The Pi Sandbox extension remains a separately maintained source module but is imported
 by the private entry point and compiled into that executable. The extension is
 not an adjacent runtime JavaScript file and is not loaded through user-facing
 extension discovery.
@@ -80,58 +82,55 @@ the private entry point requires.
 
 ## Administrative configuration and models
 
-The executable begins configuration resolution at the build-selected path,
-normally:
+Distribution schema 4 requires a per-platform strict `configuration` union:
+service plus a fixed endpoint, or local plus `config_dir`, `allow_config_override`
+and optional `audit_endpoint`. Service builds reject local source fields and
+`--config`; local builds never query remote policy/account overrides. Only a
+local descriptor with a true override flag admits a leading `--config FILE` or
+`--config=FILE`. Consume it before Pi, reject missing/repeated/misplaced options,
+and never fall back after an invalid selection. No runtime source switch exists.
 
-```text
-/etc/pi-sandbox/config.toml
-```
+A service bootstrap returns authored policy, joined overrides, resolved scoped
+environment and a parsed models object. Local loading reads schema-16 TOML and its
+absolute `models_file` as the invoking user, resolves effective main references,
+and supplies an empty override. Shared validators select one complete workspace
+mode, apply account policy once, expand account values and build one immutable
+runtime snapshot. Diagnostic source/origin information must be truthful; do not
+invent local paths for a service response.
 
-Version-3 distribution manifests require a boolean `allow_config_override`.
-With `false` (the default distribution), the path is fixed and the executable
-rejects `--config`. With `true`, a leading `--config FILE` or `--config=FILE`
-selects the TOML; relative paths resolve from the launch CWD. Pi Sandbox
-consumes the option before Pi argument handling. Reject missing, repeated, and
-misplaced flags. Invalid selected input must not fall back to the default.
-Validation commands and diagnostics must use and report the selected path.
-No environment variable, Pi setting, or automatic project discovery may enable
-or redirect this selection. The strict configuration has a required normalized
-absolute `models_file`; selecting a TOML does not alter model-path semantics,
-service sockets, or the broker/collector's own configuration directories. In broker mode, a root-managed drop-in
-selected by the kernel-authenticated account and its primary/supplementary groups may replace the model file,
-execution backend, network mode, CWD write access, workspace allowed/default
-metadata, MCP server enablement/approval and complete invocation permissions for
-a subset of model tools. The main TOML supplies the global scoped environment. An optional
-user/group TOML drop-in may overlay that environment. No other field is
-overridable.
+The managed Pi runtime receives an object catalog and captured Pi environment.
+It must retain the snapshot for refresh, session replacement and managed children,
+without temporary model/config files, source rereads, built-in catalog repair,
+personal `models.json`, persistent model cache or downloaded OpenRouter models.
+Malformed/schema-invalid catalogs, command expressions, unknown APIs and invalid
+personal-provider admission fail before model/MCP/executor effects. `$schema` is
+editor metadata only. Configured native provider implementations remain usable.
+Custom model-ID CLI behavior within configured providers remains native Pi;
+provider services enforce model-ID access limits.
 
-The managed Pi model runtime must:
+Model auth uses only the captured administrative environment, including keys,
+headers, OAuth settings and SDK routing. Reject CLI/SDK/runtime key and auth-env
+overrides and authored `!command` expressions. Missing key/header variables have
+provider/model-local availability semantics, without ambient repair. Validate
+provider headers in `checkAuth` and model/override headers in all typed availability
+views. Resolved bytes are opaque. Preserve explicit unauthenticated/proxy modes.
 
-- read model definitions from the resolved `models_file`;
-- expose no model that is present only in Pi's internal catalog;
-- use no persistent or downloaded catalog as a fallback;
-- retain the applicable Pi provider implementations needed by explicitly
-  configured models; and
-- fail startup when the administrative catalog is missing, unreadable,
-  malformed, or semantically invalid.
-
-Configured-only catalogs govern discovery and refresh; they do not remove Pi's
-explicit custom model-ID CLI behavior within a configured provider. Provider
-services remain responsible for model-ID access control. Do not treat this
-upgrade as introducing a new execution allowlist.
-
-Pi 1.5.0's per-key OpenRouter personalization must not wrap managed configured
-providers: cached and remote catalog contents, credential rotation, and refresh
-cannot introduce unconfigured models of any type. The optional `models.json`
-`$schema` field is editor metadata, not a runtime schema download.
-
-The executable does not check that administrative files are owned by root or
-have particular modes. Deployment is responsible for installing them with the
-intended ownership and permissions.
+Main `model_auth.personal_providers` admits only configured provider IDs. Default
+admission is empty. Read admitted personal records through a bounded raw literal
+store, never already-resolved `AuthStorage`; use atomic locked writes and preserve
+unadmitted records. A present valid personal credential wins; invalid records or
+refresh failures do not fall back to administrative identity. Retain native
+API-key/OAuth/cloud methods while rejecting arbitrary env/routing/header overrides,
+command-based credential sources and ambient cloud default chains. Personal
+OAuth-derived endpoints must equal administrative endpoints for all effective
+models. Explicit cloud profile/file choices remain supported with administrative
+routing. Native auth CLI and UI paths share this same factory and admission.
+See [models](../docs/models.md) and [managed service](../docs/managed-service.md)
+for the maintained operational contract.
 
 ## Workspace mode resolution
 
-Managed main schema 15 requires workspace definitions, a nonempty allowed list
+Managed main schema 16 requires workspace definitions, a nonempty allowed list
 and an allowed default. Every operational launch selects one defined mode.
 Preserve the prefix `[--config FILE] [--workspace-mode NAME] [Pi arguments...]`;
 accept the selector's equals form, reject duplicates/misplacement and consume it
@@ -145,7 +144,7 @@ Authoring permits partial common values only for CWD writability, exports and
 Bash/write/edit invocation policies. Compose every main-defined mode, including
 disallowed ones, before any runtime consumer receives configuration. Validate
 all authored entries, required effective fields, cross-table constraints and
-current-platform compatibility before broker resolution. Installation/backend
+current-platform compatibility before account resolution. Offline local/backend
 validation checks all modes on the current platform without resolving account
 selection or secret files. The shared authored backend remains the backend-query
 result. Main source is bounded to 1 MiB before parsing, including bounded reads.
@@ -157,19 +156,19 @@ description (256 UTF-8 bytes, no control/format or line/paragraph separator
 characters); it is main-only display metadata. No inter-mode inheritance,
 general profiles, user/project definitions or mode-less bypass is admitted.
 
-Resolve optional broker workspace allowed/default metadata first. Union matching
+Resolve service account workspace allowed/default metadata first. Union matching
 explicit allowed lists, preserving omitted versus empty; reject duplicate names
 within a file and require canonical distinct wire lists. Explicit defaults must
 agree, and the effective default must be defined and allowed even with a CLI
 selection. Validate matching names against own properties of the main inventory.
-Then select one complete mode, apply remaining broker policy once and recheck
+Then select one complete mode, apply remaining account policy once and recheck
 effective platform/policy constraints. Account/macros, main secret references,
 actual CWD/trusted paths and executors resolve only for that selected policy.
 
 Named-tool audit moves to exhaustive common audit.tools, covering the exact
 configured subject inventory even for disabled/user-hidden tools and when global
 audit is false. Reject old inline tool audit; attach the map's choices to runtime
-ToolPolicy without changing audit wire 5/record 6. MCP audit stays in server rules.
+ToolPolicy without changing audit service protocol 1/record 7. MCP audit stays in server rules.
 Command-set IDs reused across common/mode entries must have identical normalized
 definitions within one snapshot. Records still omit mode/configuration identity.
 
@@ -177,8 +176,9 @@ definitions within one snapshot. Records still omit mode/configuration identity.
 --config. It validates main policy/platform and authenticated access/defaults,
 prints only permitted names/descriptions with the effective default marker,
 and starts no model, session, MCP or executor. It performs no application-side
-environment-file, account-macro or runtime CWD resolution; the existing broker
-still resolves matching rule values. Reject other selectors, Pi arguments,
+environment-file, account-macro or runtime CWD resolution. Service builds use
+`policy_inspect`, which also reads no catalog or secret file; local builds use
+source-only loading. Reject other selectors, Pi arguments,
 metadata/private operations and duplicate listing flags. Keep the operational
 root guard. Help describes selection and listing; no new Pi patch is required.
 
@@ -194,22 +194,23 @@ Pi's normal `PI_CODING_AGENT_DIR` environment variable remains supported. It
 selects user state, including credentials, sessions, settings, skills, themes,
 logs, and caches. It must not affect:
 
-- `/etc/pi-sandbox/config.toml`;
-- the resolved `models_file`;
+- the build-selected source, endpoint or local policy path;
+- the captured administrative catalog;
 - inclusion of Pi's internal model catalog;
 - extension loading; or
 - tool implementations.
 
-Interactive authentication and retained credentials therefore remain
-per-user, while the administrator controls the available model definitions.
+Interactive authentication and retained credentials remain per-user only for
+providers explicitly admitted by main policy. The administrator controls all
+provider/model definitions, environment and routing.
 
 The main configuration expands bare `~` and a leading `~/` in main-policy hidden paths and
 configured scoped environment string values, including user/group values after the
-broker merge. Resolve the invoking effective user's home from the OS account
+account merge. Resolve the invoking effective user's home from the OS account
 database once at operational startup, before applying any configured environment
 or constructing executors. Ambient or configured `HOME` and CWD must not affect
 this resolution. Preserve nonmatching environment strings literally and recheck
-expanded bounds and hidden-path restrictions. Installation validation must not
+expanded bounds and hidden-path restrictions. Offline installation validation must not
 expand against the installer's account. This behavior belongs to Pi Sandbox,
 not the upstream Pi patch series; it does not extend to model/configuration/
 installation paths, arbitrary extension settings, inherited environment, or
@@ -241,90 +242,41 @@ about one second displays `Checking for old sessions…`, before the TUI starts;
 other modes and cleanup errors remain silent. System audit-log retention is
 independent and remains host-owned.
 
-## User and group resolution
+## Service identity, rules and audit
 
-The optional identity broker is a separate static native executable, activated
-per socket connection. It obtains UID from Linux `SO_PEERCRED` and invokes the
-fixed `/usr/bin/getent` host NSS resolver to identify the account and its primary
-and supplementary groups. The compiled configuration directory is its process
-argument. It reads optional protected `users.d/*.toml` and `groups.d/*.toml`
-version-11 rules, selecting exactly one `user`/`uid` or `group`/`gid` per file. Filenames are
-labels. Names and numeric selectors have identical precedence.
+Use one concurrent Linux Rust daemon with an ordinary root systemd unit, not a
+per-user/per-connection service. Both Unix and HTTPS use bounded HTTP/1.1
+`POST /v1/service`, protocol 1, for bootstrap, policy inspection and audit handles.
+Unix identity comes from `SO_PEERCRED` plus bounded host account/group lookup;
+HTTPS authenticates Basic ingress and accepts exact username assertions without
+server NSS mapping. HTTPS rules reject numeric/group selectors. The official
+client derives assertions from OS account/hardware sources, while documenting
+that shared credential holders can impersonate asserted users.
 
-The protocol uses newline-delimited JSON version 11 and operation
-`resolve-identity`, with no caller-claimed identity. The client keeps its write
-side open; the broker responds after reading the newline. Successful responses
-contain only one combined matching environment/override patch. Missing rule
-directories or no matching rules return an empty patch. The socket remains
-`/run/pi-sandbox-identity/broker.sock` and cannot be redirected by policy.
+Version-12 rules combine explicit permissions before overlaying defaults. Tool
+pairs join in least-restrictive order; workspace allowed lists union and defaults
+must agree; distinct backend/catalog/same-key environment values conflict.
+Service model selection is a complete catalog source, never a personal merge.
+MCP layers retain within-file ordering and main audit. Every file is structurally
+validated, with matching tool/MCP/mode inventory checks against the active policy.
+Local profiles have empty overrides and never discover these directories.
 
-Combine matching explicit permissions before overlaying defaults. Complete tool
-pairs order as `disabled/never` < `deny/never` < `ask/never` < `ask/offer` <
-`allow/never`; `host` wins for networking and `true` for CWD writability and each
-explicit MCP server enablement override.
-Different explicit backend/model values or values of the same scoped environment
-key fail resolution. User rules have no extra precedence. Named-tool logging
-remains in common `audit.tools`; MCP audit stays in its main server policies. Revalidate the complete effective configuration after the merge.
-Environment entries never select extensions, enable tools, or grant approval.
+The daemon resolves effective file-backed Pi values after joining declarations;
+local builds read their own references as the invoking user. Bound regular UTF-8
+reads, strip one terminal LF/CRLF, reject NUL/empty values and return service
+values as wire-only `{literal}` wrappers. Keep reference contents opaque to macro
+expansion. Offline validation is symbolic; operational bootstrap resolves secrets.
+Both sources feed the same scoped environment pipeline, with model authentication
+restricted to its captured Pi map. MCP preserves its explicit projection rules.
 
-MCP authored overrides are server-local optional `enabled`, `default_policy`,
-and nonempty `tool_rules`; require at least one meaningful field. Approval pairs
-contain only `mode` and `session_grant`. Resolve each matching file's first rule
-or explicit default independently, then join present complete pairs with the
-ordinary tool ordering. If no layer contributes, inherit global policy; an explicit
-contribution replaces it. Global first-match/default audit remains unchanged.
-Policy-only entries do not imply enabled. Explicit booleans combine with true
-winning before replacing main defaults. User/group order has no priority.
-The broker emits separate, canonical deduplicated `policy_layers`, retaining
-within-file rule order and omitting selectors/filenames. Authored files cannot
-use that wire shape. Validate every file even if unmatched; reject unknown
-matching server IDs in the application. Admit 32 servers, 256 layers/server,
-256 rules/server, 1,024 rules total and 256 KiB MCP data; validate the complete
-512 KiB response including newline before writing. Keep connection definitions,
-credential mappings, exposure, timeouts, and audit main-policy-only. See the
-[identity broker contract](../docs/identity-broker.md#mcp-tool-approval-policies)
-for grammar, limits, ordering examples and the strict version-11/protocol-11 cutover.
-Revalidate enabled code-mode exposure against main-policy code-mode availability.
-Disabled servers skip their executable, identity, credential-reference, and
-transport work; independently configured scoped environment still applies.
-User saved preferences may narrow admission but cannot enable an effectively
-disabled server. Administrative changes require restart. Broker support remains
-Linux-only; main configuration requires schema 15. The current audit contract uses
-wire 5/record 6 for configured Bash command provenance and child invocation identity.
-
-Host lookups are bounded to four seconds, the client deadline is ten seconds,
-and the service lifetime is fifteen seconds. Local accounts and SSSD via local
-sockets are supported; direct network LDAP is outside the service network
-boundary. Membership is a startup snapshot subject to host account caching.
-Lookup failure must not silently omit membership or matching rules.
-
-Authored main/rule Pi environment entries accept a string or an exact
-`{ file = "/normalized/absolute/path" }` table. Other scopes remain string-only.
-Main references resolve after broker overlays as the invoking user; broker
-references resolve after matching and merging under its existing credentials.
-Conflicts compare authored declarations before reads; unmatched rules never open
-references, and an overridden main reference is not read. Each reader caches
-paths for one startup/request only. Ordinary filesystem permissions and symlink
-behavior apply; deployment protects broker targets from untrusted redirection.
-Readers require regular files, cap raw bytes at 8194 and resolved values at
-1–8192 UTF-8 bytes, preserve BOM and all other content except one terminal LF or
-CRLF, reject NUL/invalid UTF-8, and recheck aggregate limits. Failures are path-
-and content-free. Wire protocol 11 permits only strings or exact `{literal}`
-objects in Pi values. File-derived bytes bypass home/account/machine expansion;
-final runtime environments remain string maps. Config/rule versions are
-15/11. Installation/backend validation and packaging are symbolic: no referenced
-secret file is read or copied. See the [file contract](../docs/configuration.md#file-backed-pi-environment-values).
-
-The effective model catalog is loaded with the `pi` scope applied to the
-trusted host process. The `sandbox` scope is added to Bubblewrap's cleared
-environment or overlaid on the inherited environment of direct built-in
-commands. Each `extensions.<id>` scope is admitted only for a selected
-compiled extension and names that extension declares; Pi-scoped and other
-extension-scoped values are excluded from its executor. Broker failures,
-structurally invalid drop-ins, invalid matching overrides, responses or scoped environments, and
-invalid effective catalogs abort startup. Missing drop-ins do not. Disabled
-broker mode skips user/group lookup but still applies the main configuration's
-global scoped environment.
+Audit protocol 1/record schema 7 preserves existing tool, child, configured Bash
+and export metadata while adding provenance and policy origin. Acknowledged intent
+precedes effects; acknowledgment is syslog submission, not durable storage. A later
+explicit external-message/export checkpoint can recover a failed audit attempt.
+No event/effect replay, policy refetch, held-input scheduler or background-LLM gate
+is introduced. The per-tool/export gate remains mandatory. Session changes fence
+old handles and pending work. See [service](../docs/managed-service.md) for the
+source, identity and deployment contract.
 
 ## Required Pi patch behavior
 
@@ -429,6 +381,37 @@ provides these seams:
     API, repaint timer, custom footer or feature-specific rendering logic.
     Ordinary unpatched Pi extensions continue using the same public status API.
 
+13. `0012-object-model-auth-and-input.patch` adds a strict object model source,
+    authoritative environment/auth policy, raw bounded atomic auth storage backend
+    and explicit personal admission. Object refresh never reads model files. Native
+    auth CLI paths use the injected runtime even for read-only/no-refresh credential
+    printing; print-by-model includes configured administrative providers. Login,
+    logout, SDK keys and runtime keys enforce admission before effects. Provider
+    composition, every typed model view, OAuth host/callback/header resolution and
+    cloud adapters use the captured environment. Preserve ordinary Pi behavior
+    when these embedding options are absent. Explicit profile/file cloud methods
+    must retain supported native methods without subprocess/default-chain escape.
+    Test real SDK construction with fake transports, not only resolver mocks.
+    Include OpenRouter image requests, authoritative HTTP proxy/no-proxy resolution,
+    native Copilot `availableModelIds`, Radius on native provider IDs and corrupt
+    personal-record replacement. Retain external-account authorized-user Google
+    ADC and replace only the pinned Google AWS federation supplier seam to prevent
+    ambient identity/region lookup while retaining native signing and selected
+    metadata/routing. The private supplier-field seam must fail clearly if the
+    pinned dependency changes and has a real offline signing negative control.
+
+14. The same patch exposes awaited `beforeExternalMessage` only on external TUI,
+    print and RPC adapters, after initial extension `session_start`. It runs before
+    fresh model input is accepted, including steering/follow-up and CLI initial
+    messages. Reuse registered-extension-command classification; built-in commands,
+    extension commands and human shell bypass the hook. Preserve RPC prompt command
+    execution and native steer/follow-up rejection. Idle Alt+Enter delegates once
+    to ordinary submit; active/compacting Alt+Enter checks once before queueing.
+    Catch TUI hook failure internally, restore editor text/attachments and recall,
+    and report it without an unhandled rejection. Print failures are nonzero; RPC
+    returns an error. Do not hook `AgentSession.prompt`, queued draining, internal
+    continuations or child sessions. Pi Sandbox owns audit reconnection policy.
+
 Pi 1.0's resource loader separates built-in factories from ordinary inline
 factories. The forced `--no-extensions` flag disables the built-in factories and
 user/project discovery while retaining the mandatory Pi Sandbox inline factory.
@@ -509,26 +492,20 @@ download or build Pi.
 
 ## Installation contract
 
-The Linux release installs one application directory at
-`/usr/libexec/pi-sandbox`, a `/usr/bin/pi-sandbox` symlink, and identity-broker
-systemd unit symlinks. The macOS release installs the application at
-`/usr/local/libexec/pi-sandbox` with a `/usr/local/bin/pi-sandbox` symlink and
-omits the Linux-only broker. There are no wrapper, runtime-download, or
-generation layers.
+Client packages install one compiled application and selected tool/skill assets,
+with no service units or daemon. Local-profile installs retain their configured
+TOML/catalog on upgrades; `--replace-config` explicitly backs up and replaces
+those defaults. Local candidate validation is offline and honors staging roots.
+Service-profile installs contain no policy/catalog defaults, reject local-config
+replacement/removal flags and validate required skill roots against live bootstrap
+as the chosen unprivileged validation user before swapping traversable staged
+payloads. `DESTDIR` remains offline packaging and requires host validation later.
 
-The root-run installation helper installs code and assets on every install. On
-first installation it creates `/etc/pi-sandbox/config.toml` and the packaged
-default model file. On ordinary upgrades it preserves `/etc/pi-sandbox` and
-validates the existing administrative inputs with the new executable. An
-explicit `--replace-config` operation validates packaged defaults, backs up the
-active files, and replaces them atomically.
-
-The installer never creates, replaces, backs up, or removes
-`/etc/pi-sandbox/users.d`, `/etc/pi-sandbox/groups.d`, or their contents, and does not enable or start the
-broker socket.
-
-Pi Sandbox does not produce an RPM. Site administrators may wrap the release
-archive and these semantics in their own package-management system.
+The Linux daemon has a separate package with its manifest/ordinary unit. Preserve
+administrator policy, rules, secrets and service state across client upgrades.
+The service installer does not provision credentials or enable/start the daemon.
+See [installation](../docs/installation.md) for exact layout and validation flags.
+No wrapper, source-mode fallback, runtime download or compatibility broker remains.
 
 ## Command scheduling and cleanup
 
@@ -538,7 +515,7 @@ write/edit coordination across complete mutations and bounded transport frames,
 arguments, input and output. Backpressure must not eagerly encode arbitrarily many
 requests, and whole-frame control priority must keep cancellation/close responsive.
 
-Managed schema 15 rejects `process_lifetime`; standalone schema 6 removes
+Managed schema 16 rejects `process_lifetime`; standalone schema 6 removes
 `processLifetime`. One lifecycle permits background descendants to survive normal
 completion and logical session changes. Per-request cancellation, timeout,
 overflow, callback/spawn failure affect only that request; nonzero exit is normal.
@@ -597,7 +574,7 @@ bind would mask private `/tmp`. Existing root and private-system-path overlap
 rejections remain enforced. The setting applies to built-ins and user shell;
 managed host tools retain their declared host authority.
 
-Managed schema 15 requires `[filesystem].denied_paths`, empty for
+Managed schema 16 requires `[filesystem].denied_paths`, empty for
 Bubblewrap/direct. macOS Seatbelt rejects hidden paths
 and local networking, and accepts canonical existing directory denials. A denied
 ancestor admits only CWD; explicit interior denials remain effective. Denials are
@@ -606,7 +583,8 @@ the configured policy without private /tmp or mount namespaces. Standalone
 schema 6 exposes the same backend through the existing neutral executor and tool
 factory, without managed approvals. Both consumers must fail closed, preserve
 streaming/cancellation and require the fixed system /usr/bin/sandbox-exec.
-macOS broker and audit services remain disabled; host Git remains separate.
+macOS clients may use remote HTTPS bootstrap/audit; no local service is installed.
+Host Git remains separate.
 
 ## Managed MCP and code-mode seams
 

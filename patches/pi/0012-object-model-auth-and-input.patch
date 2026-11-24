@@ -1,0 +1,3790 @@
+diff --git a/package-lock.json b/package-lock.json
+index a0749b9..46e1507 100644
+--- a/package-lock.json
++++ b/package-lock.json
+@@ -5682,10 +5682,13 @@
+ 			"dependencies": {
+ 				"@anthropic-ai/sdk": "0.129.0",
+ 				"@aws-sdk/client-bedrock-runtime": "3.1127.0",
++				"@aws-sdk/credential-provider-ini": "3.973.15",
+ 				"@earendil-works/pi-schema": "1.5.0",
+ 				"@earendil-works/pi-telemetry": "1.5.0",
+ 				"@google/genai": "2.21.0",
++				"@smithy/core": "3.33.3",
+ 				"@smithy/node-http-handler": "4.12.1",
++				"google-auth-library": "10.6.2",
+ 				"http-proxy-agent": "9.1.0",
+ 				"https-proxy-agent": "9.1.0",
+ 				"openai": "7.19.0",
+diff --git a/packages/ai/package.json b/packages/ai/package.json
+index 57e8f26..d74b272 100644
+--- a/packages/ai/package.json
++++ b/packages/ai/package.json
+@@ -69,10 +69,13 @@
+ 	"dependencies": {
+ 		"@anthropic-ai/sdk": "0.129.0",
+ 		"@aws-sdk/client-bedrock-runtime": "3.1127.0",
++		"@aws-sdk/credential-provider-ini": "3.973.15",
+ 		"@earendil-works/pi-schema": "1.5.0",
+ 		"@earendil-works/pi-telemetry": "1.5.0",
+ 		"@google/genai": "2.21.0",
++		"@smithy/core": "3.33.3",
+ 		"@smithy/node-http-handler": "4.12.1",
++		"google-auth-library": "10.6.2",
+ 		"http-proxy-agent": "9.1.0",
+ 		"https-proxy-agent": "9.1.0",
+ 		"openai": "7.19.0",
+diff --git a/packages/ai/src/api/anthropic-messages.ts b/packages/ai/src/api/anthropic-messages.ts
+index 9d6a8bd..24ddab0 100644
+--- a/packages/ai/src/api/anthropic-messages.ts
++++ b/packages/ai/src/api/anthropic-messages.ts
+@@ -45,7 +45,7 @@ import {
+ 	isOpenRouterModel,
+ 	type OpenRouterUsageAccounting,
+ } from "../utils/openrouter-cost.ts";
+-import { getProviderEnvValue } from "../utils/provider-env.ts";
++import { getProviderEnvValue, isAuthoritativeProviderEnv } from "../utils/provider-env.ts";
+ import { retryProviderRequest } from "../utils/provider-retry.ts";
+ import { sanitizeSurrogates } from "../utils/sanitize-unicode.ts";
+ import { ToolCallArgumentsStream } from "../utils/streaming-json.ts";
+@@ -339,6 +339,16 @@ function assertRequestAuth(provider: string, apiKey: string | undefined, headers
+  * also resolve and exchange SDK credentials behind pi's auth resolver.
+  */
+ class PiAnthropic extends Anthropic {
++	constructor(options: ClientOptions & { managedEnvironment?: ProviderEnv }) {
++		const { managedEnvironment, ...sdk } = options;
++		const managed = isAuthoritativeProviderEnv(managedEnvironment);
++		super(managed ? { ...sdk, webhookKey: null, logLevel: "warn" } : sdk);
++		if (managed) {
++			// The SDK parses ambient ANTHROPIC_CUSTOM_HEADERS during construction.
++			this._options.defaultHeaders = sdk.defaultHeaders;
++			Object.assign(this._options, { managedEnvironment });
++		}
++	}
+ 	protected override _shouldResolveDefaultCredentials(): boolean {
+ 		return false;
+ 	}
+@@ -637,6 +647,7 @@ export const stream: StreamFunction<"anthropic-messages", AnthropicOptions> = (
+ 					cacheSessionId,
+ 					federation,
+ 					options?.identity,
++					options?.env,
+ 				);
+ 				client = created.client;
+ 				isOAuth = created.isOAuthToken;
+@@ -1014,10 +1025,12 @@ function createClient(
+ 	sessionId?: string,
+ 	federation?: AnthropicFederationConfig,
+ 	identity?: ClientIdentity,
++	env?: ProviderEnv,
+ ): { client: Anthropic; isOAuthToken: boolean } {
+ 	// Copilot: Bearer auth.
+ 	if (model.provider === "github-copilot") {
+ 		const client = new PiAnthropic({
++			managedEnvironment: env,
+ 			apiKey: null,
+ 			authToken: apiKey ?? null,
+ 			baseURL: model.baseUrl,
+@@ -1041,6 +1054,7 @@ function createClient(
+ 	// OAuth: Bearer auth, Claude Code identity headers instead of the client identity.
+ 	if (apiKey && isOAuthToken(apiKey)) {
+ 		const client = new PiAnthropic({
++			managedEnvironment: env,
+ 			apiKey: null,
+ 			authToken: apiKey,
+ 			baseURL: model.baseUrl,
+@@ -1079,9 +1093,10 @@ function createClient(
+ 		optionsHeaders,
+ 	);
+ 	if (federation) {
+-		const key = JSON.stringify([model.baseUrl, federation]);
++		const key = JSON.stringify([model.baseUrl, federation, isAuthoritativeProviderEnv(env)]);
+ 		if (federationClient?.key !== key || federationClient.fetch !== fetch) {
+ 			const client = new PiAnthropic({
++				managedEnvironment: env,
+ 				apiKey: null,
+ 				authToken: null,
+ 				config: federation,
+@@ -1095,6 +1110,7 @@ function createClient(
+ 	}
+ 
+ 	const client = new PiAnthropic({
++		managedEnvironment: env,
+ 		apiKey: apiKey ?? null,
+ 		authToken: null,
+ 		baseURL: model.baseUrl,
+diff --git a/packages/ai/src/api/authoritative-azure-client.ts b/packages/ai/src/api/authoritative-azure-client.ts
+new file mode 100644
+index 0000000..1fb3925
+--- /dev/null
++++ b/packages/ai/src/api/authoritative-azure-client.ts
+@@ -0,0 +1,17 @@
++import { AzureOpenAI } from "openai";
++import { isAuthoritativeProviderEnv } from "../utils/provider-env.ts";
++import { explicitOptions, type ManagedOptions } from "./authoritative-client-options.ts";
++
++type AzureOptions = NonNullable<ConstructorParameters<typeof AzureOpenAI>[0]>;
++
++export class PiAzureOpenAI extends AzureOpenAI {
++	constructor(options: AzureOptions & ManagedOptions) {
++		const { managedEnvironment, ...sdk } = options;
++		const managed = isAuthoritativeProviderEnv(managedEnvironment);
++		super(managed ? explicitOptions(sdk, managedEnvironment!) : sdk);
++		if (managed) {
++			this._options.defaultHeaders = sdk.defaultHeaders;
++			Object.assign(this._options, { managedEnvironment });
++		}
++	}
++}
+diff --git a/packages/ai/src/api/authoritative-client-options.ts b/packages/ai/src/api/authoritative-client-options.ts
+new file mode 100644
+index 0000000..2261cc1
+--- /dev/null
++++ b/packages/ai/src/api/authoritative-client-options.ts
+@@ -0,0 +1,17 @@
++import type OpenAI from "openai";
++import type { ProviderEnv } from "../types.ts";
++import { getProviderEnvValue } from "../utils/provider-env.ts";
++
++type OpenAIOptions = NonNullable<ConstructorParameters<typeof OpenAI>[0]>;
++export type ManagedOptions = { managedEnvironment?: ProviderEnv };
++
++export function explicitOptions<T extends OpenAIOptions>(options: T, environment: ProviderEnv): T {
++	return {
++		...options,
++		adminAPIKey: null,
++		organization: getProviderEnvValue("OPENAI_ORG_ID", environment) ?? null,
++		project: getProviderEnvValue("OPENAI_PROJECT_ID", environment) ?? null,
++		webhookSecret: null,
++		logLevel: "warn",
++	};
++}
+diff --git a/packages/ai/src/api/authoritative-clients.ts b/packages/ai/src/api/authoritative-clients.ts
+new file mode 100644
+index 0000000..323c96c
+--- /dev/null
++++ b/packages/ai/src/api/authoritative-clients.ts
+@@ -0,0 +1,19 @@
++import OpenAI from "openai";
++import { explicitOptions, type ManagedOptions } from "./authoritative-client-options.ts";
++
++type OpenAIOptions = NonNullable<ConstructorParameters<typeof OpenAI>[0]>;
++
++import { isAuthoritativeProviderEnv } from "../utils/provider-env.ts";
++
++/** The SDK additionally reads account IDs and OPENAI_CUSTOM_HEADERS outside Pi's resolver. */
++export class PiOpenAI extends OpenAI {
++	constructor(options: OpenAIOptions & ManagedOptions) {
++		const { managedEnvironment, ...sdk } = options;
++		const managed = isAuthoritativeProviderEnv(managedEnvironment);
++		super(managed ? explicitOptions(sdk, managedEnvironment!) : sdk);
++		if (managed) {
++			this._options.defaultHeaders = sdk.defaultHeaders;
++			Object.assign(this._options, { managedEnvironment });
++		}
++	}
++}
+diff --git a/packages/ai/src/api/azure-openai-responses.ts b/packages/ai/src/api/azure-openai-responses.ts
+index 24e73fd..687102e 100644
+--- a/packages/ai/src/api/azure-openai-responses.ts
++++ b/packages/ai/src/api/azure-openai-responses.ts
+@@ -1,4 +1,3 @@
+-import { AzureOpenAI } from "openai";
+ import type { ResponseCreateParamsStreaming } from "openai/resources/responses/responses.js";
+ import { clampThinkingLevel } from "../models.ts";
+ import type { Api, AssistantMessage, Model, SimpleStreamOptions, StreamFunction, TranscriptContext } from "../types.ts";
+@@ -8,6 +7,7 @@ import { headersToRecord } from "../utils/headers.ts";
+ import { getIdentityHeaders } from "../utils/identity.ts";
+ import { retryProviderRequest } from "../utils/provider-retry.ts";
+ import { getDeclaredTools, resolveTranscript, resolveTranscriptTools } from "../utils/transcript.ts";
++import { PiAzureOpenAI } from "./authoritative-azure-client.ts";
+ import { type AzureEndpointOptions, resolveAzureConfig, resolveDeploymentName } from "./azure-openai-config.ts";
+ import { createGrammarToolInputProperties } from "./constrained-sampling.ts";
+ import { clampOpenAIPromptCacheKey } from "./openai-prompt-cache.ts";
+@@ -160,7 +160,8 @@ function createClient(model: Model<"azure-openai-responses">, apiKey: string, op
+ 
+ 	const { baseUrl, apiVersion } = resolveAzureConfig(model, options);
+ 
+-	return new AzureOpenAI({
++	return new PiAzureOpenAI({
++		managedEnvironment: options?.env,
+ 		apiKey,
+ 		apiVersion,
+ 		dangerouslyAllowBrowser: true,
+diff --git a/packages/ai/src/api/bedrock-converse-stream.ts b/packages/ai/src/api/bedrock-converse-stream.ts
+index 0ed88be..5312a11 100644
+--- a/packages/ai/src/api/bedrock-converse-stream.ts
++++ b/packages/ai/src/api/bedrock-converse-stream.ts
+@@ -54,7 +54,7 @@ import { AssistantMessageEventStream } from "../utils/event-stream.ts";
+ import { providerHeadersToRecord } from "../utils/headers.ts";
+ import { type ClientIdentity, getClientVersion } from "../utils/identity.ts";
+ import { resolveHttpProxyUrlForTarget } from "../utils/node-http-proxy.ts";
+-import { getProviderEnvValue } from "../utils/provider-env.ts";
++import { getProviderEnvValue, isAuthoritativeProviderEnv } from "../utils/provider-env.ts";
+ import { sanitizeSurrogates } from "../utils/sanitize-unicode.ts";
+ import { ToolCallArgumentsStream } from "../utils/streaming-json.ts";
+ import { getSystemMessageText } from "../utils/text.ts";
+@@ -176,7 +176,7 @@ export const stream: StreamFunction<"bedrock-converse-stream", BedrockOptions> =
+ 			customUserAgent: bedrockUserAgent(options.identity),
+ 		};
+ 		const configuredRegion = getConfiguredBedrockRegion(options);
+-		const hasAmbientConfiguredProfile = Boolean(getProviderEnvValue("AWS_PROFILE"));
++		const hasAmbientConfiguredProfile = Boolean(getProviderEnvValue("AWS_PROFILE", options.env));
+ 		const endpointRegion = getStandardBedrockEndpointRegion(model.baseUrl);
+ 		const useExplicitEndpoint = shouldUseExplicitBedrockEndpoint(
+ 			model.baseUrl,
+@@ -259,6 +259,23 @@ export const stream: StreamFunction<"bedrock-converse-stream", BedrockOptions> =
+ 		let responseRequestId: string | undefined;
+ 
+ 		try {
++			if (isAuthoritativeProviderEnv(options.env)) {
++				delete config.profile;
++				config.endpoint = model.baseUrl;
++				config.ignoreConfiguredEndpointUrls = true;
++				const region =
++					configuredRegion ??
++					endpointRegion ??
++					model.id.match(/^arn:aws(?:-[a-z0-9-]+)?:bedrock:([a-z0-9-]+):/)?.[1];
++				if (!region) throw new Error("Amazon Bedrock requires an administrative region or regional endpoint");
++				config.region = region;
++				if (!skipAuth && !useBearerToken && !config.credentials)
++					throw new Error("Amazon Bedrock requires explicit credentials");
++				if (useBearerToken && !config.credentials)
++					config.credentials = async () => {
++						throw new Error("Bearer authentication cannot select AWS credentials");
++					};
++			}
+ 			const supportsStrictMode = model.compat?.supportsStrictMode ?? false;
+ 			const client = new BedrockRuntimeClient(config);
+ 			let observedRawResponse = false;
+diff --git a/packages/ai/src/api/google-generative-ai.ts b/packages/ai/src/api/google-generative-ai.ts
+index 213eff5..6a1391e 100644
+--- a/packages/ai/src/api/google-generative-ai.ts
++++ b/packages/ai/src/api/google-generative-ai.ts
+@@ -356,6 +356,7 @@ function createClient(
+ 	}
+ 
+ 	return new GoogleGenAI({
++		vertexai: false,
+ 		apiKey,
+ 		httpOptions: Object.keys(httpOptions).length > 0 ? httpOptions : undefined,
+ 	});
+diff --git a/packages/ai/src/api/google-vertex.ts b/packages/ai/src/api/google-vertex.ts
+index 07f78af..a0fcd6b 100644
+--- a/packages/ai/src/api/google-vertex.ts
++++ b/packages/ai/src/api/google-vertex.ts
+@@ -26,7 +26,12 @@ import { formatProviderError, normalizeProviderError } from "../utils/error-body
+ import { AssistantMessageEventStream } from "../utils/event-stream.ts";
+ import { providerHeadersToRecord } from "../utils/headers.ts";
+ import { type ClientIdentity, getIdentityHeaders } from "../utils/identity.ts";
+-import { getProviderEnvValue } from "../utils/provider-env.ts";
++import {
++	explicitGoogleAuthClient,
++	explicitGoogleCredentials,
++	getProviderEnvValue,
++	isAuthoritativeProviderEnv,
++} from "../utils/provider-env.ts";
+ import { sanitizeSurrogates } from "../utils/sanitize-unicode.ts";
+ import { getSystemMessageText } from "../utils/text.ts";
+ import { collapseSystemMessages, getCurrentTools, getInitialSystemMessage } from "../utils/transcript.ts";
+@@ -99,7 +104,7 @@ export const stream: StreamFunction<"google-vertex", GoogleVertexOptions> = (
+ 			const apiKey = resolveApiKey(options);
+ 			// Create the client using either a Vertex API key, if provided, or ADC with project and location
+ 			const client = apiKey
+-				? createClientWithApiKey(model, apiKey, options?.headers, options?.identity)
++				? createClientWithApiKey(model, apiKey, options?.headers, options?.identity, options?.env)
+ 				: createClient(
+ 						model,
+ 						resolveProject(options),
+@@ -370,7 +375,13 @@ function createClient(
+ 		location,
+ 		apiVersion: API_VERSION,
+ 		...(googleAuthOptions ? { googleAuthOptions } : {}),
+-		httpOptions: buildHttpOptions(model, optionsHeaders, identity),
++		httpOptions: buildHttpOptions(
++			isAuthoritativeProviderEnv(env)
++				? { ...model, baseUrl: model.baseUrl.replaceAll("{location}", location).replaceAll("{project}", project) }
++				: model,
++			optionsHeaders,
++			identity,
++		),
+ 	});
+ }
+ 
+@@ -379,9 +390,21 @@ function createClientWithApiKey(
+ 	apiKey: string,
+ 	optionsHeaders?: ProviderHeaders,
+ 	identity?: ClientIdentity,
++	env?: ProviderEnv,
+ ): GoogleGenAI {
++	if (isAuthoritativeProviderEnv(env)) {
++		const location = getProviderEnvValue("GOOGLE_CLOUD_LOCATION", env);
++		const project = getProviderEnvValue("GOOGLE_CLOUD_PROJECT", env) ?? getProviderEnvValue("GCLOUD_PROJECT", env);
++		if ((model.baseUrl.includes("{location}") && !location) || (model.baseUrl.includes("{project}") && !project))
++			throw new Error("Google Vertex endpoint requires administrative project/location");
++		model = {
++			...model,
++			baseUrl: model.baseUrl.replaceAll("{location}", location ?? "").replaceAll("{project}", project ?? ""),
++		};
++	}
+ 	return new GoogleGenAI({
+ 		vertexai: true,
++		...(isAuthoritativeProviderEnv(env) ? { project: "", location: "" } : {}),
+ 		apiKey,
+ 		apiVersion: API_VERSION,
+ 		httpOptions: buildHttpOptions(model, optionsHeaders, identity),
+@@ -428,13 +451,23 @@ function baseUrlIncludesApiVersion(baseUrl: string): boolean {
+ 	}
+ }
+ 
+-function buildGoogleAuthOptions(env?: ProviderEnv): { keyFilename: string } | undefined {
++function buildGoogleAuthOptions(
++	env?: ProviderEnv,
++): NonNullable<ConstructorParameters<typeof GoogleGenAI>[0]>["googleAuthOptions"] {
++	if (isAuthoritativeProviderEnv(env)) {
++		const credentials = explicitGoogleCredentials(env);
++		if (!credentials) throw new Error("Google Vertex requires explicit credentials");
++		const authClient = explicitGoogleAuthClient(env);
++		return { credentials, ...(authClient ? { authClient } : {}) } as NonNullable<
++			ConstructorParameters<typeof GoogleGenAI>[0]
++		>["googleAuthOptions"];
++	}
+ 	const keyFilename = getProviderEnvValue("GOOGLE_APPLICATION_CREDENTIALS", env);
+ 	return keyFilename ? { keyFilename } : undefined;
+ }
+ 
+ function resolveApiKey(options?: GoogleVertexOptions): string | undefined {
+-	const apiKey = options?.apiKey?.trim();
++	const apiKey = isAuthoritativeProviderEnv(options?.env) ? options?.apiKey : options?.apiKey?.trim();
+ 	if (!apiKey || apiKey === GCP_VERTEX_CREDENTIALS_MARKER || isPlaceholderApiKey(apiKey)) {
+ 		return undefined;
+ 	}
+diff --git a/packages/ai/src/api/openai-completions.ts b/packages/ai/src/api/openai-completions.ts
+index 0e5b606..0f97cf4 100644
+--- a/packages/ai/src/api/openai-completions.ts
++++ b/packages/ai/src/api/openai-completions.ts
+@@ -1,4 +1,4 @@
+-import OpenAI from "openai";
++import type OpenAI from "openai";
+ import type {
+ 	ChatCompletionAssistantMessageParam,
+ 	ChatCompletionChunk,
+@@ -56,6 +56,7 @@ import {
+ 	resolveTranscriptTools,
+ 	type TranscriptContext,
+ } from "../utils/transcript.ts";
++import { PiOpenAI } from "./authoritative-clients.ts";
+ import {
+ 	appendGrammarToolInputJsonDelta,
+ 	closeGrammarToolInputJson,
+@@ -361,6 +362,7 @@ export const stream: StreamFunction<"openai-completions", OpenAICompletionsOptio
+ 				options?.fetch,
+ 				cacheSessionId,
+ 				compat,
++				options?.env,
+ 			);
+ 			let params = buildParams(
+ 				model,
+@@ -745,6 +747,7 @@ function createClient(
+ 	fetch?: typeof globalThis.fetch,
+ 	sessionId?: string,
+ 	compat: ResolvedOpenAICompletionsCompat = getCompat(model),
++	env?: ProviderEnv,
+ ) {
+ 	const headers: ProviderHeaders = { ...getIdentityHeaders(model, identity), ...model.headers };
+ 	if (model.provider === "github-copilot") {
+@@ -773,7 +776,8 @@ function createClient(
+ 		Object.assign(headers, optionsHeaders);
+ 	}
+ 
+-	return new OpenAI({
++	return new PiOpenAI({
++		managedEnvironment: env,
+ 		apiKey,
+ 		baseURL: model.baseUrl,
+ 		dangerouslyAllowBrowser: true,
+diff --git a/packages/ai/src/api/openai-responses.ts b/packages/ai/src/api/openai-responses.ts
+index c29e6ad..daf7cef 100644
+--- a/packages/ai/src/api/openai-responses.ts
++++ b/packages/ai/src/api/openai-responses.ts
+@@ -1,4 +1,3 @@
+-import OpenAI from "openai";
+ import type { ResponseCreateParamsStreaming } from "openai/resources/responses/responses.js";
+ import { clampThinkingLevel } from "../models.ts";
+ import type {
+@@ -22,6 +21,7 @@ import { type ClientIdentity, getIdentityHeaders } from "../utils/identity.ts";
+ import { getProviderEnvValue } from "../utils/provider-env.ts";
+ import { retryProviderRequest } from "../utils/provider-retry.ts";
+ import { getDeclaredTools, resolveTranscript, resolveTranscriptTools } from "../utils/transcript.ts";
++import { PiOpenAI } from "./authoritative-clients.ts";
+ import { createGrammarToolInputProperties } from "./constrained-sampling.ts";
+ import { buildCopilotDynamicHeaders, hasCopilotVisionInput } from "./github-copilot-headers.ts";
+ import { clampOpenAIPromptCacheKey } from "./openai-prompt-cache.ts";
+@@ -199,6 +199,7 @@ export const stream: StreamFunction<"openai-responses", OpenAIResponsesOptions>
+ 				options?.identity,
+ 				options?.fetch,
+ 				cacheSessionId,
++				options?.env,
+ 			);
+ 			let params = buildParams(
+ 				model,
+@@ -299,6 +300,7 @@ function createClient(
+ 	identity?: ClientIdentity,
+ 	fetch?: typeof globalThis.fetch,
+ 	sessionId?: string,
++	env?: ProviderEnv,
+ ) {
+ 	const compat = getCompat(model);
+ 	const headers: ProviderHeaders = { ...getIdentityHeaders(model, identity), ...model.headers };
+@@ -327,7 +329,8 @@ function createClient(
+ 		Object.assign(headers, optionsHeaders);
+ 	}
+ 
+-	return new OpenAI({
++	return new PiOpenAI({
++		managedEnvironment: env,
+ 		apiKey,
+ 		baseURL: model.baseUrl,
+ 		dangerouslyAllowBrowser: true,
+diff --git a/packages/ai/src/api/openrouter-images.ts b/packages/ai/src/api/openrouter-images.ts
+index 6054c72..fda753e 100644
+--- a/packages/ai/src/api/openrouter-images.ts
++++ b/packages/ai/src/api/openrouter-images.ts
+@@ -1,4 +1,4 @@
+-import OpenAI from "openai";
++import type OpenAI from "openai";
+ import type {
+ 	ChatCompletion,
+ 	ChatCompletionContentPart,
+@@ -14,6 +14,7 @@ import type {
+ 	ImagesContext,
+ 	ImagesFunction,
+ 	ImagesOptions,
++	ProviderEnv,
+ 	ProviderHeaders,
+ 	TextContent,
+ } from "../types.ts";
+@@ -22,6 +23,7 @@ import { headersToRecord, providerHeadersToRecord } from "../utils/headers.ts";
+ import { type ClientIdentity, getIdentityHeaders } from "../utils/identity.ts";
+ import { retryProviderRequest } from "../utils/provider-retry.ts";
+ import { sanitizeSurrogates } from "../utils/sanitize-unicode.ts";
++import { PiOpenAI } from "./authoritative-clients.ts";
+ 
+ interface OpenRouterGeneratedImage {
+ 	image_url?: string | { url?: string };
+@@ -59,7 +61,7 @@ export const generateImages: ImagesFunction<ImagesOptions> = async (
+ 		if (!apiKey) {
+ 			throw new Error(`No API key for provider: ${model.provider}`);
+ 		}
+-		const client = createClient(model, apiKey, options?.headers, options?.fetch, options?.identity);
++		const client = createClient(model, apiKey, options?.headers, options?.fetch, options?.identity, options?.env);
+ 		let params = buildParams(model, context);
+ 		const nextParams = await options?.onPayload?.(params, model);
+ 		if (nextParams !== undefined) {
+@@ -123,8 +125,10 @@ function createClient(
+ 	optionsHeaders?: ProviderHeaders,
+ 	fetch?: typeof globalThis.fetch,
+ 	identity?: ClientIdentity,
++	env?: ProviderEnv,
+ ): OpenAI {
+-	return new OpenAI({
++	return new PiOpenAI({
++		managedEnvironment: env,
+ 		apiKey,
+ 		baseURL: model.baseUrl,
+ 		dangerouslyAllowBrowser: true,
+diff --git a/packages/ai/src/auth/explicit-cloud-loader.ts b/packages/ai/src/auth/explicit-cloud-loader.ts
+new file mode 100644
+index 0000000..8fc9e02
+--- /dev/null
++++ b/packages/ai/src/auth/explicit-cloud-loader.ts
+@@ -0,0 +1,13 @@
++type ExplicitCloud = typeof import("./explicit-cloud.ts");
++let bundled: (() => ExplicitCloud) | undefined;
++
++/** Node-only personal source readers follow the same bundling seam as OAuth. */
++export function registerBundledExplicitCloud(loader: () => ExplicitCloud): void {
++	bundled = loader;
++}
++
++export async function loadExplicitCloud(): Promise<ExplicitCloud> {
++	if (bundled) return bundled();
++	const specifier = import.meta.url.endsWith(".js") ? "./explicit-cloud.js" : "./explicit-cloud.ts";
++	return import(specifier);
++}
+diff --git a/packages/ai/src/auth/explicit-cloud.ts b/packages/ai/src/auth/explicit-cloud.ts
+new file mode 100644
+index 0000000..0d06f82
+--- /dev/null
++++ b/packages/ai/src/auth/explicit-cloud.ts
+@@ -0,0 +1,228 @@
++import { randomUUID } from "node:crypto";
++import { constants } from "node:fs";
++import { type FileHandle, open } from "node:fs/promises";
++import { userInfo } from "node:os";
++import { isAbsolute, join } from "node:path";
++import { fromIni } from "@aws-sdk/credential-provider-ini";
++import { externalDataInterceptor, parseKnownFiles } from "@smithy/core/config";
++import { type AuthClient, AwsClient, type AwsSecurityCredentialsSupplier, GoogleAuth } from "google-auth-library";
++import type { ProviderEnv } from "../types.ts";
++
++const MAXIMUM_CLOUD_CREDENTIAL_BYTES = 1024 * 1024;
++
++async function readSelectedFile(path: string, optional = false): Promise<string | undefined> {
++	if (!isAbsolute(path) || path.includes("\0")) throw new Error("Credential source requires an absolute file path");
++	let file: FileHandle;
++	try {
++		file = await open(path, constants.O_RDONLY | constants.O_NONBLOCK);
++	} catch (error) {
++		if (optional && (error as NodeJS.ErrnoException).code === "ENOENT") return undefined;
++		throw new Error("Selected cloud credential file is unavailable");
++	}
++	try {
++		const metadata = await file.stat();
++		if (!metadata.isFile() || metadata.size > MAXIMUM_CLOUD_CREDENTIAL_BYTES)
++			throw new Error("Cloud credential file exceeds its bounds");
++		const bytes = Buffer.alloc(MAXIMUM_CLOUD_CREDENTIAL_BYTES + 1);
++		let length = 0;
++		while (length < bytes.length) {
++			const { bytesRead } = await file.read(bytes, length, bytes.length - length, null);
++			if (!bytesRead) break;
++			length += bytesRead;
++		}
++		if (length > MAXIMUM_CLOUD_CREDENTIAL_BYTES) throw new Error("Cloud credential file exceeds its bounds");
++		return new TextDecoder("utf-8", { fatal: true, ignoreBOM: true }).decode(bytes.subarray(0, length));
++	} finally {
++		await file.close();
++	}
++}
++
++/** Resolve only the selected native profile from immutable in-memory SDK inputs. */
++export async function resolveSelectedAwsProfile(
++	profile: string,
++	environment: ProviderEnv,
++	signal: AbortSignal,
++): Promise<ProviderEnv> {
++	signal.throwIfAborted();
++	const home = userInfo().homedir;
++	const [credentials, configuration] = await Promise.all([
++		readSelectedFile(join(home, ".aws", "credentials"), true),
++		readSelectedFile(join(home, ".aws", "config"), true),
++	]);
++	// The SDK supports in-memory file interception. Unique names fence concurrent requests
++	// and prevent a second filesystem read from introducing credential_process after validation.
++	const id = randomUUID();
++	const filepath = `pi-explicit-credentials:${id}`;
++	const configFilepath = `pi-explicit-config:${id}`;
++	externalDataInterceptor.interceptFile(filepath, credentials ?? "");
++	externalDataInterceptor.interceptFile(configFilepath, configuration ?? "");
++	try {
++		const options = { profile, filepath, configFilepath, ignoreCache: true };
++		const profiles = await parseKnownFiles(options);
++		const visited = new Set<string>();
++		let current: string | undefined = profile;
++		while (current !== undefined) {
++			if (visited.has(current) || visited.size >= 32)
++				throw new Error("Selected AWS profile has an invalid source chain");
++			visited.add(current);
++			const selected: Record<string, string | undefined> | undefined = profiles[current];
++			if (!selected) throw new Error("Selected AWS profile is unavailable");
++			if (selected.credential_process !== undefined) throw new Error("AWS credential_process is not permitted");
++			if (selected.credential_source === "Environment")
++				throw new Error("AWS profiles cannot select ambient environment credentials");
++			current = selected.source_profile;
++		}
++		signal.throwIfAborted();
++		const clientConfig = {
++			region: environment.AWS_REGION ?? environment.AWS_DEFAULT_REGION ?? profiles[profile]?.region ?? "us-east-1",
++			ignoreConfiguredEndpointUrls: true,
++			maxAttempts: 1,
++		};
++		const resolved = await fromIni({ ...options, clientConfig })({
++			callerClientConfig: {
++				...clientConfig,
++				region: () => Promise.resolve(clientConfig.region),
++			},
++		});
++		signal.throwIfAborted();
++		return {
++			AWS_ACCESS_KEY_ID: resolved.accessKeyId,
++			AWS_SECRET_ACCESS_KEY: resolved.secretAccessKey,
++			...(resolved.sessionToken ? { AWS_SESSION_TOKEN: resolved.sessionToken } : { AWS_SESSION_TOKEN: "" }),
++			AWS_BEARER_TOKEN_BEDROCK: "",
++			AWS_PROFILE: "",
++		};
++	} finally {
++		delete externalDataInterceptor.getFileRecord()[filepath];
++		delete externalDataInterceptor.getFileRecord()[configFilepath];
++	}
++}
++
++export function parseGoogleCredentials(value: string, serviceAccountOnly: boolean): Record<string, unknown> {
++	let parsed: unknown;
++	try {
++		parsed = JSON.parse(value);
++	} catch {
++		throw new Error("Configured Google credentials are not valid JSON");
++	}
++	if (!parsed || typeof parsed !== "object" || Array.isArray(parsed))
++		throw new Error("Configured Google credentials must be an object");
++	const credentials = parsed as Record<string, unknown>;
++	if (serviceAccountOnly && credentials.type !== "service_account")
++		throw new Error("Administrative Google credentials must be self-contained service-account JSON");
++	if (credentials.type === "service_account") {
++		if (
++			typeof credentials.client_email !== "string" ||
++			!credentials.client_email ||
++			typeof credentials.private_key !== "string" ||
++			!credentials.private_key
++		)
++			throw new Error("Google service-account credentials require client_email and private_key");
++	} else if (credentials.type === "authorized_user" || credentials.type === "external_account_authorized_user") {
++		for (const field of ["client_id", "client_secret", "refresh_token"])
++			if (typeof credentials[field] !== "string" || !credentials[field])
++				throw new Error("Google ADC credentials are incomplete");
++	} else if (credentials.type === "external_account") {
++		const source = credentials.credential_source;
++		if (!source || typeof source !== "object" || Array.isArray(source))
++			throw new Error("Google external-account credentials require an explicit source");
++		if ("executable" in source) throw new Error("Executable Google external-account authentication is not permitted");
++	} else if (credentials.type === "impersonated_service_account") {
++		parseGoogleCredentials(JSON.stringify(credentials.source_credentials), false);
++	} else throw new Error("Unsupported selected Google credential source");
++	return credentials;
++}
++
++export async function readSelectedGoogleCredentials(
++	path: string | undefined,
++	signal: AbortSignal,
++): Promise<Record<string, unknown>> {
++	signal.throwIfAborted();
++	const home = userInfo().homedir;
++	const selected = path?.startsWith("~/")
++		? join(home, path.slice(2))
++		: (path ?? join(home, ".config", "gcloud", "application_default_credentials.json"));
++	const content = await readSelectedFile(selected);
++	signal.throwIfAborted();
++	return parseGoogleCredentials(content!, false);
++}
++
++/** Keep native Google credential types while removing AWS federation's implicit shell credentials. */
++export function createSelectedGoogleAuthClient(credentials: Record<string, unknown>): AuthClient {
++	class SelectedGoogleAuth extends GoogleAuth {
++		override fromJSON(
++			json: Parameters<GoogleAuth["fromJSON"]>[0],
++			options?: Parameters<GoogleAuth["fromJSON"]>[1],
++		): ReturnType<GoogleAuth["fromJSON"]> {
++			const client = super.fromJSON(json, options);
++			if (client instanceof AwsClient) {
++				const source = (json as unknown as { credential_source: Record<string, unknown> }).credential_source;
++				const regionUrl = source.region_url;
++				const credentialsUrl = source.url;
++				if (typeof regionUrl !== "string" || typeof credentialsUrl !== "string")
++					throw new Error("Selected Google AWS federation requires explicit metadata credential and region URLs");
++				const headers = async (
++					context: Parameters<AwsSecurityCredentialsSupplier["getAwsRegion"]>[0],
++				): Promise<Record<string, string>> => {
++					const tokenUrl = source.imdsv2_session_token_url;
++					if (tokenUrl === undefined) return {};
++					if (typeof tokenUrl !== "string") throw new Error("Invalid Google AWS metadata token URL");
++					const response = await context.transporter.request<string>({
++						url: tokenUrl,
++						method: "PUT",
++						responseType: "text",
++						headers: { "x-aws-ec2-metadata-token-ttl-seconds": "300" },
++					});
++					return { "x-aws-ec2-metadata-token": response.data };
++				};
++				const supplier: AwsSecurityCredentialsSupplier = {
++					getAwsRegion: async (context) => {
++						const response = await context.transporter.request<string>({
++							url: regionUrl,
++							method: "GET",
++							responseType: "text",
++							headers: await headers(context),
++						});
++						if (typeof response.data !== "string" || response.data.length < 2)
++							throw new Error("Invalid selected AWS region");
++						return response.data.slice(0, -1);
++					},
++					getAwsSecurityCredentials: async (context) => {
++						const requestHeaders = await headers(context);
++						const role = await context.transporter.request<string>({
++							url: credentialsUrl,
++							method: "GET",
++							responseType: "text",
++							headers: requestHeaders,
++						});
++						if (typeof role.data !== "string" || !role.data) throw new Error("Invalid selected AWS role");
++						const response = await context.transporter.request<{
++							AccessKeyId: string;
++							SecretAccessKey: string;
++							Token?: string;
++						}>({
++							url: `${credentialsUrl}/${role.data}`,
++							method: "GET",
++							responseType: "json",
++							headers: requestHeaders,
++						});
++						if (!response.data.AccessKeyId || !response.data.SecretAccessKey)
++							throw new Error("Invalid selected AWS credentials");
++						return {
++							accessKeyId: response.data.AccessKeyId,
++							secretAccessKey: response.data.SecretAccessKey,
++							token: response.data.Token,
++						};
++					},
++				};
++				// Pinned google-auth-library exposes no supplier replacement with native JSON
++				// routing preserved. Fence this one internal seam and exercise the real signer.
++				if (!("awsSecurityCredentialsSupplier" in client))
++					throw new Error("Unsupported Google AWS credential supplier seam");
++				Object.defineProperty(client, "awsSecurityCredentialsSupplier", { value: supplier });
++			}
++			return client;
++		}
++	}
++	return new SelectedGoogleAuth({ scopes: ["https://www.googleapis.com/auth/cloud-platform"] }).fromJSON(credentials);
++}
+diff --git a/packages/ai/src/auth/helpers.ts b/packages/ai/src/auth/helpers.ts
+index 980963e..f3d9c53 100644
+--- a/packages/ai/src/auth/helpers.ts
++++ b/packages/ai/src/auth/helpers.ts
+@@ -53,7 +53,7 @@ export function lazyOAuth(input: {
+ 		isSubscription: input.isSubscription,
+ 		loginLabel: input.loginLabel,
+ 		login: async (interaction, options) => (await loaded()).login(interaction, options),
+-		refresh: async (credential, signal) => (await loaded()).refresh(credential, signal),
+-		toAuth: async (credential) => (await loaded()).toAuth(credential),
++		refresh: async (credential, signal, context) => (await loaded()).refresh(credential, signal, context),
++		toAuth: async (credential, context) => (await loaded()).toAuth(credential, context),
+ 	};
+ }
+diff --git a/packages/ai/src/auth/oauth/anthropic.ts b/packages/ai/src/auth/oauth/anthropic.ts
+index b3d8499..b4d2086 100644
+--- a/packages/ai/src/auth/oauth/anthropic.ts
++++ b/packages/ai/src/auth/oauth/anthropic.ts
+@@ -6,7 +6,7 @@
+  */
+ 
+ import { getProviderEnvValue } from "../../utils/provider-env.ts";
+-import type { OAuthAuth, OAuthCredential, ProviderAuthInteraction } from "../types.ts";
++import type { LoginOptions, OAuthAuth, OAuthCredential, ProviderAuthInteraction } from "../types.ts";
+ import { startOAuthCallbackServer, waitForCallbackOrManualInput } from "./callback-server.ts";
+ import { generatePKCE } from "./pkce.ts";
+ 
+@@ -14,7 +14,7 @@ const decode = (s: string) => atob(s);
+ const CLIENT_ID = decode("OWQxYzI1MGEtZTYxYi00NGQ5LTg4ZWQtNTk0NGQxOTYyZjVl");
+ const AUTHORIZE_URL = "https://claude.ai/oauth/authorize";
+ const TOKEN_URL = "https://platform.claude.com/v1/oauth/token";
+-const CALLBACK_HOST = getProviderEnvValue("PI_OAUTH_CALLBACK_HOST") || "127.0.0.1";
++
+ // Preferred so the port can be forwarded into containers or over SSH. Anthropic accepts any loopback port,
+ // so login falls back to a free port when this one cannot be bound (#10571).
+ const CALLBACK_PORT = 53692;
+@@ -137,12 +137,12 @@ async function exchangeAuthorizationCode(
+ 	};
+ }
+ 
+-async function loginAnthropic(interaction: ProviderAuthInteraction): Promise<OAuthCredential> {
++async function loginAnthropic(interaction: ProviderAuthInteraction, options?: LoginOptions): Promise<OAuthCredential> {
+ 	const { verifier, challenge } = await generatePKCE();
+ 	const startCallbackServer = (port: number) =>
+ 		startOAuthCallbackServer({
+ 			providerName: "Anthropic",
+-			host: CALLBACK_HOST,
++			host: getProviderEnvValue("PI_OAUTH_CALLBACK_HOST", options?.authContext?.environment) || "127.0.0.1",
+ 			port,
+ 			path: CALLBACK_PATH,
+ 			redirectHost: "localhost",
+@@ -279,7 +279,7 @@ export const anthropicOAuth: OAuthAuth = {
+ 	name: "Anthropic (Claude Pro/Max)",
+ 	isSubscription: true,
+ 
+-	async login(interaction) {
++	async login(interaction, options) {
+ 		const method = await interaction.prompt({
+ 			type: "select",
+ 			message: "Select Anthropic login method:",
+@@ -296,7 +296,7 @@ export const anthropicOAuth: OAuthAuth = {
+ 			throw new Error(`Unknown Anthropic login method: ${method}`);
+ 		}
+ 
+-		return loginAnthropic(interaction);
++		return loginAnthropic(interaction, options);
+ 	},
+ 
+ 	refresh: (credential, signal) => refreshAnthropicToken(credential.refresh, signal),
+diff --git a/packages/ai/src/auth/oauth/kimi-coding.ts b/packages/ai/src/auth/oauth/kimi-coding.ts
+index a7748c8..b7cb7dc 100644
+--- a/packages/ai/src/auth/oauth/kimi-coding.ts
++++ b/packages/ai/src/auth/oauth/kimi-coding.ts
+@@ -8,7 +8,7 @@
+ 
+ import { getProviderEnvValue } from "../../utils/provider-env.ts";
+ import { sleep } from "../../utils/sleep.ts";
+-import type { OAuthAuth, OAuthCredential, ProviderAuthInteraction } from "../types.ts";
++import type { AuthContext, LoginOptions, OAuthAuth, OAuthCredential, ProviderAuthInteraction } from "../types.ts";
+ import { pollOAuthDeviceCodeFlow } from "./device-code.ts";
+ import { trustedHttpUrl } from "./trusted-url.ts";
+ 
+@@ -34,8 +34,10 @@ type TokenResponse = {
+ 	expires: number;
+ };
+ 
+-function getOauthHost(): string {
+-	const override = getProviderEnvValue("KIMI_CODE_OAUTH_HOST") || getProviderEnvValue("KIMI_OAUTH_HOST");
++function getOauthHost(context?: AuthContext): string {
++	const override =
++		getProviderEnvValue("KIMI_CODE_OAUTH_HOST", context?.environment) ||
++		getProviderEnvValue("KIMI_OAUTH_HOST", context?.environment);
+ 	return (override || DEFAULT_OAUTH_HOST).replace(/\/+$/, "");
+ }
+ 
+@@ -246,8 +248,8 @@ async function refreshToken(oauthHost: string, refreshTokenValue: string, signal
+ 	throw lastError ?? new Error("Kimi Code token refresh failed");
+ }
+ 
+-async function loginKimiCoding(interaction: ProviderAuthInteraction): Promise<OAuthCredential> {
+-	const oauthHost = getOauthHost();
++async function loginKimiCoding(interaction: ProviderAuthInteraction, options?: LoginOptions): Promise<OAuthCredential> {
++	const oauthHost = getOauthHost(options?.authContext);
+ 	const device = await startDeviceAuthorization(oauthHost, interaction.signal);
+ 	interaction.notify({
+ 		type: "device_code",
+@@ -267,8 +269,8 @@ export const kimiCodingOAuth: OAuthAuth = {
+ 
+ 	login: loginKimiCoding,
+ 
+-	refresh: async (credential, signal) => {
+-		const token = await refreshToken(getOauthHost(), credential.refresh, signal);
++	refresh: async (credential, signal, context) => {
++		const token = await refreshToken(getOauthHost(context), credential.refresh, signal);
+ 		return { type: "oauth", access: token.access, refresh: token.refresh, expires: token.expires };
+ 	},
+ 
+diff --git a/packages/ai/src/auth/oauth/openai-chatgpt.ts b/packages/ai/src/auth/oauth/openai-chatgpt.ts
+index 65e0371..b2eb983 100644
+--- a/packages/ai/src/auth/oauth/openai-chatgpt.ts
++++ b/packages/ai/src/auth/oauth/openai-chatgpt.ts
+@@ -19,7 +19,7 @@ const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{
+ const AUTHORIZE_URL = "https://auth.openai.com/api/accounts/authorize";
+ const TOKEN_URL = "https://auth.openai.com/api/accounts/oauth/token";
+ const RESOURCE = "https://api.openai.com/v1";
+-const CALLBACK_HOST = getProviderEnvValue("PI_OAUTH_CALLBACK_HOST") || "127.0.0.1";
++
+ const CALLBACK_PORT = 1455;
+ const CALLBACK_PATH = "/auth/callback";
+ const REDIRECT_URI = `http://127.0.0.1:${CALLBACK_PORT}${CALLBACK_PATH}`;
+@@ -82,7 +82,10 @@ function sendHtml(response: ServerResponse, status: number, body: string): void
+ 	response.end(body);
+ }
+ 
+-function startCallbackServer(expectedState: string): Promise<CallbackServer> {
++function startCallbackServer(
++	expectedState: string,
++	host = getProviderEnvValue("PI_OAUTH_CALLBACK_HOST") || "127.0.0.1",
++): Promise<CallbackServer> {
+ 	return new Promise((resolve, reject) => {
+ 		let resolveResult!: (result: AuthorizationResult) => void;
+ 		let rejectResult!: (error: Error) => void;
+@@ -123,7 +126,7 @@ function startCallbackServer(expectedState: string): Promise<CallbackServer> {
+ 		});
+ 
+ 		server.once("error", reject);
+-		server.listen(CALLBACK_PORT, CALLBACK_HOST, () => {
++		server.listen(CALLBACK_PORT, host, () => {
+ 			server.removeListener("error", reject);
+ 			server.on("error", rejectResult);
+ 			resolve({ server, result });
+@@ -240,7 +243,10 @@ async function loginOpenAIChatGPT(
+ 	const nonce = randomValue();
+ 	// Without this server, the browser's callback would reach whatever else holds the port (another
+ 	// pending login or the Codex CLI), which rejects it as a state mismatch. Fail with a clear error instead.
+-	const callback = await startCallbackServer(state).catch((error: unknown) => {
++	const callback = await startCallbackServer(
++		state,
++		getProviderEnvValue("PI_OAUTH_CALLBACK_HOST", options?.authContext?.environment) || "127.0.0.1",
++	).catch((error: unknown) => {
+ 		if (!(error instanceof Error && "code" in error && error.code === "EADDRINUSE")) throw error;
+ 		throw new Error(
+ 			`Port ${CALLBACK_PORT} is in use, probably by an unfinished login in another pi session or by the Codex CLI. Cancel that login and try again.`,
+diff --git a/packages/ai/src/auth/oauth/openai-codex.ts b/packages/ai/src/auth/oauth/openai-codex.ts
+index 860ea75..8ff3b0d 100644
+--- a/packages/ai/src/auth/oauth/openai-codex.ts
++++ b/packages/ai/src/auth/oauth/openai-codex.ts
+@@ -37,8 +37,8 @@ const JWT_CLAIM_PATH = "https://api.openai.com/auth";
+ type OAuthToken = { access: string; refresh: string; expires: number };
+ type TokenOperation = "exchange" | "refresh";
+ 
+-function getCallbackHost(): string {
+-	return getProviderEnvValue("PI_OAUTH_CALLBACK_HOST") || "127.0.0.1";
++function getCallbackHost(options?: LoginOptions): string {
++	return getProviderEnvValue("PI_OAUTH_CALLBACK_HOST", options?.authContext?.environment) || "127.0.0.1";
+ }
+ 
+ type DeviceAuthInfo = {
+@@ -364,7 +364,7 @@ async function loginOpenAICodex(
+ 	// Port 1455 is shared with the Codex CLI; when it is taken, fall back to the pasted redirect URL.
+ 	const callback = await startOAuthCallbackServer({
+ 		providerName: "OpenAI",
+-		host: getCallbackHost(),
++		host: getCallbackHost(options),
+ 		port: 1455,
+ 		path: "/auth/callback",
+ 		state,
+diff --git a/packages/ai/src/auth/oauth/openrouter.ts b/packages/ai/src/auth/oauth/openrouter.ts
+index 7d6e286..5ba07fe 100644
+--- a/packages/ai/src/auth/oauth/openrouter.ts
++++ b/packages/ai/src/auth/oauth/openrouter.ts
+@@ -12,7 +12,7 @@
+  */
+ 
+ import { getProviderEnvValue } from "../../utils/provider-env.ts";
+-import type { OAuthAuth, OAuthCredential, ProviderAuthInteraction } from "../types.ts";
++import type { LoginOptions, OAuthAuth, OAuthCredential, ProviderAuthInteraction } from "../types.ts";
+ import { startOAuthCallbackServer, waitForCallbackOrManualInput } from "./callback-server.ts";
+ import { generatePKCE } from "./pkce.ts";
+ 
+@@ -21,8 +21,8 @@ const TOKEN_URL = "https://openrouter.ai/api/v1/auth/keys";
+ const LOGIN_TIMEOUT_MS = 5 * 60 * 1000;
+ const TOKEN_EXCHANGE_TIMEOUT_MS = 30_000;
+ 
+-function getCallbackHost(): string {
+-	return getProviderEnvValue("PI_OAUTH_CALLBACK_HOST") || "127.0.0.1";
++function getCallbackHost(options?: LoginOptions): string {
++	return getProviderEnvValue("PI_OAUTH_CALLBACK_HOST", options?.authContext?.environment) || "127.0.0.1";
+ }
+ 
+ type JsonObject = Record<string, unknown>;
+@@ -110,12 +110,12 @@ async function exchangeAuthorizationCode(
+ 	};
+ }
+ 
+-async function loginOpenRouter(interaction: ProviderAuthInteraction): Promise<OAuthCredential> {
++async function loginOpenRouter(interaction: ProviderAuthInteraction, options?: LoginOptions): Promise<OAuthCredential> {
+ 	const { verifier, challenge } = await generatePKCE();
+ 	// OpenRouter sends no `state`; the random path keeps stray requests from completing the sign-in.
+ 	const callback = await startOAuthCallbackServer({
+ 		providerName: "OpenRouter",
+-		host: getCallbackHost(),
++		host: getCallbackHost(options),
+ 		port: 0,
+ 		path: `/oauth/callback/${crypto.randomUUID()}`,
+ 		complete: (code) => exchangeAuthorizationCode(code, verifier, interaction.signal),
+diff --git a/packages/ai/src/auth/resolve.ts b/packages/ai/src/auth/resolve.ts
+index dfeb030..37cef5c 100644
+--- a/packages/ai/src/auth/resolve.ts
++++ b/packages/ai/src/auth/resolve.ts
+@@ -21,6 +21,8 @@ export interface AuthResolutionOverrides {
+ 	env?: ProviderEnv;
+ 	/** Require this much remaining OAuth-token validity; defaults to five minutes. */
+ 	minOAuthValidityMs?: number;
++	/** Derive the stored credential without refreshing or mutating it (credential inspection). */
++	refresh?: boolean;
+ 	signal?: AbortSignal;
+ }
+ 
+@@ -51,6 +53,9 @@ async function resolveProviderAuthWithSignal(
+ 	signal: AbortSignal,
+ ): Promise<AuthResult | undefined> {
+ 	signal.throwIfAborted();
++	if (authContext.authoritative && (overrides?.apiKey !== undefined || overrides?.env !== undefined)) {
++		throw new ModelsError("auth", "Credential overrides are not permitted by this runtime");
++	}
+ 	const requestAuthContext = overrides?.env ? overlayEnvAuthContext(authContext, overrides.env) : authContext;
+ 
+ 	if (overrides?.apiKey !== undefined && provider.auth.apiKey) {
+@@ -77,6 +82,8 @@ async function resolveProviderAuthWithSignal(
+ 				stored,
+ 				signal,
+ 				overrides?.minOAuthValidityMs,
++				authContext,
++				overrides?.refresh,
+ 			);
+ 		}
+ 		if (stored.type === "api_key" && provider.auth.apiKey) {
+@@ -122,6 +129,7 @@ export async function refreshStoredOAuthCredential(
+ 	oauth: OAuthAuth,
+ 	needsRefresh: (credential: OAuthCredential) => boolean,
+ 	signal: AbortSignal,
++	context?: AuthContext,
+ ): Promise<OAuthCredential | undefined> {
+ 	let post: Credential | undefined;
+ 	const lockWait = new AbortController();
+@@ -137,7 +145,7 @@ export async function refreshStoredOAuthCredential(
+ 				if (current?.type !== "oauth") return undefined; // logged out meanwhile
+ 				if (!needsRefresh(current)) return undefined; // another process/request refreshed
+ 				try {
+-					return await oauth.refresh(current, AbortSignal.timeout(DEFAULT_OAUTH_REFRESH_TIMEOUT_MS));
++					return await oauth.refresh(current, AbortSignal.timeout(DEFAULT_OAUTH_REFRESH_TIMEOUT_MS), context);
+ 				} catch (error) {
+ 					throw new ModelsError("oauth", `OAuth refresh failed for ${providerId}`, { cause: error });
+ 				}
+@@ -165,14 +173,16 @@ async function resolveStoredOAuth(
+ 	stored: OAuthCredential,
+ 	signal: AbortSignal,
+ 	minOAuthValidityMs?: number,
++	context?: AuthContext,
++	refresh = true,
+ ): Promise<AuthResult | undefined> {
+ 	const minimumValidityMs = Math.max(DEFAULT_OAUTH_MINIMUM_VALIDITY_MS, minOAuthValidityMs ?? 0);
+ 	const expiresSoon = (credential: OAuthCredential) => Date.now() + minimumValidityMs >= credential.expires;
+ 	let credential = stored;
+ 
+-	if (expiresSoon(credential)) {
++	if (refresh && expiresSoon(credential)) {
+ 		// Optimistic check said expired; the authoritative check runs under the lock.
+-		const post = await refreshStoredOAuthCredential(credentials, providerId, oauth, expiresSoon, signal);
++		const post = await refreshStoredOAuthCredential(credentials, providerId, oauth, expiresSoon, signal, context);
+ 		if (!post) return undefined; // logged out meanwhile
+ 		credential = post;
+ 		// The normal five-minute window triggers a refresh but does not impose a
+@@ -184,7 +194,7 @@ async function resolveStoredOAuth(
+ 	}
+ 
+ 	try {
+-		return { auth: await oauth.toAuth(credential), source: "OAuth" };
++		return { auth: await oauth.toAuth(credential, context), source: "OAuth" };
+ 	} catch (error) {
+ 		throw new ModelsError("oauth", `OAuth auth derivation failed for ${providerId}`, { cause: error });
+ 	}
+diff --git a/packages/ai/src/auth/types.ts b/packages/ai/src/auth/types.ts
+index 86a9268..74d8732 100644
+--- a/packages/ai/src/auth/types.ts
++++ b/packages/ai/src/auth/types.ts
+@@ -98,6 +98,9 @@ export interface AuthContext {
+ 	env(name: string): Promise<string | undefined>;
+ 	/** Check whether a file exists. Supports a leading `~`. Always false in browsers. */
+ 	fileExists(path: string): Promise<boolean>;
++	/** Complete embedding-owned environment; absent values have no ambient fallback. */
++	readonly environment?: ProviderEnv;
++	readonly authoritative?: boolean;
+ }
+ 
+ /** Result of resolving auth for a model. */
+@@ -176,7 +179,7 @@ export interface ApiKeyAuth {
+ 	name: string;
+ 
+ 	/** Interactive setup (prompt for key/provider env). Absent = ambient-only. */
+-	login?(interaction: ProviderAuthInteraction): Promise<ApiKeyCredential>;
++	login?(interaction: ProviderAuthInteraction, options?: LoginOptions): Promise<ApiKeyCredential>;
+ 
+ 	/**
+ 	 * Optional side-effect-free availability check. Use this when `resolve()` may
+@@ -204,6 +207,8 @@ export interface ApiKeyAuth {
+ 
+ /** App-supplied context for `Models.login`. */
+ export interface LoginOptions {
++	/** Authentication environment supplied by the owning Models collection. */
++	authContext?: AuthContext;
+ 	/**
+ 	 * Returns the stable ID of this app installation, e.g. sent to OpenAI as its
+ 	 * agent host ID. Called only by login flows that need it, so apps can create
+@@ -238,14 +243,16 @@ export interface OAuthAuth {
+ 	 * Exchange the refresh token. Network call; throws on failure
+ 	 * (invalid_grant etc.). `Models` runs this under the store lock.
+ 	 */
+-	refresh(credential: OAuthCredential, signal: AbortSignal): Promise<OAuthCredential>;
++	refresh(credential: OAuthCredential, signal: AbortSignal, context?: AuthContext): Promise<OAuthCredential>;
+ 
+ 	/**
+ 	 * Side-effect-free derivation of request auth from a valid credential.
+ 	 * Covers per-credential baseUrl (GitHub Copilot). Async so lazy wrappers
+ 	 * can load the implementation on first use.
+ 	 */
+-	toAuth(credential: OAuthCredential): Promise<ModelAuth>;
++	toAuth(credential: OAuthCredential, context?: AuthContext): Promise<ModelAuth>;
++	/** Optional side-effect-free availability check, without refreshing a credential. */
++	check?(credential: OAuthCredential, context: AuthContext): Promise<boolean>;
+ }
+ 
+ /**
+diff --git a/packages/ai/src/bun-oauth.ts b/packages/ai/src/bun-oauth.ts
+index 5e77cf1..2a143bd 100644
+--- a/packages/ai/src/bun-oauth.ts
++++ b/packages/ai/src/bun-oauth.ts
+@@ -1,3 +1,5 @@
++import * as explicitCloud from "./auth/explicit-cloud.ts";
++import { registerBundledExplicitCloud } from "./auth/explicit-cloud-loader.ts";
+ import { anthropicOAuth } from "./auth/oauth/anthropic.ts";
+ import { githubCopilotOAuth } from "./auth/oauth/github-copilot.ts";
+ import { kimiCodingOAuth } from "./auth/oauth/kimi-coding.ts";
+@@ -11,6 +13,7 @@ import { xaiOAuth } from "./auth/oauth/xai.ts";
+ 
+ /** Register OAuth flows statically embedded in the standalone Bun binary. */
+ export function registerBunOAuthFlows(): void {
++	registerBundledExplicitCloud(() => explicitCloud);
+ 	registerBundledOAuthFlowLoaders({
+ 		anthropic: () => anthropicOAuth,
+ 		openaiCodex: () => openaiCodexOAuth,
+diff --git a/packages/ai/src/models.ts b/packages/ai/src/models.ts
+index 3d26dcb..5958ffb 100644
+--- a/packages/ai/src/models.ts
++++ b/packages/ai/src/models.ts
+@@ -642,6 +642,7 @@ class ModelsImpl implements MutableModels {
+ 				oauth,
+ 				(current) => Date.now() >= current.expires,
+ 				signal,
++				this.authContext,
+ 			);
+ 		}
+ 
+@@ -667,7 +668,9 @@ class ModelsImpl implements MutableModels {
+ 		signal: AbortSignal,
+ 	): Promise<AuthCheck | undefined> {
+ 		if (credential?.type === "oauth") {
+-			return provider.auth.oauth ? { source: "OAuth", type: "oauth" } : undefined;
++			return provider.auth.oauth && ((await provider.auth.oauth.check?.(credential, this.authContext)) ?? true)
++				? { source: "OAuth", type: "oauth" }
++				: undefined;
+ 		}
+ 		const apiKey = provider.auth.apiKey;
+ 		if (!apiKey) return undefined;
+@@ -705,8 +708,16 @@ class ModelsImpl implements MutableModels {
+ 			: this.getProviders();
+ 		const checks = await Promise.all(
+ 			providers.map(async (provider) => {
+-				const credential = await this.readCredential(provider.id, signal);
+-				return { provider, credential, auth: await this.checkProviderAuth(provider, credential, signal) };
++				try {
++					const credential = await this.readCredential(provider.id, signal);
++					return { provider, credential, auth: await this.checkProviderAuth(provider, credential, signal) };
++				} catch (error) {
++					signal.throwIfAborted();
++					if (!this.authContext.authoritative || providerId) throw error;
++					// A malformed personal record disables that provider, never its siblings.
++					// Direct checkAuth/getAuth retain the actionable error and cannot fall back.
++					return { provider, credential: undefined, auth: undefined };
++				}
+ 			}),
+ 		);
+ 		return checks.filter((entry) => entry.auth !== undefined);
+@@ -786,7 +797,10 @@ class ModelsImpl implements MutableModels {
+ 		if (!method?.login) {
+ 			throw new ModelsError("auth", `${provider.name} does not support ${type} login`);
+ 		}
+-		const loginOperation: Promise<Credential> = method.login({ ...interaction, signal }, options);
++		const loginOperation: Promise<Credential> = method.login(
++			{ ...interaction, signal },
++			{ ...options, authContext: this.authContext },
++		);
+ 		const credential = await raceWithAbortSignal(loginOperation, signal);
+ 		let mutationStarted = false;
+ 		let markMutationStarted: (() => void) | undefined;
+diff --git a/packages/ai/src/providers/amazon-bedrock.ts b/packages/ai/src/providers/amazon-bedrock.ts
+index d629f1e..a2292a1 100644
+--- a/packages/ai/src/providers/amazon-bedrock.ts
++++ b/packages/ai/src/providers/amazon-bedrock.ts
+@@ -1,4 +1,5 @@
+ import { bedrockConverseStreamApi } from "../api/bedrock-converse-stream.lazy.ts";
++import { loadExplicitCloud } from "../auth/explicit-cloud-loader.ts";
+ import type { ApiKeyAuth } from "../auth/types.ts";
+ import { createProvider, type Provider } from "../models.ts";
+ import { AMAZON_BEDROCK_MODELS } from "./amazon-bedrock.models.ts";
+@@ -10,7 +11,7 @@ import { AMAZON_BEDROCK_MODELS } from "./amazon-bedrock.models.ts";
+  */
+ const bedrockAuth: ApiKeyAuth = {
+ 	name: "AWS credentials or bearer token",
+-	login: async (interaction) => {
++	login: async (interaction, options) => {
+ 		interaction.signal.throwIfAborted();
+ 		const method = await interaction.prompt({
+ 			type: "select",
+@@ -18,7 +19,9 @@ const bedrockAuth: ApiKeyAuth = {
+ 			options: [
+ 				{ id: "bearer-token", label: "Bearer token" },
+ 				{ id: "aws-profile", label: "AWS profile" },
+-				{ id: "credential-chain", label: "Existing AWS credential chain" },
++				...(options?.authContext?.authoritative
++					? []
++					: [{ id: "credential-chain", label: "Existing AWS credential chain" }]),
+ 			],
+ 		});
+ 		interaction.signal.throwIfAborted();
+@@ -44,7 +47,8 @@ const bedrockAuth: ApiKeyAuth = {
+ 				env: { AWS_PROFILE: await interaction.prompt({ type: "text", message: "Enter AWS profile name" }) },
+ 			};
+ 		}
+-		if (method !== "credential-chain") throw new Error(`Unknown Amazon Bedrock auth method: ${method}`);
++		if (options?.authContext?.authoritative || method !== "credential-chain")
++			throw new Error(`Unknown Amazon Bedrock auth method: ${method}`);
+ 		await interaction.prompt({
+ 			type: "text",
+ 			message: "Configure AWS credentials, then press Enter to continue",
+@@ -58,6 +62,26 @@ const bedrockAuth: ApiKeyAuth = {
+ 			signal.throwIfAborted();
+ 			return value;
+ 		};
++		if (ctx.authoritative) {
++			if (credential?.key) return { auth: { apiKey: credential.key }, source: "stored credential" };
++			if (credential) {
++				if (!credential.env?.AWS_PROFILE)
++					throw new Error("Amazon Bedrock requires an explicit stored profile or bearer token");
++				const { resolveSelectedAwsProfile } = await loadExplicitCloud();
++				return {
++					auth: {},
++					env: await resolveSelectedAwsProfile(credential.env.AWS_PROFILE, ctx.environment!, signal),
++					source: "stored AWS profile",
++				};
++			}
++			if ((await env("AWS_BEDROCK_SKIP_AUTH")) === "1")
++				return { auth: {}, source: "configured unauthenticated proxy" };
++			const token = await env("AWS_BEARER_TOKEN_BEDROCK");
++			if (token) return { auth: { apiKey: token }, source: "AWS_BEARER_TOKEN_BEDROCK" };
++			if ((await env("AWS_ACCESS_KEY_ID")) && (await env("AWS_SECRET_ACCESS_KEY")))
++				return { auth: {}, source: "configured AWS access keys" };
++			return undefined;
++		}
+ 		if (credential?.key) {
+ 			return { auth: { apiKey: credential.key }, env: credential.env, source: "stored credential" };
+ 		}
+diff --git a/packages/ai/src/providers/google-vertex.ts b/packages/ai/src/providers/google-vertex.ts
+index 83c7d0f..c4ccfc8 100644
+--- a/packages/ai/src/providers/google-vertex.ts
++++ b/packages/ai/src/providers/google-vertex.ts
+@@ -1,6 +1,8 @@
+ import { googleVertexApi } from "../api/google-vertex.lazy.ts";
++import { loadExplicitCloud } from "../auth/explicit-cloud-loader.ts";
+ import type { ApiKeyAuth } from "../auth/types.ts";
+ import { createProvider, type Provider } from "../models.ts";
++import { withGoogleCredentials } from "../utils/provider-env.ts";
+ import { GOOGLE_VERTEX_MODELS } from "./google-vertex.models.ts";
+ 
+ const VERTEX_ADC_PATH = "~/.config/gcloud/application_default_credentials.json";
+@@ -68,6 +70,35 @@ const vertexAuth: ApiKeyAuth = {
+ 			signal.throwIfAborted();
+ 			return value;
+ 		};
++		if (ctx.authoritative) {
++			if (credential?.key) return { auth: { apiKey: credential.key }, source: "stored credential" };
++			const { parseGoogleCredentials, readSelectedGoogleCredentials, createSelectedGoogleAuthClient } =
++				await loadExplicitCloud();
++			const project = (await env("GOOGLE_CLOUD_PROJECT")) ?? (await env("GCLOUD_PROJECT"));
++			const location = await env("GOOGLE_CLOUD_LOCATION");
++			if (credential) {
++				if (!project || !location) return undefined;
++				const credentials = await readSelectedGoogleCredentials(
++					credential.env?.GOOGLE_APPLICATION_CREDENTIALS,
++					signal,
++				);
++				return {
++					auth: {},
++					env: withGoogleCredentials(
++						{ GOOGLE_CLOUD_API_KEY: "" },
++						credentials,
++						createSelectedGoogleAuthClient(credentials),
++					),
++					source: "stored Google credential source",
++				};
++			}
++			const json = await env("GOOGLE_APPLICATION_CREDENTIALS_JSON");
++			const credentials = json ? parseGoogleCredentials(json, true) : undefined;
++			const key = await env("GOOGLE_CLOUD_API_KEY");
++			if (key) return { auth: { apiKey: key }, source: "GOOGLE_CLOUD_API_KEY" };
++			if (!credentials || !project || !location) return undefined;
++			return { auth: {}, env: withGoogleCredentials({}, credentials), source: "configured Google service account" };
++		}
+ 		const key = credential?.key ?? (await env("GOOGLE_CLOUD_API_KEY"));
+ 		if (key) return { auth: { apiKey: key }, source: credential?.key ? "stored credential" : "GOOGLE_CLOUD_API_KEY" };
+ 
+diff --git a/packages/ai/src/utils/node-http-proxy.ts b/packages/ai/src/utils/node-http-proxy.ts
+index 0550f26..4ceab8e 100644
+--- a/packages/ai/src/utils/node-http-proxy.ts
++++ b/packages/ai/src/utils/node-http-proxy.ts
+@@ -16,8 +16,8 @@ function getProxyEnv(key: string, env?: ProviderEnv): string {
+ 	return (
+ 		env?.[lowercaseKey] ||
+ 		env?.[uppercaseKey] ||
+-		getProviderEnvValue(lowercaseKey) ||
+-		getProviderEnvValue(uppercaseKey) ||
++		getProviderEnvValue(lowercaseKey, env) ||
++		getProviderEnvValue(uppercaseKey, env) ||
+ 		""
+ 	);
+ }
+diff --git a/packages/ai/src/utils/provider-env.ts b/packages/ai/src/utils/provider-env.ts
+index db49606..98b2ae7 100644
+--- a/packages/ai/src/utils/provider-env.ts
++++ b/packages/ai/src/utils/provider-env.ts
+@@ -1,5 +1,38 @@
+ import type { ProviderEnv } from "../types.ts";
+ 
++// Enumerable symbols survive ordinary object spreads without becoming environment keys.
++const AUTHORITATIVE_ENV = Symbol.for("pi.authoritative-provider-environment");
++const GOOGLE_AUTH_CLIENT = Symbol.for("pi.explicit-google-auth-client");
++const GOOGLE_CREDENTIALS = Symbol.for("pi.explicit-google-credentials");
++
++export function isAuthoritativeProviderEnv(env: ProviderEnv | undefined): boolean {
++	return env !== undefined && (env as Record<symbol, unknown>)[AUTHORITATIVE_ENV] === true;
++}
++
++/** Snapshot a complete environment instead of an overlay on the host process. */
++export function authoritativeProviderEnv(values: Readonly<Record<string, string>>): ProviderEnv {
++	return Object.freeze({ ...values, [AUTHORITATIVE_ENV]: true });
++}
++
++/** Provider-internal resolved credential object; never an ambient filename or environment string. */
++export function withGoogleCredentials(
++	env: ProviderEnv,
++	credentials: Record<string, unknown>,
++	authClient?: unknown,
++): ProviderEnv {
++	return { ...env, [GOOGLE_CREDENTIALS]: credentials, ...(authClient ? { [GOOGLE_AUTH_CLIENT]: authClient } : {}) };
++}
++
++export function explicitGoogleCredentials(env: ProviderEnv | undefined): Record<string, unknown> | undefined {
++	return env
++		? ((env as Record<symbol, unknown>)[GOOGLE_CREDENTIALS] as Record<string, unknown> | undefined)
++		: undefined;
++}
++
++export function explicitGoogleAuthClient(env: ProviderEnv | undefined): unknown {
++	return env ? (env as Record<symbol, unknown>)[GOOGLE_AUTH_CLIENT] : undefined;
++}
++
+ let procEnvCache: Map<string, string> | null = null;
+ 
+ /**
+@@ -43,6 +76,7 @@ function getBunSandboxEnvValue(name: string): string | undefined {
+  * the duplicated Bun sandbox fallback for direct pi-ai consumers.
+  */
+ export function getProviderEnvValue(name: string, env?: ProviderEnv): string | undefined {
++	if (isAuthoritativeProviderEnv(env)) return env?.[name] || undefined;
+ 	return (
+ 		env?.[name] ||
+ 		(typeof process !== "undefined" ? process.env[name] : undefined) ||
+diff --git a/packages/ai/test/authoritative-oauth-environment.test.ts b/packages/ai/test/authoritative-oauth-environment.test.ts
+new file mode 100644
+index 0000000..e23a2c8
+--- /dev/null
++++ b/packages/ai/test/authoritative-oauth-environment.test.ts
+@@ -0,0 +1,99 @@
++import { afterEach, describe, expect, it, vi } from "vitest";
++import { authoritativeProviderEnv } from "../src/utils/provider-env.ts";
++
++const callbacks = vi.hoisted(() => ({ hosts: [] as string[] }));
++vi.mock("../src/auth/oauth/callback-server.ts", async (original) => ({
++	...(await original<typeof import("../src/auth/oauth/callback-server.ts")>()),
++	startOAuthCallbackServer: async (options: { host: string }) => {
++		callbacks.hosts.push(options.host);
++		throw new Error("offline callback fixture");
++	},
++}));
++vi.mock("node:http", async (original) => ({
++	...(await original<typeof import("node:http")>()),
++	createServer: () => {
++		let onError: ((error: Error) => void) | undefined;
++		const server = {
++			on: (_event: string, fn: (error: Error) => void) => {
++				onError = fn;
++				return server;
++			},
++			once: (_event: string, fn: (error: Error) => void) => {
++				onError = fn;
++				return server;
++			},
++			listen: (_port: number, host: string) => {
++				callbacks.hosts.push(host);
++				queueMicrotask(() => onError?.(new Error("offline callback fixture")));
++			},
++			close: () => {},
++			removeListener: () => server,
++		};
++		return server;
++	},
++}));
++const authContext = (values: Record<string, string> = {}) => ({
++	environment: authoritativeProviderEnv(values),
++	authoritative: true,
++	env: async (key: string) => values[key],
++	fileExists: async () => false,
++});
++const interaction = () => ({
++	signal: new AbortController().signal,
++	prompt: vi.fn(async () => "browser"),
++	notify: vi.fn(),
++	openUrl: vi.fn(async () => {}),
++});
++afterEach(() => {
++	vi.unstubAllEnvs();
++	vi.unstubAllGlobals();
++	callbacks.hosts.length = 0;
++});
++describe("operation-scoped authoritative OAuth environment", () => {
++	it("does not read a hostile pre-import Kimi refresh host", async () => {
++		vi.stubEnv("KIMI_CODE_OAUTH_HOST", "https://evil.test");
++		const { kimiCodingOAuth } = await import("../src/auth/oauth/kimi-coding.ts");
++		const urls: string[] = [];
++		vi.stubGlobal(
++			"fetch",
++			vi.fn(async (url: string) => {
++				urls.push(String(url));
++				return new Response(JSON.stringify({ access_token: "new", refresh_token: "r", expires_in: 3600 }), {
++					status: 200,
++				});
++			}),
++		);
++		await kimiCodingOAuth.refresh(
++			{ type: "oauth", access: "a", refresh: "r", expires: 0 },
++			new AbortController().signal,
++			authContext(),
++		);
++		expect(urls[0]).not.toContain("evil.test");
++		await kimiCodingOAuth.refresh(
++			{ type: "oauth", access: "a", refresh: "r", expires: 0 },
++			new AbortController().signal,
++			authContext({ KIMI_CODE_OAUTH_HOST: "https://configured.test" }),
++		);
++		expect(urls[1]).toContain("https://configured.test/");
++	});
++	it("Anthropic callback settings use the captured map after module import", async () => {
++		vi.stubEnv("PI_OAUTH_CALLBACK_HOST", "hostile-before-import");
++		const { anthropicOAuth } = await import("../src/auth/oauth/anthropic.ts");
++		await expect(
++			anthropicOAuth.login!(interaction(), { authContext: authContext({ PI_OAUTH_CALLBACK_HOST: "configured" }) }),
++		).rejects.toThrow();
++		expect(callbacks.hosts.length).toBeGreaterThan(0);
++		expect(callbacks.hosts.every((host) => host === "configured")).toBe(true);
++	});
++	it("OpenAI callback settings use the native default when missing from the map", async () => {
++		vi.stubEnv("PI_OAUTH_CALLBACK_HOST", "hostile-before-import");
++		const { openaiChatGPTOAuth } = await import("../src/auth/oauth/openai-chatgpt.ts");
++		await expect(
++			openaiChatGPTOAuth.login!(interaction(), {
++				authContext: authContext(),
++				getDeviceId: () => "12345678-1234-1234-1234-123456789abc",
++			}),
++		).rejects.toThrow();
++		expect(callbacks.hosts).toEqual(["127.0.0.1"]);
++	});
++});
+diff --git a/packages/ai/test/authoritative-sdk.test.ts b/packages/ai/test/authoritative-sdk.test.ts
+new file mode 100644
+index 0000000..15a522c
+--- /dev/null
++++ b/packages/ai/test/authoritative-sdk.test.ts
+@@ -0,0 +1,106 @@
++import { afterEach, describe, expect, it, vi } from "vitest";
++import { stream as anthropic } from "../src/api/anthropic-messages.ts";
++import { PiAzureOpenAI } from "../src/api/authoritative-azure-client.ts";
++import { PiOpenAI } from "../src/api/authoritative-clients.ts";
++import { generateImages } from "../src/api/openrouter-images.ts";
++import { normalizeContext } from "../src/compat.ts";
++import { getBuiltinImageModel, getBuiltinModel } from "../src/providers/all.ts";
++import { authoritativeProviderEnv } from "../src/utils/provider-env.ts";
++
++afterEach(() => vi.unstubAllEnvs());
++const failedResponse = () =>
++	new Response(JSON.stringify({ error: { message: "offline fixture", type: "invalid_request_error" } }), {
++		status: 400,
++		headers: { "content-type": "application/json" },
++	});
++
++describe("authoritative SDK request boundaries", () => {
++	it.each(["openai", "azure"])("blocks ambient account/auth headers in %s's SDK", async (kind) => {
++		vi.stubEnv("OPENAI_ORG_ID", "ambient-org");
++		vi.stubEnv("OPENAI_PROJECT_ID", "ambient-project");
++		vi.stubEnv("OPENAI_CUSTOM_HEADERS", "Authorization: Bearer ambient\nX-Ambient: injected");
++		vi.stubEnv("OPENAI_BASE_URL", "https://evil.test");
++		vi.stubEnv("OPENAI_ADMIN_KEY", "ambient-admin");
++		const calls: { url: string; headers: Headers }[] = [];
++		const fetch: typeof globalThis.fetch = async (input, init) => {
++			calls.push({ url: String(input), headers: new Headers(init?.headers) });
++			return failedResponse();
++		};
++		const options = {
++			apiKey: "managed",
++			baseURL: "https://configured.test/v1",
++			defaultHeaders: { "X-Account": "managed" },
++			managedEnvironment: authoritativeProviderEnv({}),
++			fetch,
++			maxRetries: 0,
++		};
++		const client =
++			kind === "azure" ? new PiAzureOpenAI({ ...options, apiVersion: "managed-version" }) : new PiOpenAI(options);
++		await expect(client.chat.completions.create({ model: "test", messages: [] })).rejects.toThrow(/offline fixture/);
++		expect(calls[0]?.url).toMatch(/^https:\/\/configured\.test\//);
++		expect(calls[0]?.headers.get("X-Ambient")).toBeNull();
++		expect(calls[0]?.headers.get("OpenAI-Organization")).toBeNull();
++		expect(calls[0]?.headers.get("OpenAI-Project")).toBeNull();
++		expect(calls[0]?.headers.get("X-Account")).toBe("managed");
++		expect(calls[0]?.headers.get(kind === "azure" ? "api-key" : "authorization")).toBe(
++			kind === "azure" ? "managed" : "Bearer managed",
++		);
++	});
++	it("blocks ambient Anthropic headers and auth profiles at real SDK dispatch", async () => {
++		vi.stubEnv("ANTHROPIC_CUSTOM_HEADERS", "X-Ambient: injected\nX-Account: hostile");
++		vi.stubEnv("ANTHROPIC_AUTH_TOKEN", "ambient");
++		vi.stubEnv("ANTHROPIC_PROFILE", "ambient");
++		vi.stubEnv("ANTHROPIC_BASE_URL", "https://evil.test");
++		const calls: { url: string; headers: Headers }[] = [];
++		const fetch: typeof globalThis.fetch = async (input, init) => {
++			calls.push({ url: String(input), headers: new Headers(init?.headers) });
++			return failedResponse();
++		};
++		const model = { ...getBuiltinModel("anthropic", "claude-sonnet-4-5"), baseUrl: "https://configured.test" };
++		await anthropic(model, normalizeContext({ messages: [{ role: "user", content: "hi", timestamp: 0 }] }), {
++			apiKey: "managed",
++			env: authoritativeProviderEnv({}),
++			headers: { "X-Account": "managed" },
++			fetch,
++		}).result();
++		expect(calls.length).toBeGreaterThan(0);
++		expect(calls[0]?.url).toMatch(/^https:\/\/configured\.test\//);
++		expect(calls[0]?.headers.get("X-Ambient")).toBeNull();
++		expect(calls[0]?.headers.get("X-Account")).toBe("managed");
++		expect(calls[0]?.headers.get("x-api-key")).toBe("managed");
++		expect(calls[0]?.headers.get("authorization")).toBeNull();
++	});
++	it("keeps image SDK requests inside the same administrative auth/header boundary", async () => {
++		vi.stubEnv("OPENAI_CUSTOM_HEADERS", "Authorization: Bearer ambient\nX-Ambient: injected");
++		vi.stubEnv("OPENAI_ORG_ID", "ambient-org");
++		vi.stubEnv("OPENAI_PROJECT_ID", "ambient-project");
++		vi.stubEnv("OPENAI_BASE_URL", "https://evil.test");
++		const calls: { url: string; headers: Headers }[] = [];
++		const fetch: typeof globalThis.fetch = async (input, init) => {
++			calls.push({ url: String(input), headers: new Headers(init?.headers) });
++			return failedResponse();
++		};
++		const model = {
++			...getBuiltinImageModel("openrouter", "black-forest-labs/flux.2-pro"),
++			baseUrl: "https://configured.test/v1",
++		};
++		await generateImages(
++			model,
++			{ input: [{ type: "text", text: "offline" }] },
++			{
++				apiKey: "managed",
++				env: authoritativeProviderEnv({}),
++				headers: { "X-Account": "managed" },
++				fetch,
++				maxRetries: 0,
++			},
++		);
++		expect(calls).toHaveLength(1);
++		expect(calls[0]?.url).toMatch(/^https:\/\/configured\.test\//);
++		expect(calls[0]?.headers.get("authorization")).toBe("Bearer managed");
++		expect(calls[0]?.headers.get("X-Account")).toBe("managed");
++		expect(calls[0]?.headers.get("X-Ambient")).toBeNull();
++		expect(calls[0]?.headers.get("OpenAI-Organization")).toBeNull();
++		expect(calls[0]?.headers.get("OpenAI-Project")).toBeNull();
++	});
++});
+diff --git a/packages/ai/test/bedrock-credentials.test.ts b/packages/ai/test/bedrock-credentials.test.ts
+index bcf7cee..a215a5a 100644
+--- a/packages/ai/test/bedrock-credentials.test.ts
++++ b/packages/ai/test/bedrock-credentials.test.ts
+@@ -113,3 +113,50 @@ describe("bedrock credential priority", () => {
+ 		});
+ 	});
+ });
++
++describe("authoritative Bedrock SDK construction", () => {
++	it("never selects ambient keys, profiles, endpoints or the default chain", async () => {
++		const { authoritativeProviderEnv } = await import("../src/utils/provider-env.ts");
++		vi.stubEnv("AWS_ACCESS_KEY_ID", "ambient");
++		vi.stubEnv("AWS_SECRET_ACCESS_KEY", "ambient");
++		vi.stubEnv("AWS_PROFILE", "ambient");
++		vi.stubEnv("AWS_ENDPOINT_URL", "https://evil.test");
++		const model = {
++			...getBuiltinModel("amazon-bedrock", "us.anthropic.claude-opus-4-8"),
++			baseUrl: "https://configured.test",
++		};
++		const config = await captureClientConfig(model, {
++			env: authoritativeProviderEnv({
++				AWS_REGION: "us-west-2",
++				AWS_ACCESS_KEY_ID: "managed",
++				AWS_SECRET_ACCESS_KEY: "secret",
++			}),
++		});
++		expect(config).toMatchObject({
++			endpoint: "https://configured.test",
++			region: "us-west-2",
++			ignoreConfiguredEndpointUrls: true,
++			credentials: { accessKeyId: "managed", secretAccessKey: "secret" },
++		});
++		expect(config.profile).toBeUndefined();
++		bedrockMock.constructorCalls.length = 0;
++		const result = await streamBedrock(model, context, {
++			env: authoritativeProviderEnv({ AWS_REGION: "us-west-2" }),
++		}).result();
++		expect(result.stopReason).toBe("error");
++		expect(bedrockMock.constructorCalls).toEqual([]);
++	});
++	it("explicit bearer mode fences any SDK credential fallback", async () => {
++		const { authoritativeProviderEnv } = await import("../src/utils/provider-env.ts");
++		const model = {
++			...getBuiltinModel("amazon-bedrock", "us.anthropic.claude-opus-4-8"),
++			baseUrl: "https://configured.test",
++		};
++		const config = await captureClientConfig(model, {
++			apiKey: "token",
++			env: authoritativeProviderEnv({ AWS_REGION: "us-west-2" }),
++		});
++		expect(config.token).toEqual({ token: "token" });
++		await expect((config.credentials as () => Promise<unknown>)()).rejects.toThrow(/cannot select/);
++	});
++});
+diff --git a/packages/ai/test/explicit-cloud.test.ts b/packages/ai/test/explicit-cloud.test.ts
+new file mode 100644
+index 0000000..7843a66
+--- /dev/null
++++ b/packages/ai/test/explicit-cloud.test.ts
+@@ -0,0 +1,193 @@
++import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
++import { tmpdir } from "node:os";
++import { join } from "node:path";
++import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
++
++const host = vi.hoisted(() => ({ home: "" }));
++vi.mock("node:os", async (original) => ({
++	...(await original<typeof import("node:os")>()),
++	userInfo: () => ({ homedir: host.home }),
++}));
++
++import { AwsClient, ExternalAccountAuthorizedUserClient } from "google-auth-library";
++import {
++	createSelectedGoogleAuthClient,
++	parseGoogleCredentials,
++	readSelectedGoogleCredentials,
++	resolveSelectedAwsProfile,
++} from "../src/auth/explicit-cloud.ts";
++import { amazonBedrockProvider } from "../src/providers/amazon-bedrock.ts";
++import { googleVertexProvider } from "../src/providers/google-vertex.ts";
++import { authoritativeProviderEnv, explicitGoogleCredentials } from "../src/utils/provider-env.ts";
++
++const signal = () => new AbortController().signal;
++const context = (values: Record<string, string>) => ({
++	environment: authoritativeProviderEnv(values),
++	authoritative: true,
++	env: async (key: string) => values[key],
++	fileExists: vi.fn(async () => {
++		throw new Error("must not discover files");
++	}),
++});
++beforeEach(async () => {
++	host.home = await mkdtemp(join(tmpdir(), "pi-explicit-cloud-"));
++	await mkdir(join(host.home, ".aws"));
++});
++afterEach(async () => {
++	vi.unstubAllEnvs();
++	await rm(host.home, { recursive: true, force: true });
++});
++describe("explicit cloud credential sources", () => {
++	it("selects only the stored AWS profile from bounded immutable file inputs", async () => {
++		vi.stubEnv("AWS_ACCESS_KEY_ID", "ambient");
++		vi.stubEnv("AWS_SECRET_ACCESS_KEY", "ambient");
++		vi.stubEnv("AWS_PROFILE", "default");
++		vi.stubEnv("AWS_SHARED_CREDENTIALS_FILE", "/wrong-file");
++		await writeFile(
++			join(host.home, ".aws", "credentials"),
++			"[personal]\naws_access_key_id=selected\naws_secret_access_key=secret\n[default]\naws_access_key_id=wrong\naws_secret_access_key=wrong\n",
++		);
++		const resolved = await resolveSelectedAwsProfile("personal", {}, signal());
++		expect(resolved).toMatchObject({
++			AWS_ACCESS_KEY_ID: "selected",
++			AWS_SECRET_ACCESS_KEY: "secret",
++			AWS_PROFILE: "",
++			AWS_BEARER_TOKEN_BEDROCK: "",
++		});
++		const auth = await amazonBedrockProvider().auth.apiKey!.resolve({
++			ctx: context({
++				AWS_BEARER_TOKEN_BEDROCK: "admin",
++				AWS_ACCESS_KEY_ID: "admin",
++				AWS_SECRET_ACCESS_KEY: "admin",
++			}),
++			credential: { type: "api_key", env: { AWS_PROFILE: "personal" } },
++			signal: signal(),
++		});
++		expect(auth?.env?.AWS_ACCESS_KEY_ID).toBe("selected");
++		expect(auth?.auth.apiKey).toBeUndefined();
++	});
++	it.each(["credential_process=never-execute", "role_arn=arn:aws:iam::123:role/role\ncredential_source=Environment"])(
++		"rejects incompatible AWS mode before resolution: %s",
++		async (mode) => {
++			await writeFile(join(host.home, ".aws", "config"), `[profile selected]\n${mode}\n`);
++			await expect(resolveSelectedAwsProfile("selected", {}, signal())).rejects.toThrow(
++				/credential_process|ambient/,
++			);
++		},
++	);
++	it("rejects commands in a selected AWS source-profile chain", async () => {
++		await writeFile(
++			join(host.home, ".aws", "config"),
++			"[profile selected]\nrole_arn=arn:aws:iam::123:role/role\nsource_profile=source\n[profile source]\ncredential_process=never-execute\n",
++		);
++		await expect(resolveSelectedAwsProfile("selected", {}, signal())).rejects.toThrow(/credential_process/);
++	});
++	it("uses selected Google file credentials ahead of administrative keys", async () => {
++		const selected = {
++			type: "authorized_user",
++			client_id: "personal",
++			client_secret: "secret",
++			refresh_token: "!literal",
++		};
++		const file = join(host.home, "selected.json");
++		await writeFile(file, JSON.stringify(selected));
++		const auth = await googleVertexProvider().auth.apiKey!.resolve({
++			ctx: context({
++				GOOGLE_CLOUD_PROJECT: "managed",
++				GOOGLE_CLOUD_LOCATION: "region",
++				GOOGLE_CLOUD_API_KEY: "admin",
++			}),
++			credential: { type: "api_key", env: { GOOGLE_APPLICATION_CREDENTIALS: file } },
++			signal: signal(),
++		});
++		expect(explicitGoogleCredentials(auth?.env)).toEqual(selected);
++		expect(auth?.env?.GOOGLE_CLOUD_API_KEY).toBe("");
++		expect(auth?.auth.apiKey).toBeUndefined();
++	});
++	it("reads only the explicitly selected native ADC location", async () => {
++		await mkdir(join(host.home, ".config", "gcloud"), { recursive: true });
++		const selected = {
++			type: "authorized_user",
++			client_id: "selected",
++			client_secret: "secret",
++			refresh_token: "$literal",
++		};
++		await writeFile(
++			join(host.home, ".config", "gcloud", "application_default_credentials.json"),
++			JSON.stringify(selected),
++		);
++		vi.stubEnv("GOOGLE_APPLICATION_CREDENTIALS", "/wrong-file");
++		expect(await readSelectedGoogleCredentials(undefined, signal())).toEqual(selected);
++	});
++	it("disallows executable external-account Google authentication and admin ADC discovery", async () => {
++		expect(() =>
++			parseGoogleCredentials(
++				JSON.stringify({ type: "external_account", credential_source: { executable: { command: "never-run" } } }),
++				false,
++			),
++		).toThrow(/Executable/);
++		expect(() =>
++			parseGoogleCredentials(
++				JSON.stringify({ type: "authorized_user", client_id: "a", client_secret: "s", refresh_token: "r" }),
++				true,
++			),
++		).toThrow(/service-account/);
++		const ctx = context({});
++		vi.stubEnv("GOOGLE_APPLICATION_CREDENTIALS", "/unselected.json");
++		vi.stubEnv("GOOGLE_CLOUD_API_KEY", "ambient");
++		expect(await googleVertexProvider().auth.apiKey!.resolve({ ctx, signal: signal() })).toBeUndefined();
++		expect(ctx.fileExists).not.toHaveBeenCalled();
++	});
++	it("retains native external-account authorized-user ADC without ambient discovery", () => {
++		const credentials = parseGoogleCredentials(
++			JSON.stringify({
++				type: "external_account_authorized_user",
++				client_id: "selected",
++				client_secret: "secret",
++				refresh_token: "opaque",
++			}),
++			false,
++		);
++		expect(createSelectedGoogleAuthClient(credentials)).toBeInstanceOf(ExternalAccountAuthorizedUserClient);
++	});
++	it("keeps selected AWS federation while excluding ambient AWS identity and region", async () => {
++		vi.stubEnv("AWS_ACCESS_KEY_ID", "ambient");
++		vi.stubEnv("AWS_SECRET_ACCESS_KEY", "ambient-secret");
++		vi.stubEnv("AWS_REGION", "ambient-region");
++		const client = createSelectedGoogleAuthClient({
++			type: "external_account",
++			audience: "//iam.googleapis.com/projects/123/locations/global/workloadIdentityPools/pool/providers/provider",
++			subject_token_type: "urn:ietf:params:aws:token-type:aws4_request",
++			token_url: "https://sts.googleapis.com/v1/token",
++			credential_source: {
++				environment_id: "aws1",
++				region_url: "http://metadata.test/region",
++				url: "http://metadata.test/credentials",
++				regional_cred_verification_url:
++					"https://sts.{region}.amazonaws.com?Action=GetCallerIdentity&Version=2011-06-15",
++			},
++		});
++		expect(client).toBeInstanceOf(AwsClient);
++		const requests: string[] = [];
++		vi.spyOn(client.transporter, "request").mockImplementation((async (options: { url?: unknown }) => {
++			const url = String(options.url);
++			requests.push(url);
++			return {
++				data: url.endsWith("/region")
++					? "eu-west-1a"
++					: url.endsWith("/credentials")
++						? "role"
++						: { AccessKeyId: "selected", SecretAccessKey: "selected-secret", Token: "selected-token" },
++			};
++		}) as never);
++		const token = decodeURIComponent(await (client as AwsClient).retrieveSubjectToken());
++		expect(requests).toEqual([
++			"http://metadata.test/region",
++			"http://metadata.test/credentials",
++			"http://metadata.test/credentials/role",
++		]);
++		expect(token).toContain("sts.eu-west-1.amazonaws.com");
++		expect(token).toContain("Credential=selected/");
++		expect(token).not.toContain("ambient");
++	});
++});
+diff --git a/packages/ai/test/google-vertex-api-key-resolution.test.ts b/packages/ai/test/google-vertex-api-key-resolution.test.ts
+index 42e3abb..8755eb2 100644
+--- a/packages/ai/test/google-vertex-api-key-resolution.test.ts
++++ b/packages/ai/test/google-vertex-api-key-resolution.test.ts
+@@ -240,3 +240,69 @@ describe("google-vertex api key resolution", () => {
+ 		});
+ 	});
+ });
++
++describe("authoritative Google SDK construction", () => {
++	afterEach(() => vi.unstubAllEnvs());
++	it("passes in-memory service account credentials with explicit endpoint/project/location", async () => {
++		const { authoritativeProviderEnv, withGoogleCredentials } = await import("../src/utils/provider-env.ts");
++		vi.stubEnv("GOOGLE_API_KEY", "ambient");
++		vi.stubEnv("GOOGLE_APPLICATION_CREDENTIALS", "/unselected.json");
++		vi.stubEnv("GOOGLE_CLOUD_PROJECT", "ambient");
++		vi.stubEnv("GOOGLE_VERTEX_BASE_URL", "https://evil.test");
++		const credentials = { type: "service_account", client_email: "configured@test", private_key: "literal" };
++		const env = authoritativeProviderEnv(
++			withGoogleCredentials({ GOOGLE_CLOUD_PROJECT: "managed", GOOGLE_CLOUD_LOCATION: "region" }, credentials),
++		);
++		await streamGoogleVertex({ ...model, baseUrl: "https://{location}.configured.test/{project}" }, context, {
++			env,
++		}).result();
++		expect(googleGenAiMock.constructorCalls[0]).toMatchObject({
++			vertexai: true,
++			project: "managed",
++			location: "region",
++			googleAuthOptions: { credentials },
++			httpOptions: { baseUrl: "https://region.configured.test/managed" },
++		});
++		expect(googleGenAiMock.constructorCalls[0]?.googleAuthOptions).not.toHaveProperty("keyFilename");
++	});
++	it("does not construct a Google SDK client without explicit credentials", async () => {
++		const { authoritativeProviderEnv } = await import("../src/utils/provider-env.ts");
++		vi.stubEnv("GOOGLE_API_KEY", "ambient");
++		vi.stubEnv("GOOGLE_APPLICATION_CREDENTIALS", "/unselected.json");
++		const result = await streamGoogleVertex(model, context, {
++			env: authoritativeProviderEnv({ GOOGLE_CLOUD_PROJECT: "managed", GOOGLE_CLOUD_LOCATION: "region" }),
++		}).result();
++		expect(result.stopReason).toBe("error");
++		expect(googleGenAiMock.constructorCalls).toEqual([]);
++	});
++	it("keeps explicit API key mode and endpoint despite ambient cloud routing", async () => {
++		const { authoritativeProviderEnv } = await import("../src/utils/provider-env.ts");
++		vi.stubEnv("GOOGLE_CLOUD_PROJECT", "ambient");
++		vi.stubEnv("GOOGLE_CLOUD_LOCATION", "ambient");
++		await streamGoogleVertex({ ...model, baseUrl: "https://configured.test" }, context, {
++			apiKey: "managed",
++			env: authoritativeProviderEnv({}),
++		}).result();
++		expect(googleGenAiMock.constructorCalls[0]).toMatchObject({
++			apiKey: "managed",
++			project: "",
++			location: "",
++			httpOptions: { baseUrl: "https://configured.test" },
++		});
++	});
++	it("selects Gemini non-Vertex mode explicitly", async () => {
++		const { stream: gemini } = await import("../src/api/google-generative-ai.ts");
++		const { authoritativeProviderEnv } = await import("../src/utils/provider-env.ts");
++		vi.stubEnv("GOOGLE_GENAI_USE_VERTEXAI", "true");
++		await gemini(
++			{ ...model, api: "google-generative-ai", provider: "google", baseUrl: "https://configured.test" },
++			context,
++			{ apiKey: "managed", env: authoritativeProviderEnv({}) },
++		).result();
++		expect(googleGenAiMock.constructorCalls[0]).toMatchObject({
++			vertexai: false,
++			apiKey: "managed",
++			httpOptions: { baseUrl: "https://configured.test" },
++		});
++	});
++});
+diff --git a/packages/ai/test/node-http-proxy.test.ts b/packages/ai/test/node-http-proxy.test.ts
+index 5ed530e..4dd83c7 100644
+--- a/packages/ai/test/node-http-proxy.test.ts
++++ b/packages/ai/test/node-http-proxy.test.ts
+@@ -1,5 +1,6 @@
+-import { afterEach, describe, expect, it } from "vitest";
++import { afterEach, describe, expect, it, vi } from "vitest";
+ import { resolveHttpProxyUrlForTarget, UNSUPPORTED_PROXY_PROTOCOL_MESSAGE } from "../src/utils/node-http-proxy.ts";
++import { authoritativeProviderEnv } from "../src/utils/provider-env.ts";
+ 
+ const PROXY_ENV_KEYS = [
+ 	"HTTP_PROXY",
+@@ -92,4 +93,16 @@ describe("node HTTP proxy resolution", () => {
+ 		expect(resolveHttpProxyUrlForTarget("https://127.0.0.1:8080")).toBeUndefined();
+ 		expect(resolveHttpProxyUrlForTarget("https://127.0.0.1:3000")?.toString()).toBe("http://proxy.example:8080/");
+ 	});
++	it("never repairs managed proxy/no-proxy values from ambient environment", () => {
++		vi.stubEnv("HTTPS_PROXY", "http://ambient.test:8080");
++		vi.stubEnv("ALL_PROXY", "http://ambient.test:8080");
++		vi.stubEnv("NO_PROXY", "*");
++		expect(resolveHttpProxyUrlForTarget("https://configured.test", authoritativeProviderEnv({}))).toBeUndefined();
++		expect(
++			resolveHttpProxyUrlForTarget(
++				"https://configured.test",
++				authoritativeProviderEnv({ HTTPS_PROXY: "http://managed.test:8080" }),
++			)?.href,
++		).toBe("http://managed.test:8080/");
++	});
+ });
+diff --git a/packages/coding-agent/install-lock/package-lock.json b/packages/coding-agent/install-lock/package-lock.json
+index e37a4fb..bbf77df 100644
+--- a/packages/coding-agent/install-lock/package-lock.json
++++ b/packages/coding-agent/install-lock/package-lock.json
+@@ -404,10 +404,13 @@
+ 			"dependencies": {
+ 				"@anthropic-ai/sdk": "0.129.0",
+ 				"@aws-sdk/client-bedrock-runtime": "3.1127.0",
++				"@aws-sdk/credential-provider-ini": "3.973.15",
+ 				"@earendil-works/pi-schema": "1.5.0",
+ 				"@earendil-works/pi-telemetry": "1.5.0",
+ 				"@google/genai": "2.21.0",
++				"@smithy/core": "3.33.3",
+ 				"@smithy/node-http-handler": "4.12.1",
++				"google-auth-library": "10.6.2",
+ 				"http-proxy-agent": "9.1.0",
+ 				"https-proxy-agent": "9.1.0",
+ 				"openai": "7.19.0",
+diff --git a/packages/coding-agent/src/cli/auth-check.ts b/packages/coding-agent/src/cli/auth-check.ts
+index e0056ed..9a55d2b 100644
+--- a/packages/coding-agent/src/cli/auth-check.ts
++++ b/packages/coding-agent/src/cli/auth-check.ts
+@@ -55,12 +55,9 @@ export async function checkProviderAuth(
+ export async function getProviderCredential(
+ 	providerId: string,
+ 	modelRuntime: ModelRuntime,
+-	credentials: CredentialStore,
+ 	options: { refresh: boolean },
+ ): Promise<string | undefined> {
+-	const credential = await credentials.read(providerId);
+-	if (!options.refresh && credential?.type === "oauth") return credential.access;
+-	return getAuthCredential(await modelRuntime.getAuth(providerId));
++	return getAuthCredential(await modelRuntime.getAuth(providerId, { refresh: options.refresh }));
+ }
+ 
+ export async function createAuthCheckModelRuntime(
+diff --git a/packages/coding-agent/src/cli/credential-print.ts b/packages/coding-agent/src/cli/credential-print.ts
+index f5250b9..1ff0fcc 100644
+--- a/packages/coding-agent/src/cli/credential-print.ts
++++ b/packages/coding-agent/src/cli/credential-print.ts
+@@ -1,4 +1,4 @@
+-import type { Api, CredentialInfo, Model } from "@earendil-works/pi-ai";
++import type { Api, Model } from "@earendil-works/pi-ai";
+ import { resolveCliModel, resolveModelReference } from "../core/model-resolver.ts";
+ import type { ModelRuntime } from "../core/model-runtime.ts";
+ import type { Args } from "./args.ts";
+@@ -22,9 +22,6 @@ export async function resolveCredentialForPrint(
+ 	signal?: AbortSignal,
+ ): Promise<string> {
+ 	const { provider: cliProvider, model: cliModel } = validateAuthCommandArgs(args, kind);
+-	const credentialTypes = new Map<string, CredentialInfo["type"]>(
+-		(await modelRuntime.listCredentials({ signal })).map((credential) => [credential.providerId, credential.type]),
+-	);
+ 	const providers: Array<{ id: string; model?: Model<Api> }> = [];
+ 	if (cliProvider) {
+ 		const provider = modelRuntime.getProvider(cliProvider);
+@@ -43,7 +40,6 @@ export async function resolveCredentialForPrint(
+ 	} else {
+ 		const models = modelRuntime.getModels();
+ 		for (const provider of modelRuntime.getProviders()) {
+-			if (!credentialTypes.has(provider.id)) continue;
+ 			const resolved = resolveModelReference(
+ 				{ text: cliModel!, provider: provider.id, thinkingSuffix: "strict", fuzzy: true },
+ 				models,
+@@ -58,7 +54,7 @@ export async function resolveCredentialForPrint(
+ 
+ 	const credentials: Array<{ providerId: string; value: string }> = [];
+ 	for (const provider of providers) {
+-		const type = credentialTypes.get(provider.id);
++		const type = (await modelRuntime.checkAuth(provider.id, { signal }))?.type;
+ 		if (kind === "api_key" && type === "oauth") continue;
+ 		if (kind === "bearer_token" && type !== "oauth") continue;
+ 		const authOptions = {
+@@ -75,7 +71,7 @@ export async function resolveCredentialForPrint(
+ 	if (credentials.length === 1) return credentials[0].value;
+ 	if (credentials.length === 0) {
+ 		const providerId = providers[0]?.id;
+-		const type = providerId ? credentialTypes.get(providerId) : undefined;
++		const type = providerId ? (await modelRuntime.checkAuth(providerId, { signal }))?.type : undefined;
+ 		if (cliProvider && kind === "api_key" && type === "oauth") {
+ 			throw new AuthCommandError(`Provider "${providerId}" is configured with OAuth, not an API key`);
+ 		}
+diff --git a/packages/coding-agent/src/core/auth-storage.ts b/packages/coding-agent/src/core/auth-storage.ts
+index 5a8fa41..e2c36c7 100644
+--- a/packages/coding-agent/src/core/auth-storage.ts
++++ b/packages/coding-agent/src/core/auth-storage.ts
+@@ -3,8 +3,21 @@
+  * Provider auth orchestration belongs to ModelRuntime and pi-ai Models.
+  */
+ 
++import { randomUUID } from "node:crypto";
+ import type { AuthOperationOptions, Credential, CredentialInfo, CredentialStore } from "@earendil-works/pi-ai";
+-import { existsSync, mkdirSync, readFileSync, writeFileSync } from "fs";
++import {
++	closeSync,
++	constants,
++	existsSync,
++	fstatSync,
++	mkdirSync,
++	openSync,
++	readFileSync,
++	readSync,
++	renameSync,
++	unlinkSync,
++	writeFileSync,
++} from "fs";
+ import { dirname, join } from "path";
+ import lockfile from "proper-lockfile";
+ import { setTimeout as sleep } from "timers/promises";
+@@ -60,9 +73,54 @@ export interface AuthStorageBackend {
+ 
+ export class FileAuthStorageBackend implements AuthStorageBackend {
+ 	private authPath: string;
++	private readonly options: { maximumBytes?: number; atomicWrites?: boolean };
+ 
+-	constructor(authPath: string = join(getAgentDir(), "auth.json")) {
++	constructor(
++		authPath: string = join(getAgentDir(), "auth.json"),
++		options: { maximumBytes?: number; atomicWrites?: boolean } = {},
++	) {
+ 		this.authPath = normalizePath(authPath);
++		this.options = options;
++	}
++
++	private readCurrent(): string | undefined {
++		if (!existsSync(this.authPath)) return undefined;
++		if (this.options.maximumBytes === undefined) return readFileSync(this.authPath, "utf-8");
++		const fd = openSync(this.authPath, constants.O_RDONLY | constants.O_NONBLOCK);
++		try {
++			const metadata = fstatSync(fd);
++			if (!metadata.isFile() || metadata.size > this.options.maximumBytes)
++				throw new Error("Credential storage exceeds its bounds");
++			const buffer = Buffer.alloc(this.options.maximumBytes + 1);
++			let length = 0;
++			while (length < buffer.length) {
++				const count = readSync(fd, buffer, length, buffer.length - length, null);
++				if (!count) break;
++				length += count;
++			}
++			if (length > this.options.maximumBytes) throw new Error("Credential storage exceeds its bounds");
++			return new TextDecoder("utf-8", { fatal: true, ignoreBOM: true }).decode(buffer.subarray(0, length));
++		} finally {
++			closeSync(fd);
++		}
++	}
++
++	private writeCurrent(value: string): void {
++		if (this.options.maximumBytes !== undefined && Buffer.byteLength(value) > this.options.maximumBytes)
++			throw new Error("Credential storage exceeds its bounds");
++		if (!this.options.atomicWrites) {
++			writeFileSync(this.authPath, value, AUTH_FILE_WRITE_OPTIONS);
++			return;
++		}
++		const temporary = `${this.authPath}.${randomUUID()}.tmp`;
++		try {
++			writeFileSync(temporary, value, { ...AUTH_FILE_WRITE_OPTIONS, flag: "wx" });
++			renameSync(temporary, this.authPath);
++		} finally {
++			try {
++				unlinkSync(temporary);
++			} catch {}
++		}
+ 	}
+ 
+ 	private ensureParentDir(): void {
+@@ -101,10 +159,10 @@ export class FileAuthStorageBackend implements AuthStorageBackend {
+ 		let release: (() => void) | undefined;
+ 		try {
+ 			release = this.acquireLockSyncWithRetry(this.authPath);
+-			const current = existsSync(this.authPath) ? readFileSync(this.authPath, "utf-8") : undefined;
++			const current = this.readCurrent();
+ 			const { result, next } = fn(current);
+ 			if (next !== undefined) {
+-				writeFileSync(this.authPath, next, AUTH_FILE_WRITE_OPTIONS);
++				this.writeCurrent(next);
+ 			}
+ 			return result;
+ 		} finally {
+@@ -180,12 +238,12 @@ export class FileAuthStorageBackend implements AuthStorageBackend {
+ 
+ 			throwIfCompromised();
+ 			options?.signal?.throwIfAborted();
+-			const current = existsSync(this.authPath) ? readFileSync(this.authPath, "utf-8") : undefined;
++			const current = this.readCurrent();
+ 			const { result, next } = await fn(current);
+ 			throwIfCompromised();
+ 			options?.signal?.throwIfAborted();
+ 			if (next !== undefined) {
+-				writeFileSync(this.authPath, next, AUTH_FILE_WRITE_OPTIONS);
++				this.writeCurrent(next);
+ 			}
+ 			throwIfCompromised();
+ 			return result;
+diff --git a/packages/coding-agent/src/core/authoritative-auth.ts b/packages/coding-agent/src/core/authoritative-auth.ts
+new file mode 100644
+index 0000000..d2ca42d
+--- /dev/null
++++ b/packages/coding-agent/src/core/authoritative-auth.ts
+@@ -0,0 +1,142 @@
++import type { AnyModel, AuthResult, CredentialStore, ModelAuth, ProviderHeaders } from "@earendil-works/pi-ai";
++import type { ModelConfig } from "./model-config.ts";
++import { isCommandConfigValue, resolveHeadersOrThrow } from "./resolve-config-value.ts";
++
++/** Optional authority supplied by an embedding application, independent of storage or transport. */
++export interface ModelRuntimeAuthPolicy {
++	readonly environment: Readonly<Record<string, string>>;
++	readonly personalProviders: readonly string[];
++}
++
++const PERSONAL_AUTH = Symbol("personal-authentication");
++type PersonalAuth = ModelAuth & { [PERSONAL_AUTH]?: { headers?: ProviderHeaders; apiKey: boolean } };
++
++export function validateAuthoritativeCatalog(config: ModelConfig, policy: ModelRuntimeAuthPolicy): void {
++	if (config.getError()) throw new Error(config.getError());
++	const providers = new Set(config.getProviderIds());
++	if (new Set(policy.personalProviders).size !== policy.personalProviders.length) {
++		throw new Error("Personal provider admission contains duplicates");
++	}
++	for (const id of policy.personalProviders) {
++		if (!providers.has(id)) throw new Error(`Personal authentication names an unconfigured provider: ${id}`);
++	}
++	for (const id of providers) {
++		const provider = config.getProvider(id)!;
++		if (provider.oauth === "radius" && !policy.personalProviders.includes(id)) {
++			throw new Error(`Provider ${id}: Radius requires personal authentication admission`);
++		}
++		const values = [
++			provider.apiKey,
++			...Object.values(provider.headers ?? {}),
++			...(provider.models ?? []).flatMap((model) => Object.values(model.headers ?? {})),
++			...Object.values(provider.modelOverrides ?? {}).flatMap((model) => Object.values(model.headers ?? {})),
++		];
++		if (values.some((value) => value !== undefined && isCommandConfigValue(value))) {
++			throw new Error(`Provider ${id}: command expressions are not permitted in model configuration`);
++		}
++	}
++}
++
++export function markPersonalAuth(auth: ModelAuth): ModelAuth {
++	return { ...auth, [PERSONAL_AUTH]: { headers: auth.headers, apiKey: auth.apiKey !== undefined } } as PersonalAuth;
++}
++
++export function assertPersonalHeaderConsistency(auth: ModelAuth, configured: ProviderHeaders | undefined): void {
++	const personal = (auth as PersonalAuth)[PERSONAL_AUTH];
++	if (!personal || !configured) return;
++	const supplied = new Set(Object.keys(personal.headers ?? {}).map((name) => name.toLowerCase()));
++	if (personal.apiKey) {
++		for (const name of ["authorization", "x-api-key", "api-key"]) supplied.add(name);
++	}
++	for (const name of Object.keys(configured)) {
++		if (supplied.has(name.toLowerCase())) {
++			throw new Error(`Personal authentication conflicts with configured header: ${name}`);
++		}
++	}
++}
++
++function normalizedEndpoint(value: string): string {
++	const url = new URL(value);
++	url.pathname = url.pathname.replace(/\/+$/u, "") || "/";
++	return url.href;
++}
++
++export function assertAuthMatchesModels(result: AuthResult, models: readonly AnyModel[], config: ModelConfig): void {
++	if (!(result.auth as PersonalAuth)[PERSONAL_AUTH]) return;
++	for (const model of models) {
++		if (result.auth.baseUrl && normalizedEndpoint(result.auth.baseUrl) !== normalizedEndpoint(model.baseUrl)) {
++			throw new Error(
++				`Personal authentication endpoint does not match configured model ${model.provider}/${model.id}`,
++			);
++		}
++		const provider = config.getProvider(model.provider);
++		const definition = provider?.models?.find((entry) => entry.id === model.id);
++		// Header *names* establish the authority boundary even if a variable is unavailable.
++		const headers = { ...provider?.modelOverrides?.[model.id]?.headers, ...definition?.headers };
++		assertPersonalHeaderConsistency(result.auth, headers);
++		if (
++			model.api === "openai-codex-responses" &&
++			Object.keys({ ...provider?.headers, ...headers }).some((name) => name.toLowerCase() === "chatgpt-account-id")
++		) {
++			throw new Error("Personal Codex authentication conflicts with configured chatgpt-account-id header");
++		}
++	}
++}
++
++/** Cloud routing is administrative even when the selected credential is personal. */
++export function configuredRoutingAvailable(model: AnyModel, environment: Record<string, string>): boolean {
++	if (model.api === "bedrock-converse-stream") {
++		return !!(
++			environment.AWS_REGION ||
++			environment.AWS_DEFAULT_REGION ||
++			/^https:\/\/bedrock-runtime[.-][a-z0-9-]+\.amazonaws\.com(?:\.cn)?(?:\/|$)/u.test(model.baseUrl) ||
++			/^arn:aws(?:-[a-z0-9-]+)?:bedrock:[a-z0-9-]+:/u.test(model.id)
++		);
++	}
++	if (model.api === "google-vertex") {
++		return (
++			(!model.baseUrl.includes("{location}") || !!environment.GOOGLE_CLOUD_LOCATION) &&
++			(!model.baseUrl.includes("{project}") || !!(environment.GOOGLE_CLOUD_PROJECT || environment.GCLOUD_PROJECT))
++		);
++	}
++	return true;
++}
++
++export function configuredHeadersAvailable(
++	headers: Record<string, string> | undefined,
++	environment: Record<string, string>,
++): boolean {
++	try {
++		resolveHeadersOrThrow(headers, "configured provider", environment);
++		return true;
++	} catch {
++		return false;
++	}
++}
++
++/** Admission precedes every store read; embeddings still supply a raw, validated store. */
++export function admitCredentialStore(
++	store: CredentialStore,
++	policy: ModelRuntimeAuthPolicy,
++	readOnly: boolean,
++): CredentialStore {
++	const admitted = new Set(policy.personalProviders);
++	const writable = (provider: string) => {
++		if (!admitted.has(provider)) throw new Error(`Provider ${provider} is administrator-managed`);
++		if (readOnly) throw new Error("Read-only credential inspection cannot modify storage");
++	};
++	return {
++		read: (provider, options) =>
++			admitted.has(provider) ? store.read(provider, options) : Promise.resolve(undefined),
++		list: async (options) =>
++			admitted.size ? (await store.list(options)).filter((entry) => admitted.has(entry.providerId)) : [],
++		modify: async (provider, fn, options) => {
++			writable(provider);
++			return store.modify(provider, fn, options);
++		},
++		delete: async (provider, options) => {
++			writable(provider);
++			await store.delete(provider, options);
++		},
++	};
++}
+diff --git a/packages/coding-agent/src/core/model-config.ts b/packages/coding-agent/src/core/model-config.ts
+index 200cdee..459a6f6 100644
+--- a/packages/coding-agent/src/core/model-config.ts
++++ b/packages/coding-agent/src/core/model-config.ts
+@@ -136,6 +136,7 @@ const validateModelsConfig = Compile(ModelsConfigSchema);
+ export type ModelsJsonModel = Static<typeof ModelDefinitionSchema>;
+ export type ModelsJsonModelOverride = Static<typeof ModelOverrideSchema>;
+ export type ModelsJsonProvider = Static<typeof ProviderConfigSchema>;
++export type ModelsJsonConfig = Static<typeof ModelsConfigSchema>;
+ 
+ function formatValidationPath(error: TLocalizedValidationError): string {
+ 	if (error.keyword === "required") {
+@@ -190,13 +191,18 @@ export class ModelConfig {
+ 			);
+ 		}
+ 
++		return ModelConfig.fromObject(parsed, path);
++	}
++
++	/** Validate and snapshot an embedding-owned catalog without accessing a file. */
++	static fromObject(parsed: unknown, source = "supplied model configuration"): ModelConfig {
+ 		if (!validateModelsConfig.Check(parsed)) {
+ 			const errors =
+ 				validateModelsConfig
+ 					.Errors(parsed)
+ 					.map((error) => `  - ${formatValidationPath(error)}: ${error.message}`)
+ 					.join("\n") || "Unknown schema error";
+-			return new ModelConfig(new Map(), `Invalid models.json schema:\n${errors}\n\nFile: ${path}`);
++			return new ModelConfig(new Map(), `Invalid model configuration schema (${source}):\n${errors}`);
+ 		}
+ 
+ 		const providers = new Map<string, ModelsJsonProvider>();
+diff --git a/packages/coding-agent/src/core/model-runtime.ts b/packages/coding-agent/src/core/model-runtime.ts
+index 97ab06a..77605c6 100644
+--- a/packages/coding-agent/src/core/model-runtime.ts
++++ b/packages/coding-agent/src/core/model-runtime.ts
+@@ -7,6 +7,7 @@ import {
+ 	type AssistantMessage,
+ 	type AssistantMessageEventStream,
+ 	type AuthCheck,
++	type AuthContext,
+ 	type AuthInteraction,
+ 	type AuthOperationOptions,
+ 	type AuthResult,
+@@ -67,10 +68,20 @@ import {
+ 	classifierErrorResult,
+ 	imageErrorResult,
+ } from "@earendil-works/pi-ai/utils/model-operations";
++import { authoritativeProviderEnv } from "@earendil-works/pi-ai/utils/provider-env";
+ import { getAgentDir } from "../config.ts";
+ import { operationSignal, raceWithAbortSignal } from "../utils/abort.ts";
+-import { AuthStorage as DefaultAuthStorage } from "./auth-storage.ts";
++import { AuthStorage as DefaultAuthStorage, ReadOnlyAuthStorage } from "./auth-storage.ts";
++import {
++	admitCredentialStore,
++	assertAuthMatchesModels,
++	type ModelRuntimeAuthPolicy,
++	validateAuthoritativeCatalog,
++} from "./authoritative-auth.ts";
+ import { ModelConfig } from "./model-config.ts";
++
++export type { ModelRuntimeAuthPolicy } from "./authoritative-auth.ts";
++
+ import { FileModelsStore, InMemoryCodingAgentModelsStore } from "./models-store.ts";
+ import {
+ 	type AuthStatus,
+@@ -112,6 +123,14 @@ export interface CreateModelRuntimeOptions {
+ 	credentials?: CredentialStore;
+ 	authPath?: string;
+ 	modelsPath?: string | null;
++	/** Immutable object catalog; mutually exclusive with modelsPath. */
++	modelsConfig?: Readonly<Record<string, unknown>>;
++	/** Explicit provider context, forwarded into the underlying collection. */
++	authContext?: AuthContext;
++	/** Embedding-owned catalog/auth authority. Requires a literal credential store. */
++	authPolicy?: ModelRuntimeAuthPolicy;
++	/** Request a non-mutating credential store from an embedding factory. */
++	readOnlyCredentials?: boolean;
+ 	modelsStore?: ModelsStore;
+ 	modelsStorePath?: string;
+ 	/** Allow create() to refresh model catalogs over the network. Defaults to false. */
+@@ -134,6 +153,7 @@ export interface ModelRuntimeAuthOverrides extends AuthOperationOptions {
+ 	env?: Record<string, string>;
+ 	/** Require this much remaining OAuth-token validity; defaults to five minutes. */
+ 	minOAuthValidityMs?: number;
++	refresh?: boolean;
+ }
+ 
+ export type CredentialSynchronizationOperation = "login" | "logout" | "setRuntimeApiKey" | "removeRuntimeApiKey";
+@@ -186,6 +206,9 @@ export class ModelRuntime implements Models {
+ 	private readonly virtualModels = new Map<string, Map<string, RegisteredVirtualModel>>();
+ 	private readonly compositionErrors = new Map<string, string>();
+ 	private readonly modelsPath: string | undefined;
++	private readonly objectSource: boolean;
++	private readonly authContext: AuthContext | undefined;
++	private readonly authPolicy: ModelRuntimeAuthPolicy | undefined;
+ 	private readonly modelNetworkEnabled: boolean;
+ 	private readonly includeBuiltinCatalog: boolean;
+ 	private config: ModelConfig;
+@@ -210,23 +233,63 @@ export class ModelRuntime implements Models {
+ 		providers: readonly Provider[],
+ 		modelNetworkEnabled: boolean,
+ 		includeBuiltinCatalog: boolean,
++		objectSource: boolean,
++		authContext?: AuthContext,
++		authPolicy?: ModelRuntimeAuthPolicy,
+ 	) {
+ 		this.credentials = credentials;
+ 		this.config = config;
+ 		this.modelsPath = modelsPath;
++		this.objectSource = objectSource;
++		this.authContext = authContext;
++		this.authPolicy = authPolicy;
+ 		this.modelNetworkEnabled = modelNetworkEnabled;
+ 		this.includeBuiltinCatalog = includeBuiltinCatalog;
+ 		this.defaultBuiltins = new Map(providers.map((provider) => [provider.id, provider]));
+ 		for (const [providerId, provider] of this.defaultBuiltins) this.builtins.set(providerId, provider);
+-		this.models = createModels({ credentials, modelsStore });
++		this.models = createModels({ credentials, modelsStore, authContext });
+ 		this.rebuildProviders();
+ 	}
+ 
+ 	static async create(options: CreateModelRuntimeOptions = {}): Promise<ModelRuntime> {
+-		const credentials = new RuntimeCredentials(options.credentials ?? DefaultAuthStorage.create(options.authPath));
++		if (options.modelsConfig !== undefined && options.modelsPath !== undefined) {
++			throw new Error("modelsConfig and modelsPath are mutually exclusive");
++		}
++		if (options.authPolicy && !options.credentials)
++			throw new Error("Authoritative authentication requires a literal credential store");
++		const suppliedCredentials =
++			options.credentials ??
++			(options.readOnlyCredentials
++				? new ReadOnlyAuthStorage(options.authPath)
++				: DefaultAuthStorage.create(options.authPath));
++		const credentials = new RuntimeCredentials(
++			options.authPolicy
++				? admitCredentialStore(suppliedCredentials, options.authPolicy, options.readOnlyCredentials === true)
++				: suppliedCredentials,
++		);
+ 		const modelsPath =
+-			options.modelsPath === null ? undefined : (options.modelsPath ?? join(getAgentDir(), "models.json"));
+-		const config = await ModelConfig.load(modelsPath);
++			options.modelsConfig !== undefined || options.modelsPath === null
++				? undefined
++				: (options.modelsPath ?? join(getAgentDir(), "models.json"));
++		const config =
++			options.modelsConfig === undefined
++				? await ModelConfig.load(modelsPath)
++				: ModelConfig.fromObject(options.modelsConfig);
++		const authPolicy = options.authPolicy
++			? Object.freeze({
++					environment: authoritativeProviderEnv(options.authPolicy.environment),
++					personalProviders: Object.freeze([...options.authPolicy.personalProviders]),
++				})
++			: undefined;
++		if (authPolicy) validateAuthoritativeCatalog(config, authPolicy);
++		const authContext = authPolicy
++			? {
++					environment: authPolicy.environment,
++					authoritative: true,
++					env: async (name: string) => authPolicy.environment[name] || undefined,
++					fileExists: async () => false,
++				}
++			: options.authContext;
+ 		const modelsStore =
+ 			options.modelsStore ??
+ 			(modelsPath
+@@ -254,6 +317,9 @@ export class ModelRuntime implements Models {
+ 			providers,
+ 			process.env.PI_OFFLINE === undefined,
+ 			options.includeBuiltinCatalog !== false,
++			options.modelsConfig !== undefined,
++			authContext,
++			authPolicy,
+ 		);
+ 		runtime.configureRadiusProviders();
+ 		runtime.rebuildProviders();
+@@ -327,6 +393,7 @@ export class ModelRuntime implements Models {
+ 		try {
+ 			const provider = composeModelProvider(providerId, base, this.config, extension, {
+ 				includeBuiltinModels: includeBaseModels,
++				authContext: this.authContext,
+ 			});
+ 			this.compositionErrors.delete(providerId);
+ 			return provider;
+@@ -357,12 +424,15 @@ export class ModelRuntime implements Models {
+ 		const [available, checks, credentials] = await Promise.all([
+ 			this.models.getAvailable(undefined, { signal }),
+ 			Promise.all(
+-				providers.map(
+-					async (provider): Promise<[string, AuthCheck | undefined]> => [
+-						provider.id,
+-						await this.models.checkAuth(provider.id, { signal }),
+-					],
+-				),
++				providers.map(async (provider): Promise<[string, AuthCheck | undefined]> => {
++					try {
++						return [provider.id, await this.models.checkAuth(provider.id, { signal })];
++					} catch (error) {
++						signal.throwIfAborted();
++						if (!this.authPolicy) throw error;
++						return [provider.id, undefined];
++					}
++				}),
+ 			),
+ 			this.credentials.list({ signal }),
+ 		]);
+@@ -571,14 +641,20 @@ export class ModelRuntime implements Models {
+ 		providerOrModel: string | AnyModel,
+ 		overrides: ModelRuntimeAuthOverrides = {},
+ 	): Promise<AuthResult | undefined> {
+-		if (typeof providerOrModel === "string") return this.models.getAuth(providerOrModel, overrides);
+-		const resolution = await this.models.getAuth(providerOrModel, overrides);
++		const resolution =
++			typeof providerOrModel === "string"
++				? await this.models.getAuth(providerOrModel, overrides)
++				: await this.models.getAuth(providerOrModel, overrides);
++		const providerId = typeof providerOrModel === "string" ? providerOrModel : providerOrModel.provider;
++		if (resolution && this.authPolicy)
++			assertAuthMatchesModels(resolution, this.models.getAllModels(providerId), this.config);
++		if (typeof providerOrModel === "string") return resolution;
+ 		if (!resolution) return undefined;
+ 		const configuredHeaders = resolveConfiguredModelHeaders(
+ 			providerOrModel,
+ 			this.config.getProvider(providerOrModel.provider),
+ 			this.extensionProviders.get(providerOrModel.provider),
+-			{ ...(resolution.env ?? {}), ...(overrides.env ?? {}) },
++			this.authPolicy?.environment ?? { ...(resolution.env ?? {}), ...(overrides.env ?? {}) },
+ 		);
+ 		return {
+ 			...resolution,
+@@ -632,6 +708,7 @@ export class ModelRuntime implements Models {
+ 	}
+ 
+ 	setRuntimeApiKey(providerId: string, apiKey: string, options: AuthOperationOptions = {}): Promise<void> {
++		if (this.authPolicy) return Promise.reject(new Error("Runtime credential overrides are not permitted"));
+ 		const signal = operationSignal(options.signal);
+ 		return this.enqueueCredentialOperation(providerId, signal, async () => {
+ 			this.credentials.setRuntimeApiKey(providerId, apiKey);
+@@ -645,6 +722,7 @@ export class ModelRuntime implements Models {
+ 	}
+ 
+ 	removeRuntimeApiKey(providerId: string, options: AuthOperationOptions = {}): Promise<void> {
++		if (this.authPolicy) return Promise.reject(new Error("Runtime credential overrides are not permitted"));
+ 		const signal = operationSignal(options.signal);
+ 		return this.enqueueCredentialOperation(providerId, signal, async () => {
+ 			this.credentials.removeRuntimeApiKey(providerId);
+@@ -662,6 +740,7 @@ export class ModelRuntime implements Models {
+ 		const configured = configuredRequestAuthStatus(
+ 			this.config.getProvider(providerId),
+ 			this.extensionProviders.get(providerId),
++			this.authPolicy?.environment,
+ 		);
+ 		if (configured) return configured;
+ 		const check = this.snapshot.auth.get(providerId);
+@@ -681,6 +760,22 @@ export class ModelRuntime implements Models {
+ 	}> {
+ 		const provider = this.models.getProvider(model.provider);
+ 		if (!provider) throw new ModelsError("provider", `Unknown provider: ${model.provider}`);
++		if (this.authPolicy && options) {
++			for (const key of [
++				"bearerToken",
++				"profile",
++				"region",
++				"project",
++				"location",
++				"credentialsFile",
++				"azureBaseUrl",
++				"azureResourceName",
++				"azureDeploymentName",
++				"azureApiVersion",
++			]) {
++				if (key in options) throw new Error(`Managed model authentication does not permit the ${key} override`);
++			}
++		}
+ 		const resolution = await this.getAuth(model, {
+ 			apiKey: options?.apiKey,
+ 			env: options?.env,
+@@ -700,8 +795,9 @@ export class ModelRuntime implements Models {
+ 			providerOptions.headers,
+ 		);
+ 		if (transformHeaders) headers = await transformHeaders(headers ?? {});
+-		const env =
+-			resolution.env || providerOptions.env
++		const env = this.authPolicy
++			? authoritativeProviderEnv({ ...this.authPolicy.environment, ...resolution.env })
++			: resolution.env || providerOptions.env
+ 				? { ...(resolution.env ?? {}), ...(providerOptions.env ?? {}) }
+ 				: undefined;
+ 		return {
+@@ -849,6 +945,8 @@ export class ModelRuntime implements Models {
+ 		interaction: AuthInteraction,
+ 		options?: LoginOptions,
+ 	): Promise<Credential> {
++		if (!this.canManageCredentials(providerId))
++			return Promise.reject(new Error(`Provider ${providerId} is administrator-managed`));
+ 		const signal = operationSignal(interaction.signal);
+ 		return this.enqueueCredentialOperation(providerId, signal, async () => {
+ 			const credential = await this.models.login(providerId, type, { ...interaction, signal }, options);
+@@ -857,7 +955,13 @@ export class ModelRuntime implements Models {
+ 		});
+ 	}
+ 
++	canManageCredentials(providerId: string): boolean {
++		return !this.authPolicy || this.authPolicy.personalProviders.includes(providerId);
++	}
++
+ 	logout(providerId: string, options: AuthOperationOptions = {}): Promise<void> {
++		if (!this.canManageCredentials(providerId))
++			return Promise.reject(new Error(`Provider ${providerId} is administrator-managed`));
+ 		const signal = operationSignal(options.signal);
+ 		return this.enqueueCredentialOperation(providerId, signal, async () => {
+ 			await this.models.logout(providerId, { signal });
+@@ -866,7 +970,7 @@ export class ModelRuntime implements Models {
+ 	}
+ 
+ 	async refresh(options: ModelsRefreshOptions = {}): Promise<ModelsRefreshResult> {
+-		this.config = await ModelConfig.load(this.modelsPath);
++		if (!this.objectSource) this.config = await ModelConfig.load(this.modelsPath);
+ 		this.configureRadiusProviders();
+ 		if (options.providers) {
+ 			for (const providerId of new Set(options.providers)) this.recomposeProvider(providerId);
+diff --git a/packages/coding-agent/src/core/provider-composer.ts b/packages/coding-agent/src/core/provider-composer.ts
+index d1e9f7e..8d13fc9 100644
+--- a/packages/coding-agent/src/core/provider-composer.ts
++++ b/packages/coding-agent/src/core/provider-composer.ts
+@@ -28,6 +28,13 @@ import {
+ } from "@earendil-works/pi-ai";
+ import { getApiProvider } from "@earendil-works/pi-ai/compat";
+ import { classifierErrorResult, imageErrorResult } from "@earendil-works/pi-ai/utils/model-operations";
++import {
++	assertAuthMatchesModels,
++	assertPersonalHeaderConsistency,
++	configuredHeadersAvailable,
++	configuredRoutingAvailable,
++	markPersonalAuth,
++} from "./authoritative-auth.ts";
+ import type { ModelConfig, ModelsJsonModel, ModelsJsonModelOverride, ModelsJsonProvider } from "./model-config.ts";
+ import {
+ 	clearConfigValueCache,
+@@ -410,6 +417,7 @@ async function configContextEnv(
+ 	ctx: AuthContext,
+ 	explicit?: Record<string, string>,
+ ): Promise<Record<string, string> | undefined> {
++	if (ctx.authoritative) return ctx.environment!;
+ 	const env = { ...explicit };
+ 	for (const name of new Set(values.flatMap(getConfigValueEnvVarNames))) {
+ 		if (env[name] !== undefined) continue;
+@@ -424,6 +432,7 @@ function composeApiKeyAuth(
+ 	base: Provider | undefined,
+ 	config: ModelsJsonProvider | undefined,
+ 	extension: ProviderConfigInput | undefined,
++	validatePersonal?: (auth: ModelAuth) => void,
+ ): ApiKeyAuth | undefined {
+ 	const inherited = base?.auth.apiKey;
+ 	const rawKey = configuredApiKey(config, extension);
+@@ -441,6 +450,13 @@ function composeApiKeyAuth(
+ 				key: await interaction.prompt({ type: "secret", message: "Enter API key" }),
+ 			})),
+ 		check: async (input) => {
++			if (input.ctx.authoritative && !configuredHeadersAvailable(rawHeaders, input.ctx.environment!))
++				return undefined;
++			if (input.ctx.authoritative && input.credential?.key) {
++				const auth = markPersonalAuth({ apiKey: input.credential.key });
++				assertPersonalHeaderConsistency(auth, rawHeaders);
++				validatePersonal?.(auth);
++			}
+ 			if (input.credential) {
+ 				if (inherited?.check) return inherited.check(input);
+ 				if (input.credential.key) return { type: "api_key", source: "stored credential" };
+@@ -457,7 +473,13 @@ function composeApiKeyAuth(
+ 			}
+ 			if (inherited?.check) return inherited.check(input);
+ 			const resolved = await inherited?.resolve(input);
+-			return resolved ? { type: "api_key", source: resolved.source } : undefined;
++			if (resolved) return { type: "api_key", source: resolved.source };
++			return input.ctx.authoritative &&
++				Object.keys(rawHeaders ?? {}).some((name) =>
++					["authorization", "x-api-key", "api-key"].includes(name.toLowerCase()),
++				)
++				? { type: "api_key", source: "configured authentication headers" }
++				: undefined;
+ 		},
+ 		resolve: async (input) => {
+ 			let result: AuthResult | undefined;
+@@ -476,11 +498,24 @@ function composeApiKeyAuth(
+ 			} else {
+ 				result = await inherited?.resolve(input);
+ 			}
++			if (
++				!result &&
++				input.ctx.authoritative &&
++				!input.credential &&
++				Object.keys(rawHeaders ?? {}).some((name) =>
++					["authorization", "x-api-key", "api-key"].includes(name.toLowerCase()),
++				)
++			) {
++				result = { auth: {}, source: "configured authentication headers" };
++			}
+ 			if (!result) return undefined;
+ 			const explicitEnv = { ...(input.credential?.env ?? {}), ...(result.env ?? {}) };
+ 			const headerEnv = await configContextEnv(Object.values(rawHeaders ?? {}), input.ctx, explicitEnv);
+ 			const headers = resolveHeadersOrThrow(rawHeaders, `provider "${providerId}"`, headerEnv);
+-			return { ...result, auth: withConfiguredAuth(result.auth, headers, authHeader) };
++			const auth = input.ctx.authoritative && input.credential ? markPersonalAuth(result.auth) : result.auth;
++			assertPersonalHeaderConsistency(auth, headers);
++			if (input.ctx.authoritative && input.credential) validatePersonal?.(auth);
++			return { ...result, auth: withConfiguredAuth(auth, headers, authHeader) };
+ 		},
+ 	};
+ }
+@@ -490,6 +525,7 @@ function composeOAuthAuth(
+ 	base: Provider | undefined,
+ 	config: ModelsJsonProvider | undefined,
+ 	extension: ProviderConfigInput | undefined,
++	validatePersonal?: (auth: ModelAuth) => void,
+ ): OAuthAuth | undefined {
+ 	const oauth = extension?.oauth ? adaptOAuth(extension.oauth) : base?.auth.oauth;
+ 	if (!oauth) return undefined;
+@@ -497,14 +533,26 @@ function composeOAuthAuth(
+ 	const authHeader = extension?.authHeader ?? config?.authHeader ?? false;
+ 	return {
+ 		...oauth,
+-		toAuth: async (credential) => {
+-			const auth = await oauth.toAuth(credential);
+-			const env = credential.env;
++		check: async (credential, context) => {
++			if (context.authoritative && !configuredHeadersAvailable(rawHeaders, context.environment!)) return false;
++			if (context.authoritative) {
++				const auth = markPersonalAuth(await oauth.toAuth(credential, context));
++				assertPersonalHeaderConsistency(auth, rawHeaders);
++				validatePersonal?.(auth);
++			}
++			return (await oauth.check?.(credential, context)) ?? true;
++		},
++		toAuth: async (credential, context) => {
++			const resolved = await oauth.toAuth(credential, context);
++			const auth = context?.authoritative ? markPersonalAuth(resolved) : resolved;
++			const env = context?.authoritative ? context.environment : credential.env;
+ 			const headers = resolveHeadersOrThrow(
+ 				rawHeaders,
+ 				`provider "${providerId}"`,
+ 				typeof env === "object" && env !== null ? (env as Record<string, string>) : undefined,
+ 			);
++			assertPersonalHeaderConsistency(auth, headers);
++			if (context?.authoritative) validatePersonal?.(auth);
+ 			return withConfiguredAuth(auth, headers, authHeader);
+ 		},
+ 	};
+@@ -549,7 +597,7 @@ export function composeModelProvider(
+ 	base: Provider | undefined,
+ 	modelConfig: ModelConfig,
+ 	extension: ProviderConfigInput | undefined,
+-	options: { includeBuiltinModels?: boolean } = {},
++	options: { includeBuiltinModels?: boolean; authContext?: AuthContext } = {},
+ ): Provider {
+ 	const config = modelConfig.getProvider(providerId);
+ 	let extensionOAuthCredential: OAuthCredentials | undefined;
+@@ -578,9 +626,32 @@ export function composeModelProvider(
+ 		});
+ 	};
+ 	// Validate eagerly so registration/reload reports structural errors immediately.
+-	getAllModels();
+-	const apiKey = composeApiKeyAuth(providerId, base, config, extension);
+-	const oauth = composeOAuthAuth(providerId, base, config, extension);
++	for (const model of getAllModels()) {
++		if (options.authContext?.authoritative && isModelType(model, "chat") && !getApiProvider(model.api)) {
++			throw new Error(`Unknown model API: ${model.api}`);
++		}
++	}
++	const validatePersonal = (auth: ModelAuth) =>
++		assertAuthMatchesModels({ auth, source: "stored credential" }, getAllModels(), modelConfig);
++	const apiKey = composeApiKeyAuth(providerId, base, config, extension, validatePersonal);
++	const oauth = composeOAuthAuth(providerId, base, config, extension, validatePersonal);
++	if (options.authContext?.authoritative) {
++		const environment = options.authContext.environment!;
++		if (apiKey?.check) {
++			const check = apiKey.check;
++			apiKey.check = (input) =>
++				getAllModels().some((model) => configuredRoutingAvailable(model, environment))
++					? check(input)
++					: Promise.resolve(undefined);
++		}
++		if (oauth?.check) {
++			const check = oauth.check;
++			oauth.check = (credential, context) =>
++				getAllModels().some((model) => configuredRoutingAvailable(model, environment))
++					? check(credential, context)
++					: Promise.resolve(false);
++		}
++	}
+ 	if (!apiKey && !oauth) throw new Error(`Provider ${providerId}: no authentication method configured.`);
+ 
+ 	const supportsBaseApi = (model: Model<Api>) => base?.getModels().some((entry) => entry.api === model.api) ?? false;
+@@ -637,12 +708,40 @@ export function composeModelProvider(
+ 						});
+ 					}
+ 				: undefined,
+-		filterModels: base?.filterModels
+-			? (models, credential: Credential | undefined) => base.filterModels!(models, credential)
+-			: undefined,
+-		filterAllModels: base?.filterAllModels
+-			? (models, credential: Credential | undefined) => base.filterAllModels!(models, credential)
+-			: undefined,
++		filterModels: (models, credential: Credential | undefined) => {
++			const selected = base?.filterModels?.(models, credential) ?? models;
++			return options.authContext?.authoritative
++				? selected.filter(
++						(model) =>
++							configuredRoutingAvailable(model, options.authContext!.environment!) &&
++							configuredHeadersAvailable(
++								rawModelHeaders(model, config, extension),
++								options.authContext!.environment!,
++							),
++					)
++				: selected;
++		},
++		filterAllModels: (models, credential: Credential | undefined) => {
++			let selected = base?.filterAllModels?.(models, credential) ?? models;
++			if (!base?.filterAllModels && base?.filterModels) {
++				const chat = base.filterModels(
++					models.filter((model) => isModelType(model, "chat")),
++					credential,
++				);
++				const ids = new Set(chat.map((model) => model.id));
++				selected = models.filter((model) => !isModelType(model, "chat") || ids.has(model.id));
++			}
++			return options.authContext?.authoritative
++				? selected.filter(
++						(model) =>
++							configuredRoutingAvailable(model, options.authContext!.environment!) &&
++							configuredHeadersAvailable(
++								rawModelHeaders(model, config, extension),
++								options.authContext!.environment!,
++							),
++					)
++				: selected;
++		},
+ 		stream: (model, context, options) => streamWith(model, context, options, false),
+ 		streamSimple: (model, context, options) => streamWith(model, context, options, true),
+ 	};
+@@ -722,13 +821,14 @@ export function resolveCompatibilityRequestConfig(
+ export function configuredRequestAuthStatus(
+ 	config: ModelsJsonProvider | undefined,
+ 	extension: ProviderConfigInput | undefined,
++	environment?: Record<string, string>,
+ ): AuthStatus | undefined {
+ 	const value = configuredApiKey(config, extension);
+ 	if (value === undefined) return undefined;
+ 	if (isCommandConfigValue(value)) return { configured: true, source: "models_json_command" };
+ 	const names = getConfigValueEnvVarNames(value);
+ 	if (names.length > 0) {
+-		return isConfigValueConfigured(value)
++		return isConfigValueConfigured(value, environment)
+ 			? { configured: true, source: "environment", label: names.join(", ") }
+ 			: { configured: false };
+ 	}
+diff --git a/packages/coding-agent/src/core/resolve-config-value.ts b/packages/coding-agent/src/core/resolve-config-value.ts
+index 6d75b00..78dfe5d 100644
+--- a/packages/coding-agent/src/core/resolve-config-value.ts
++++ b/packages/coding-agent/src/core/resolve-config-value.ts
+@@ -3,6 +3,7 @@
+  * Used by auth-storage.ts and model-registry.ts.
+  */
+ 
++import { getProviderEnvValue, isAuthoritativeProviderEnv } from "@earendil-works/pi-ai/utils/provider-env";
+ import { execSync, spawnSync } from "child_process";
+ import { getShellConfig } from "../utils/shell.ts";
+ 
+@@ -86,7 +87,7 @@ function parseConfigValueReference(config: string): ConfigValueReference {
+ }
+ 
+ function resolveEnvConfigValue(name: string, env?: Record<string, string>): string | undefined {
+-	return env?.[name] || process.env[name] || undefined;
++	return getProviderEnvValue(name, env);
+ }
+ 
+ function getTemplateEnvVarNames(parts: TemplatePart[]): string[] {
+@@ -145,6 +146,8 @@ export function isConfigValueConfigured(config: string, env?: Record<string, str
+ export function resolveConfigValue(config: string, env?: Record<string, string>): string | undefined {
+ 	const reference = parseConfigValueReference(config);
+ 	if (reference.type === "command") {
++		if (isAuthoritativeProviderEnv(env))
++			throw new Error("Command expressions are not permitted in model configuration");
+ 		return executeCommand(reference.config);
+ 	}
+ 	return resolveTemplate(reference.parts, env);
+@@ -221,6 +224,8 @@ function executeCommand(commandConfig: string): string | undefined {
+ export function resolveConfigValueUncached(config: string, env?: Record<string, string>): string | undefined {
+ 	const reference = parseConfigValueReference(config);
+ 	if (reference.type === "command") {
++		if (isAuthoritativeProviderEnv(env))
++			throw new Error("Command expressions are not permitted in model configuration");
+ 		return executeCommandUncached(reference.config);
+ 	}
+ 	return resolveTemplate(reference.parts, env);
+diff --git a/packages/coding-agent/src/index.ts b/packages/coding-agent/src/index.ts
+index 9b84fbe..95172b3 100644
+--- a/packages/coding-agent/src/index.ts
++++ b/packages/coding-agent/src/index.ts
+@@ -23,7 +23,7 @@ export {
+ 	parseSkillBlock,
+ 	type SessionStats,
+ } from "./core/agent-session.ts";
+-export { readStoredCredential } from "./core/auth-storage.ts";
++export { type AuthStorageBackend, FileAuthStorageBackend, readStoredCredential } from "./core/auth-storage.ts";
+ export type { CacheWarmingDecision, CacheWarmingStatus } from "./core/cache-warmer.ts";
+ // Compaction
+ export {
+@@ -235,6 +235,7 @@ export {
+ 	type CredentialSynchronizationOperation,
+ 	ModelRuntime,
+ 	type ModelRuntimeAuthOverrides,
++	type ModelRuntimeAuthPolicy,
+ 	type ModelRuntimeFactory,
+ } from "./core/model-runtime.ts";
+ export type {
+diff --git a/packages/coding-agent/src/main.ts b/packages/coding-agent/src/main.ts
+index 2227739..14b28ae 100644
+--- a/packages/coding-agent/src/main.ts
++++ b/packages/coding-agent/src/main.ts
+@@ -5,18 +5,12 @@
+  * createAgentSession() options. The SDK does the heavy lifting.
+  */
+ 
+-import { join } from "node:path";
+ import { createInterface } from "node:readline";
+ import { type ImageContent, modelsAreEqual } from "@earendil-works/pi-ai";
+ import { setCapabilityOverrides } from "@earendil-works/pi-tui";
+ import chalk from "chalk";
+ import { type Args, type Mode, normalizeSessionName, parseArgs, printHelp } from "./cli/args.ts";
+-import {
+-	type AuthCheckResult,
+-	checkProviderAuth,
+-	createAuthCheckModelRuntime,
+-	getProviderCredential,
+-} from "./cli/auth-check.ts";
++import { type AuthCheckResult, checkProviderAuth, getProviderCredential } from "./cli/auth-check.ts";
+ import {
+ 	type AuthCommand,
+ 	AuthCommandError,
+@@ -42,7 +36,6 @@ import {
+ 	createAgentSessionServices,
+ } from "./core/agent-session-services.ts";
+ import { formatNoModelsAvailableMessage } from "./core/auth-guidance.ts";
+-import { AuthStorage, ReadOnlyAuthStorage } from "./core/auth-storage.ts";
+ import { exportFromFile } from "./core/export-html/index.ts";
+ import type { ExtensionCommandContext, InlineExtension } from "./core/extensions/types.ts";
+ import { applyHttpProxySettings, configureHttpDispatcher } from "./core/http-dispatcher.ts";
+@@ -181,11 +174,14 @@ async function runAuthCommand(
+ 		let result: AuthCheckResult;
+ 		let credential: string | undefined;
+ 		try {
+-			const credentials = command.noRefresh ? new ReadOnlyAuthStorage() : AuthStorage.create();
+-			const modelRuntime = await createAuthCheckModelRuntime(credentials, createModelRuntime);
++			const modelRuntime = await createModelRuntime({
++				readOnlyCredentials: command.noRefresh,
++				allowModelNetwork: false,
++				refreshOnCreate: false,
++			});
+ 			result = await checkProviderAuth(parsed, modelRuntime, { refresh: !command.noRefresh });
+ 			if (command.credentials && result.status === "ready") {
+-				credential = await getProviderCredential(result.provider, modelRuntime, credentials, {
++				credential = await getProviderCredential(result.provider, modelRuntime, {
+ 					refresh: !command.noRefresh,
+ 				});
+ 				if (!credential) {
+@@ -572,6 +568,8 @@ async function promptForMissingSessionCwd(
+ }
+ 
+ export interface MainOptions {
++	/** Application checkpoint before external model-message admission. */
++	beforeExternalMessage?: () => Promise<void>;
+ 	/** Return false to cancel ordinary interactive quit while the TUI remains available. */
+ 	beforeInteractiveQuit?: (context: ExtensionCommandContext, signal: AbortSignal) => Promise<boolean>;
+ 	/** Application identity shown by --version and the TUI; internal Pi version stays unchanged. */
+@@ -786,8 +784,6 @@ export async function main(args: string[], options?: MainOptions) {
+ 		const runtimeSettingsManager = SettingsManager.create(cwd, agentDir, { projectTrusted });
+ 		const managedModelRuntime = options?.createModelRuntime
+ 			? await options.createModelRuntime({
+-					authPath: join(agentDir, "auth.json"),
+-					modelsPath: join(agentDir, "models.json"),
+ 					signal: AbortSignal.timeout(15_000),
+ 				})
+ 			: undefined;
+@@ -1004,10 +1000,11 @@ export async function main(args: string[], options?: MainOptions) {
+ 
+ 	if (appMode === "rpc") {
+ 		printTimings();
+-		await runRpcMode(runtime);
++		await runRpcMode(runtime, { beforeExternalMessage: options?.beforeExternalMessage });
+ 	} else if (appMode === "interactive") {
+ 		const interactiveMode = new InteractiveMode(runtime, {
+ 			beforeInteractiveQuit: options?.beforeInteractiveQuit,
++			beforeExternalMessage: options?.beforeExternalMessage,
+ 			displayVersion: options?.displayVersion,
+ 			migratedProviders,
+ 			startupDiagnostics,
+@@ -1044,6 +1041,7 @@ export async function main(args: string[], options?: MainOptions) {
+ 		printTimings();
+ 		const exitCode = await runPrintMode(runtime, {
+ 			mode: toPrintOutputMode(appMode),
++			beforeExternalMessage: options?.beforeExternalMessage,
+ 			messages: parsed.messages,
+ 			initialMessage,
+ 			initialImages,
+diff --git a/packages/coding-agent/src/modes/external-input.ts b/packages/coding-agent/src/modes/external-input.ts
+new file mode 100644
+index 0000000..b6f71fa
+--- /dev/null
++++ b/packages/coding-agent/src/modes/external-input.ts
+@@ -0,0 +1,16 @@
++import type { AgentSession } from "../core/agent-session.ts";
++
++/** Native command lookup shared by external adapters; never called by queue drains. */
++export function isRegisteredCommand(session: AgentSession, text: string): boolean {
++	if (!text.startsWith("/")) return false;
++	const space = text.indexOf(" ");
++	return !!session.extensionRunner.getCommand(space === -1 ? text.slice(1) : text.slice(1, space));
++}
++
++export async function beforeExternalInput(
++	session: AgentSession,
++	text: string,
++	checkpoint: (() => Promise<void>) | undefined,
++): Promise<void> {
++	if (checkpoint && !isRegisteredCommand(session, text)) await checkpoint();
++}
+diff --git a/packages/coding-agent/src/modes/interactive/interactive-mode.ts b/packages/coding-agent/src/modes/interactive/interactive-mode.ts
+index f1d02c9..ccc12fc 100644
+--- a/packages/coding-agent/src/modes/interactive/interactive-mode.ts
++++ b/packages/coding-agent/src/modes/interactive/interactive-mode.ts
+@@ -426,6 +426,7 @@ function formatLoginProviderCompletionDescription(provider: LoginProviderComplet
+  * Options for InteractiveMode initialization.
+  */
+ export interface InteractiveModeOptions {
++	beforeExternalMessage?: () => Promise<void>;
+ 	/** Return false to cancel ordinary quit. Signals abort this hook and continue shutdown. */
+ 	beforeInteractiveQuit?: (context: ExtensionCommandContext, signal: AbortSignal) => Promise<boolean>;
+ 	/** Application identity for the header only; does not affect update or changelog comparisons. */
+@@ -1122,11 +1123,11 @@ export class InteractiveMode {
+ 
+ 		// Enable the remaining input handlers only after managed-tool setup completes.
+ 		this.setupKeyHandlers();
+-		this.setupEditorSubmitHandler();
+ 		this.ui.requestRender();
+ 
+-		// Initialize extensions first so resources are shown before messages
++		// Keep startup submission guarded until session_start establishes application state.
+ 		await this.rebindCurrentSession();
++		this.setupEditorSubmitHandler();
+ 
+ 		// Render initial messages AFTER showing loaded resources
+ 		this.renderInitialMessages();
+@@ -1257,7 +1258,7 @@ export class InteractiveMode {
+ 		void this.maybeWarnAboutAnthropicSubscriptionAuth();
+ 
+ 		// Process initial messages
+-		if (initialMessage) {
++		if (initialMessage && (await this.acceptExternalInput(initialMessage, initialImages))) {
+ 			try {
+ 				await this.session.prompt(initialMessage, { images: initialImages });
+ 			} catch (error: unknown) {
+@@ -1268,6 +1269,7 @@ export class InteractiveMode {
+ 
+ 		if (initialMessages) {
+ 			for (const message of initialMessages) {
++				if (!(await this.acceptExternalInput(message))) break;
+ 				try {
+ 					await this.session.prompt(message);
+ 				} catch (error: unknown) {
+@@ -3426,6 +3428,8 @@ export class InteractiveMode {
+ 				}
+ 			}
+ 
++			if (!(await this.acceptExternalInput(text))) return;
++
+ 			// Queue input during compaction (extension commands execute immediately)
+ 			if (this.session.isCompacting) {
+ 				if (this.isExtensionCommand(text)) {
+@@ -4400,7 +4404,8 @@ export class InteractiveMode {
+ 			this.beforeQuitController = controller;
+ 			try {
+ 				const proceed = await this.options.beforeInteractiveQuit(
+-					this.session.extensionRunner.createCommandContext(), controller.signal,
++					this.session.extensionRunner.createCommandContext(),
++					controller.signal,
+ 				);
+ 				if (controller.signal.aborted || this.isShuttingDown) return;
+ 				if (!proceed) {
+@@ -4603,6 +4608,8 @@ export class InteractiveMode {
+ 		const text = (this.editor.getExpandedText?.() ?? this.editor.getText()).trim();
+ 		if (!text) return;
+ 
++		if ((this.session.isCompacting || this.session.isStreaming) && !(await this.acceptExternalInput(text))) return;
++
+ 		// Queue input during compaction (extension commands execute immediately)
+ 		if (this.session.isCompacting) {
+ 			if (this.isExtensionCommand(text)) {
+@@ -4897,6 +4904,28 @@ export class InteractiveMode {
+ 		this.showStatus("Queued message for after compaction");
+ 	}
+ 
++	private async acceptExternalInput(text: string, images?: ImageContent[]): Promise<boolean> {
++		if (!this.options.beforeExternalMessage || this.isExtensionCommand(text)) return true;
++		try {
++			await this.options.beforeExternalMessage();
++			return true;
++		} catch (error) {
++			// Editor attachments are ordinary paths; initial CLI images use the same
++			// attachment representation as clipboard images when restored for editing.
++			const attachments = (images ?? []).map((image) => {
++				const extension = extensionForImageMimeType(image.mimeType) ?? "png";
++				const file = path.join(os.tmpdir(), `pi-input-${crypto.randomUUID()}.${extension}`);
++				fs.writeFileSync(file, Buffer.from(image.data, "base64"), { mode: 0o600, flag: "wx" });
++				return file;
++			});
++			const restored = [text, ...attachments].join("\n");
++			this.editor.setText(restored);
++			this.editor.addToHistory?.(restored);
++			this.showError(error instanceof Error ? error.message : "Input checkpoint failed");
++			return false;
++		}
++	}
++
+ 	private isExtensionCommand(text: string): boolean {
+ 		if (!text.startsWith("/")) return false;
+ 
+@@ -5917,6 +5946,7 @@ export class InteractiveMode {
+ 	private getLoginProviderOptions(authType?: "oauth" | "api_key"): AuthSelectorProvider[] {
+ 		const options: AuthSelectorProvider[] = [];
+ 		for (const provider of this.session.modelRuntime.getProviders()) {
++			if (!this.session.modelRuntime.canManageCredentials(provider.id)) continue;
+ 			const authStatus = this.session.modelRuntime.getProviderAuthStatus(provider.id);
+ 			const status = authStatus.configured
+ 				? {
+@@ -5951,6 +5981,7 @@ export class InteractiveMode {
+ 
+ 	private async getLogoutProviderOptions(): Promise<AuthSelectorProvider[]> {
+ 		return (await this.session.modelRuntime.listCredentials({ signal: AbortSignal.timeout(15_000) }))
++			.filter(({ providerId }) => this.session.modelRuntime.canManageCredentials(providerId))
+ 			.map(({ providerId, type }) => {
+ 				const provider = this.session.modelRuntime.getProvider(providerId);
+ 				return {
+diff --git a/packages/coding-agent/src/modes/print-mode.ts b/packages/coding-agent/src/modes/print-mode.ts
+index 6b932ac..9759eeb 100644
+--- a/packages/coding-agent/src/modes/print-mode.ts
++++ b/packages/coding-agent/src/modes/print-mode.ts
+@@ -10,12 +10,14 @@ import type { AssistantMessage, ImageContent } from "@earendil-works/pi-ai";
+ import type { AgentSessionRuntime } from "../core/agent-session-runtime.ts";
+ import { flushRawStdout, waitForRawStdoutBackpressure, writeRawStdout } from "../core/output-guard.ts";
+ import { killTrackedDetachedChildren } from "../utils/shell.ts";
++import { beforeExternalInput } from "./external-input.ts";
+ import { toJsonEvent } from "./json-event.ts";
+ 
+ /**
+  * Options for print mode.
+  */
+ export interface PrintModeOptions {
++	beforeExternalMessage?: () => Promise<void>;
+ 	/** Output mode: "text" for final response only, "json" for all events */
+ 	mode: "text" | "json";
+ 	/** Array of additional prompts to send after initialMessage */
+@@ -129,10 +131,12 @@ export async function runPrintMode(runtimeHost: AgentSessionRuntime, options: Pr
+ 		await rebindSession();
+ 
+ 		if (initialMessage) {
++			await beforeExternalInput(session, initialMessage, options.beforeExternalMessage);
+ 			await session.prompt(initialMessage, { images: initialImages });
+ 		}
+ 
+ 		for (const message of messages) {
++			await beforeExternalInput(session, message, options.beforeExternalMessage);
+ 			await session.prompt(message);
+ 		}
+ 
+diff --git a/packages/coding-agent/src/modes/rpc/rpc-mode.ts b/packages/coding-agent/src/modes/rpc/rpc-mode.ts
+index 8978ecc..9215a66 100644
+--- a/packages/coding-agent/src/modes/rpc/rpc-mode.ts
++++ b/packages/coding-agent/src/modes/rpc/rpc-mode.ts
+@@ -26,6 +26,7 @@ import {
+ 	writeRawStdout,
+ } from "../../core/output-guard.ts";
+ import { killTrackedDetachedChildren } from "../../utils/shell.ts";
++import { beforeExternalInput } from "../external-input.ts";
+ import { type Theme, theme } from "../interactive/theme/theme.ts";
+ import { toJsonEvent } from "../json-event.ts";
+ import { attachJsonlLineReader, serializeJsonLine } from "./jsonl.ts";
+@@ -51,7 +52,10 @@ export type {
+  * Run in RPC mode.
+  * Listens for JSON commands on stdin, outputs events and responses on stdout.
+  */
+-export async function runRpcMode(runtimeHost: AgentSessionRuntime): Promise<never> {
++export async function runRpcMode(
++	runtimeHost: AgentSessionRuntime,
++	options: { beforeExternalMessage?: () => Promise<void> } = {},
++): Promise<never> {
+ 	takeOverStdout();
+ 	let session = runtimeHost.session;
+ 	let unsubscribe: (() => void) | undefined;
+@@ -392,6 +396,7 @@ export async function runRpcMode(runtimeHost: AgentSessionRuntime): Promise<neve
+ 			// =================================================================
+ 
+ 			case "prompt": {
++				await beforeExternalInput(session, command.message, options.beforeExternalMessage);
+ 				// Start prompt handling immediately, but emit the authoritative response only after
+ 				// prompt preflight succeeds. Queued and immediately handled prompts also count as success.
+ 				let preflightSucceeded = false;
+@@ -414,11 +419,13 @@ export async function runRpcMode(runtimeHost: AgentSessionRuntime): Promise<neve
+ 			}
+ 
+ 			case "steer": {
++				await beforeExternalInput(session, command.message, options.beforeExternalMessage);
+ 				const disposition = await session.steer(command.message, command.images, { source: "rpc" });
+ 				return success(id, "steer", { disposition });
+ 			}
+ 
+ 			case "follow_up": {
++				await beforeExternalInput(session, command.message, options.beforeExternalMessage);
+ 				const disposition = await session.followUp(command.message, command.images, { source: "rpc" });
+ 				return success(id, "follow_up", { disposition });
+ 			}
+diff --git a/packages/coding-agent/test/auth-check.test.ts b/packages/coding-agent/test/auth-check.test.ts
+index 49bd9d4..283f53b 100644
+--- a/packages/coding-agent/test/auth-check.test.ts
++++ b/packages/coding-agent/test/auth-check.test.ts
+@@ -57,9 +57,7 @@ describe("auth check command", () => {
+ 	test("reads credentials without refreshing OAuth when requested", async () => {
+ 		const apiCredentials = AuthStorage.inMemory({ openai: { type: "api_key", key: "test-key" } });
+ 		const apiRuntime = await createRuntime(apiCredentials);
+-		await expect(getProviderCredential("openai", apiRuntime, apiCredentials, { refresh: false })).resolves.toBe(
+-			"test-key",
+-		);
++		await expect(getProviderCredential("openai", apiRuntime, { refresh: false })).resolves.toBe("test-key");
+ 
+ 		const credentials = AuthStorage.inMemory({
+ 			"openai-codex": { type: "oauth", access: "old-token", refresh: "refresh-token", expires: 0 },
+@@ -70,9 +68,7 @@ describe("auth check command", () => {
+ 		const refresh = vi.fn(oauth.refresh);
+ 		oauth.refresh = refresh;
+ 
+-		await expect(getProviderCredential("openai-codex", oauthRuntime, credentials, { refresh: false })).resolves.toBe(
+-			"old-token",
+-		);
++		await expect(getProviderCredential("openai-codex", oauthRuntime, { refresh: false })).resolves.toBe("old-token");
+ 		expect(refresh).not.toHaveBeenCalled();
+ 	});
+ 
+diff --git a/packages/coding-agent/test/authoritative-model-runtime.test.ts b/packages/coding-agent/test/authoritative-model-runtime.test.ts
+new file mode 100644
+index 0000000..87cf139
+--- /dev/null
++++ b/packages/coding-agent/test/authoritative-model-runtime.test.ts
+@@ -0,0 +1,209 @@
++import { type CredentialStore, InMemoryCredentialStore, InMemoryModelsStore } from "@earendil-works/pi-ai";
++import { afterEach, describe, expect, test, vi } from "vitest";
++import { parseArgs } from "../src/cli/args.ts";
++import { getProviderCredential } from "../src/cli/auth-check.ts";
++import { resolveCredentialForPrint } from "../src/cli/credential-print.ts";
++import { ModelRuntime } from "../src/core/model-runtime.ts";
++
++const provider = (extra: Record<string, unknown> = {}) => ({
++	api: "openai-completions",
++	baseUrl: "https://configured.test/v1",
++	models: [{ id: "model" }],
++	...extra,
++});
++async function runtime(
++	providers: Record<string, unknown>,
++	environment: Record<string, string> = {},
++	personalProviders: string[] = [],
++	credentials: CredentialStore = new InMemoryCredentialStore(),
++) {
++	return ModelRuntime.create({
++		modelsConfig: { providers },
++		credentials,
++		modelsStore: new InMemoryModelsStore(),
++		includeBuiltinCatalog: false,
++		allowModelNetwork: false,
++		refreshOnCreate: false,
++		authPolicy: { environment, personalProviders },
++	});
++}
++afterEach(() => {
++	vi.restoreAllMocks();
++	vi.unstubAllEnvs();
++});
++describe("authoritative object model runtime", () => {
++	test("object catalog survives mutation and refresh without reading models.json", async () => {
++		const source = { custom: provider({ apiKey: "literal" }) };
++		const result = await runtime(source);
++		source.custom.models = [{ id: "changed" }];
++		await result.refresh({ allowNetwork: false });
++		expect(result.getModels().map((model) => model.id)).toEqual(["model"]);
++		expect(result.getError()).toBeUndefined();
++	});
++	test("keys and headers resolve only captured environment with no ambient repair", async () => {
++		vi.stubEnv("ADMIN_KEY", "ambient");
++		vi.stubEnv("MISSING", "ambient");
++		const env = { ADMIN_KEY: "!literal $opaque", USERNAME: "managed" };
++		const result = await runtime(
++			{
++				custom: provider({ apiKey: "$ADMIN_KEY", headers: { "X-User": "$USERNAME" } }),
++				absent: provider({ apiKey: "$MISSING" }),
++			},
++			env,
++		);
++		env.ADMIN_KEY = "changed";
++		await expect(result.getAuth("custom")).resolves.toMatchObject({
++			auth: { apiKey: "!literal $opaque", headers: { "X-User": "managed" } },
++		});
++		expect((await result.getAvailable()).map((model) => model.provider)).toEqual(["custom"]);
++	});
++	test("provider and individual model missing headers have local availability", async () => {
++		vi.stubEnv("MISSING", "ambient");
++		const result = await runtime({
++			custom: provider({
++				apiKey: "key",
++				models: [{ id: "good" }, { id: "bad", headers: { "X-Required": "$MISSING" } }],
++			}),
++			absent: provider({ apiKey: "key", headers: { "X-Required": "$MISSING" } }),
++		});
++		expect((await result.getAllAvailable()).map((model) => model.id)).toEqual(["good"]);
++		expect((await result.getAvailable()).map((model) => model.id)).toEqual(["good"]);
++		expect((await result.getAvailableOfType("chat")).map((model) => model.id)).toEqual(["good"]);
++	});
++	test("does not read unadmitted personal records, including credential output", async () => {
++		const store = new InMemoryCredentialStore();
++		const read = vi.spyOn(store, "read").mockRejectedValue(new Error("must not read"));
++		const result = await runtime({ custom: provider({ apiKey: "managed" }) }, {}, [], store);
++		await expect(getProviderCredential("custom", result, { refresh: false })).resolves.toBe("managed");
++		await expect(resolveCredentialForPrint(parseArgs(["--model", "model"]), result, "api_key")).resolves.toBe(
++			"managed",
++		);
++		expect(read).not.toHaveBeenCalled();
++	});
++	test("personal literal keys win, missing headers stay unavailable, invalid records never fall back", async () => {
++		const store = new InMemoryCredentialStore();
++		await store.modify("custom", async () => ({ type: "api_key", key: "!$literal" }));
++		const result = await runtime(
++			{ custom: provider({ apiKey: "$MISSING" }), good: provider({ apiKey: "key" }) },
++			{},
++			["custom"],
++			store,
++		);
++		await expect(result.getAuth("custom")).resolves.toMatchObject({ auth: { apiKey: "!$literal" } });
++		vi.spyOn(store, "read").mockImplementation(async (id) => {
++			if (id === "custom") throw new Error("invalid personal credential");
++			return undefined;
++		});
++		await expect(result.getAuth("custom")).rejects.toThrow();
++		expect((await result.getAvailable()).map((model) => model.provider)).toEqual(["good"]);
++	});
++	test.each(["apiKey", "env"])("rejects SDK %s before reading personal credentials", async (key) => {
++		const store = new InMemoryCredentialStore();
++		const read = vi.spyOn(store, "read");
++		const result = await runtime({ custom: provider({ apiKey: "managed" }) }, {}, ["custom"], store);
++		await expect(result.getAuth("custom", { [key]: key === "env" ? {} : "override" })).rejects.toThrow(/override/);
++		expect(read).not.toHaveBeenCalled();
++		await expect(result.setRuntimeApiKey("custom", "override")).rejects.toThrow(/override/);
++		await expect(result.removeRuntimeApiKey("custom")).rejects.toThrow(/override/);
++	});
++	test("rejects commands, unconfigured admission, unadmitted Radius and unknown APIs", async () => {
++		await expect(runtime({ custom: provider({ apiKey: "!command" }) })).rejects.toThrow(/command/);
++		await expect(runtime({ custom: provider() }, {}, ["absent"])).rejects.toThrow(/unconfigured/);
++		await expect(runtime({ custom: provider({ oauth: "radius" }) })).rejects.toThrow(/Radius/);
++		expect((await runtime({ custom: provider({ api: "unknown-api" }) })).getError()).toMatch(/Unknown model API/);
++	});
++	test("personal authentication rejects configured authorization headers", async () => {
++		const store = new InMemoryCredentialStore();
++		await store.modify("custom", async () => ({ type: "api_key", key: "personal" }));
++		const result = await runtime(
++			{ custom: provider({ headers: { Authorization: "Bearer admin" } }) },
++			{},
++			["custom"],
++			store,
++		);
++		await expect(result.getAuth("custom")).rejects.toThrow();
++		expect(await result.getAvailable()).toEqual([]);
++	});
++	test("administrator-owned providers reject login and logout before effects", async () => {
++		const result = await runtime({ custom: provider({ apiKey: "managed" }) });
++		const prompt = vi.fn();
++		expect(result.canManageCredentials("custom")).toBe(false);
++		await expect(
++			result.login("custom", "api_key", {
++				signal: new AbortController().signal,
++				prompt,
++				notify: vi.fn(),
++				openUrl: vi.fn(),
++			}),
++		).rejects.toThrow(/administrator-managed/);
++		await expect(result.logout("custom")).rejects.toThrow(/administrator-managed/);
++		expect(prompt).not.toHaveBeenCalled();
++	});
++});
++
++describe("managed native OAuth", () => {
++	test("Kimi native OAuth retains literal tokens and rejects provider/model auth-header conflicts", async () => {
++		const store = new InMemoryCredentialStore();
++		await store.modify("kimi-coding", async () => ({
++			type: "oauth",
++			access: "$literal!",
++			refresh: "refresh",
++			expires: Date.now() + 3600000,
++		}));
++		const result = await runtime(
++			{ "kimi-coding": provider({ baseUrl: "https://api.kimi.com/coding/v1" }) },
++			{},
++			["kimi-coding"],
++			store,
++		);
++		await expect(result.getAuth("kimi-coding")).resolves.toMatchObject({
++			auth: { headers: { Authorization: "Bearer $literal!" } },
++		});
++		const conflict = await runtime(
++			{
++				"kimi-coding": provider({
++					baseUrl: "https://api.kimi.com/coding/v1",
++					models: [{ id: "model", headers: { authorization: "admin" } }],
++				}),
++			},
++			{},
++			["kimi-coding"],
++			store,
++		);
++		await expect(conflict.getAuth("kimi-coding")).rejects.toThrow();
++		expect(await conflict.getAvailable()).toEqual([]);
++	});
++	test("Copilot token-derived model endpoints must equal the administrative catalog", async () => {
++		const store = new InMemoryCredentialStore();
++		await store.modify("github-copilot", async () => ({
++			type: "oauth",
++			access: "tid=1;exp=9999999999;proxy-ep=proxy.individual.githubcopilot.com",
++			refresh: "r",
++			expires: Date.now() + 3600000,
++		}));
++		const matching = await runtime(
++			{ "github-copilot": provider({ baseUrl: "https://api.individual.githubcopilot.com/" }) },
++			{},
++			["github-copilot"],
++			store,
++		);
++		await expect(matching.getAuth("github-copilot")).resolves.toMatchObject({
++			auth: { baseUrl: "https://api.individual.githubcopilot.com" },
++		});
++		const mismatch = await runtime({ "github-copilot": provider() }, {}, ["github-copilot"], store);
++		await expect(mismatch.getAuth("github-copilot")).rejects.toThrow();
++		expect(await mismatch.getAvailable()).toEqual([]);
++	});
++	test("no-refresh output does not refresh or mutate an admitted OAuth record", async () => {
++		const store = new InMemoryCredentialStore();
++		await store.modify("kimi-coding", async () => ({ type: "oauth", access: "!literal", refresh: "r", expires: 0 }));
++		const result = await runtime({ "kimi-coding": provider() }, {}, ["kimi-coding"], store);
++		const modify = vi.spyOn(store, "modify");
++		const refresh = vi
++			.spyOn(result.getProvider("kimi-coding")!.auth.oauth!, "refresh")
++			.mockRejectedValue(new Error("must not refresh"));
++		await expect(getProviderCredential("kimi-coding", result, { refresh: false })).resolves.toBe("!literal");
++		expect(refresh).not.toHaveBeenCalled();
++		expect(modify).not.toHaveBeenCalled();
++	});
++});
+diff --git a/packages/coding-agent/test/interactive-mode-startup-input.test.ts b/packages/coding-agent/test/interactive-mode-startup-input.test.ts
+index 28a0f48..d07d929 100644
+--- a/packages/coding-agent/test/interactive-mode-startup-input.test.ts
++++ b/packages/coding-agent/test/interactive-mode-startup-input.test.ts
+@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from "vitest";
+ import { InteractiveMode } from "../src/modes/interactive/interactive-mode.ts";
+ 
+ type SubmitContext = {
++	acceptExternalInput: (text: string) => Promise<boolean>;
+ 	defaultEditor: { onSubmit?: (text: string) => void };
+ 	editor: {
+ 		addToHistory?: (text: string) => void;
+@@ -38,6 +39,7 @@ const interactiveModePrototype = InteractiveMode.prototype as unknown as Interac
+ 
+ function createSubmitContext(): SubmitContext {
+ 	return {
++		acceptExternalInput: async () => true,
+ 		defaultEditor: {},
+ 		editor: {
+ 			addToHistory: vi.fn(),
+diff --git a/packages/coding-agent/test/managed-auth-storage.test.ts b/packages/coding-agent/test/managed-auth-storage.test.ts
+new file mode 100644
+index 0000000..8b7571a
+--- /dev/null
++++ b/packages/coding-agent/test/managed-auth-storage.test.ts
+@@ -0,0 +1,49 @@
++import { mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
++import { tmpdir } from "node:os";
++import { join } from "node:path";
++import { afterEach, beforeEach, describe, expect, it } from "vitest";
++import { FileAuthStorageBackend } from "../src/core/auth-storage.ts";
++
++let directory: string;
++let path: string;
++beforeEach(() => {
++	directory = mkdtempSync(join(tmpdir(), "pi-bounded-auth-"));
++	path = join(directory, "auth.json");
++});
++afterEach(() => rmSync(directory, { recursive: true, force: true }));
++describe("bounded atomic credential backend", () => {
++	it("serializes concurrent raw mutations without losing records", async () => {
++		const backend = new FileAuthStorageBackend(path, { maximumBytes: 1024, atomicWrites: true });
++		await Promise.all(
++			Array.from({ length: 8 }, (_, id) =>
++				backend.withLockAsync(async (current) => {
++					const value = JSON.parse(current ?? "{}");
++					value[id] = "!literal $KEY";
++					await Promise.resolve();
++					return { result: undefined, next: JSON.stringify(value) };
++				}),
++			),
++		);
++		expect(Object.keys(JSON.parse(readFileSync(path, "utf8")))).toHaveLength(8);
++		expect(statSync(path).mode & 0o777).toBe(0o600);
++	});
++	it("rejects oversized writes without replacing the original document", async () => {
++		writeFileSync(path, "{}");
++		const backend = new FileAuthStorageBackend(path, { maximumBytes: 10, atomicWrites: true });
++		await expect(backend.withLockAsync(async () => ({ result: undefined, next: "x".repeat(11) }))).rejects.toThrow(
++			/bounds/,
++		);
++		expect(readFileSync(path, "utf8")).toBe("{}");
++	});
++	it("rejects malformed UTF-8 and oversized reads before invoking a callback", async () => {
++		const backend = new FileAuthStorageBackend(path, { maximumBytes: 10, atomicWrites: true });
++		writeFileSync(path, Buffer.from([0xff]));
++		await expect(
++			backend.withLockAsync(async () => {
++				throw new Error("callback must not run");
++			}),
++		).rejects.not.toThrow(/callback/);
++		writeFileSync(path, "x".repeat(11));
++		await expect(backend.withLockAsync(async () => ({ result: undefined }))).rejects.toThrow(/bounds/);
++	});
++});
+diff --git a/packages/coding-agent/test/managed-external-input.test.ts b/packages/coding-agent/test/managed-external-input.test.ts
+new file mode 100644
+index 0000000..a9d179b
+--- /dev/null
++++ b/packages/coding-agent/test/managed-external-input.test.ts
+@@ -0,0 +1,102 @@
++import { readFileSync, unlinkSync } from "node:fs";
++import { describe, expect, it, vi } from "vitest";
++import { InteractiveMode } from "../src/modes/interactive/interactive-mode.ts";
++
++// These contexts exercise the real native adapters without opening a terminal.
++function mode(state = "idle", checkpoint = vi.fn(async () => {})) {
++	const text = "message\n/attachment.png";
++	const session = {
++		isCompacting: state === "compacting",
++		isStreaming: state === "streaming",
++		isBashRunning: false,
++		prompt: vi.fn(async () => {}),
++		extensionRunner: { getCommand: (name: string) => (name === "sandbox" ? {} : undefined) },
++	};
++	const editor = {
++		onSubmit: undefined as ((text: string) => Promise<void>) | undefined,
++		getText: () => text,
++		setText: vi.fn(),
++		addToHistory: vi.fn(),
++	};
++	const instance = Object.assign(Object.create(InteractiveMode.prototype), {
++		runtimeHost: { session },
++		options: { beforeExternalMessage: checkpoint },
++		defaultEditor: editor,
++		editor,
++		pendingUserInputs: [],
++		compactionQueuedMessages: [],
++		showError: vi.fn(),
++		showStatus: vi.fn(),
++		flushPendingBashComponents: vi.fn(),
++		updatePendingMessagesDisplay: vi.fn(),
++		ui: { requestRender: vi.fn() },
++		handleBashCommand: vi.fn(async () => {}),
++		updateEditorBorderColor: vi.fn(),
++	});
++	instance.setupEditorSubmitHandler();
++	return { instance, session, editor, checkpoint, text };
++}
++
++describe("TUI external input checkpoint", () => {
++	it.each(["idle", "streaming", "compacting"])(
++		"rejects %s input before any queue and restores text/attachments",
++		async (state) => {
++			const { instance, session, editor, text } = mode(
++				state,
++				vi.fn(async () => {
++					throw new Error("offline");
++				}),
++			);
++			await editor.onSubmit!(text);
++			expect(instance.pendingUserInputs).toEqual([]);
++			expect(instance.compactionQueuedMessages).toEqual([]);
++			expect(session.prompt).not.toHaveBeenCalled();
++			expect(editor.setText).toHaveBeenCalledWith(text);
++			expect(editor.addToHistory).toHaveBeenCalledWith(text);
++			expect(instance.showError).toHaveBeenCalledWith("offline");
++		},
++	);
++	it.each(["idle", "streaming", "compacting"])("checks Alt+Enter once in %s", async (state) => {
++		const { instance, checkpoint } = mode(state);
++		await instance.handleFollowUp();
++		await Promise.resolve();
++		expect(checkpoint).toHaveBeenCalledOnce();
++	});
++	it.each(["idle", "streaming", "compacting"])("registered commands bypass failure in %s", async (state) => {
++		const { editor, checkpoint } = mode(
++			state,
++			vi.fn(async () => {
++				throw new Error("offline");
++			}),
++		);
++		await editor.onSubmit!("/sandbox");
++		expect(checkpoint).not.toHaveBeenCalled();
++	});
++	it("human shell commands bypass the checkpoint", async () => {
++		const { editor, checkpoint, instance } = mode("idle");
++		await editor.onSubmit!("!pwd");
++		expect(checkpoint).not.toHaveBeenCalled();
++		expect(instance.handleBashCommand).toHaveBeenCalledWith("pwd", false);
++	});
++	it("restores rejected initial images as ordinary editable attachments", async () => {
++		const { instance, editor } = mode(
++			"idle",
++			vi.fn(async () => {
++				throw new Error("offline");
++			}),
++		);
++		expect(
++			await instance.acceptExternalInput("initial", [
++				{ type: "image", mimeType: "image/png", data: Buffer.from("image bytes").toString("base64") },
++			]),
++		).toBe(false);
++		const restored = editor.setText.mock.calls[0]![0] as string;
++		const file = restored.split("\n")[1]!;
++		try {
++			expect(readFileSync(file, "utf8")).toBe("image bytes");
++		} finally {
++			unlinkSync(file);
++		}
++		expect(restored.startsWith("initial\n")).toBe(true);
++	});
++});
+diff --git a/packages/coding-agent/test/managed-main.test.ts b/packages/coding-agent/test/managed-main.test.ts
+index 04def0a..582b311 100644
+--- a/packages/coding-agent/test/managed-main.test.ts
++++ b/packages/coding-agent/test/managed-main.test.ts
+@@ -59,8 +59,7 @@ describe("managed main runtime injection", () => {
+ 			).rejects.toBe(failure);
+ 			expect(createModelRuntime).toHaveBeenCalledExactlyOnceWith(
+ 				expect.objectContaining({
+-					authPath: join(agentDir, "auth.json"),
+-					modelsPath: join(agentDir, "models.json"),
++					signal: expect.any(AbortSignal),
+ 				}),
+ 			);
+ 		},
+diff --git a/packages/coding-agent/test/print-mode.test.ts b/packages/coding-agent/test/print-mode.test.ts
+index be41adb..c4b0ab4 100644
+--- a/packages/coding-agent/test/print-mode.test.ts
++++ b/packages/coding-agent/test/print-mode.test.ts
+@@ -6,6 +6,7 @@ import { runPrintMode } from "../src/modes/print-mode.ts";
+ type EmitEvent = SessionShutdownEvent;
+ 
+ type FakeExtensionRunner = {
++	getCommand: (name: string) => unknown;
+ 	hasHandlers: (eventType: string) => boolean;
+ 	emit: ReturnType<typeof vi.fn<(event: EmitEvent) => Promise<void>>>;
+ };
+@@ -57,6 +58,7 @@ function createAssistantMessage(options?: {
+ 
+ function createRuntimeHost(assistantMessage: AssistantMessage): FakeRuntimeHost {
+ 	const extensionRunner: FakeExtensionRunner = {
++		getCommand: (name) => (name === "sandbox" ? {} : undefined),
+ 		hasHandlers: (eventType: string) => eventType === "session_shutdown",
+ 		emit: vi.fn(async () => {}),
+ 	};
+@@ -153,3 +155,38 @@ describe("runPrintMode", () => {
+ 		expect(errorSpy).toHaveBeenCalled();
+ 	});
+ });
++
++describe("print external input checkpoint", () => {
++	it("checks every model message, preserves images and bypasses registered commands", async () => {
++		const host = createRuntimeHost(createAssistantMessage());
++		const checkpoint = vi.fn(async () => {});
++		const images: ImageContent[] = [{ type: "image", mimeType: "image/png", data: "aGVsbG8=" }];
++		expect(
++			await runPrintMode(host as unknown as Parameters<typeof runPrintMode>[0], {
++				mode: "json",
++				initialMessage: "initial",
++				initialImages: images,
++				messages: ["/sandbox", "next"],
++				beforeExternalMessage: checkpoint,
++			}),
++		).toBe(0);
++		expect(checkpoint).toHaveBeenCalledTimes(2);
++		expect(host.session.prompt).toHaveBeenNthCalledWith(1, "initial", { images });
++		expect(host.session.prompt).toHaveBeenNthCalledWith(2, "/sandbox");
++	});
++	it("returns failure without accepting a prompt when the checkpoint rejects", async () => {
++		const host = createRuntimeHost(createAssistantMessage());
++		vi.spyOn(console, "error").mockImplementation(() => {});
++		expect(
++			await runPrintMode(host as unknown as Parameters<typeof runPrintMode>[0], {
++				mode: "text",
++				initialMessage: "rejected",
++				beforeExternalMessage: async () => {
++					throw new Error("audit unavailable");
++				},
++			}),
++		).toBe(1);
++		expect(host.session.prompt).not.toHaveBeenCalled();
++		expect(host.dispose).toHaveBeenCalledOnce();
++	});
++});
+diff --git a/packages/coding-agent/test/rpc-prompt-response-semantics.test.ts b/packages/coding-agent/test/rpc-prompt-response-semantics.test.ts
+index 18c4064..b3fba98 100644
+--- a/packages/coding-agent/test/rpc-prompt-response-semantics.test.ts
++++ b/packages/coding-agent/test/rpc-prompt-response-semantics.test.ts
+@@ -160,18 +160,32 @@ async function createRuntimeHost(options: {
+ 	};
+ }
+ 
+-async function startRpcMode(options: Parameters<typeof createRuntimeHost>[0]): Promise<{
++async function startRpcMode(
++	options: Parameters<typeof createRuntimeHost>[0] & { beforeExternalMessage?: () => Promise<void> },
++): Promise<{
+ 	lineHandler: (line: string) => void;
+ 	cleanup: () => Promise<void>;
+ }> {
+ 	rpcIo.outputLines = [];
+ 	rpcIo.lineHandler = undefined;
+ 
++	const previousSignals = new Map(["SIGTERM", "SIGHUP"].map((event) => [event, new Set(process.listeners(event))]));
++	const previousEnd = new Set(process.stdin.listeners("end"));
+ 	const { runtimeHost, cleanup } = await createRuntimeHost(options);
+-	void runRpcMode(runtimeHost);
++	void runRpcMode(runtimeHost, { beforeExternalMessage: options.beforeExternalMessage });
+ 	await vi.waitFor(() => expect(rpcIo.lineHandler).toBeDefined());
+ 
+-	return { lineHandler: rpcIo.lineHandler!, cleanup };
++	return {
++		lineHandler: rpcIo.lineHandler!,
++		cleanup: async () => {
++			await cleanup();
++			for (const [event, previous] of previousSignals)
++				for (const listener of process.listeners(event))
++					if (!previous.has(listener)) process.removeListener(event, listener);
++			for (const listener of process.stdin.listeners("end"))
++				if (!previousEnd.has(listener)) process.stdin.removeListener("end", listener);
++		},
++	};
+ }
+ 
+ describe("RPC prompt response semantics", () => {
+@@ -450,3 +464,59 @@ describe("RPC prompt response semantics", () => {
+ 		}
+ 	});
+ });
++
++describe("RPC external input checkpoint", () => {
++	it.each(["prompt", "steer", "follow_up"])(
++		"rejects %s through the normal response and permits a later retry",
++		async (type) => {
++			const checkpoint = vi.fn().mockRejectedValueOnce(new Error("audit unavailable")).mockResolvedValue(undefined);
++			const { lineHandler, cleanup } = await startRpcMode({
++				withAuth: true,
++				responseDelayMs: 0,
++				beforeExternalMessage: checkpoint,
++			});
++			try {
++				lineHandler(JSON.stringify({ id: "rejected", type, message: "hello" }));
++				await vi.waitFor(() =>
++					expect(parseOutputLines(rpcIo.outputLines)).toContainEqual(
++						expect.objectContaining({ id: "rejected", success: false, error: "audit unavailable" }),
++					),
++				);
++				expect(parseOutputLines(rpcIo.outputLines).some((event) => event.type === "agent_start")).toBe(false);
++				lineHandler(JSON.stringify({ id: "retry", type, message: "hello" }));
++				await vi.waitFor(() => expect(checkpoint).toHaveBeenCalledTimes(2));
++			} finally {
++				await cleanup();
++			}
++		},
++	);
++	it.each(["prompt", "steer", "follow_up"])(
++		"preserves native %s registered-command behavior without checkpointing",
++		async (type) => {
++			const command = vi.fn(async () => {});
++			const checkpoint = vi.fn().mockRejectedValue(new Error("audit unavailable"));
++			const { lineHandler, cleanup } = await startRpcMode({
++				withAuth: true,
++				responseDelayMs: 0,
++				beforeExternalMessage: checkpoint,
++				extensionsResult: await createTestExtensionsResult([
++					(pi) => {
++						pi.registerCommand("sandbox", { description: "diagnostic", handler: command });
++					},
++				]),
++			});
++			try {
++				lineHandler(JSON.stringify({ id: "command", type, message: "/sandbox" }));
++				await vi.waitFor(() =>
++					expect(parseOutputLines(rpcIo.outputLines)).toContainEqual(
++						expect.objectContaining({ id: "command", success: type === "prompt" }),
++					),
++				);
++				expect(checkpoint).not.toHaveBeenCalled();
++				expect(command).toHaveBeenCalledTimes(type === "prompt" ? 1 : 0);
++			} finally {
++				await cleanup();
++			}
++		},
++	);
++});

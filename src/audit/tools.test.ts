@@ -1,22 +1,19 @@
+import { FakeService } from "../service/fixture.test-support.js";
 import type { ExtensionToolContext, ToolDefinition } from "@earendil-works/pi-coding-agent";
 import { describe, expect, it, vi } from "vitest";
 import { ManagedToolExecutionError } from "../runtime/tool-error.js";
 import { SandboxExecutionError } from "../../packages/sandbox-extension/src/runtime/index.js";
-import type { AuditClient, AuditEvent } from "./client.js";
+import { AuditManager, type AuditEvent } from "./client.js";
 import { ToolAuditor, toolAuditMetadata } from "./tools.js";
 import { withManagedChild } from "../subagents/invocation.js";
 
 const success = { content: [], details: {} };
 function fixture(submit?: (event: AuditEvent) => Promise<void>) {
-  const events: AuditEvent[] = [];
+  const service = new FakeService();
+  if (submit) service.sink = submit;
+  const events = service.events;
   let session = "pi-1";
-  const client: AuditClient = {
-    submit: async (event) => {
-      events.push(event);
-      await submit?.(event);
-    },
-    close: () => Promise.resolve(),
-  };
+  const client = new AuditManager(service, "/workspace", { source: "local" });
   const auditor = new ToolAuditor(client, "/workspace", "/home/user");
   const ctx = {
     sessionManager: { getSessionId: () => session },
@@ -29,6 +26,7 @@ function fixture(submit?: (event: AuditEvent) => Promise<void>) {
     tool.execute("call-1", args, signal, undefined, ctx);
   return {
     auditor,
+    client,
     events,
     ctx,
     definition,
@@ -464,8 +462,8 @@ describe("ToolAuditor", () => {
     );
     const execute = vi.fn<ToolDefinition["execute"]>(() => Promise.resolve(success));
     const tool = f.definition(execute);
-    await expect(f.invoke(tool)).rejects.toThrow("logging is unavailable");
-    await expect(f.invoke(tool)).rejects.toThrow("logging is unavailable");
+    await expect(f.invoke(tool)).rejects.toThrow("auditing is unavailable");
+    await expect(f.invoke(tool)).rejects.toThrow("auditing is unavailable");
     expect(execute).toHaveBeenCalledTimes(1);
     expect(f.events.filter((event) => event.event === "tool_completed")).toHaveLength(1);
   });
@@ -475,7 +473,7 @@ describe("ToolAuditor", () => {
       event.event === "tool_requested" ? Promise.reject(new Error("offline")) : Promise.resolve(),
     );
     const execute = vi.fn<ToolDefinition["execute"]>(() => Promise.resolve(success));
-    await expect(f.invoke(f.definition(execute))).rejects.toThrow("logging is unavailable");
+    await expect(f.invoke(f.definition(execute))).rejects.toThrow("auditing is unavailable");
     expect(execute).not.toHaveBeenCalled();
   });
 

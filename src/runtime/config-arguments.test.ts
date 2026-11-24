@@ -3,14 +3,22 @@ import { describe, expect, it } from "vitest";
 import { parseSandboxArguments } from "./config-arguments.js";
 import { assertRuntimeUser } from "./user.js";
 
-const managed = { configPath: "/etc/pi-sandbox/config.toml", allowConfigOverride: false };
-const configurable = { ...managed, allowConfigOverride: true };
+const managed = {
+  configuration: {
+    source: "local" as const,
+    configDir: "/etc/pi-sandbox",
+    configPath: "/etc/pi-sandbox/config.toml",
+    defaultModelsPath: "/etc/pi-sandbox/models.json",
+    allowConfigOverride: false,
+  },
+};
+const configurable = { configuration: { ...managed.configuration, allowConfigOverride: true } };
 
 describe("build-controlled configuration arguments", () => {
   it("uses the compiled policy when no override is supplied", () => {
     for (const layout of [managed, configurable]) {
       expect(parseSandboxArguments(["--model", "local/example"], layout)).toEqual({
-        configPath: managed.configPath,
+        configPath: managed.configuration.configPath,
         piArgs: ["--model", "local/example"],
       });
     }
@@ -61,7 +69,7 @@ describe("build-controlled configuration arguments", () => {
 
   it("leaves literal prompt arguments after -- untouched", () => {
     expect(parseSandboxArguments(["--", "--config", "policy.toml"], managed)).toEqual({
-      configPath: managed.configPath,
+      configPath: managed.configuration.configPath,
       piArgs: ["--", "--config", "policy.toml"],
     });
   });
@@ -90,7 +98,7 @@ describe("workspace launch selection", () => {
     "consumes one selector before Pi arguments: %j",
     (...prefix) => {
       expect(parseSandboxArguments([...prefix, "--mode", "rpc"], managed)).toEqual({
-        configPath: managed.configPath,
+        configPath: managed.configuration.configPath,
         workspaceMode: "sandbox",
         piArgs: ["--mode", "rpc"],
       });
@@ -123,7 +131,7 @@ describe("workspace launch selection", () => {
   it.each([
     "--version",
     "--validate-installation",
-    "--print-execution-backend",
+    "--print-build-capabilities",
     "--pi-sandbox-internal-worker",
     "--pi-sandbox-internal-export-reader",
   ])("rejects selectors with metadata/private operation %s before startup", (operation) => {
@@ -141,7 +149,7 @@ describe("workspace launch selection", () => {
     ["A prompt containing --workspace-mode=host text"],
   ])("preserves literal Pi values and prompt text: %j", (...args) => {
     expect(parseSandboxArguments(args, managed)).toEqual({
-      configPath: managed.configPath,
+      configPath: managed.configuration.configPath,
       piArgs: args,
     });
   });
@@ -179,5 +187,56 @@ describe("workspace launch selection", () => {
     expect(() => parseSandboxArguments(args, managed)).toThrow(
       "--list-workspace-modes accepts only",
     );
+  });
+});
+
+describe("immutable service source", () => {
+  const service = {
+    configuration: {
+      source: "service" as const,
+      endpoint: {
+        transport: "https" as const,
+        url: "https://service.invalid/v1/service",
+        basicUsername: "fixture",
+        basicPassword: "x".repeat(32),
+        sendMachineId: false,
+      },
+    },
+  };
+  it("has no local path or runtime source selector", () => {
+    expect(parseSandboxArguments(["--help"], service)).toEqual({ piArgs: ["--help"] });
+    for (const args of [
+      ["--config", "/tmp/config.toml"],
+      ["--help", "--config=/tmp/config.toml"],
+      ["--api-key", "personal"],
+      ["--api-key=personal"],
+    ])
+      expect(() => parseSandboxArguments(args, service)).toThrow();
+  });
+  it("keeps help mode selection and rejects it for every administrative command", () => {
+    expect(parseSandboxArguments(["--workspace-mode", "sandbox", "--help"], service)).toEqual({
+      piArgs: ["--help"],
+      workspaceMode: "sandbox",
+    });
+    for (const command of [
+      "--version",
+      "--validate-installation",
+      "--validate-service",
+      "--validate-bootstrap",
+      "--print-build-capabilities",
+    ])
+      expect(() =>
+        parseSandboxArguments(["--workspace-mode", "sandbox", command], service),
+      ).toThrow("cannot be combined");
+  });
+  it("permits only offline validation and capability queries as root", () => {
+    for (const command of [
+      "--validate-installation",
+      "--validate-bootstrap",
+      "--print-build-capabilities",
+    ])
+      expect(() => assertRuntimeUser([command], 0)).not.toThrow();
+    for (const command of ["--validate-service", "--help", "--list-workspace-modes"])
+      expect(() => assertRuntimeUser([command], 0)).toThrow("refusing to run as root");
   });
 });

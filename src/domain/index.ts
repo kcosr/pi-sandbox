@@ -1,6 +1,4 @@
 export {
-  AUDIT_FACILITIES,
-  IDENTITY_BROKER_SOCKET_PATH,
   COMMAND_CLASS_MODES,
   EXECUTION_BACKENDS,
   NETWORK_MODES,
@@ -11,15 +9,12 @@ export {
 } from "./policy.js";
 export type {
   AuditConfig,
-  AuditFacility,
   ToolPolicy,
   ApprovalSubject,
   BuiltInToolName,
-  BrokerIdentityConfig,
   CommandClassMode,
   CommandClassPolicies,
   CommandClassPolicy,
-  DisabledIdentityConfig,
   EnvironmentVariables,
   EnvironmentFileReference,
   LiteralEnvironmentValue,
@@ -29,12 +24,12 @@ export type {
   ExecutionBackend,
   ExecutionConfig,
   FilesystemConfig,
-  IdentityConfig,
   ExtensionConfig,
   ManagedEnvironment,
   NetworkConfig,
   NetworkMode,
-  IdentityOverrides,
+  AccountOverrides,
+  ModelAuthConfig,
   PolicyMode,
   SandboxConfig,
   AuthoredSandboxConfig,
@@ -70,7 +65,7 @@ export {
   overlayManagedEnvironment,
   parseManagedEnvironment,
   parseAuthoredManagedEnvironment,
-  parseBrokerManagedEnvironment,
+  parseResolvedManagedEnvironment,
 } from "./environment.js";
 export { expandManagedHomePaths } from "./home-expansion.js";
 

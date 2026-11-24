@@ -1,24 +1,10 @@
 import { dirname, join, relative } from "node:path";
 
 export function layoutReplacements(layout, os) {
-  const defaults =
-    os === "linux"
-      ? {
-          configDir: "/etc/pi-sandbox",
-          libexecDir: "/usr/libexec/pi-sandbox",
-          launcherPath: "/usr/bin/pi-sandbox",
-          serviceDir: "/usr/lib/systemd/system",
-          auditSocketPath: "/run/pi-sandbox-audit/collector.sock",
-          identitySocketPath: "/run/pi-sandbox-identity/broker.sock",
-        }
-      : {
-          configDir: "/etc/pi-sandbox",
-          libexecDir: "/usr/local/libexec/pi-sandbox",
-          launcherPath: "/usr/local/bin/pi-sandbox",
-          auditSocketPath: "/run/pi-sandbox-audit/collector.sock",
-          identitySocketPath: "/run/pi-sandbox-identity/broker.sock",
-        };
+  const config = layout.configuration;
   const replacements = [
+    ["configuration_source=local", `configuration_source=${config.source}`],
+    ["expected_arch=x64", `expected_arch=${process.arch}`],
     [
       "bundled_commands=''",
       `bundled_commands='${[...Object.keys(layout.toolBundle?.commands ?? {}), ...Object.keys(layout.hostTools ?? {})].sort().join(" ")}'`,
@@ -27,55 +13,38 @@ export function layoutReplacements(layout, os) {
       "../libexec/pi-sandbox/pi-sandbox",
       relative(dirname(layout.launcherPath), join(layout.libexecDir, "pi-sandbox")),
     ],
-    [defaults.configDir, layout.configDir],
-    [defaults.libexecDir, layout.libexecDir],
-    [defaults.launcherPath, layout.launcherPath],
-    [defaults.identitySocketPath, layout.identitySocketPath],
-    [defaults.auditSocketPath, layout.auditSocketPath],
+    [
+      os === "linux" ? "/usr/libexec/pi-sandbox" : "/usr/local/libexec/pi-sandbox",
+      layout.libexecDir,
+    ],
+    [os === "linux" ? "/usr/bin/pi-sandbox" : "/usr/local/bin/pi-sandbox", layout.launcherPath],
   ];
-  if (os === "linux") {
-    replacements.unshift(
+  if (config.source === "local") replacements.push(["/etc/pi-sandbox", config.configDir]);
+  if (os === "linux")
+    replacements.push(
       ["bubblewrap_mode=system", `bubblewrap_mode=${layout.bubblewrap.mode}`],
       ["/usr/bin/bwrap", layout.bubblewrap.path],
-      [
-        "../../../libexec/pi-sandbox/systemd/pi-sandbox-identity-broker.socket",
-        relative(
-          layout.serviceDir,
-          join(layout.libexecDir, "systemd/pi-sandbox-identity-broker.socket"),
-        ),
-      ],
-      [
-        "../../../libexec/pi-sandbox/systemd/pi-sandbox-identity-broker@.service",
-        relative(
-          layout.serviceDir,
-          join(layout.libexecDir, "systemd/pi-sandbox-identity-broker@.service"),
-        ),
-      ],
     );
-    for (const unit of ["pi-sandbox-audit.socket", "pi-sandbox-audit@.service"]) {
-      replacements.unshift([
-        `../../../libexec/pi-sandbox/systemd/${unit}`,
-        relative(layout.serviceDir, join(layout.libexecDir, "systemd", unit)),
-      ]);
-    }
-    replacements.push([defaults.serviceDir, layout.serviceDir]);
-  }
   return replacements;
 }
 
 export function renderLayoutText(contents, layout, os) {
   const shell = contents.startsWith("#!/bin/sh");
+  const assignments = new Set([
+    "configuration_source=local",
+    "expected_arch=x64",
+    "bundled_commands=''",
+    "bubblewrap_mode=system",
+  ]);
   const replacements = new Map(
     layoutReplacements(layout, os).map(([from, to]) => [
       from,
-      shell && !["bundled_commands=''", "bubblewrap_mode=system"].includes(from)
-        ? to.replace(/[\\$`"]/gu, "\\$&")
-        : to,
+      shell && !assignments.has(from) ? to.replace(/[\\$`"]/gu, "\\$&") : to,
     ]),
   );
   const pattern = new RegExp(
     [...replacements.keys()]
-      .sort((left, right) => right.length - left.length)
+      .sort((a, b) => b.length - a.length)
       .map((value) => value.replace(/[.*+?^${}()|[\]\\]/gu, "\\$&"))
       .join("|"),
     "gu",

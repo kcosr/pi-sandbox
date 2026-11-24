@@ -4,7 +4,7 @@ import {
   emptyManagedEnvironment,
   MAXIMUM_ENVIRONMENT_VALUE_BYTES,
   parseManagedEnvironment,
-  parseBrokerManagedEnvironment,
+  parseResolvedManagedEnvironment,
 } from "./environment.js";
 import { expandManagedHomePaths } from "./home-expansion.js";
 import { MAXIMUM_ADMINISTRATIVE_PATH_BYTES } from "../../packages/sandbox-extension/src/runtime/paths.js";
@@ -298,7 +298,7 @@ it("treats file-derived Pi values as opaque, even with invalid template syntax",
   const literal = "~/{{unknown}}/{{machine_id}}/}}/$(command)";
   const result = expandManagedHomePaths(
     { cwdWritable: true, hiddenPaths: [], deniedPaths: [] },
-    parseBrokerManagedEnvironment({ pi: { TOKEN: { literal } }, sandbox: {}, extensions: {} }),
+    parseResolvedManagedEnvironment({ pi: { TOKEN: { literal } }, sandbox: {}, extensions: {} }),
     identity,
     machine,
   );

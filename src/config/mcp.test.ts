@@ -6,7 +6,7 @@ import { parseConfig as parseAuthoredConfig } from "./parse.js";
 import { resolveWorkspaceSelection } from "./workspace.js";
 
 function parseConfig(...args: Parameters<typeof parseAuthoredConfig>) {
-  return resolveWorkspaceSelection(parseAuthoredConfig(...args)).config;
+  return resolveWorkspaceSelection(parseAuthoredConfig(...args).policy).config;
 }
 import { parseCodeModeConfig, parseMcpConfig } from "./mcp.js";
 
@@ -30,15 +30,15 @@ const parse = (server: Record<string, unknown>) =>
   parseMcpConfig({ servers: { docs: server } }, code).servers.docs!;
 
 describe("MCP administrative configuration", () => {
-  it("requires new top-level sections and schema 15, with packaged features disabled", () => {
+  it("requires new top-level sections and schema 16, with packaged features disabled", () => {
     const fixture = readFileSync("config/default/config.toml", "utf8");
     const catalog = createManagedExtensionCatalog([]);
     const config = parseConfig(fixture, "fixture", catalog);
     expect(config.codemode).toEqual({ enabled: false, timeoutMs: 300000 });
     expect(config.mcp.servers).toEqual({});
     expect(() =>
-      parseConfig(fixture.replace("config_version = 15", "config_version = 9"), "fixture", catalog),
-    ).toThrow("integer 15");
+      parseConfig(fixture.replace("config_version = 16", "config_version = 9"), "fixture", catalog),
+    ).toThrow("integer 16");
     expect(() =>
       parseConfig(fixture.replace("[mcp.servers]", "[mcp]"), "fixture", catalog),
     ).toThrow("servers is required");

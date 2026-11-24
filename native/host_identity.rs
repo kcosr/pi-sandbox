@@ -112,7 +112,8 @@ fn protected_getent() -> io::Result<()> {
 }
 
 // Every child has its own process group. Reap the leader and kill surviving
-// descendants even after successful NSS completion, so they cannot retain pipes.
+// descendants only while their leader remains unreaped. Never signal a former
+// process group after successful completion: its identifier may have been reused.
 fn run(mut command: Command, deadline: Instant) -> io::Result<Option<String>> {
     if Instant::now() >= deadline {
         return Err(io::Error::new(
@@ -127,6 +128,7 @@ fn run(mut command: Command, deadline: Instant) -> io::Result<Option<String>> {
         .process_group(0);
     let mut child = command.spawn()?;
     let pid = child.id() as libc::pid_t;
+    let mut reaped = false;
     let mut stdout = child
         .stdout
         .take()
@@ -173,10 +175,8 @@ fn run(mut command: Command, deadline: Instant) -> io::Result<Option<String>> {
             }
             status = child.try_wait()?;
             if status.is_some() {
-                unsafe {
-                    libc::kill(-pid, libc::SIGKILL);
-                }
-                // Drain buffered output once more after termination.
+                reaped = true;
+                // Drain only immediately available output, then detach the pipes.
                 continue;
             }
             std::thread::sleep(
@@ -184,10 +184,12 @@ fn run(mut command: Command, deadline: Instant) -> io::Result<Option<String>> {
             );
         }
     })();
-    unsafe {
-        libc::kill(-pid, libc::SIGKILL);
+    if !reaped {
+        unsafe {
+            libc::kill(-pid, libc::SIGKILL);
+        }
+        let _ = child.wait();
     }
-    let _ = child.wait();
     result
 }
 
@@ -286,6 +288,23 @@ mod tests {
         let mut command = Command::new("/bin/sh");
         command.arg("-c").arg(script);
         command
+    }
+
+    #[test]
+    fn successful_lookup_does_not_signal_the_reaped_leaders_group() {
+        let child = run(
+            shell("sleep 0.4 & printf '%s' \"$!\""),
+            Instant::now() + Duration::from_secs(2),
+        )
+        .unwrap()
+        .unwrap();
+        let state = std::fs::read_to_string(format!("/proc/{child}/stat")).unwrap();
+        let after_name = state.rsplit_once(')').unwrap().1.trim_start();
+        assert!(
+            !after_name.starts_with('Z'),
+            "successful lookup killed its remaining group"
+        );
+        // The bounded fixture exits naturally; there is no post-reap cleanup signal.
     }
 
     #[test]

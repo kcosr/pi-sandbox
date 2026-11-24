@@ -1,3 +1,4 @@
+import { createTestAuditClient, FakeService } from "../service/fixture.test-support.js";
 import type {
   ExtensionAPI,
   ExtensionContext,
@@ -35,7 +36,7 @@ import {
 import { SandboxExecutionError } from "../../packages/sandbox-extension/src/runtime/index.js";
 import { createPiSandboxExtension } from "./index.js";
 import { LINUX_TOOL_COMMANDS } from "../../packages/sandbox-extension/src/runtime/index.js";
-import type { AuditClient, AuditEvent } from "../audit/client.js";
+import { AuditManager, type AuditClient, type AuditEvent } from "../audit/client.js";
 import type { BashAnalysis, BashCommandAnalyzer } from "../permissions/bash/contracts.js";
 import { createBashCommandAnalyzer } from "../permissions/bash/analyzer.js";
 import type { CommandClassPolicy, SubjectPolicy } from "../permissions/index.js";
@@ -108,17 +109,18 @@ function config(
   overrides: Partial<Record<ToolName, "allow" | "ask" | "deny" | "disabled">> = {},
 ): SandboxConfig {
   return {
-    configVersion: 15,
+    configVersion: 16,
+    modelAuth: { personalProviders: [] },
     skills: { directories: [] },
     exports: { enabled: false },
     codemode: { enabled: false, timeoutMs: 300000 },
     mcp: { servers: {} },
     sessions: { retentionDays: 0 },
     filesystem: { cwdWritable: true, deniedPaths: [], hiddenPaths: [] },
-    audit: { enabled: false, facility: "local0" },
-    modelsFile: "/etc/pi-sandbox/models.json",
+    audit: { enabled: false },
+
     execution: { backend: "bubblewrap" },
-    identity: { mode: "disabled" },
+
     network: { mode: "none" },
     environment: { pi: {}, sandbox: {}, extensions: {} },
     extensions: {},
@@ -335,7 +337,11 @@ async function start(
 ): Promise<void> {
   await createPiSandboxExtension({
     cwd: "/work/project",
-    configPath: "/etc/pi-sandbox/config.toml",
+    provenance: {
+      source: "local",
+      configPath: "/etc/pi-sandbox/config.toml",
+      modelsPath: "/etc/pi-sandbox/models.json",
+    },
     workspaceSelection: { name: "host", source: "default" },
     userStateDir: "/home/test/.pi/agent",
     loadConfig: () => Promise.resolve(cfg),
@@ -372,7 +378,11 @@ describe("managed initial tool activation", () => {
       await writeFile(path, "invalid-secret-preferences");
       await createPiSandboxExtension({
         cwd: "/work/project",
-        configPath: "/etc/pi-sandbox/config.toml",
+        provenance: {
+          source: "local",
+          configPath: "/etc/pi-sandbox/config.toml",
+          modelsPath: "/etc/pi-sandbox/models.json",
+        },
         workspaceSelection: { name: "host", source: "default" },
         userStateDir: directory,
         loadConfig: () => Promise.resolve(cfg),
@@ -406,7 +416,11 @@ describe("managed initial tool activation", () => {
       const pi = fakePi();
       await createPiSandboxExtension({
         cwd: "/work/project",
-        configPath: "/etc/pi-sandbox/config.toml",
+        provenance: {
+          source: "local",
+          configPath: "/etc/pi-sandbox/config.toml",
+          modelsPath: "/etc/pi-sandbox/models.json",
+        },
         workspaceSelection: { name: "host", source: "default" },
         userStateDir: directory,
         loadConfig: () => Promise.resolve(cfg),
@@ -483,7 +497,7 @@ describe("managed initial tool activation", () => {
     const cfg: SandboxConfig = {
       ...config(),
       subagents: { enabled: true, maxConcurrent: 4, maxTotal: 32 },
-      audit: { enabled: true, facility: "local0" },
+      audit: { enabled: true },
       tools: {
         ...config().tools,
         subagents: { mode: "ask", sessionGrant: "offer", audit: true },
@@ -502,19 +516,20 @@ describe("managed initial tool activation", () => {
     try {
       await createPiSandboxExtension({
         cwd: "/work/project",
-        configPath: "/etc/pi-sandbox/config.toml",
+        provenance: {
+          source: "local",
+          configPath: "/etc/pi-sandbox/config.toml",
+          modelsPath: "/etc/pi-sandbox/models.json",
+        },
         workspaceSelection: { name: "host", source: "default" },
         userStateDir: directory,
         loadConfig: () => Promise.resolve(cfg),
         executor: fakeExecutor(),
         getModelRuntime: () => ({}) as ModelRuntime,
-        auditClient: {
-          submit: (event) => {
-            events.push(event);
-            return Promise.resolve();
-          },
-          close: () => Promise.resolve(),
-        },
+        auditClient: createTestAuditClient((event) => {
+          events.push(event);
+          return Promise.resolve();
+        }),
         features: { config: cfg, servers: [], selected: () => true },
       })(pi.api);
       await pi.handlers.get("session_start")!(undefined as never, ctx);
@@ -595,7 +610,11 @@ describe("managed initial tool activation", () => {
       try {
         await createPiSandboxExtension({
           cwd: "/work/project",
-          configPath: "/etc/pi-sandbox/config.toml",
+          provenance: {
+            source: "local",
+            configPath: "/etc/pi-sandbox/config.toml",
+            modelsPath: "/etc/pi-sandbox/models.json",
+          },
           workspaceSelection: { name: "host", source: "default" },
           userStateDir: directory,
           loadConfig: () => Promise.resolve(cfg),
@@ -637,7 +656,11 @@ describe("managed initial tool activation", () => {
     const cfg = { ...config(policies), codemode: { enabled, timeoutMs: 1000 } };
     await createPiSandboxExtension({
       cwd: "/work/project",
-      configPath: "/etc/pi-sandbox/config.toml",
+      provenance: {
+        source: "local",
+        configPath: "/etc/pi-sandbox/config.toml",
+        modelsPath: "/etc/pi-sandbox/models.json",
+      },
       workspaceSelection: { name: "host", source: "default" },
       userStateDir: "/home/test/.pi/agent",
       loadConfig: () => Promise.resolve(cfg),
@@ -848,7 +871,11 @@ describe("managed environment prompt lifecycle", () => {
     Object.defineProperty(executor, "home", { get: () => home });
     await createPiSandboxExtension({
       cwd: "/work/project",
-      configPath: "/etc/pi-sandbox/config.toml",
+      provenance: {
+        source: "local",
+        configPath: "/etc/pi-sandbox/config.toml",
+        modelsPath: "/etc/pi-sandbox/models.json",
+      },
       workspaceSelection: { name: "host", source: "default" },
       userStateDir: "/unrelated/pi-state",
       loadConfig: () => Promise.resolve(config()),
@@ -904,7 +931,7 @@ describe("Pi Sandbox extension", () => {
     const base = config();
     const cfg: SandboxConfig = {
       ...base,
-      audit: { enabled: true, facility: "local0" },
+      audit: { enabled: true },
       extensions: { git: { id: "git", settings, toolNames: ["git_clone"] } },
       tools: { ...base.tools, git_clone: { mode: "deny", sessionGrant: "never", audit: true } },
     };
@@ -913,7 +940,11 @@ describe("Pi Sandbox extension", () => {
     const host = { cwd: executor.cwd, execute: vi.fn(), close: async () => {} };
     await createPiSandboxExtension({
       cwd: executor.cwd,
-      configPath: "/etc/pi-sandbox/config.toml",
+      provenance: {
+        source: "local",
+        configPath: "/etc/pi-sandbox/config.toml",
+        modelsPath: "/etc/pi-sandbox/models.json",
+      },
       workspaceSelection: { name: "host", source: "default" },
       userStateDir: "/home/test/.pi/agent",
       loadConfig: () => Promise.resolve(cfg),
@@ -921,13 +952,10 @@ describe("Pi Sandbox extension", () => {
       getImportTarget,
       managedExtensions: [instance],
       hostExecutors: { git: host },
-      auditClient: {
-        submit: (event) => {
-          events.push(event);
-          return Promise.resolve();
-        },
-        close: async () => {},
-      },
+      auditClient: createTestAuditClient((event) => {
+        events.push(event);
+        return Promise.resolve();
+      }),
     })(pi.api);
     await pi.handlers.get("session_start")?.(undefined as never, context());
     await expect(
@@ -954,15 +982,12 @@ describe("Pi Sandbox extension", () => {
     const pi = fakePi();
     const executor = fakeExecutor();
     const events: AuditEvent[] = [];
-    const auditClient: AuditClient = {
-      submit(event) {
-        events.push(event);
-        if (event.event === options.failEvent)
-          return Promise.reject(new Error("collector unavailable"));
-        return Promise.resolve();
-      },
-      close: async () => {},
-    };
+    const auditClient: AuditClient = createTestAuditClient(async (event) => {
+      events.push(event);
+      if (event.event === options.failEvent)
+        return Promise.reject(new Error("collector unavailable"));
+      return Promise.resolve();
+    });
     const base =
       options.config ??
       (options.managed
@@ -972,7 +997,7 @@ describe("Pi Sandbox extension", () => {
           : config());
     const cfg = {
       ...base,
-      audit: { enabled: true, facility: "local0" as const },
+      audit: { enabled: true as const },
       tools: Object.fromEntries(
         Object.entries(base.tools).map(([name, policy]) => [
           name,
@@ -995,7 +1020,11 @@ describe("Pi Sandbox extension", () => {
     };
     await createPiSandboxExtension({
       cwd: "/work/project",
-      configPath: "/etc/pi-sandbox/config.toml",
+      provenance: {
+        source: "local",
+        configPath: "/etc/pi-sandbox/config.toml",
+        modelsPath: "/etc/pi-sandbox/models.json",
+      },
       workspaceSelection: { name: "host", source: "default" },
       userStateDir: "/home/test/.pi/agent",
       loadConfig: () => Promise.resolve(cfg),
@@ -1056,17 +1085,17 @@ describe("Pi Sandbox extension", () => {
     const before = await loggedExtension({ failEvent: "tool_execution_intent" });
     await expect(
       executeTool(before.pi, "write", { path: "note.txt", content: "private" }),
-    ).rejects.toThrow("logging is unavailable");
+    ).rejects.toThrow("auditing is unavailable");
     expect(before.executor.calls).toHaveLength(0);
     const after = await loggedExtension({ failEvent: "tool_completed" });
     await expect(
       executeTool(after.pi, "write", { path: "note.txt", content: "private" }),
-    ).rejects.toThrow("logging is unavailable");
+    ).rejects.toThrow("auditing is unavailable");
     const calls = after.executor.calls.length;
     expect(calls).toBeGreaterThan(0);
     await expect(
       executeTool(after.pi, "write", { path: "other.txt", content: "private" }),
-    ).rejects.toThrow("logging is unavailable");
+    ).rejects.toThrow("auditing is unavailable");
     expect(after.executor.calls).toHaveLength(calls);
     expect(after.events.filter((event) => event.event === "tool_completed")).toHaveLength(1);
   });
@@ -1106,7 +1135,11 @@ describe("Pi Sandbox extension", () => {
     const pi = fakePi();
     await createPiSandboxExtension({
       cwd: "/work/project",
-      configPath: "/etc/pi-sandbox/config.toml",
+      provenance: {
+        source: "local",
+        configPath: "/etc/pi-sandbox/config.toml",
+        modelsPath: "/etc/pi-sandbox/models.json",
+      },
       workspaceSelection: { name: "host", source: "default" },
       userStateDir: "/home/test/.pi/agent",
       loadConfig: () => Promise.resolve(configWithPiTool("allow")),
@@ -1122,7 +1155,11 @@ describe("Pi Sandbox extension", () => {
     const denied = fakePi();
     await createPiSandboxExtension({
       cwd: "/work/project",
-      configPath: "/etc/pi-sandbox/config.toml",
+      provenance: {
+        source: "local",
+        configPath: "/etc/pi-sandbox/config.toml",
+        modelsPath: "/etc/pi-sandbox/models.json",
+      },
       workspaceSelection: { name: "host", source: "default" },
       userStateDir: "/home/test/.pi/agent",
       loadConfig: () => Promise.resolve(configWithPiTool("deny")),
@@ -1137,7 +1174,11 @@ describe("Pi Sandbox extension", () => {
     const disabled = fakePi();
     await createPiSandboxExtension({
       cwd: "/work/project",
-      configPath: "/etc/pi-sandbox/config.toml",
+      provenance: {
+        source: "local",
+        configPath: "/etc/pi-sandbox/config.toml",
+        modelsPath: "/etc/pi-sandbox/models.json",
+      },
       workspaceSelection: { name: "host", source: "default" },
       userStateDir: "/home/test/.pi/agent",
       loadConfig: () => Promise.resolve(configWithPiTool("disabled")),
@@ -1153,7 +1194,11 @@ describe("Pi Sandbox extension", () => {
     const pi = fakePi();
     await createPiSandboxExtension({
       cwd: "/work/project",
-      configPath: "/etc/pi-sandbox/config.toml",
+      provenance: {
+        source: "local",
+        configPath: "/etc/pi-sandbox/config.toml",
+        modelsPath: "/etc/pi-sandbox/models.json",
+      },
       workspaceSelection: { name: "host", source: "default" },
       userStateDir: "/home/test/.pi/agent",
       loadConfig: () => Promise.resolve(configWithPiTool("allow")),
@@ -1173,7 +1218,11 @@ describe("Pi Sandbox extension", () => {
     const second = fakePi();
     await createPiSandboxExtension({
       cwd: "/work/project",
-      configPath: "/etc/pi-sandbox/config.toml",
+      provenance: {
+        source: "local",
+        configPath: "/etc/pi-sandbox/config.toml",
+        modelsPath: "/etc/pi-sandbox/models.json",
+      },
       workspaceSelection: { name: "host", source: "default" },
       userStateDir: "/home/test/.pi/agent",
       loadConfig: () => Promise.resolve(configWithPiTool("allow")),
@@ -1209,7 +1258,11 @@ describe("Pi Sandbox extension", () => {
     });
     await createPiSandboxExtension({
       cwd: "/work/project",
-      configPath: "/etc/pi-sandbox/config.toml",
+      provenance: {
+        source: "local",
+        configPath: "/etc/pi-sandbox/config.toml",
+        modelsPath: "/etc/pi-sandbox/models.json",
+      },
       workspaceSelection: { name: "host", source: "default" },
       userStateDir: "/home/test/.pi/agent",
       loadConfig: () => Promise.resolve(configWithManagedTool("ask")),
@@ -1279,7 +1332,11 @@ describe("Pi Sandbox extension", () => {
     const fixture = managedToolFixture();
     await createPiSandboxExtension({
       cwd: "/work/project",
-      configPath: "/etc/pi-sandbox/config.toml",
+      provenance: {
+        source: "local",
+        configPath: "/etc/pi-sandbox/config.toml",
+        modelsPath: "/etc/pi-sandbox/models.json",
+      },
       workspaceSelection: { name: "host", source: "default" },
       userStateDir: "/home/test/.pi/agent",
       loadConfig: () => Promise.resolve(configWithManagedTool("deny")),
@@ -1555,7 +1612,11 @@ describe("Pi Sandbox extension", () => {
     });
     await createPiSandboxExtension({
       cwd: "/work/project",
-      configPath: "/etc/pi-sandbox/config.toml",
+      provenance: {
+        source: "local",
+        configPath: "/etc/pi-sandbox/config.toml",
+        modelsPath: "/etc/pi-sandbox/models.json",
+      },
       workspaceSelection: { name: "host", source: "default" },
       userStateDir: "/home/test/.pi/agent",
       loadConfig: () => Promise.resolve(config({ write: "ask" })),
@@ -1803,7 +1864,11 @@ describe("Pi Sandbox extension", () => {
     const pi = fakePi();
     await createPiSandboxExtension({
       cwd: "/work/project",
-      configPath: "/etc/pi-sandbox/config.toml",
+      provenance: {
+        source: "local",
+        configPath: "/etc/pi-sandbox/config.toml",
+        modelsPath: "/etc/pi-sandbox/models.json",
+      },
       workspaceSelection: { name: "host", source: "default" },
       userStateDir: "/home/test/.pi/agent",
       loadConfig: () => Promise.reject(new Error("configuration failed")),
@@ -1840,7 +1905,11 @@ describe("Pi Sandbox extension", () => {
     });
     await createPiSandboxExtension({
       cwd: "/work/project",
-      configPath: "/etc/pi-sandbox/config.toml",
+      provenance: {
+        source: "local",
+        configPath: "/etc/pi-sandbox/config.toml",
+        modelsPath: "/etc/pi-sandbox/models.json",
+      },
       workspaceSelection: { name: "host", source: "default" },
       userStateDir: "/home/test/.pi/agent",
       loadConfig: () => Promise.resolve(config()),
@@ -1866,7 +1935,11 @@ describe("Pi Sandbox extension", () => {
     const onSessionStart = vi.fn(() => Promise.resolve());
     const extension = createPiSandboxExtension({
       cwd: "/work/project",
-      configPath: "/etc/pi-sandbox/config.toml",
+      provenance: {
+        source: "local",
+        configPath: "/etc/pi-sandbox/config.toml",
+        modelsPath: "/etc/pi-sandbox/models.json",
+      },
       workspaceSelection: { name: "host", source: "default" },
       userStateDir: "/home/test/.pi/agent",
       loadConfig: () => Promise.resolve(config()),
@@ -1896,7 +1969,11 @@ describe("Pi Sandbox extension", () => {
     const ctx = context();
     await createPiSandboxExtension({
       cwd: "/work/project",
-      configPath: "/etc/pi-sandbox/config.toml",
+      provenance: {
+        source: "local",
+        configPath: "/etc/pi-sandbox/config.toml",
+        modelsPath: "/etc/pi-sandbox/models.json",
+      },
       workspaceSelection: { name: "host", source: "default" },
       userStateDir: "/home/test/.pi/agent",
       loadConfig: () => Promise.resolve(config()),
@@ -1937,7 +2014,11 @@ describe("Pi Sandbox extension", () => {
     const executor = { ...fakeExecutor(), probe: () => probe.promise };
     await createPiSandboxExtension({
       cwd: "/work/project",
-      configPath: "/etc/pi-sandbox/config.toml",
+      provenance: {
+        source: "local",
+        configPath: "/etc/pi-sandbox/config.toml",
+        modelsPath: "/etc/pi-sandbox/models.json",
+      },
       workspaceSelection: { name: "host", source: "default" },
       userStateDir: "/home/test/.pi/agent",
       loadConfig: () => Promise.resolve(config()),
@@ -1952,6 +2033,49 @@ describe("Pi Sandbox extension", () => {
     expect(pi.tools.size).toBe(7);
   });
 
+  it("retains audit binding through reload while retiring outgoing tool wrappers", async () => {
+    const service = new FakeService();
+    const auditClient = new AuditManager(service, "/work/project", { source: "local" });
+    const cfg = config();
+    const audited = {
+      ...cfg,
+      audit: { enabled: true },
+      tools: { ...cfg.tools, write: { ...cfg.tools.write!, audit: true } },
+    };
+    const create = async () => {
+      const pi = fakePi();
+      await createPiSandboxExtension({
+        cwd: "/work/project",
+        provenance: { source: "local", configPath: "/policy", modelsPath: "/models" },
+        workspaceSelection: { name: "host", source: "default" },
+        userStateDir: "/home/test/.pi/agent",
+        loadConfig: () => Promise.resolve(audited),
+        executor: fakeExecutor(),
+        auditClient,
+      })(pi.api);
+      await pi.handlers.get("session_start")!(undefined as never, context());
+      return pi;
+    };
+    const first = await create();
+    const binding = await auditClient.captureInvocation("pi-session-1");
+    const oldTool = first.tools.get("write")!;
+    await first.handlers.get("session_shutdown")!(
+      { type: "session_shutdown", reason: "reload" } as never,
+      context(),
+    );
+    const second = await create();
+    expect(await auditClient.captureInvocation("pi-session-1")).toBe(binding);
+    expect(service.calls.map((call) => call.operation)).toEqual(["audit_open"]);
+    await expect(
+      oldTool.execute("stale", { path: "file", content: "old" }, undefined, undefined, context()),
+    ).rejects.toThrow();
+    await second.handlers.get("session_shutdown")!(
+      { type: "session_shutdown", reason: "quit" } as never,
+      context(),
+    );
+    expect(service.calls.map((call) => call.operation)).toEqual(["audit_open", "audit_close"]);
+    expect(auditClient.isCurrent(binding)).toBe(false);
+  });
   it.each(["new", "resume", "fork", "reload"])(
     "does not close process resources on %s session replacement",
     async (reason) => {
@@ -1959,7 +2083,11 @@ describe("Pi Sandbox extension", () => {
       const onProcessShutdown = vi.fn(() => Promise.resolve());
       await createPiSandboxExtension({
         cwd: "/work/project",
-        configPath: "/etc/pi-sandbox/config.toml",
+        provenance: {
+          source: "local",
+          configPath: "/etc/pi-sandbox/config.toml",
+          modelsPath: "/etc/pi-sandbox/models.json",
+        },
         workspaceSelection: { name: "host", source: "default" },
         userStateDir: "/home/test/.pi/agent",
         loadConfig: () => Promise.resolve(config()),
@@ -1985,7 +2113,11 @@ describe("Pi Sandbox extension", () => {
     });
     await createPiSandboxExtension({
       cwd: "/work/project",
-      configPath: "/etc/pi-sandbox/config.toml",
+      provenance: {
+        source: "local",
+        configPath: "/etc/pi-sandbox/config.toml",
+        modelsPath: "/etc/pi-sandbox/models.json",
+      },
       workspaceSelection: { name: "host", source: "default" },
       userStateDir: "/home/test/.pi/agent",
       loadConfig: () => Promise.resolve(config()),
@@ -2137,7 +2269,11 @@ describe("known read-only Bash commands", () => {
     const executor = fakeExecutor();
     await createPiSandboxExtension({
       cwd: "/work/project",
-      configPath: "/etc/pi-sandbox/config.toml",
+      provenance: {
+        source: "local",
+        configPath: "/etc/pi-sandbox/config.toml",
+        modelsPath: "/etc/pi-sandbox/models.json",
+      },
       workspaceSelection: { name: "host", source: "default" },
       userStateDir: "/home/test/.pi/agent",
       loadConfig: () => Promise.resolve(cfg),
@@ -2184,20 +2320,17 @@ describe("known read-only Bash commands", () => {
       },
     };
     const events: AuditEvent[] = [];
-    const auditClient: AuditClient = {
-      submit: (event) => {
-        events.push(event);
-        return Promise.resolve();
-      },
-      close: async () => {},
-    };
+    const auditClient: AuditClient = createTestAuditClient((event) => {
+      events.push(event);
+      return Promise.resolve();
+    });
     const base = classConfig(
       { mode: "ask", sessionGrant: "offer", commandSets },
       { mode: "allow", sessionGrant: "never" },
     );
     const cfg = {
       ...base,
-      audit: { enabled: true, facility: "local0" as const },
+      audit: { enabled: true as const },
       tools: { ...base.tools, bash: { ...base.tools.bash!, audit: true } },
     };
     const analyzer = () =>
@@ -2579,7 +2712,11 @@ describe("known read-only Bash commands", () => {
     const executor = fakeExecutor();
     await createPiSandboxExtension({
       cwd: "/work/project",
-      configPath: "/etc/pi-sandbox/config.toml",
+      provenance: {
+        source: "local",
+        configPath: "/etc/pi-sandbox/config.toml",
+        modelsPath: "/etc/pi-sandbox/models.json",
+      },
       workspaceSelection: { name: "host", source: "default" },
       userStateDir: "/home/test/.pi/agent",
       loadConfig: () => Promise.resolve(cfg),
@@ -2648,7 +2785,11 @@ try { await tools.bash({ command: "echo x > out" }); } catch (error) { return St
     const pi = fakePi();
     await createPiSandboxExtension({
       cwd: "/work/project",
-      configPath: "/etc/pi-sandbox/config.toml",
+      provenance: {
+        source: "local",
+        configPath: "/etc/pi-sandbox/config.toml",
+        modelsPath: "/etc/pi-sandbox/models.json",
+      },
       workspaceSelection: { name: "host", source: "default" },
       userStateDir: "/home/test/.pi/agent",
       loadConfig: () =>
@@ -2668,20 +2809,17 @@ try { await tools.bash({ command: "echo x > out" }); } catch (error) { return St
 
   it("audits the command class and registry version on Bash decisions only", async () => {
     const events: AuditEvent[] = [];
-    const auditClient: AuditClient = {
-      submit(event) {
-        events.push(event);
-        return Promise.resolve();
-      },
-      close: async () => {},
-    };
+    const auditClient: AuditClient = createTestAuditClient(async (event) => {
+      events.push(event);
+      return Promise.resolve();
+    });
     const base = classConfig(
       { mode: "deny", sessionGrant: "never" },
       { mode: "allow", sessionGrant: "never" },
     );
     const cfg = {
       ...base,
-      audit: { enabled: true, facility: "local0" as const },
+      audit: { enabled: true as const },
       tools: Object.fromEntries(
         Object.entries(base.tools).map(([name, policy]) => [name, { ...policy, audit: true }]),
       ),
