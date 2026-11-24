@@ -7,12 +7,13 @@
 - Require main schema 16, service rule version 12 and distribution schema 4;
   migrate workspace policy and replace per-user broker/audit units explicitly.
   Compiled builds require Bun 1.4.4 or newer for isolated TLS trust.
-  ([#58](https://github.com/kcosr/pi-sandbox/pull/58))
+  ([#58](https://github.com/kcosr/pi-sandbox/pull/58), [#59](https://github.com/kcosr/pi-sandbox/pull/59))
 
 ### Added
 
 - Add a concurrent Unix/HTTPS configuration and audit service, shared local/service
   configuration profiles, in-memory model catalogs and recoverable audit gates.
+  ([#59](https://github.com/kcosr/pi-sandbox/pull/59))
 - Add administrator-defined workspace modes, per-account mode access/defaults,
   CLI selection and listing with descriptions, and effective-mode diagnostics.
   ([#58](https://github.com/kcosr/pi-sandbox/pull/58))
