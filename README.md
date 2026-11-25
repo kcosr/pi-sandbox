@@ -223,9 +223,9 @@ Every launch selects an administrator-defined workspace mode. Use
 `--list-workspace-modes` to show permitted names, descriptions and the effective
 default, or `--workspace-mode NAME` before Pi arguments to select one. If used,
 the optional `--config FILE` prefix comes first. Fresh confined packages offer
-host (writable project, approvals, exports off) and sandbox (read-only project,
-temporary work, explicit user export), with host as default. Seatbelt keeps
-model Bash disabled in both packaged modes; direct packages offer only host.
+host (writable project, approvals) and sandbox (read-only project, temporary work),
+both with explicit user export and host as default. Seatbelt keeps model Bash
+disabled in both packaged modes; direct packages offer only host with exports disabled.
 Mode names are administrator-authored and do not guarantee final permissions.
 
 Service listeners may apply administrator-owned username/account/group rules

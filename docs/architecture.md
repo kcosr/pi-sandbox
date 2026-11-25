@@ -758,6 +758,15 @@ manifest review, host destination validation and publication. The reusable sandb
 runtime supplies a separate export-source capability through a trusted constructor
 callback; it is absent from `SandboxExecutor` and model-tool contexts.
 
+Main policy may enable saving with either writable or read-only CWD on a confined
+backend. Publication remains a host-user operation, including when its reviewed
+destination is inside writable CWD; private scratch destinations remain excluded.
+Foreground idle and managed-child quiescence do not stop surviving background
+commands. Destination, staging and replacement races with those commands are an
+accepted limit of this host publisher, as with host Git cloning; it does not add
+a confined writer or process monitor. User review, required audit and existing
+publication checks remain in place. See [the export trust contract](security.md#user-directed-sandbox-file-export).
+
 Bubblewrap worker protocol 6 carries paged inventory and bounded pull reads within
 the existing namespace. Seatbelt starts a transient restricted reader role under
 its existing profile, packaged for both the compiled application and stock Node/Bun

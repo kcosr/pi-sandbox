@@ -777,13 +777,20 @@ managed-only setting in standalone JSON.
 
 ## Private-file saving
 
-Export tests cover main-only admission, effective read-only CWD enforcement, TUI-only
+Export tests cover main-only admission with writable and read-only CWD, direct-backend rejection, TUI-only
 entry, selection/hidden-entry semantics, cancellation, manifest validation and bounded
 inventory. Host publisher tests use disposable destinations and prove explicit conflict
-review, hard-link alias safety, symlink/type rejection, late conflicts, source changes,
+review, writable-CWD destinations, private scratch exclusion, hard-link alias safety, observed symlink/type rejection, late conflicts, source changes,
 partial results and audit failure before and after publication. Reader tests exercise
 paging, bounded pulls, invalid names, source identity changes, special files and
-root/path substitution. Real Bubblewrap coverage must prove host CWD remains read-only
-and private files can be exported through the worker. Seatbelt native tests must run
+root/path substitution. Real backend and shipped-source smoke coverage must prove
+that CWD writes follow each configured writable/read-only setting and that private
+files can still be exported through the worker or confined reader in both modes.
+Native Seatbelt checks must open the reader under Node and Bun, verify fresh
+export roots remain empty, and preserve user scratch files across repeated probes.
+Retain the bounded-reader, denied-source and cancellation controls. Concurrency
+tests cover observed checks and the accepted host publication race; they must not
+claim background-process exclusion or durable destination integrity.
+Seatbelt native tests must run
 on each supported macOS architecture before release qualification; Linux tests cannot
 establish its native enforcement or packaged reader behavior.

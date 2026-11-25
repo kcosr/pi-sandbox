@@ -27,6 +27,7 @@ import {
 } from "./seatbelt-executor.js";
 import { resolveDirectToolCommands } from "./direct-executor.js";
 import type { SandboxExecutor } from "./contracts.js";
+import type { SandboxExportSource } from "./export/contracts.js";
 
 const node = await realpath(process.execPath);
 const bun = process.env.PI_SANDBOX_TEST_BUN;
@@ -100,6 +101,7 @@ describe.skipIf(prerequisite !== undefined)("native Seatbelt executor", () => {
   let cwd: string;
   let secret: string;
   let hostBundle: string;
+  let exportReaderBundle: string;
   let executors: SandboxExecutor[];
   beforeAll(async () => {
     root = await realpath(await mkdtemp("/private/tmp/pi-seatbelt-tests-"));
@@ -107,6 +109,15 @@ describe.skipIf(prerequisite !== undefined)("native Seatbelt executor", () => {
     await build({
       entryPoints: [path.resolve("packages/sandbox-extension/src/runtime/seatbelt-executor.ts")],
       outfile: hostBundle,
+      platform: "node",
+      target: "node24",
+      format: "esm",
+      bundle: true,
+    });
+    exportReaderBundle = path.join(root, "export-reader.mjs");
+    await build({
+      entryPoints: [path.resolve("packages/sandbox-extension/src/runtime/export-reader-entry.ts")],
+      outfile: exportReaderBundle,
       platform: "node",
       target: "node24",
       format: "esm",
@@ -191,6 +202,52 @@ describe.skipIf(prerequisite !== undefined)("native Seatbelt executor", () => {
         await expect(access(executor.home)).rejects.toThrow();
       } finally {
         delete process.env.SEATBELT_SYNTHETIC_SECRET;
+      }
+    },
+  );
+
+  it.each(runtimes)(
+    "%s probes leave export roots empty and preserve user scratch with either CWD policy",
+    async (_name, runtime) => {
+      for (const cwdWritable of [true, false]) {
+        let source: SandboxExportSource | undefined;
+        const executor = await create({
+          cwdWritable,
+          exportReaderCommand: [runtime, exportReaderBundle],
+          onExportSource: (captured) => {
+            source = captured;
+          },
+        });
+        expect(source).toBeDefined();
+        for (const repeat of [false, true]) {
+          if (repeat) {
+            const created = await executor.execute({
+              argv: [
+                "/bin/sh",
+                "-c",
+                'printf home-user-data > "$HOME/probe" && printf tmp-user-data > "$TMPDIR/probe"',
+              ],
+            });
+            expect(created.exitCode, created.stderr.toString()).toBe(0);
+            await executor.probe();
+          }
+          const reader = await source!.open();
+          try {
+            expect(reader.roots.map(({ id }) => id).sort()).toEqual(["home", "tmp"]);
+            for (const { id } of reader.roots) {
+              const { entries } = await reader.list(id, "");
+              expect(entries.map(({ name }) => name)).toEqual(repeat ? ["probe"] : []);
+              if (repeat) {
+                await reader.openFile(entries[0]!);
+                expect(Buffer.from(await reader.readChunk()).toString()).toBe(`${id}-user-data`);
+                expect(await reader.readChunk()).toHaveLength(0);
+                await reader.closeFile();
+              }
+            }
+          } finally {
+            await reader.close();
+          }
+        }
       }
     },
   );

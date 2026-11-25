@@ -216,16 +216,25 @@ describe("account MCP overrides", () => {
     expect(() => parseAccountOverrides({ subagents: { enabled: true }, tools: {} })).toThrow();
   });
 
-  it("keeps export admission main-only and rejects overrides that broaden writable host access", () => {
+  it("keeps export admission main-only while allowing confined CWD writability overrides", () => {
     const exporting = {
       ...base,
       exports: { enabled: true },
       filesystem: { ...base.filesystem, cwdWritable: false },
     };
     expect(applyAccountOverrides(exporting, { tools: {} }).exports).toBe(exporting.exports);
-    expect(() =>
-      applyAccountOverrides(exporting, { tools: {}, filesystem: { cwdWritable: true } }),
-    ).toThrow("exports.enabled");
+    const writable = applyAccountOverrides(exporting, {
+      tools: {},
+      filesystem: { cwdWritable: true },
+    });
+    expect(writable.exports).toBe(exporting.exports);
+    expect(writable.filesystem.cwdWritable).toBe(true);
+    expect(
+      applyAccountOverrides(writable, { tools: {}, filesystem: { cwdWritable: false } }).exports,
+    ).toBe(exporting.exports);
+    expect(
+      applyAccountOverrides(base, { tools: {}, filesystem: { cwdWritable: true } }).exports.enabled,
+    ).toBe(false);
     expect(() =>
       applyAccountOverrides(exporting, { tools: {}, execution: { backend: "direct" } }),
     ).toThrow("exports.enabled");

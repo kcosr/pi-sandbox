@@ -695,10 +695,18 @@ in the compiled application; project files cannot inject startup environment.
 ## User-only sandbox saving
 
 The forced extension owns `/sandbox save`. Admit it only for `ctx.mode === "tui"`
-and enabled effective main export policy with a confined, read-only CWD. Await
+and enabled effective main export policy with a confined backend and either writable
+or read-only CWD. Await
 `ctx.waitForIdle()` before listing; this does not stop background descendants. Never
 register a model tool, use `hasUI` as the admission check, or expose the export-source
 capability through `SandboxExecutor`. RPC dispatch must not acquire host publication.
+
+Permit reviewed host destinations inside writable CWD while excluding private
+sandbox scratch. Preserve required audit, fresh-inode/no-truncate, no-replace and
+observed path/identity checks. Accept surviving background destination/staging/
+replacement races under host-user authority, analogous to host Git cloning;
+hashes identify copied bytes, not durable destination integrity. Do not add a
+process monitor or confined writer to this integration seam.
 
 Cancel and await an active picker or copy on the outgoing `session_shutdown`, before
 ending its audit session or releasing the process executor. Recreated logical-session

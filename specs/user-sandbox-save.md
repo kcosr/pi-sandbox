@@ -2,14 +2,17 @@
 
 Status: implemented in `feature/user-sandbox-save` after subagent and Keel Oracle
 design review. Current behavior is maintained in the subject documents under `docs/`.
+The normative export contract below includes the subsequently accepted writable-CWD
+extension; the original Oracle consultation remains historical.
 
 ## Intent and accepted direction
 
 Let a user preserve selected files created in the existing private tool HOME or
 temporary storage. Keep Linux HOME and temporary storage on their current tmpfs
-mounts, keep the existing process lifetime across logical Pi sessions, and keep
-the host CWD read-only for the intended workflow. Bash, write and edit can use
-their existing `allow` policy while filesystem enforcement protects host files.
+mounts and keep the existing process lifetime across logical Pi sessions. Saving
+is available with either writable or read-only CWD on a confined backend. With
+read-only CWD, Bash, write and edit can use their existing `allow` policy while
+filesystem enforcement protects host files from sandbox commands.
 
 Saving is a user action through `/sandbox save` or the interactive exit prompt. It is not a model tool or a
 Code Mode capability. It does not add persistent writable HOME, another work
@@ -114,22 +117,19 @@ destination selection, confirmation, publication, and UI. Ordinary Pi consumers
 must still load and run without the managed application or new private
 dependencies; shared API changes require both consumers' qualification.
 
-Proposed administrative control: main-only `[exports] enabled = false`, disabled
-unless admitted by the administrator. It does not create a `tools.save` policy,
-broker tool override, or automatic approval grant. A suggested destination is
-convenience, not a destination allowlist. The user can save wherever their host
-account has permission. A strict main-schema revision is planned from current
-13 to 14 with packaged defaults disabled, without dual-schema parsing. Coordinate
-the final version with other changes before implementation; the older workspace
-mode branch independently used 14. No export fields enter broker rule/patch
-contracts.
+Administrative control remains main-authored `[exports].enabled`, including
+workspace-mode overlays. It creates no `tools.save` policy, account-rule override
+or automatic approval grant. Packaged Bubblewrap and Seatbelt host and sandbox
+modes enable it; direct keeps it disabled. A suggested destination is convenience,
+not an allowlist. The user may save wherever their host account has permission,
+except destinations overlapping private sandbox scratch storage. Writable CWD
+destinations are permitted. This extension adds no schema version or flag.
 
-For this proposal, the admitted workflow is a confined backend with read-only
-CWD. Direct mode has no private source roots and does not support this command.
-Do not silently switch backends, make CWD writable, or alter other tool policies
-to enable saving. Existing writable-CWD deployments need a separate explicit
-decision before broadening this feature's scope. The older workspace-mode branch
-may supply convenient RO/RW tool policies but is not a dependency of export.
+The admitted workflow requires a confined backend, independently of CWD writability.
+Direct mode has no private source roots and does not support this command.
+Do not silently switch backends, change CWD writability, or alter other tool
+policies to enable saving. The user explicitly accepts the host publication races
+described below for writable-CWD destinations.
 
 ## Export across the boundary
 
@@ -168,7 +168,9 @@ filesystem crossings as well as the known CWD overlay. A bind mount does not
 generally have a unique `st_dev`; the device check is useful here because the
 private tmpfs is newly created and distinct from the host CWD filesystem. Do not
 substitute a general device-equals-mount claim for explicit overlay handling.
-CWD exactly `/tmp` is already rejected in the intended read-only mode.
+CWD exactly `/tmp` is rejected when read-only. With writable CWD exactly `/tmp`,
+the worker registers only Home: no Temporary root is offered, and listing the
+`tmp` root rejects with `export_invalid_root` without enumerating host `/tmp`.
 
 Allow regular files and directories. Reject observed symlink components, links
 themselves and special files; use no-follow final opens and inspect/read the same
@@ -181,8 +183,9 @@ The anchored Linux walk prevents ancestor-path replacement from redirecting the
 next open and rejects symlink components. Ordinary pathname checks on macOS do
 not provide the same strict traversal property against every intermediate race.
 On both platforms, the hard authority guarantee is that the source reader never
-has more filesystem access than the agent; the parent separately guarantees
-publication only to its validated, user-authorized manifest paths. Observed-link
+has more filesystem access than the agent; the parent separately restricts
+requested publication to validated, user-authorized manifest paths, subject to
+the accepted destination races below. Observed-link
 checks and root identities enforce intended selection and detect changes; they
 are not an inode-provenance or atomic-snapshot guarantee. An agent can already
 copy any sandbox-readable content into HOME. A selected file's contents therefore
@@ -192,8 +195,8 @@ Create a bounded manifest before user confirmation and transfer only manifest
 entries. Do not add newly created descendants during copying. Source file
 identity/size/timestamp changes detected before or during copying fail that entry
 and are reported. This is a live file copy, not an atomic snapshot of a running
-filesystem. Hashes identify received bytes and transfer integrity, not global
-consistency. Wait for ordinary foreground activity to idle, without killing or
+filesystem. Hashes identify received/copied bytes, not global consistency or
+the mutable destination's lasting contents. Wait for ordinary foreground activity to idle, without killing or
 claiming exclusion against background writers.
 
 Use strict pull with exactly one outstanding request; request the next chunk
@@ -218,11 +221,13 @@ manifest-authorized relative paths, preserve them as data, and reject traversal,
 absolute names, duplicates and filesystem-equivalent collisions. Never let the
 worker choose the destination root or provide code to execute on the host.
 
-The user-selected destination must be outside every live writable sandbox grant.
-For Seatbelt this includes the actual host scratch locations. Destination path
-traversal and final entries must not follow symlinks. Concurrent modification by
-the trusted host user remains a separate consideration from malicious sandbox
-data. MCP and other managed host operations retain their separate authority;
+The user-selected destination may be inside writable CWD but must remain outside
+private sandbox scratch storage, including Seatbelt's actual host scratch root.
+The shared source still reports all writable host grants; the managed controller
+exempts only its canonical launch-CWD grant from destination exclusions. Reject
+observed symlink traversal and incompatible final entries. These pathname checks
+are best-effort detection under concurrent modification, not an atomic traversal
+boundary. MCP and other managed host operations retain their separate authority;
 export does not make the entire application a universal no-host-write boundary.
 
 Write each file to an exclusively created temporary sibling with restrictive
@@ -246,9 +251,18 @@ detects changed conflicts and requires another decision, but a trusted host
 process can still change a target between that check and rename. A replacement
 at that exact time can be lost. An ordinary stat-then-rename sequence is not an
 atomic compare-and-swap against file identity; do not promise such a guarantee.
-The sandbox cannot directly race valid destinations because it lacks write
-authority there. Other trusted host processes, including managed host tools,
-retain the separately documented concurrency limit.
+For writable-CWD destinations, surviving sandbox commands can race ancestor
+paths, staging names or contents, and replacement publication. Modes 0700/0600
+do not separate same-UID commands from staging. A path race can redirect host
+writes or cleanup outside the reviewed destination; stage substitution can change
+the published object, and replacement races can lose concurrent updates. The user
+accepts these risks under host-user authority, analogous to the existing host Git
+clone destination race. Foreground idle and managed-child quiescence do not provide
+complete process ownership. No monitor, confined writer, descendant revocation or
+new helper is added. Preserve fresh-inode/no-truncate, atomic no-replace, required
+audit and observed path/identity checks. These checks do not promise race freedom
+or durable destination integrity. Trusted host writers retain the same concurrency
+limit even with read-only CWD.
 
 Publication is per-file, not a transaction across the tree. Errors/cancellation
 leave previously committed files in place and report an exact partial result;
@@ -259,9 +273,9 @@ atomic save or guaranteed physical durability across power loss.
 
 ## Audit
 
-User export is a new kind of host-write action, separate from existing model-tool
-events and the deliberately unaudited human `!` shell. When Linux audit is
-enabled, add typed parent-only export intent/completion records with operation
+User export is a host-write action, separate from model-tool events and the
+deliberately unaudited human `!` shell. When audit is enabled on either platform,
+emit typed parent-only export intent/completion records with operation
 and Pi-session IDs, source root IDs, destination, bounded counts and a manifest
 digest. Never log file contents or place an unbounded conflict list into a frame.
 The final selection and exact local per-file outcome remain available in the UI.
@@ -272,10 +286,8 @@ records without truncating the approved list. Submit export intent before any
 payload staging and each replacement intent before its publication. Required
 audit failure must stop further host publication and report files already
 committed. Do not fabricate a model tool call or a tool approval to fit existing
-event types. The current strict client/collector permits only session/tool events
-and has a 32 KiB request bound, so this requires an explicit coordinated upgrade
-from wire 3 to 4 and record schema 4 to 5, with corresponding collector validation.
-macOS audit stays disabled.
+event types. The managed service protocol already carries these records; writable
+CWD saving changes neither its protocol nor record schema.
 
 ## Lifecycle, limits and verification
 
@@ -293,8 +305,11 @@ Verify with offline fixtures and real backend coverage:
 - Negative model-tool/Code Mode/RPC/headless access controls.
 - Recursive source symlink and rename attacks, private `/tmp` with host-CWD
   overlay, unreadable/special files, manifest changes and invalid names.
-- Destination symlink ancestors, hardlinks, new and changed conflicts, actual
+- Writable and read-only CWD admission and real private-source reads, direct-mode
+  rejection, writable-CWD destination acceptance and private scratch exclusion.
+- Observed destination symlink ancestors, hardlinks, new and changed conflicts, actual
   no-replace races, case/normalization collisions and file-directory mismatches.
+  Preserve checks without claiming exclusion of hostile background path/staging races.
 - Bounded streaming, cancellation, disk-full and partial-copy reporting.
 - Real Linux Bubblewrap; native Seatbelt on each supported architecture; shared
   ordinary Pi packages under Node and Bun. Do not claim native Mac qualification

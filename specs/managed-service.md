@@ -46,6 +46,10 @@ service outage fallback or a compatibility layer.
 - Preserve current tool/export audit coverage. Check the connection before accepting
   a new user message; a failed check can reject that message before its LLM request.
   Do not add control over background LLM/auth activity or the application lifecycle.
+  User exports may run with writable or read-only CWD on a confined backend. The
+  host publisher retains its user-review/audit gates and private scratch exclusion;
+  writable-CWD destination/staging races are accepted under host-user authority,
+  as documented in [the export contract](user-sandbox-save.md#host-publication-and-replacement).
 - Model credentials come from the selected administrative snapshot by default. Personal Pi credentials
   require explicit administrator opt-in for named configured providers.
 - Ordinary Pi extension packages remain independently usable without this service.

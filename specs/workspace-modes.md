@@ -17,7 +17,7 @@ The two example configurations are:
 
 | Example mode | Host CWD  | Model Bash, write, edit                    | User file export |
 | ------------ | --------- | ------------------------------------------ | ---------------- |
-| host         | Writable  | Ask for each invocation; no session grants | Disabled         |
+| host         | Writable  | Ask for each invocation; no session grants | Enabled          |
 | sandbox      | Read-only | Allow without approval prompts             | Enabled          |
 
 These names and policies are administrator-authored, not built-in permission
@@ -122,7 +122,7 @@ selection metadata, exhaustive audit map, aggregate bounds and command-set ID
 consistency. Effective cross-entry and cross-table policy checks run on each
 composed mode, not on the partial common input as a separate launchable
 configuration. Thus
-individually valid common CWD/export values may be incompatible with each other
+individually valid common backend/filesystem values may be incompatible with each other
 if every mode replaces enough of them to form a valid configuration. A malformed
 common entry is still rejected even when every mode replaces it. Composed-mode
 errors name the mode and the originating common or mode paths for the relevant
@@ -306,7 +306,7 @@ description = "Work in the host project with approval for changes."
 cwd_writable = true
 
 [workspace.modes.host.exports]
-enabled = false
+enabled = true
 
 [workspace.modes.sandbox]
 description = "Work in temporary storage and explicitly save deliverables."
@@ -440,7 +440,8 @@ the same invocation overrides. No mode patch is reapplied after broker policy.
 An explicit broker ask can keep a tool prompted in sandbox mode; a broker allow
 can relax a host example's approval. Such valid differences do not fail merely
 because they differ from the mode's name. A broker writable CWD with enabled
-exports remains invalid and fails startup.
+exports is valid on a confined backend; changing the effective backend to direct
+with exports enabled remains invalid.
 
 Static validation does not resolve secret files, expand an arbitrary user's
 identity, query hardware identity, connect MCP, probe executors, or inspect
@@ -449,7 +450,7 @@ skill checks retain their normal scope. Actual account-specific and filesystem
 checks run for the selected final configuration only.
 
 Existing static and runtime guards remain effective: exports require a confined
-backend and read-only CWD, direct requires host networking and writable CWD,
+backend independently of CWD writability, direct requires host networking and writable CWD,
 platforms constrain their backends and exclusions, command-path directories
 cannot overlap writable grants, and Bubblewrap read-only CWD cannot equal /tmp.
 An incompatible selection never changes backend or chooses another mode.
@@ -549,6 +550,9 @@ source, or suggest that the model can export files.
 - Exports remain explicit user-directed publication with replacement review,
   existing bounds, audit behavior, cancellation and exit semantics. No automatic
   retention or new noninteractive exporter is added.
+  Writable CWD destinations are allowed; private scratch destinations remain
+  excluded. Host publication accepts background destination, staging and replacement
+  races as with host Git cloning, without a process monitor or confined writer.
 - Audit records retain their current schemas and do not attribute decisions to
   workspace modes. Command-set IDs have consistent definitions within one main
   snapshot only; retained policy versions are still needed to interpret historic
@@ -579,10 +583,13 @@ For existing deployments preserving their exact policy:
    selection metadata; otherwise author allowed/default explicitly.
 4. Before adding another mode, review existing account/group cwd_writable and
    Bash/write/edit overrides, which apply to every selected mode. A matching
-   cwd_writable = true makes exports-enabled modes invalid for that account;
-   tool overrides can replace the intended per-mode approval differences. Move
+   cwd_writable = true changes the workspace's protection while leaving exports
+   available on a confined backend; tool overrides can replace the intended per-mode approval differences. Move
    differences into mode definitions and account mode grants where that is the
    intended policy, removing obsolete overlapping overrides explicitly.
+   With exports newly enabled in confined host defaults, an effective account
+   backend of `direct` needs an administrator-authored `exports.enabled = false`
+   mode and appropriate allowed/default selection; account rules cannot disable exports.
 5. Add other modes and grants deliberately, after validating their resolved
    configurations and account combinations.
 
@@ -595,14 +602,14 @@ Do not automatically rewrite policy or infer a mode from CWD writability. Update
 both Linux and macOS candidate validation, default configurations, smoke fixtures
 and documentation.
 
-Packaged policies for fresh installations retain their present backend and
-default host behavior. Every invocation policy below uses session_grant = "never";
+Packaged policies for fresh installations retain their backend and default host
+mode, enabling exports in both confined modes. Every invocation policy below uses session_grant = "never";
 existing common audit choices are preserved.
 
 | Packaged file                       | Allowed/default      | Host mode                                                | Sandbox mode                                               |
 | ----------------------------------- | -------------------- | -------------------------------------------------------- | ---------------------------------------------------------- |
-| config/default/config.toml          | host, sandbox / host | Writable CWD, exports off, Bash/write/edit ask           | Read-only CWD, exports on, Bash/write/edit allow           |
-| config/default/config.seatbelt.toml | host, sandbox / host | Writable CWD, exports off, Bash disabled, write/edit ask | Read-only CWD, exports on, Bash disabled, write/edit allow |
+| config/default/config.toml          | host, sandbox / host | Writable CWD, exports on, Bash/write/edit ask            | Read-only CWD, exports on, Bash/write/edit allow           |
+| config/default/config.seatbelt.toml | host, sandbox / host | Writable CWD, exports on, Bash disabled, write/edit ask  | Read-only CWD, exports on, Bash disabled, write/edit allow |
 | config/default/config.direct.toml   | host / host          | Writable CWD, exports off, Bash disabled, write/edit ask | Not defined                                                |
 
 The Bubblewrap policy matches the complete Linux example. Seatbelt's sandbox
@@ -684,8 +691,8 @@ All behavioral verification is offline; no live model-provider calls.
   inventory IDs without adding main-inventory reads to the broker.
 - Test omitted versus empty allowed through the real broker protocol.
 - Preserve current tool, environment, backend and network joins after selection.
-  Exercise valid account ask/allow changes and invalid writable-CWD/export
-  results. Keep session grants and logging ownership unchanged.
+  Exercise valid account ask/allow changes, writable-CWD/export combinations and
+  invalid direct-backend/export results. Keep session grants and logging ownership unchanged.
 - Reject old protocol/rule versions, unknown wire fields and unbounded output.
 
 ### CLI and lifecycle
@@ -723,12 +730,12 @@ All behavioral verification is offline; no live model-provider calls.
 
 ### Both consumers and deployment
 
-- Resolve every packaged policy/mode to the table above and show each default
-  retains its prior effective policy. Migrate each current schema-14 packaged
+- Resolve every packaged policy/mode to the table above, including newly enabled
+  exports in confined host modes. Migrate each current schema-14 packaged
   policy through steps 1–3 and demonstrate effective-policy equivalence. Both
   Linux and macOS installers reject retained schema-14 input before binary swap.
 - Unit, identity integration and native backend tests cover host write approval
-  and read-only sandbox work plus explicit export.
+  and explicit export with both writable and read-only sandbox CWD.
 - Qualify the compiled managed application, real Bubblewrap, installers,
   collector parsing and package/release smoke; preserve mandatory builder
   verification checkpoints.

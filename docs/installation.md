@@ -693,15 +693,21 @@ To preserve an existing schema-14 deployment's behavior:
 3. Update any user/group rule files to version 12. They may omit workspace
    metadata to inherit the main selection choices.
 4. Before adding modes, review mode-agnostic account CWD and tool overrides.
-   They apply after selection: writable-CWD overrides invalidate export-enabled
-   modes, and tool overrides may replace a mode's approval behavior. Move those
+   They apply after selection: writable-CWD overrides change workspace protection
+   while preserving export availability on confined backends, and tool overrides
+   may replace a mode's approval behavior. Move those
    differences into mode definitions and account grants where intended.
+   Newly enabled confined host exports also require reviewing account backend
+   overrides: an effective `direct` backend needs an administrator-authored mode
+   with `exports.enabled = false` and suitable allowed/default selection. Account
+   rules cannot disable exports.
 5. Add other mode definitions and allowed/default grants deliberately. Validate
    all definitions and relevant account combinations before deploying matching
    application and service components.
 
-Fresh confined packages offer host and sandbox with host as default; direct
-packages offer only host. Seatbelt keeps Bash disabled in both packaged modes.
+Fresh confined packages offer host and sandbox with host as default and exports
+enabled in both modes; direct packages offer only host with exports disabled.
+Seatbelt keeps Bash disabled in both packaged modes.
 Ordinary upgrades preserve site policy instead of replacing it with those new
 choices. Both installers validate retained main configuration before swapping
 binaries, but do not validate live service rules. There is no compatibility parser,

@@ -66,12 +66,9 @@ export function applyAccountOverrides<PiValue extends AuthoredPiEnvironmentValue
   );
   if (
     base.exports.enabled &&
-    ((overrides.execution?.backend ?? base.execution.backend) === "direct" ||
-      (overrides.filesystem?.cwdWritable ?? base.filesystem.cwdWritable))
+    (overrides.execution?.backend ?? base.execution.backend) === "direct"
   ) {
-    throw new Error(
-      "exports.enabled requires a confined backend and filesystem.cwd_writable = false after account overrides",
-    );
+    throw new Error("exports.enabled requires a confined backend after account overrides");
   }
   return Object.freeze({
     configVersion: 16,

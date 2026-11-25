@@ -20,19 +20,26 @@ export async function testPackagedExportSource({
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
 import { once } from "node:events";
-import { mkdtemp, mkdir, lstat, writeFile, access, rm } from "node:fs/promises";
+import { mkdtemp, mkdir, lstat, readFile, writeFile, access, rm } from "node:fs/promises";
 import { createBubblewrapExecutor, createSeatbeltExecutor } from ${JSON.stringify(pathToFileURL(join(directory, "dist/runtime.js")).href)};
 import { builtToolBundle } from ${JSON.stringify(pathToFileURL(join(directory, "dist/build-tools.js")).href)};
 import { connectExportReader } from ${JSON.stringify(pathToFileURL(join(directory, "dist/runtime/export/connection.js")).href)};
 import { exportIdentity } from ${JSON.stringify(pathToFileURL(join(directory, "dist/runtime/export/files.js")).href)};
 import { encodeWorkerFrame } from ${JSON.stringify(pathToFileURL(join(directory, "dist/runtime/worker-protocol.js")).href)};
+for (const cwdWritable of [false,true]) {
 let source;
-const common = {cwd:${JSON.stringify(workspace)},cwdWritable:false,onExportSource:value=>{source=value;},...(builtToolBundle?{toolBundle:builtToolBundle}:{})};
+const cwdMarker=${JSON.stringify(workspace)}+"/package-export-cwd-"+cwdWritable;
+const common = {cwd:${JSON.stringify(workspace)},cwdWritable,onExportSource:value=>{source=value;},...(builtToolBundle?{toolBundle:builtToolBundle}:{})};
 const executor = await (${JSON.stringify(kind)} === "bubblewrap" ? createBubblewrapExecutor({...common,bubblewrapPath:"/usr/bin/bwrap",networkMode:"none",hiddenPaths:[${JSON.stringify(deniedRoot)}],workerCommand:[process.execPath,${JSON.stringify(join(directory, "dist/runtime/worker-entry.js"))}]}) : createSeatbeltExecutor({...common,networkMode:"none",deniedPaths:[${JSON.stringify(deniedRoot)}]}));
 let reader;
 try {
   assert(source);
   assert(!Object.hasOwn(executor,"exportSource"));
+  assert.equal(source.writableHostPaths.includes(${JSON.stringify(workspace)}),cwdWritable);
+  assert.equal(source.writableHostPaths.length,(${JSON.stringify(kind)}==="seatbelt"?1:0)+(cwdWritable?1:0));
+  const cwdWrite=await executor.execute({argv:[executor.commands.sh,"-c",'printf workspace-data > "$1"',"package-export",cwdMarker]});
+  if(cwdWritable){assert.equal(cwdWrite.exitCode,0,cwdWrite.stderr.toString());assert.equal(await readFile(cwdMarker,"utf8"),"workspace-data");}
+  else {assert.notEqual(cwdWrite.exitCode,0,"read-only CWD must reject sandbox writes");await assert.rejects(access(cwdMarker));}
   const created = await executor.execute({argv:["/bin/bash","-c",'printf private-package-data > "$HOME/report"; mkdir "$HOME/nested"; printf nested > "$HOME/nested/item"; ln -s "$1/export-denied-input" "$HOME/denied-link"',"package-export",${JSON.stringify(deniedRoot)}]});
   assert.equal(created.exitCode,0,created.stderr.toString());
   reader=await source.open();
@@ -51,8 +58,24 @@ try {
   await assert.rejects(reader.list("home",""),/export_aborted/);
   await reader.close();reader=undefined;
   assert.equal((await executor.execute({argv:[executor.commands.sh,"-c","printf %s peer-alive"]})).stdout.toString(),"peer-alive");
-  console.log("export-source-ok");
-} finally {await reader?.close();await executor.close();}
+  console.log("export-source-ok:"+(cwdWritable?"writable":"read-only"));
+} finally {await reader?.close();await executor.close();await rm(cwdMarker,{force:true});}
+}
+if (${JSON.stringify(kind)} === "bubblewrap") {
+  let source;
+  const executor=await createBubblewrapExecutor({cwd:"/tmp",cwdWritable:true,bubblewrapPath:"/usr/bin/bwrap",networkMode:"none",workerCommand:[process.execPath,${JSON.stringify(join(directory, "dist/runtime/worker-entry.js"))}],onExportSource:value=>{source=value;}});
+  let reader;
+  try {
+    const created=await executor.execute({argv:[executor.commands.sh,"-c",'printf private-home-data > "$HOME/report"']});
+    assert.equal(created.exitCode,0,created.stderr.toString());
+    assert.deepEqual(source.writableHostPaths,["/tmp"]);
+    reader=await source.open();
+    assert.deepEqual(reader.roots.map(root=>root.id),["home"]);
+    assert((await reader.list("home","")).entries.some(entry=>entry.name==="report"));
+    await assert.rejects(reader.list("tmp",""),/export_invalid_root/);
+    console.log("export-source-ok:host-tmp");
+  } finally {await reader?.close();await executor.close();}
+}
 // Exercise the shipped role and its lifecycle independently of native Seatbelt.
 // This host-only probe makes no confinement claim.
 const roleRoot=await mkdtemp(${JSON.stringify(join(dirname(workspace), "reader-role-"))});
@@ -98,5 +121,7 @@ try {
     maxBuffer: 64 * 1024,
     encoding: "utf8",
   });
-  assert.match(output, /export-source-ok/u);
+  assert.match(output, /export-source-ok:read-only/u);
+  assert.match(output, /export-source-ok:writable/u);
+  if (kind === "bubblewrap") assert.match(output, /export-source-ok:host-tmp/u);
 }

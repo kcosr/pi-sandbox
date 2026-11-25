@@ -52,7 +52,7 @@ describe("workspace mode composition", () => {
       network: "none",
       allowed: ["host", "sandbox"],
       modes: [
-        { name: "host", cwdWritable: true, exports: false, bash: "ask", write: "ask", edit: "ask" },
+        { name: "host", cwdWritable: true, exports: true, bash: "ask", write: "ask", edit: "ask" },
         {
           name: "sandbox",
           cwdWritable: false,
@@ -72,7 +72,7 @@ describe("workspace mode composition", () => {
         {
           name: "host",
           cwdWritable: true,
-          exports: false,
+          exports: true,
           bash: "disabled",
           write: "ask",
           edit: "ask",
@@ -103,7 +103,7 @@ describe("workspace mode composition", () => {
         },
       ],
     },
-  ])("preserves the prior host policy and resolves every mode in $file", (expected) => {
+  ])("resolves the packaged host policy and every mode in $file", (expected) => {
     const source = readFileSync(
       new URL(`../../config/default/${expected.file}`, import.meta.url),
       "utf8",
@@ -185,11 +185,6 @@ describe("workspace mode composition", () => {
   });
 
   it("checks effective relationships after composition rather than requiring launchable common defaults", () => {
-    const authored = changed((input) => {
-      table(input, "exports").enabled = true;
-      table(modes(input), "host").filesystem = { cwd_writable: false };
-    });
-    expect(resolveWorkspaceSelection(authored).config.exports.enabled).toBe(true);
     const noCommonClass = changed((input) => {
       table(input, "tools").read = invocation("deny");
       table(input, "tools").bash = { ...invocation("deny"), known_read_only: invocation() };
@@ -198,11 +193,6 @@ describe("workspace mode composition", () => {
     expect(
       resolveWorkspaceSelection(noCommonClass).config.tools.bash!.commandClasses,
     ).toBeUndefined();
-    expect(() =>
-      changed((input) => {
-        table(modes(input), "host").exports = { enabled: true };
-      }),
-    ).toThrow('workspace mode "host": config.workspace.modes.host.exports.enabled requires');
   });
 
   it("replaces complete invocation entries without retaining common classes, grants or command sets", () => {
@@ -223,24 +213,40 @@ describe("workspace mode composition", () => {
     expect(sandbox.commandSets).toBeUndefined();
   });
 
-  it("attributes conflicting CWD and export values to their common or mode origins", () => {
-    expect(() =>
-      changed((input) => {
-        table(input, "filesystem").cwd_writable = false;
-        table(input, "exports").enabled = true;
-        table(modes(input), "host").filesystem = { cwd_writable: true };
-      }),
-    ).toThrow(
-      'workspace mode "host": config.exports.enabled requires a confined backend and config.workspace.modes.host.filesystem.cwd_writable = false',
-    );
-    expect(() =>
-      changed((input) => {
-        table(modes(input), "host").exports = { enabled: true };
-      }),
-    ).toThrow(
-      'workspace mode "host": config.workspace.modes.host.exports.enabled requires a confined backend and config.filesystem.cwd_writable = false',
-    );
+  it("selects export admission independently of CWD writability", () => {
+    const authored = changed((input) => {
+      table(input, "filesystem").cwd_writable = false;
+      table(input, "exports").enabled = true;
+      table(modes(input), "host").filesystem = { cwd_writable: true };
+      table(modes(input), "sandbox").exports = { enabled: false };
+    });
+    expect(resolveWorkspaceSelection(authored).config).toMatchObject({
+      filesystem: { cwdWritable: true },
+      exports: { enabled: true },
+    });
+    expect(resolveWorkspaceSelection(authored, undefined, "sandbox").config).toMatchObject({
+      filesystem: { cwdWritable: false },
+      exports: { enabled: false },
+    });
   });
+
+  it.each(["common", "mode"])(
+    "attributes direct-mode export rejection to its %s origin",
+    (origin) => {
+      expect(() =>
+        changed((input) => {
+          table(input, "execution").backend = "direct";
+          table(input, "network").mode = "host";
+          table(input, "workspace").allowed = ["host"];
+          delete modes(input).sandbox;
+          table(input, "exports").enabled = origin === "common";
+          if (origin === "mode") table(modes(input), "host").exports = { enabled: true };
+        }),
+      ).toThrow(
+        `workspace mode "host": config.${origin === "mode" ? "workspace.modes.host." : ""}exports.enabled requires a confined backend`,
+      );
+    },
+  );
 
   it("normalizes equivalent command sets but rejects conflicting IDs in unused entries", () => {
     const authored = changed((input) => {

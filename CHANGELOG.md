@@ -4,6 +4,10 @@
 
 ### Breaking changes
 
+- Confined host defaults now enable exports. Accounts overridden to `direct`
+  need an administrator-authored exports-disabled mode and suitable allowed/default
+  selection; account rules cannot disable exports.
+  ([#60](https://github.com/kcosr/pi-sandbox/pull/60))
 - Require main schema 16, service rule version 12 and distribution schema 4;
   migrate workspace policy and replace per-user broker/audit units explicitly.
   Compiled builds require Bun 1.4.4 or newer for isolated TLS trust.
@@ -11,6 +15,9 @@
 
 ### Added
 
+- Allow user-directed sandbox saving with a writable CWD; enable exports in
+  packaged Bubblewrap and Seatbelt host modes while retaining private scratch exclusion.
+  ([#60](https://github.com/kcosr/pi-sandbox/pull/60))
 - Add a concurrent Unix/HTTPS configuration and audit service, shared local/service
   configuration profiles, in-memory model catalogs and recoverable audit gates.
   ([#59](https://github.com/kcosr/pi-sandbox/pull/59))
@@ -29,6 +36,8 @@
 
 ### Fixed
 
+- Keep Seatbelt scratch free of probe files and export-reader cache artifacts.
+  ([#60](https://github.com/kcosr/pi-sandbox/pull/60))
 - Increase automatic subagent reports to 16 KiB with explicit truncation notices
   and cursor-based `inspect_agent` retrieval of saved final-answer text.
   ([#55](https://github.com/kcosr/pi-sandbox/pull/55))
