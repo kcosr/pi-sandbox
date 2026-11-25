@@ -9,7 +9,7 @@ const baseline: SeatbeltPolicy = {
   workspace: directory("/work/ancestor/workspace"),
   workspaceWritable: true,
   temporaryDirectories: [directory("/session/temp")],
-  deniedDirectories: [directory("/work/ancestor"), directory("/work/ancestor/workspace/a/secret")],
+  deniedPaths: [directory("/work/ancestor"), directory("/work/ancestor/workspace/a/secret")],
   networkMode: "none",
 };
 
@@ -17,7 +17,7 @@ describe("Seatbelt profile generation", () => {
   it("is deterministic, immutable and parameterizes all paths", () => {
     const input = {
       ...baseline,
-      deniedDirectories: [...baseline.deniedDirectories].reverse(),
+      deniedPaths: [...baseline.deniedPaths].reverse(),
     };
     const first = buildSeatbeltProfile(baseline);
     expect(buildSeatbeltProfile(input)).toEqual(first);
@@ -48,7 +48,7 @@ describe("Seatbelt profile generation", () => {
 
   it("keeps quotes, backslashes, spaces and Unicode out of SBPL source", () => {
     const workspace = directory('/work/space 雪\\") (allow default) ;');
-    const result = buildSeatbeltProfile({ ...baseline, workspace, deniedDirectories: [] });
+    const result = buildSeatbeltProfile({ ...baseline, workspace, deniedPaths: [] });
     expect(Object.values(result.parameters)).toContain(workspace);
     expect(result.profile).not.toContain("allow default");
   });
@@ -79,9 +79,9 @@ describe("Seatbelt profile generation", () => {
   });
 
   it("rejects protected workspace equality and overlapping scratch authority", () => {
-    expect(() =>
-      buildSeatbeltProfile({ ...baseline, deniedDirectories: [baseline.workspace] }),
-    ).toThrow("seatbelt_workspace_denied");
+    expect(() => buildSeatbeltProfile({ ...baseline, deniedPaths: [baseline.workspace] })).toThrow(
+      "seatbelt_workspace_denied",
+    );
     for (const path of [
       baseline.workspace,
       "/work",
@@ -139,7 +139,7 @@ describe("Seatbelt profile generation", () => {
   });
 
   it("keeps sensitive canonical private directories available as read denials", () => {
-    const deniedDirectories = [
+    const deniedPaths = [
       "/private",
       "/private/etc",
       "/private/var/root",
@@ -148,9 +148,8 @@ describe("Seatbelt profile generation", () => {
       "/private/var/tmp",
       "/private/var/folders",
     ].map(directory);
-    const result = buildSeatbeltProfile({ ...baseline, deniedDirectories });
-    for (const value of deniedDirectories)
-      expect(Object.values(result.parameters)).toContain(value);
+    const result = buildSeatbeltProfile({ ...baseline, deniedPaths });
+    for (const value of deniedPaths) expect(Object.values(result.parameters)).toContain(value);
     expect(result.profile).toContain("(require-not (subpath");
   });
 
@@ -158,8 +157,8 @@ describe("Seatbelt profile generation", () => {
     "permits %s as a denial ancestor without granting its whole tree",
     (root) => {
       const workspace = directory(`${root}/fixture/workspace`);
-      const deniedDirectories = [directory(root), directory(`${workspace}/private`)];
-      const result = buildSeatbeltProfile({ ...baseline, workspace, deniedDirectories });
+      const deniedPaths = [directory(root), directory(`${workspace}/private`)];
+      const result = buildSeatbeltProfile({ ...baseline, workspace, deniedPaths });
       const key = Object.entries(result.parameters).find(([, value]) => value === root)![0];
       expect(result.profile).toContain(`(require-any (require-not (subpath (param "${key}")))`);
       expect(result.profile).not.toContain(`(allow file-write* (subpath (param "${key}"))`);
@@ -194,7 +193,7 @@ describe("Seatbelt profile generation", () => {
       { networkMode: "proxy" },
       { workspaceWritable: undefined },
       { temporaryDirectories: null },
-      { deniedDirectories: "/secret" },
+      { deniedPaths: "/secret" },
     ]) {
       expect(() => buildSeatbeltProfile({ ...baseline, ...patch } as SeatbeltPolicy)).toThrow();
     }
@@ -204,7 +203,7 @@ describe("Seatbelt profile generation", () => {
     expect(() =>
       buildSeatbeltProfile({
         ...baseline,
-        deniedDirectories: Array.from({ length: 65 }, (_, i) => directory(`/deny/${i}`)),
+        deniedPaths: Array.from({ length: 65 }, (_, i) => directory(`/deny/${i}`)),
       }),
     ).toThrow();
     expect(() =>
@@ -213,7 +212,7 @@ describe("Seatbelt profile generation", () => {
     expect(() =>
       buildSeatbeltProfile({
         ...baseline,
-        deniedDirectories: Array.from({ length: 64 }, (_, i) =>
+        deniedPaths: Array.from({ length: 64 }, (_, i) =>
           directory(`/deny/${i}/${"x".repeat(2000)}`),
         ),
       }),

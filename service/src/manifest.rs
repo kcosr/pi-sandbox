@@ -7,7 +7,7 @@ use serde::Deserialize;
 use sha2::{Digest, Sha256};
 use subtle::ConstantTimeEq;
 
-use crate::protocol::{CONFIG, Result, normalized, text};
+use crate::protocol::{CONFIG, Error, Result, normalized, text};
 use crate::sources::{protected_metadata, read_protected};
 
 #[derive(Debug, Deserialize)]
@@ -73,13 +73,16 @@ impl Password {
 }
 impl Manifest {
     pub fn load(path: &Path) -> Result<Self> {
-        let bytes = read_protected(path, 1024 * 1024, false, 0)?;
+        let bytes = read_protected(path, 1024 * 1024, false, unsafe { libc::geteuid() })?;
         let value = crate::protocol::toml_json(
             toml::from_str(std::str::from_utf8(&bytes).map_err(|_| CONFIG)?).map_err(|_| CONFIG)?,
         )?;
         let manifest: Self = serde_json::from_value(value).map_err(|_| CONFIG)?;
         manifest.check()?;
         Ok(manifest)
+    }
+    pub(crate) fn admitted_owner(&self) -> Result<u32> {
+        admit_owner(unsafe { libc::geteuid() }, &self.listeners)
     }
     pub(crate) fn check(&self) -> Result<()> {
         if self.manifest_version != 1 || self.listeners.is_empty() || self.listeners.len() > 16 {
@@ -140,12 +143,25 @@ impl Manifest {
             || limit.rlim_cur < (self.limits.max_connections + 1024) as libc::rlim_t
         {
             eprintln!(
-                "pi-sandbox-service: file descriptor soft limit must be at least max_connections + 1024; raise LimitNOFILE"
+                "pi-sandbox-service: file descriptor soft limit must be at least max_connections + 1024; raise ulimit -n in the launching shell or systemd LimitNOFILE"
             );
             return Err(CONFIG);
         }
         Ok(())
     }
+}
+fn admit_owner(owner: u32, listeners: &[Listener]) -> Result<u32> {
+    if owner != 0
+        && listeners
+            .iter()
+            .any(|listener| listener.socket_path.is_some())
+    {
+        eprintln!(
+            "pi-sandbox-service: Unix listeners require root; a non-root service must be HTTPS-only"
+        );
+        return Err(Error("admission_denied"));
+    }
+    Ok(owner)
 }
 impl Listener {
     fn check(&self) -> Result<()> {
@@ -294,6 +310,28 @@ pub(crate) fn basic_name(s: &str) -> bool {
 mod tests {
     use super::*;
     use crate::testing::Fixture;
+    #[test]
+    fn non_root_admission_requires_every_listener_to_be_https() {
+        let f = Fixture::new();
+        let unix = f.listener.clone();
+        let mut https = unix.clone();
+        https.transport = "https".into();
+        https.socket_path = None;
+        for listeners in [
+            vec![unix.clone()],
+            vec![https.clone()],
+            vec![unix.clone(), https.clone()],
+            vec![https, unix],
+        ] {
+            assert_eq!(admit_owner(0, &listeners), Ok(0));
+            let expected = if listeners.iter().any(|l| l.transport == "unix") {
+                Err(Error("admission_denied"))
+            } else {
+                Ok(1000)
+            };
+            assert_eq!(admit_owner(1000, &listeners), expected);
+        }
+    }
     #[test]
     fn manifest_exact_shape_facility_and_listener_scoped_limits() {
         let f = Fixture::new();

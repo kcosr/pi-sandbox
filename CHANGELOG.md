@@ -15,6 +15,9 @@
 
 ### Added
 
+- Allow HTTPS-only configuration/audit services to run under an unprivileged
+  account with account-owned protected inputs; Unix listeners remain root-only.
+  ([#61](https://github.com/kcosr/pi-sandbox/pull/61))
 - Allow user-directed sandbox saving with a writable CWD; enable exports in
   packaged Bubblewrap and Seatbelt host modes while retaining private scratch exclusion.
   ([#60](https://github.com/kcosr/pi-sandbox/pull/60))
@@ -36,6 +39,8 @@
 
 ### Fixed
 
+- Accept regular-file denials and skip missing paths at macOS Seatbelt startup.
+  ([#61](https://github.com/kcosr/pi-sandbox/pull/61))
 - Keep Seatbelt scratch free of probe files and export-reader cache artifacts.
   ([#60](https://github.com/kcosr/pi-sandbox/pull/60))
 - Increase automatic subagent reports to 16 KiB with explicit truncation notices

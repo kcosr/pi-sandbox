@@ -66,8 +66,10 @@ under the selected CA does not.
 
 ## Daemon and listeners
 
-One concurrent Linux Rust `pi-sandbox-service` process runs as root under an
-ordinary `pi-sandbox-service.service` unit. It binds its own listeners and never
+One concurrent Linux Rust `pi-sandbox-service` process binds its own listeners. The
+packaged `pi-sandbox-service.service` unit runs it as root. Any Unix listener requires
+root, including a mixed Unix/HTTPS manifest; an HTTPS-only manifest may also run
+under an unprivileged service account. The daemon never
 spawns a systemd instance or application process per user. macOS installs no
 privileged daemon. The service does not execute tools or proxy model requests.
 Client and service packages are separate; see [installation](installation.md).
@@ -108,16 +110,54 @@ Each listener owns its platform, policy and syslog facility (`local0`–`local7`
 An omitted rule directory means no rules; a declared missing directory fails.
 Restart the daemon for manifest, listener, TLS or ingress-credential changes.
 Policy/rule/catalog/secret files are read per configuration request; running
-clients retain their captured snapshots. Deployment protects service manifest,
-policy/catalog/rule paths and their ancestors. Rule files are root-owned regular
-`0600` files. Secret references use ordinary permissions and symlink following;
+clients retain their captured snapshots. Administrative manifest, policy, catalog,
+rule, certificate and credential files must belong to the daemon's effective UID.
+Rule directories also belong to that UID. All ancestors must belong to root or
+that UID; paths must be non-symlink and not group/world writable. Policies,
+catalogs and certificate chains may be `0644`; rules, private keys and Basic
+password files must be `0600`. A root daemon still requires root-owned inputs.
+Secret references use ordinary permissions and symlink following;
 the deployment must prevent untrusted redirection of privileged reads.
+
+### Foreground HTTPS-only operation
+
+An HTTPS-only service can keep its executable and inputs under the service
+account's home and run directly, without systemd or installation under `/opt` or
+`/run`. Provision a manifest containing only HTTPS listeners, using absolute
+physical paths and the ownership/modes above. A symlinked or group/world-writable
+ancestor is rejected, including an unsafe home directory. Use an unprivileged
+port such as `19443` and keep server keys separate from client-distributed credentials.
+
+Run validation and startup as the same account:
+
+```sh
+umask 077
+ulimit -n 4096
+./pi-sandbox-service --validate --manifest "$HOME/pi-service/service.toml"
+exec ./pi-sandbox-service --manifest "$HOME/pi-service/service.toml"
+```
+
+`umask` protects newly created files; it does not repair existing modes. The soft
+file-descriptor limit must be at least `max_connections + 1024` (4096 suffices for
+the default limits), within the account's hard limit. The service account must be
+able to submit audit records to the host's existing `/dev/log`; missing or denied
+syslog access still fails audited operations. Offline validation does not contact
+syslog or read private-key/password/secret contents; startup checks TLS and Basic
+credentials. Non-root Unix or mixed manifests are rejected in both validation and
+startup, before any listener activates. No privilege switch or ownership repair
+is performed.
 
 ## Identity and trust
 
 Unix connections capture Linux `SO_PEERCRED` UID/PID before dispatch. Bounded
 host account lookup supplies the canonical username and primary/supplementary
 groups. Requests cannot replace that identity with a body assertion.
+
+Clients authenticate the configured service through the protected root-owned Unix
+socket path or the compiled HTTPS hostname and TLS trust. The HTTPS daemon's UID
+does not select client trust. Client users must not have the server private key or
+authority to issue trusted certificates for that hostname. An operator-owned trial
+service is intentional; use separate trial and production keys and credentials.
 
 HTTPS checks Basic authentication on every request and accepts a canonical
 OS-derived username in the request body. Optional machine ID is metadata, not a

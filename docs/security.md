@@ -49,14 +49,22 @@ scratch directories. `cwd_writable = false` removes CWD write authority.
 Apple marks `sandbox-exec` deprecated. Treat continued availability and policy
 behavior as macOS qualification requirements; an unavailable launcher or failed
 enforcement probe aborts startup rather than selecting direct execution.
-`filesystem.denied_paths` denies reads and writes to canonical existing directories,
+`filesystem.denied_paths` denies reads and writes to canonical existing files and directories,
 including selected CWD descendants. Denials are not empty mounts and may expose
 names in parent listings. A denied ancestor admits only the CWD subtree, with
 explicit interior denials applied afterward. Denying CWD itself is rejected.
 Root `/`, system trees `/System`, `/usr`, `/bin`, `/sbin`, `/dev`, and known
 noncanonical aliases `/tmp`, `/var`, `/etc` are invalid denial targets. Broad
 account/data roots such as `/Users`, `/Volumes`, and `/Library` may be denied,
-but are not valid whole-workspace grants.
+but are not valid whole-workspace grants. Missing targets are skipped at startup;
+if created later, they may be accessible until restart. Symlink components
+(including dangling links), non-directory ancestors, special files and permission
+errors still fail startup. Directory identities retain per-command inode checks.
+Regular files retain canonical-path and type checks, so atomic host replacement
+remains protected without stopping commands; removal or symlink/type substitution
+fails subsequent command admission. Sandbox code cannot create a new hard link
+or clone of a denied file into writable CWD or scratch. Pre-existing hard-link
+aliases remain a limitation of pathname-based denials.
 
 There are no PID, filesystem, IPC or network namespaces, private `/tmp`, VM,
 or parent-death containment. Scratch is real host storage with best-effort removal.
@@ -64,7 +72,7 @@ or parent-death containment. Scratch is real host storage with best-effort remov
 subject to other policy restrictions. Private-loopback `local` is unsupported.
 The policy uses a cleared environment plus fixed values and the admitted sandbox
 scope; those values remain model-visible. Broad filesystem reads can still expose
-credentials outside denied directories. Path aliases and existing filesystem
+credentials outside denied paths. Path aliases and existing filesystem
 relationships must not be treated as inode-level confidentiality guarantees.
 
 Commands may overlap and have bounded argv, stdin and output. Optional caller or
@@ -143,7 +151,7 @@ invoking account's authority, including startup and background activity before
 any tool approval. HTTP tools exercise the server's authority. Sandbox network
 and filesystem exclusion settings do not constrain either transport. Enabling a server
 authorizes connection and tool discovery even if every tool policy is disabled.
-On Linux, root-managed user/group rules may change a globally defined server's
+Administrator-managed service user/group rules may change a globally defined server's
 enabled flag and tool approval policies. Matching explicit true wins over false
 for admission. Each file's first matching tool rule or explicit default
 contributes a complete approval pair; the least restrictive pair replaces the
@@ -238,7 +246,13 @@ are disabled; selected personal cloud methods remain bounded explicit sources.
 inputs. Exact `--version` is offline; ordinary help validates source/mode context.
 
 The Linux service protects its administrative manifest, policy/catalog/rule inputs
-and socket ancestry. Every rule is structurally validated; only matching rules
+and socket ancestry. HTTPS-only services may run unprivileged, with administrative
+files owned by the effective service UID and non-symlink ancestors owned by root or
+that UID, protected from group/other writes. Rule directories belong to that UID;
+rule files, TLS private keys and Basic passwords remain `0600`. Any Unix listener
+still requires root and the client's root-owned socket/ancestor checks. Root
+execution retains root-owned inputs even for HTTPS-only listeners. Every rule is
+structurally validated; only matching rules
 are checked against the listener's tool/MCP/mode inventories. Local file loading
 uses ordinary permissions and symlink following, so deployment is responsible for
 its protection. Secret-file references also use normal permission/symlink rules;
@@ -547,7 +561,7 @@ seccomp permits `socket`. Sandboxed commands can therefore reach host loopback,
 LAN, Internet, metadata endpoints, and visible or abstract Unix-domain services
 subject only to ordinary host controls. This is not filtered egress. Bubblewrap
 does not enforce IP, port, hostname, or destination rules. Only the fixed base
-configuration or a root-managed service user/group rule can select this mode.
+configuration or an administrator-managed service user/group rule can select this mode.
 
 In every mode the classic seccomp BPF program denies the three `io_uring`
 control syscalls. In `none` and `local`, anonymous `socketpair()` is restricted to
@@ -899,7 +913,11 @@ UID/PID are never inferred from server-side accounts. Shared Unix accounts remai
 shared principals, and shared HTTPS credentials permit assertion impersonation.
 Pi session identifiers, tool metadata and outcomes originate in the client.
 
-Root ownership protects the Unix service endpoint and daemon inputs. Host syslog
+Root ownership protects the Unix service endpoint; effective-service-UID ownership
+protects daemon inputs. HTTPS server keys must remain inaccessible to client users:
+the client authenticates the compiled endpoint through TLS, not the daemon's UID.
+Running a trial server as its operator does not isolate that server from its operator.
+Host syslog
 owns protection, persistence and forwarding of accepted records. Acknowledgment
 means successful local submission, not durable storage. Audited intent must be
 accepted before effects, including publication-time checks for user exports.

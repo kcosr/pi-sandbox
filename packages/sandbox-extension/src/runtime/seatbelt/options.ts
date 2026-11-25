@@ -16,13 +16,14 @@ import {
   assertSeatbeltPath,
   isSeatbeltPathWithin,
   type CanonicalSeatbeltDirectory,
+  type CanonicalSeatbeltPath,
 } from "./paths.js";
 import { buildSeatbeltProfile, type SeatbeltPolicy } from "./policy.js";
 
 export interface CreateSeatbeltExecutorOptions {
   readonly cwd: string;
   readonly cwdWritable?: boolean;
-  /** Existing canonical directories denied access, not masked by private mounts. */
+  /** Canonical files/directories denied access, not masked. Missing paths are skipped at startup. */
   readonly deniedPaths?: readonly string[];
   readonly networkMode?: "none" | "host";
   readonly environment?: Readonly<Record<string, string>>;
@@ -46,15 +47,15 @@ export function seatbeltBasePolicy(options: CreateSeatbeltExecutorOptions): Seat
     workspace: options.cwd as CanonicalSeatbeltDirectory,
     workspaceWritable: options.cwdWritable ?? true,
     temporaryDirectories: Object.freeze([]),
-    deniedDirectories: Object.freeze([
+    deniedPaths: Object.freeze([
       ...(options.deniedPaths ?? []),
-    ]) as readonly CanonicalSeatbeltDirectory[],
+    ]) as readonly CanonicalSeatbeltPath[],
     networkMode: options.networkMode ?? "none",
   });
 }
 
 export function canReadSeatbeltPath(policy: SeatbeltPolicy, target: string): boolean {
-  return policy.deniedDirectories.every(
+  return policy.deniedPaths.every(
     (denied) =>
       !isSeatbeltPathWithin(denied, target) ||
       (isSeatbeltPathWithin(denied, policy.workspace) &&

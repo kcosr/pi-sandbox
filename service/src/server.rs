@@ -800,10 +800,8 @@ impl Drop for SocketCleanup {
     }
 }
 pub async fn run(manifest: Manifest) -> Result<()> {
-    if unsafe { libc::geteuid() } != 0 {
-        return Err(Error("admission_denied"));
-    }
     manifest.check()?;
+    let owner = manifest.admitted_owner()?;
     manifest.descriptor_limit()?;
     let runtime = Arc::new(Runtime {
         audit: Audit::new(manifest.limits.clone(), Arc::new(Syslog))?,
@@ -815,13 +813,13 @@ pub async fn run(manifest: Manifest) -> Result<()> {
             new_work: BTreeMap::new(),
         })),
         limits: manifest.limits,
-        owner: 0,
+        owner,
     });
     let mut prepared = Vec::new();
     for config in manifest.listeners {
-        config.validate_material_metadata(0)?;
-        let passwords = config.passwords(0)?;
-        let tls = config.tls(0)?;
+        config.validate_material_metadata(owner)?;
+        let passwords = config.passwords(owner)?;
+        let tls = config.tls(owner)?;
         prepared.push(Arc::new(ActiveListener {
             config,
             passwords,

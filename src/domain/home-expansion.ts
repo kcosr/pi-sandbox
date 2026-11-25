@@ -48,7 +48,7 @@ export function expandManagedHomePaths(
     new Set(deniedPaths).size !== deniedPaths.length
   ) {
     throw new Error(
-      "Expanded filesystem.denied_paths must contain unique normalized absolute directory paths",
+      "Expanded filesystem.denied_paths must contain unique normalized absolute paths",
     );
   }
 

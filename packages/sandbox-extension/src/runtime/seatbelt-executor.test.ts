@@ -10,6 +10,7 @@ import {
   open,
   readFile,
   realpath,
+  rename,
   rm,
   symlink,
   writeFile,
@@ -300,14 +301,114 @@ describe.skipIf(prerequisite !== undefined)("native Seatbelt executor", () => {
     expect(result.stdout.toString().trim()).toBe("workspace");
   });
 
-  it("rejects missing, file and aliased policy paths without fallback", async () => {
+  it.each(runtimes)(
+    "%s denies individual files with either CWD write policy",
+    async (_name, runtime) => {
+      const parent = path.join(cwd, "credentials");
+      await mkdir(parent);
+      const file = path.join(parent, ".git-credentials");
+      await writeFile(file, "protected-file");
+      await writeFile(`${file}.backup`, "visible-sibling");
+      await symlink(file, path.join(cwd, "file-alias"));
+      const cloneControl = await executeHost(runtime, [
+        "-e",
+        `
+        const fs=require('node:fs');
+        try {
+          fs.copyFileSync(${JSON.stringify(`${file}.backup`)},${JSON.stringify(`${file}.clone-control`)},fs.constants.COPYFILE_FICLONE_FORCE);
+          fs.unlinkSync(${JSON.stringify(`${file}.clone-control`)}); console.log('supported');
+        } catch(e) { if(e.code!=='ENOSYS')throw e; console.log('ENOSYS'); }`,
+      ]);
+      const cloneSupported = cloneControl.stdout.trim() === "supported";
+      if (!cloneSupported) {
+        expect(cloneControl.stdout.trim()).toBe("ENOSYS");
+        console.info(
+          `${_name}: forced-clone API unavailable outside Seatbelt (ENOSYS); hard-link and ordinary denial checks still run`,
+        );
+      }
+      for (const cwdWritable of [true, false]) {
+        const executor = await create({ cwdWritable, deniedPaths: [fixture, file] });
+        const result = await executor.execute({
+          argv: [
+            runtime,
+            "-e",
+            `
+        const fs=require('node:fs'); const file=${JSON.stringify(file)};
+        const denied=(fn)=>{try{fn();throw Error('allowed')}catch(e){if(e.code!=='EPERM'&&e.code!=='EACCES')throw e}};
+        if(fs.readFileSync(file+'.backup','utf8')!=='visible-sibling')throw Error('sibling');
+        denied(()=>fs.readFileSync(file)); denied(()=>fs.readFileSync('file-alias'));
+        denied(()=>fs.writeFileSync(file,'changed')); denied(()=>fs.unlinkSync(file));
+        denied(()=>fs.renameSync(file,file+'.moved')); denied(()=>fs.renameSync('credentials','moved'));
+        fs.writeFileSync(process.env.TMPDIR+'/control-source','control');
+        for (const base of [process.env.TMPDIR, ...(${JSON.stringify(cwdWritable)} ? [process.cwd()] : [])]) {
+          // Positive controls distinguish policy rejection from unsupported link/clone operations.
+          fs.linkSync(process.env.TMPDIR+'/control-source',base+'/allowed-link');
+          denied(()=>fs.linkSync(file,base+'/denied-link'));
+          fs.unlinkSync(base+'/allowed-link');
+          if (${JSON.stringify(cloneSupported)}) {
+            fs.copyFileSync(process.env.TMPDIR+'/control-source',base+'/allowed-clone',fs.constants.COPYFILE_FICLONE_FORCE);
+            denied(()=>fs.copyFileSync(file,base+'/denied-clone',fs.constants.COPYFILE_FICLONE_FORCE));
+            fs.unlinkSync(base+'/allowed-clone');
+          }
+        }
+        fs.writeFileSync(process.env.TMPDIR+'/replacement','replacement');
+        denied(()=>fs.renameSync(process.env.TMPDIR+'/replacement',file));
+        console.log('file-denied');`,
+          ],
+        });
+        expect(result.exitCode, result.stderr.toString()).toBe(0);
+        expect(result.stdout.toString().trim()).toBe("file-denied");
+        expect(await readFile(file, "utf8")).toBe("protected-file");
+      }
+    },
+  );
+
+  it("skips absent denials once and does not claim protection for later host creation", async () => {
+    const missing = path.join(fixture, "absent", "credentials");
+    const executor = await create({ deniedPaths: [secret, missing] });
+    await mkdir(path.dirname(missing));
+    await writeFile(missing, "created-later");
+    const result = await executor.execute({ argv: ["/bin/cat", missing] });
+    expect(result.exitCode, result.stderr.toString()).toBe(0);
+    expect(result.stdout.toString()).toBe("created-later");
+  });
+
+  it("keeps file denials after atomic host replacement without stopping commands", async () => {
+    const file = path.join(cwd, ".git-credentials");
+    await writeFile(file, "before");
+    const executor = await create({ deniedPaths: [file] });
+    await writeFile(`${file}.new`, "after");
+    await rename(`${file}.new`, file);
+    expect((await executor.execute({ argv: ["/bin/echo", "still-running"] })).exitCode).toBe(0);
+    expect((await executor.execute({ argv: ["/bin/cat", file] })).exitCode).not.toBe(0);
+    expect(await readFile(file, "utf8")).toBe("after");
+  });
+
+  it.each(["directory", "symlink"])(
+    "rejects host substitution of a denied file with a %s",
+    async (kind) => {
+      const file = path.join(cwd, ".git-credentials");
+      await writeFile(file, "before");
+      const executor = await create({ deniedPaths: [file] });
+      await rename(file, `${file}.old`);
+      if (kind === "directory") await mkdir(file);
+      else await symlink(`${file}.old`, file);
+      await expect(executor.execute({ argv: ["/bin/echo", "must-not-run"] })).rejects.toMatchObject(
+        { code: "sandbox_process_failed" },
+      );
+    },
+  );
+
+  it("rejects invalid workspaces and aliased or invalid denied paths without fallback", async () => {
     const alias = path.join(fixture, "alias");
     await symlink(cwd, alias);
     for (const options of [
       { cwd: alias },
       { deniedPaths: [alias] },
-      { deniedPaths: [path.join(secret, "marker")] },
-      { deniedPaths: [path.join(fixture, "absent")] },
+      { cwd: path.join(fixture, "absent") },
+      { cwd: path.join(secret, "marker") },
+      { deniedPaths: [path.join(alias, "absent")] },
+      { deniedPaths: [path.join(secret, "marker", "absent")] },
     ])
       await expect(create(options)).rejects.toMatchObject({ code: "sandbox_start_failed" });
   });

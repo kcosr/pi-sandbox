@@ -538,7 +538,7 @@ function parseFilesystem(value: unknown, issues: string[]): FilesystemConfig | u
     new Set(deniedPaths).size !== deniedPaths.length
   ) {
     issues.push(
-      "config.filesystem.denied_paths must be an array of unique normalized absolute or home-relative directory paths",
+      "config.filesystem.denied_paths must be an array of unique normalized absolute or home-relative paths",
     );
     return undefined;
   }

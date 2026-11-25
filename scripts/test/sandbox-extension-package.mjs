@@ -45,6 +45,8 @@ try {
     const home = join(temp, `home-${index}`);
     await mkdir(workspace);
     await mkdir(home);
+    const deniedFile = join(workspace, ".git-credentials");
+    if (selected.kind === "seatbelt") await writeFile(deniedFile, "DENIED_FILE_MARKER");
     const config = join(temp, `config-${index}.json`);
     const backend =
       selected.kind === "bubblewrap"
@@ -62,7 +64,7 @@ try {
               kind: "seatbelt",
               network: "none",
               cwdWritable: true,
-              deniedPaths: [home],
+              deniedPaths: [home, deniedFile, join(temp, `missing-${index}`, "credentials")],
               environment: {},
             }
           : { kind: "direct", environment: {} };
@@ -148,6 +150,14 @@ try {
       throw new Error(`No ${type} response: ${errors}\n${output}`);
     }
     await request("get_state");
+    if (selected.kind === "seatbelt") {
+      const deniedRead = await request("bash", { command: "cat .git-credentials" });
+      assert.notEqual(deniedRead.data.exitCode, 0);
+      assert(!deniedRead.data.output.includes("DENIED_FILE_MARKER"));
+      const deniedWrite = await request("bash", { command: "printf changed > .git-credentials" });
+      assert.notEqual(deniedWrite.data.exitCode, 0);
+      assert.equal(await readFile(deniedFile, "utf8"), "DENIED_FILE_MARKER");
+    }
     if (selected.kind === "bubblewrap") {
       const first = await request("bash", { command: "readlink /proc/self/ns/pid" });
       assert.equal(first.data.exitCode, 0, JSON.stringify(first));

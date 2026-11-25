@@ -156,6 +156,12 @@ supported 16-listener, 4,096-connection and 8,192-session ceilings, recording me
 thread and descriptor high-water marks under the unit's descriptor limit. Its
 synthetic pressure UIDs hold sockets without making account-dependent requests.
 Actual Unix identity/request checks and account separation remain in the matrix.
+The same isolated harness also runs the binary as a non-root UID with account-owned
+HTTPS inputs. It verifies real TLS bootstrap, username rules and secret reads,
+audit delivery and denied-syslog failure, and matching `--validate`/startup rejection
+of Unix or mixed listeners without partial activation. Wrong file owners, unsafe
+modes, symlinked ancestry and root access to user-owned input trees remain negative
+controls. These checks never send records to the host log service.
 
 On macOS the verifier requires real Seatbelt controls and both Node/Bun runtime
 fixtures. It selects Bun from `PI_SANDBOX_TEST_BUN`, `PI_SANDBOX_BUN`, or the
@@ -361,8 +367,18 @@ standard-extension acceptance remains `npm run test:extension`.
 
 Verify all seven tools, user `!`, canonical CWD, read-only and writable CWD,
 ordinary outside reads with denied writes, real host scratch, and existing
-canonical directory denials. Reject unsupported `local`, removed lifetime fields,
-nonempty hidden paths, missing/symlink/file denials, contradictory grants and
+canonical file/directory denials. Exercise files under writable and read-only CWD,
+ancestor restoration, sibling access, blocked reads/writes/unlink/replacement and
+ancestor renames, atomic host file replacement without losing protection or command
+availability, rejected symlink/type substitution, missing leaf/parent skips and later
+creation, dangling/ancestor symlinks, permission errors and special-file rejection.
+Native checks must deny new hard links and forced clones of protected files into
+writable CWD or scratch, with working positive controls for each operation.
+Probe forced-clone support outside Seatbelt first: a runtime returning `ENOSYS`
+cannot exercise that control and must report it explicitly without skipping its
+hard-link or other denial checks. Never count an unsupported operation as a policy denial.
+Qualify both native Node/Bun execution and compiled/standalone package paths. Reject unsupported `local`, removed lifetime fields,
+nonempty hidden paths, symlink-component/non-directory-ancestor/special-file denials, contradictory grants and
 unknown launcher fields. Verify none/host networking, no direct fallback, bounded
 input/output, concurrent execution, cancellation and close, and accurate diagnostics.
 

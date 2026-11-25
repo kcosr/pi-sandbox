@@ -244,8 +244,11 @@ independent and remains host-owned.
 
 ## Service identity, rules and audit
 
-Use one concurrent Linux Rust daemon with an ordinary root systemd unit, not a
-per-user/per-connection service. Both Unix and HTTPS use bounded HTTP/1.1
+Package one concurrent Linux Rust daemon with an ordinary root systemd unit.
+Do not spawn per-user or per-connection service instances.
+HTTPS-only deployments may also run in the foreground as an unprivileged account
+with administrative inputs owned by that account; any Unix listener requires root.
+Both Unix and HTTPS use bounded HTTP/1.1
 `POST /v1/service`, protocol 1, for bootstrap, policy inspection and audit handles.
 Unix identity comes from `SO_PEERCRED` plus bounded host account/group lookup;
 HTTPS authenticates Basic ingress and accepts exact username assertions without
@@ -549,7 +552,7 @@ survivors, final Linux teardown, unchanged approvals and same-file coordination.
 
 Every composed workspace mode requires `[filesystem].cwd_writable`, supplied by
 common defaults or its mode overlay. Packaged host modes use `true`; confined
-sandbox modes use `false`. Root-managed user/group rules may replace that setting under
+sandbox modes use `false`. Administrator-managed service user/group rules may replace that setting under
 `[overrides.filesystem]`. Effective direct execution requires `true`.
 
 The Bubblewrap backend always creates an explicit same-path CWD bind after its
@@ -576,7 +579,9 @@ managed host tools retain their declared host authority.
 
 Managed schema 16 requires `[filesystem].denied_paths`, empty for
 Bubblewrap/direct. macOS Seatbelt rejects hidden paths
-and local networking, and accepts canonical existing directory denials. A denied
+and local networking, and accepts canonical existing file/directory denials, skipping missing targets at startup.
+Symlink components, non-directory ancestors, special files and permission errors
+still fail closed; paths created after being skipped may be visible until restart. A denied
 ancestor admits only CWD; explicit interior denials remain effective. Denials are
 access restrictions, not empty masks. CWD and real host scratch writes follow
 the configured policy without private /tmp or mount namespaces. Standalone

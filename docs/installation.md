@@ -113,6 +113,11 @@ passwords or TLS keys. Deployment owns `/etc/pi-sandbox-service/main/service.tom
 service activation. Examples are templates, not active configuration. The daemon
 unit is one concurrent root process with `MemoryMax=4G`, `TasksMax=256` and
 `LimitNOFILE=16384`; it owns `/run/pi-sandbox` and is not socket activated per user.
+HTTPS-only deployments may instead run the executable directly as an unprivileged
+account with protected account-owned inputs, including under that account's home.
+See [foreground HTTPS operation](managed-service.md#foreground-https-only-operation)
+for validation, file modes, descriptor limits and syslog requirements. The packaged
+installer and unit retain their root-managed system layout.
 
 Common client installation paths and native tool selection are compiled into the
 application and rendered into the installer and release manifest. A `DESTDIR`
