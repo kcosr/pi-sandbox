@@ -2,16 +2,40 @@
 
 ## Unreleased
 
+## 0.14.0 - 2026-11-25
+
 ### Breaking changes
 
+- Migrate main policy from schema 14 to 16: define workspace modes with explicit
+  allowed/default choices, and move named-tool audit flags into `audit.tools`.
+  Retained policies are not converted automatically; follow the
+  [workspace migration](docs/installation.md#workspace-policy-migration).
+  ([#58](https://github.com/kcosr/pi-sandbox/pull/58), [#59](https://github.com/kcosr/pi-sandbox/pull/59))
+- Replace the per-user identity broker and audit collector with the separately
+  installed configuration/audit service. Upgrade clients and service together for
+  service API 1, rule version 12 and audit record schema 7; old protocols and units
+  are unsupported. Remove policy `identity` and `audit.facility`, and configure
+  the facility on the service listener. HTTPS rules select usernames only.
+  ([#59](https://github.com/kcosr/pi-sandbox/pull/59))
+- Migrate build distributions to schema 4 and explicitly select a `local` or
+  `service` configuration source. Service builds use their compiled endpoint with
+  no local fallback; local builds retain file configuration and require a compiled
+  `audit_endpoint` when auditing is enabled. Per-account rules require the service
+  configuration source. Compiled builds require Bun 1.4.4+.
+  ([#59](https://github.com/kcosr/pi-sandbox/pull/59))
+- Add `model_auth.personal_providers` to policy; use an empty list for managed-only
+  credentials or explicitly admit personal logins. Move model key/header variables
+  into `environment.pi`; ambient credentials and implicit cloud credential chains
+  are no longer used. `!command` expressions and `--api-key` are rejected. Model
+  catalogs must be strict JSON; user catalogs cannot add or override providers.
+  ([#59](https://github.com/kcosr/pi-sandbox/pull/59))
 - Confined host defaults now enable exports. Accounts overridden to `direct`
   need an administrator-authored exports-disabled mode and suitable allowed/default
   selection; account rules cannot disable exports.
   ([#60](https://github.com/kcosr/pi-sandbox/pull/60))
-- Require main schema 16, service rule version 12 and distribution schema 4;
-  migrate workspace policy and replace per-user broker/audit units explicitly.
-  Compiled builds require Bun 1.4.4 or newer for isolated TLS trust.
-  ([#58](https://github.com/kcosr/pi-sandbox/pull/58), [#59](https://github.com/kcosr/pi-sandbox/pull/59))
+- Standalone subagents require explicit configuration. Close existing sessions
+  before upgrading: ownership markers without process identity are no longer
+  accepted. ([#54](https://github.com/kcosr/pi-sandbox/pull/54))
 
 ### Added
 
@@ -37,6 +61,15 @@
   applications, including completed messages, tool calls/results and task status.
   ([#54](https://github.com/kcosr/pi-sandbox/pull/54))
 
+### Changed
+
+- Version the reusable sandbox extension as `0.10.0`, Git extension as `0.3.0`
+  and subagent extension as `0.2.0`; all retain Pi `1.5.0`.
+  ([#62](https://github.com/kcosr/pi-sandbox/pull/62))
+- Capture policy, environment and models once per application process. Restart
+  the application to load administrative changes; session refreshes reuse the
+  captured configuration. ([#59](https://github.com/kcosr/pi-sandbox/pull/59))
+
 ### Fixed
 
 - Accept regular-file denials and skip missing paths at macOS Seatbelt startup.
@@ -46,9 +79,7 @@
 - Increase automatic subagent reports to 16 KiB with explicit truncation notices
   and cursor-based `inspect_agent` retrieval of saved final-answer text.
   ([#55](https://github.com/kcosr/pi-sandbox/pull/55))
-- Reject missing explicit subagent configuration and recover stale state ownership
-  after process death or PID reuse. Close existing sessions before updating;
-  older ownership markers without process identity are no longer accepted.
+- Recover stale subagent state ownership after process death or PID reuse.
   ([#54](https://github.com/kcosr/pi-sandbox/pull/54))
 
 ## 0.13.0 - 2026-11-07
