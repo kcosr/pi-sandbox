@@ -141,7 +141,6 @@ export async function testGitDestination({
   await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
   const base = `http://127.0.0.1:${server.address().port}`;
   const config = parse(originalConfig);
-  config.identity = { mode: "disabled" };
   config.audit.enabled = false;
   config.sessions.retention_days = 0;
   config.exports.enabled = false;

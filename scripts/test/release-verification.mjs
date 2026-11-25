@@ -5,7 +5,11 @@ import { fileURLToPath } from "node:url";
 const defaultRepositoryRoot = dirname(dirname(dirname(fileURLToPath(import.meta.url))));
 
 /** These two callbacks own all behavioral checks run inside the builder's temporary trees. */
-export function createReleaseVerification(environment, runCommand = runVerificationCommand) {
+export function createReleaseVerification(
+  environment,
+  runCommand = runVerificationCommand,
+  verifyMatrix = defaultVerifyMatrix,
+) {
   const verificationEnvironment = { ...environment };
   delete verificationEnvironment.NODE_ENV;
   return {
@@ -26,6 +30,17 @@ export function createReleaseVerification(environment, runCommand = runVerificat
           "vitest",
           "run",
           "packages/coding-agent/test/auth-check.test.ts",
+          "packages/coding-agent/test/authoritative-model-runtime.test.ts",
+          "packages/coding-agent/test/managed-auth-storage.test.ts",
+          "packages/coding-agent/test/managed-external-input.test.ts",
+          "packages/coding-agent/test/rpc-prompt-response-semantics.test.ts",
+          "packages/ai/test/explicit-cloud.test.ts",
+          "packages/ai/test/authoritative-sdk.test.ts",
+          "packages/ai/test/node-http-proxy.test.ts",
+          "packages/ai/test/openrouter-images.test.ts",
+          "packages/ai/test/authoritative-oauth-environment.test.ts",
+          "packages/ai/test/bedrock-credentials.test.ts",
+          "packages/ai/test/google-vertex-api-key-resolution.test.ts",
           "packages/coding-agent/test/managed-model-runtime.test.ts",
           "packages/coding-agent/test/managed-main.test.ts",
           "packages/coding-agent/test/default-skill-paths.test.ts",
@@ -95,8 +110,9 @@ export function createReleaseVerification(environment, runCommand = runVerificat
         },
       );
     },
-    async verifyPackagedRelease({ repositoryRoot, extractedRelease, os, packagedConfig, layout }) {
-      if (os === "linux") {
+    async verifyPackagedRelease(context) {
+      const { repositoryRoot, extractedRelease, os, packagedConfig, layout } = context;
+      if (os === "linux" && layout.configuration.source === "local") {
         process.stdout.write("Testing /sandbox through the packaged executable\n");
         await runCommand(
           process.execPath,
@@ -107,7 +123,11 @@ export function createReleaseVerification(environment, runCommand = runVerificat
           ],
           { env: verificationEnvironment },
         );
-      } else if (packagedConfig.execution?.backend === "seatbelt" && layout.allowConfigOverride) {
+      } else if (
+        packagedConfig?.execution?.backend === "seatbelt" &&
+        layout.configuration.source === "local" &&
+        layout.configuration.allowConfigOverride
+      ) {
         process.stdout.write("Testing Seatbelt through the packaged review executable\n");
         await runCommand(
           process.execPath,
@@ -118,8 +138,14 @@ export function createReleaseVerification(environment, runCommand = runVerificat
           { env: verificationEnvironment },
         );
       }
+      await verifyMatrix(context, verificationEnvironment, runCommand);
     },
   };
+}
+
+async function defaultVerifyMatrix(context, environment, runCommand) {
+  const { verifyManagedServiceMatrix } = await import("./managed-service-matrix.mjs");
+  await verifyManagedServiceMatrix(context, environment, runCommand);
 }
 
 export function runVerificationCommand(command, args, options = {}) {

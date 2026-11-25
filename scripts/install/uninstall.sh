@@ -1,5 +1,6 @@
 #!/bin/sh
 set -eu
+configuration_source=local
 
 usage() {
   echo "usage: uninstall.sh [--remove-config]" >&2
@@ -9,7 +10,7 @@ usage() {
 remove_config=0
 while [ "$#" -gt 0 ]; do
   case "$1" in
-    --remove-config) remove_config=1; shift ;;
+    --remove-config) [ "$configuration_source" = local ] || { echo "--remove-config requires a local configuration build" >&2; exit 2; }; remove_config=1; shift ;;
     *) usage ;;
   esac
 done
@@ -24,52 +25,13 @@ if [ -z "$destdir" ] && [ "$(id -u)" -ne 0 ]; then
   echo "system uninstall must run as root" >&2
   exit 1
 fi
-systemd_live=0
-if [ -z "$destdir" ] && [ -d /run/systemd/system ]; then
-  systemd_live=1
-  command -v systemctl >/dev/null 2>&1 || {
-    echo "systemctl is required to verify managed service state" >&2
-    exit 1
-  }
-  if systemctl is-active --quiet pi-sandbox-identity-broker.socket || \
-     systemctl is-enabled --quiet pi-sandbox-identity-broker.socket; then
-    echo "disable the identity broker before uninstalling:" >&2
-    echo "  systemctl disable --now pi-sandbox-identity-broker.socket" >&2
-    exit 1
-  fi
-  if systemctl is-active --quiet pi-sandbox-audit.socket || \
-     systemctl is-enabled --quiet pi-sandbox-audit.socket; then
-    echo "disable the audit collector before uninstalling:" >&2
-    echo "  systemctl disable --now pi-sandbox-audit.socket" >&2
-    exit 1
-  fi
-  active_audit_services=$(systemctl list-units --state=active --no-legend --plain 'pi-sandbox-audit@*.service') || {
-    echo "cannot verify audit collector connection service state" >&2
-    exit 1
-  }
-  if [ -n "$active_audit_services" ]; then
-    echo "stop audit collector connections before uninstalling:" >&2
-    echo "  systemctl stop 'pi-sandbox-audit@*.service'" >&2
-    exit 1
-  fi
-fi
-
 root_prefix=${destdir:-}
 launcher="${root_prefix}/usr/bin/pi-sandbox"
 install_base="${root_prefix}/usr/libexec/pi-sandbox"
-systemd_target="${root_prefix}/usr/lib/systemd/system"
-socket_unit="$systemd_target/pi-sandbox-identity-broker.socket"
-audit_socket_unit="$systemd_target/pi-sandbox-audit.socket"
-service_unit="$systemd_target/pi-sandbox-identity-broker@.service"
-audit_service_unit="$systemd_target/pi-sandbox-audit@.service"
 etc_target="${root_prefix}/etc/pi-sandbox"
 config="$etc_target/config.toml"
 models="$etc_target/models.json"
 expected_link="../libexec/pi-sandbox/pi-sandbox"
-expected_socket_unit_link="../../../libexec/pi-sandbox/systemd/pi-sandbox-identity-broker.socket"
-expected_audit_socket_unit_link="../../../libexec/pi-sandbox/systemd/pi-sandbox-audit.socket"
-expected_service_unit_link="../../../libexec/pi-sandbox/systemd/pi-sandbox-identity-broker@.service"
-expected_audit_service_unit_link="../../../libexec/pi-sandbox/systemd/pi-sandbox-audit@.service"
 
 # Validate every managed target before removing any of them.
 if [ -e "$launcher" ] || [ -L "$launcher" ]; then
@@ -81,30 +43,6 @@ fi
 if [ -e "$install_base" ] || [ -L "$install_base" ]; then
   [ -d "$install_base" ] && [ ! -L "$install_base" ] || {
     echo "installed pi-sandbox path is not a regular directory" >&2
-    exit 1
-  }
-fi
-if [ -e "$socket_unit" ] || [ -L "$socket_unit" ]; then
-  [ -L "$socket_unit" ] && [ "$(readlink "$socket_unit")" = "$expected_socket_unit_link" ] || {
-    echo "installed pi-sandbox identity broker socket unit is not the managed symlink" >&2
-    exit 1
-  }
-fi
-if [ -e "$service_unit" ] || [ -L "$service_unit" ]; then
-  [ -L "$service_unit" ] && [ "$(readlink "$service_unit")" = "$expected_service_unit_link" ] || {
-    echo "installed pi-sandbox identity broker service unit is not the managed symlink" >&2
-    exit 1
-  }
-fi
-if [ -e "$audit_socket_unit" ] || [ -L "$audit_socket_unit" ]; then
-  [ -L "$audit_socket_unit" ] && [ "$(readlink "$audit_socket_unit")" = "$expected_audit_socket_unit_link" ] || {
-    echo "installed pi-sandbox audit collector socket unit is not the managed symlink" >&2
-    exit 1
-  }
-fi
-if [ -e "$audit_service_unit" ] || [ -L "$audit_service_unit" ]; then
-  [ -L "$audit_service_unit" ] && [ "$(readlink "$audit_service_unit")" = "$expected_audit_service_unit_link" ] || {
-    echo "installed pi-sandbox audit collector service unit is not the managed symlink" >&2
     exit 1
   }
 fi
@@ -120,15 +58,7 @@ if [ "$remove_config" -eq 1 ]; then
 fi
 
 [ ! -e "$launcher" ] && [ ! -L "$launcher" ] || rm -f -- "$launcher"
-[ ! -e "$socket_unit" ] && [ ! -L "$socket_unit" ] || rm -f -- "$socket_unit"
-[ ! -e "$audit_socket_unit" ] && [ ! -L "$audit_socket_unit" ] || rm -f -- "$audit_socket_unit"
-[ ! -e "$service_unit" ] && [ ! -L "$service_unit" ] || rm -f -- "$service_unit"
-[ ! -e "$audit_service_unit" ] && [ ! -L "$audit_service_unit" ] || rm -f -- "$audit_service_unit"
 [ ! -e "$install_base" ] && [ ! -L "$install_base" ] || rm -rf -- "$install_base"
-
-if [ "$systemd_live" -eq 1 ]; then
-  systemctl daemon-reload
-fi
 
 if [ "$remove_config" -eq 1 ]; then
   for active in "$config" "$models"; do

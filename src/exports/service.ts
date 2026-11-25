@@ -20,7 +20,7 @@ export interface UserExportOptions {
   readonly accountHome?: string;
   readonly getSource: () => SandboxExportSource | undefined;
   readonly admitted: () => boolean;
-  readonly audit?: ExportAudit;
+  readonly createAudit?: (sessionId: string) => Promise<ExportAudit>;
   readonly beforeCapture?: () => Promise<void>;
 }
 
@@ -208,6 +208,9 @@ export function createUserExportController(options: UserExportOptions): {
             if (choice === undefined) return;
             if (choice === "destination") continue;
             const exportReader = reader;
+            const sessionId = ctx.sessionManager.getSessionId();
+            const audit = await options.createAudit?.(sessionId);
+            checkCancelled(signal);
             const result = await copyExportWithProgress(
               ctx,
               () =>
@@ -216,8 +219,8 @@ export function createUserExportController(options: UserExportOptions): {
                   manifest,
                   destination: plan,
                   replaceListed: plan.conflicts.length > 0,
-                  sessionId: ctx.sessionManager.getSessionId(),
-                  ...(options.audit ? { audit: options.audit } : {}),
+                  sessionId,
+                  ...(audit ? { audit } : {}),
                   signal: transferSignal,
                 }),
               () => transferController.abort(new Error("Save cancelled")),

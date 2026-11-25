@@ -38,10 +38,10 @@ export async function testWorkspaceModes({ launch, configPath, workspace }) {
       },
     };
     const source = stringify(config);
-    await writeFile(configPath, source.replace("config_version = 15", "config_version = 14"));
+    await writeFile(configPath, source.replace("config_version = 16", "config_version = 14"));
     const obsolete = await collect(launch(["--validate-installation"]));
     assert.notEqual(obsolete.code, 0);
-    assert.match(obsolete.stderr, /config_version.*15/);
+    assert.match(obsolete.stderr, /config_version.*16/);
     config.models_file = "/nonexistent/workspace-list-models.json";
     config.environment.pi.MISSING_SECRET = { file: "/nonexistent/workspace-list-secret" };
     await writeFile(configPath, stringify(config));
@@ -53,9 +53,15 @@ export async function testWorkspaceModes({ launch, configPath, workspace }) {
         (confined ? "sandbox — Use temporary files and save deliverables.\n" : ""),
     );
     assert.equal(listed.stderr, "");
+    // Operational launches capture the complete snapshot before selecting a mode.
+    // Keep missing catalog/secret inputs confined to the policy-only listing check.
+    await writeFile(configPath, source);
     const forbidden = await collect(launch(["--workspace-mode=restricted", "--mode", "rpc"]));
     assert.notEqual(forbidden.code, 0);
-    assert(forbidden.stderr.includes(`Allowed modes: ${confined ? "host, sandbox" : "host"}`));
+    assert(
+      forbidden.stderr.includes(`Allowed modes: ${confined ? "host, sandbox" : "host"}`),
+      forbidden.stderr,
+    );
     assert(!forbidden.stderr.includes("RESTRICTED_DESCRIPTION"));
 
     for (const name of confined ? ["host", "sandbox"] : ["host"]) {

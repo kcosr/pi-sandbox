@@ -63,7 +63,7 @@ try {
 
   // Installer control-flow coverage; full schema rejection is exercised by parser/runtime tests.
   const validPolicy = await readFile(config, "utf8");
-  const oldPolicy = validPolicy.replace("config_version = 15", "config_version = 14");
+  const oldPolicy = validPolicy.replace("config_version = 16", "config_version = 14");
   const executable = join(installBase, "pi-sandbox");
   const retainedBinary = `${await readFile(executable, "utf8")}# retained binary marker\n`;
   await writeFile(executable, retainedBinary);
@@ -72,7 +72,7 @@ try {
     join(release, "install.sh"),
     [],
     { DESTDIR: installRoot },
-    "config.config_version must be the integer 15",
+    "config.config_version must be the integer 16",
   );
   if (
     (await readFile(config, "utf8")) !== oldPolicy ||
@@ -203,11 +203,13 @@ async function verifyExecutionBackends(root) {
   // rendered into this disposable tree. No system paths are used.
   const hostRoot = join(root, "simulated-host");
   const layout = {
-    configDir: join(hostRoot, "etc/pi-sandbox"),
+    configuration: {
+      source: "local",
+      configDir: join(hostRoot, "etc/pi-sandbox"),
+      allowConfigOverride: false,
+    },
     libexecDir: join(hostRoot, "libexec/pi-sandbox"),
     launcherPath: join(hostRoot, "bin/pi-sandbox"),
-    identitySocketPath: join(hostRoot, "identity.sock"),
-    auditSocketPath: join(hostRoot, "audit.sock"),
   };
   const fakeBin = join(root, "host-probes");
   await mkdir(fakeBin);
@@ -229,7 +231,7 @@ async function verifyExecutionBackends(root) {
       "missing required host executables",
     );
     await expectMissing(layout.libexecDir);
-    await expectMissing(join(layout.configDir, "config.toml"));
+    await expectMissing(join(layout.configuration.configDir, "config.toml"));
   }
   const toolNames = [
     "cat",
@@ -306,6 +308,7 @@ async function createRelease(directory, { backend = "direct", layout, homebrewPr
     `#!/bin/sh
 set -eu
 operation=\${1:-}
+if [ "$operation" = --print-build-capabilities ]; then echo '{"configuration_source":"local","architecture":"${process.arch}","platform":"darwin"}'; exit 0; fi
 shift
 root=
 candidate_payload=
@@ -318,14 +321,13 @@ while [ "$#" -gt 0 ]; do
   esac
   shift 2
 done
-config_dir=${shellQuote(layout?.configDir ?? "/etc/pi-sandbox")}
+config_dir=${shellQuote(layout?.configuration.configDir ?? "/etc/pi-sandbox")}
 config="$root$config_dir/config.toml"
 ${skillCandidateFixture(layout?.libexecDir ?? "/usr/local/libexec/pi-sandbox")}
-grep -q '^config_version = 15$' "$config" || { echo 'config.config_version must be the integer 15' >&2; exit 1; }
+grep -q '^config_version = 16$' "$config" || { echo 'config.config_version must be the integer 16' >&2; exit 1; }
 grep -q '"providers"' "$root$config_dir/models.json"
 case "$operation" in
-  --validate-installation) ;;
-  --print-execution-backend) sed -n 's/^backend = "\\([a-z]*\\)"$/\\1/p' "$root$config_dir/config.toml" ;;
+  --validate-installation) sed -n 's/^backend = "\\([a-z]*\\)"$/\\1/p' "$root$config_dir/config.toml" ;;
   *) exit 64 ;;
 esac
 `,

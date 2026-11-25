@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 
-import { writeFile } from "node:fs/promises";
+import { chmod, mkdir, writeFile } from "node:fs/promises";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -79,6 +79,8 @@ const compiledLayoutModule = createCompiledLayoutModule(distribution.layout, {
 });
 const privateBundle = join(repositoryRoot, "dist/private/private-cli.js");
 const buildVersion = await readBuildVersion(repositoryRoot);
+await mkdir(dirname(privateBundle), { recursive: true, mode: 0o700 });
+await chmod(dirname(privateBundle), 0o700);
 
 const common = {
   bundle: true,
@@ -142,6 +144,9 @@ const bundleResult = await build({
     },
   ],
 });
+
+await chmod(privateBundle, 0o600);
+await chmod(`${privateBundle}.map`, 0o600);
 
 const inventory = createExtensionBuildInventory(extensions, await sha256File(privateBundle));
 await writeFile(

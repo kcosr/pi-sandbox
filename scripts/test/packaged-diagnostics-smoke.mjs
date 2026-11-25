@@ -80,7 +80,7 @@ try {
     await readFile(join(runtimeDirectory, "release-manifest.json"), "utf8"),
   );
   const compiledLibexecDirectory = releaseManifest?.layout?.libexecDir;
-  const compiledConfigDirectory = releaseManifest?.layout?.configDir;
+  const compiledConfigDirectory = releaseManifest?.layout?.configuration?.configDir;
   if (
     typeof compiledLibexecDirectory !== "string" ||
     !compiledLibexecDirectory.startsWith("/") ||
@@ -92,8 +92,10 @@ try {
     typeof compiledConfigDirectory !== "string" ||
     !compiledConfigDirectory.startsWith("/") ||
     resolve(compiledConfigDirectory) !== compiledConfigDirectory ||
-    releaseManifest.layout.configPath !== join(compiledConfigDirectory, "config.toml") ||
-    releaseManifest.layout.defaultModelsPath !== join(compiledConfigDirectory, "models.json")
+    releaseManifest.layout.configuration.configPath !==
+      join(compiledConfigDirectory, "config.toml") ||
+    releaseManifest.layout.configuration.defaultModelsPath !==
+      join(compiledConfigDirectory, "models.json")
   ) {
     throw new Error("release manifest has an invalid compiled config directory");
   }
@@ -103,11 +105,11 @@ try {
     compiledLibexecDirectory,
   );
   const sandboxExecutable = join(compiledLibexecDirectory, "pi-sandbox");
-  if (typeof releaseManifest.layout.allowConfigOverride !== "boolean") {
+  if (typeof releaseManifest.layout.configuration.allowConfigOverride !== "boolean") {
     throw new Error("release manifest has an invalid config override policy");
   }
-  let expectedConfigPath = releaseManifest.layout.configPath;
-  let expectedModelsPath = releaseManifest.layout.defaultModelsPath;
+  let expectedConfigPath = releaseManifest.layout.configuration.configPath;
+  let expectedModelsPath = releaseManifest.layout.configuration.defaultModelsPath;
   const configArguments = [];
   const overrideDirectory = join(temporaryDirectory, "selected-policy");
   await cp(defaultsDirectory, overrideDirectory, { recursive: true });
@@ -116,7 +118,7 @@ try {
   const overrideConfig = parseToml(await readFile(overridePath, "utf8"));
   overrideConfig.models_file = overrideModelsPath;
   await writeFile(overridePath, stringifyToml(overrideConfig));
-  if (releaseManifest.layout.allowConfigOverride) {
+  if (releaseManifest.layout.configuration.allowConfigOverride) {
     configArguments.push("--config", overridePath);
     expectedConfigPath = overridePath;
     expectedModelsPath = overrideModelsPath;
@@ -306,7 +308,7 @@ try {
     !hasField("Config", expectedConfigPath) ||
     !hasField("Models", expectedModelsPath) ||
     !hasField("Extensions", "none") ||
-    !hasField("Identity", "disabled")
+    !hasField("Config source", "local")
   ) {
     throw new Error("/sandbox did not report the isolated packaged smoke configuration");
   }
@@ -342,14 +344,14 @@ try {
     .find((fields) => fields.length === 7 && Number(fields[2]) === process.geteuid());
   await testLocalProcessLifetime({
     launch,
-    configPath: releaseManifest.layout.allowConfigOverride
+    configPath: releaseManifest.layout.configuration.allowConfigOverride
       ? overridePath
       : join(defaultsDirectory, "config.toml"),
     workspace,
   });
   const sharedSkill = await testSharedSkills({
     launch,
-    configPath: releaseManifest.layout.allowConfigOverride
+    configPath: releaseManifest.layout.configuration.allowConfigOverride
       ? overridePath
       : join(defaultsDirectory, "config.toml"),
     userState,
@@ -358,20 +360,20 @@ try {
   });
   await testManagedSubagents({
     launch,
-    configPath: releaseManifest.layout.allowConfigOverride
+    configPath: releaseManifest.layout.configuration.allowConfigOverride
       ? overridePath
       : join(defaultsDirectory, "config.toml"),
-    modelsPath: releaseManifest.layout.allowConfigOverride
+    modelsPath: releaseManifest.layout.configuration.allowConfigOverride
       ? overrideModelsPath
       : join(defaultsDirectory, "models.json"),
     workspace,
   });
   await testGitDestination({
     launch,
-    configPath: releaseManifest.layout.allowConfigOverride
+    configPath: releaseManifest.layout.configuration.allowConfigOverride
       ? overridePath
       : join(defaultsDirectory, "config.toml"),
-    modelsPath: releaseManifest.layout.allowConfigOverride
+    modelsPath: releaseManifest.layout.configuration.allowConfigOverride
       ? overrideModelsPath
       : join(defaultsDirectory, "models.json"),
     workspace,
@@ -380,10 +382,10 @@ try {
   await testManagedMcpCodemode({
     sharedSkill,
     launch,
-    configPath: releaseManifest.layout.allowConfigOverride
+    configPath: releaseManifest.layout.configuration.allowConfigOverride
       ? overridePath
       : join(defaultsDirectory, "config.toml"),
-    modelsPath: releaseManifest.layout.allowConfigOverride
+    modelsPath: releaseManifest.layout.configuration.allowConfigOverride
       ? overrideModelsPath
       : join(defaultsDirectory, "models.json"),
     workspace,
@@ -393,7 +395,7 @@ try {
   });
   await testWorkspaceModes({
     launch: launchManaged,
-    configPath: releaseManifest.layout.allowConfigOverride
+    configPath: releaseManifest.layout.configuration.allowConfigOverride
       ? overridePath
       : join(defaultsDirectory, "config.toml"),
     workspace,

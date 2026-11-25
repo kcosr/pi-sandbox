@@ -11,10 +11,17 @@ import { SandboxExecutionError } from "../../packages/sandbox-extension/src/runt
 import { ManagedToolExecutionError } from "../runtime/tool-error.js";
 import { HostCommandExecutionError } from "../../packages/sandbox-extension/src/runtime/host-command/index.js";
 import { normalizeSandboxPath } from "../../packages/sandbox-extension/src/tools/executor-operations.js";
-import { auditCommand, validAuditText, type AuditClient, type AuditEvent } from "./client.js";
+import {
+  auditCommand,
+  validAuditText,
+  type AuditBinding,
+  type AuditClient,
+  type AuditEvent,
+} from "./client.js";
 import { currentManagedChild } from "../subagents/invocation.js";
 
 interface Invocation {
+  readonly binding: AuditBinding;
   readonly fields: Pick<
     AuditEvent,
     | "pi_session_id"
@@ -82,9 +89,8 @@ export function toolAuditMetadata(
 
 export class ToolAuditor {
   private readonly invocation = new AsyncLocalStorage<Invocation>();
-  private failure: Error | undefined;
   private sessionId: string | undefined;
-  private sessionQueue = Promise.resolve();
+  private stopped = false;
 
   public constructor(
     private readonly client: AuditClient,
@@ -92,41 +98,18 @@ export class ToolAuditor {
     private readonly home: string,
   ) {}
 
-  private async submit(event: AuditEvent): Promise<void> {
-    if (this.failure !== undefined) throw this.failure;
-    try {
-      await this.client.submit(event);
-    } catch {
-      this.failure = new Error(
-        "Pi Sandbox tool logging is unavailable; no further logged tools can execute",
-      );
-      throw this.failure;
-    }
-  }
-
   public async start(ctx: ExtensionContext): Promise<void> {
+    if (this.stopped) throw new Error("Audit invocation belongs to a closed session");
     const id = ctx.sessionManager.getSessionId();
-    const transition = this.sessionQueue.then(async () => {
-      if (this.sessionId === id) return;
-      await this.endSession();
-      await this.submit({ event: "session_started", pi_session_id: id, cwd: this.cwd });
-      this.sessionId = id;
-    });
-    this.sessionQueue = transition.catch(() => undefined);
-    await transition;
+    this.sessionId = id;
+    await this.client.setSession(id);
   }
 
-  public async end(): Promise<void> {
-    const transition = this.sessionQueue.then(() => this.endSession());
-    this.sessionQueue = transition.catch(() => undefined);
-    await transition;
-  }
-
-  private async endSession(): Promise<void> {
-    if (this.sessionId === undefined) return;
+  public async end({ preserveSession = false }: { preserveSession?: boolean } = {}): Promise<void> {
+    this.stopped = true;
     const id = this.sessionId;
     this.sessionId = undefined;
-    await this.submit({ event: "session_ended", pi_session_id: id });
+    if (id !== undefined && !preserveSession) await this.client.endSession(id);
   }
 
   public async decision(
@@ -149,7 +132,7 @@ export class ToolAuditor {
           };
     if (!decision.allowed) {
       invocation.denied = true;
-      await this.submit({
+      await this.client.submit(invocation.binding, {
         ...invocation.fields,
         event: "tool_denied",
         approval_source: decision.source,
@@ -157,7 +140,7 @@ export class ToolAuditor {
         ...classFields,
       });
     } else {
-      await this.submit({
+      await this.client.submit(invocation.binding, {
         ...invocation.fields,
         event: "tool_execution_intent",
         approval_source: decision.source,
@@ -210,7 +193,9 @@ export class ToolAuditor {
             ? inherited
             : undefined;
         const owner = child?.rootContext ?? ctx;
-        await this.start(owner);
+        if (this.stopped) throw new Error("Audit invocation belongs to a closed session");
+        if (this.sessionId === undefined) await this.start(owner);
+        const binding = await this.client.captureInvocation(owner.sessionManager.getSessionId());
         const fields = {
           pi_session_id: owner.sessionManager.getSessionId(),
           ...(child === undefined
@@ -233,8 +218,8 @@ export class ToolAuditor {
           ...toolAuditMetadata(definition.name, args, this.cwd, this.home),
           ...targetFields,
         };
-        await this.submit({ ...fields, event: "tool_requested" });
-        const invocation: Invocation = { fields, denied: false };
+        await this.client.submit(binding, { ...fields, event: "tool_requested" });
+        const invocation: Invocation = { binding, fields, denied: false };
         const started = performance.now();
         return this.invocation.run(invocation, async () => {
           let result;
@@ -246,9 +231,9 @@ export class ToolAuditor {
               );
             result = await definition.execute(id, args, signal, onUpdate, ctx);
           } catch (error) {
-            if (!invocation.denied && this.failure === undefined) {
+            if (!invocation.denied && this.client.isCurrent(binding)) {
               const outcome = errorOutcome(error, signal);
-              await this.submit({
+              await this.client.submit(binding, {
                 ...fields,
                 event: "tool_completed",
                 outcome,
@@ -275,7 +260,7 @@ export class ToolAuditor {
             if (kind === "timeout") outcome = "timeout";
             else if (kind === "aborted") outcome = "cancelled";
           }
-          await this.submit({
+          await this.client.submit(binding, {
             ...fields,
             event: "tool_completed",
             outcome,

@@ -23,7 +23,11 @@ if (process.platform !== "darwin" || process.argv.length !== 3) {
 const executable = resolve(process.argv[2]);
 const payload = dirname(executable);
 const manifest = JSON.parse(await readFile(join(payload, "release-manifest.json"), "utf8"));
-assert.equal(manifest.layout.allowConfigOverride, true, "requires an explicit review build");
+assert.equal(
+  manifest.layout.configuration.allowConfigOverride,
+  true,
+  "requires an explicit review build",
+);
 assert(manifest.executionBackends.includes("seatbelt"));
 const temporary = await realpath(await mkdtemp("/private/tmp/pi-seatbelt-package-"));
 const children = new Set();
@@ -44,7 +48,6 @@ try {
   config.execution = { backend: "seatbelt" };
   config.network = { mode: "none" };
   config.filesystem = { cwd_writable: true, hidden_paths: [], denied_paths: [denied] };
-  config.identity = { mode: "disabled" };
   config.audit.enabled = false;
   delete config.subagents;
   delete config.tools.subagents;

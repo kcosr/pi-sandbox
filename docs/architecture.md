@@ -57,8 +57,9 @@ is selected, one worker lives for the `pi-sandbox` process.
 
 ```text
 trusted host
-  optional root systemd identity broker (Linux)
-    -> SO_PEERCRED UID -> host account/group lookup -> optional users.d + groups.d rules
+  build-selected administrative source
+    -> local policy/catalog files, or unified concurrent service (Unix/HTTPS)
+  optional audit connection to the same service protocol
   prebuilt Bun pi-sandbox executable
     pinned, minimally patched Pi runtime
       forced inline Pi Sandbox extension
@@ -91,7 +92,7 @@ selection control activation, including automatic activation from MCP exposure.
 
 MCP servers use Pi's existing Streamable HTTP and stdio transports on the host.
 The main TOML owns endpoints, commands, credential mappings, default exposure, and ordered
-per-server wildcard policies. On Linux the identity broker combines explicit
+per-server wildcard policies. The service combines explicit
 enabled flags with true winning and preserves each matching file as an approval
 policy layer. Resolve each layer’s first rule/default, join complete pairs with
 least restrictive wins, and overlay the global invocation policy. Global audit
@@ -271,7 +272,7 @@ parent, owned roots and recently updated state are protected. Cleanup preserves
 the small spawn-count ledger even after deleting transcripts, so retention
 never refunds a charged task allowance.
 
-## Managed application and identity broker
+## Managed application and administrative snapshot
 
 The installed application is one prebuilt Bun executable. Its private entry
 point rejects an effective root UID before Pi starts, captures the canonical
@@ -302,41 +303,42 @@ Skills and user tool-selection options remain available: they may provide
 instructions or narrow the visible catalog, but all executable tool authority
 still comes from the forced extension.
 
-Configuration begins at the distribution's compiled `config_dir/config.toml`.
-Version-3 distribution manifests explicitly select `allow_config_override`;
-when true, a leading `--config FILE` selects a different TOML for this process.
-The flag is consumed before Pi argument handling, and invalid selected input
-fails closed. Managed builds set the switch to false and reject the flag.
-The following optional `--workspace-mode NAME` selector chooses an admitted
-main-defined mode; otherwise the effective configured default is used.
-Main schema 15 separates authored common defaults and mode overlays from complete
-effective runtime policy. Parsing is bounded to 1 MiB, validates every authored
-entry and composes every mode, including disallowed definitions. Common settings
-need not be launchable alone. Current-platform guards run before broker access
-and for installation/backend queries; invalid main policy fails before selection.
-When configured, the Bun process asks the
-separate static Rust broker for the caller's combined user/group rules. The broker uses kernel
-peer credentials, resolves account and primary/supplementary membership through
-the host NSS resolver, and reads protected root-owned rules. It accepts one
-newline-delimited request without requiring a client half-close. Matching
-explicit permissions combine using least restrictive wins; conflicting backend,
-model, or scoped environment values fail. It returns the environment and optional model,
-execution, network, filesystem, workspace allowed/default, MCP enablement/approval,
-and atomic tool-policy patch. Protocol and rule files use version 11. If no rules match, the broker
-returns an empty patch. The Bun process validates the response independently,
-resolves effective workspace allowed/default metadata, selects a composed mode,
-then applies the remaining policy patch once. Matching explicit allowed arrays
-union before replacing the main list; explicit defaults must agree. Descriptions
-and definitions stay in main policy. Backend/platform and other effective policy
-constraints are rechecked after overrides. The application constructs one
-immutable effective configuration and loads only its selected model catalog. Pi-scoped values are
-applied to the trusted host Pi process, sandbox-scoped values are added to the
-cleared Bubblewrap/Seatbelt environment or overlaid on the inherited direct-command
-environment, and extension-scoped values are admitted only
-for their named extension. The patched Pi runtime omits its internal model
-catalog. `PI_CODING_AGENT_DIR` still selects user credentials, sessions,
-settings, skills, themes, and logs, but cannot redirect administrative policy,
-broker selection, or models. Missing or invalid effective inputs abort startup.
+Distribution schema 4 fixes either a service endpoint or a local-file source per
+platform. Service builds obtain one authenticated bootstrap over Unix (Linux) or
+HTTPS (Linux/macOS). Local builds read `config_dir/config.toml` and its absolute
+`models_file`; a leading `--config FILE` is accepted only when the local descriptor
+compiles `allow_config_override = true`. Neither profile can switch sources at
+runtime. Missing or invalid inputs fail without a cache or fallback.
+
+Both sources normalize to authored policy, joined account overrides, resolved
+scoped environment and a parsed model object. Main schema 16 separates common
+defaults and mode overlays from complete runtime policy. The client validates
+all authored entries and every composed mode, including disallowed definitions,
+before selecting one. Common settings need not be launchable alone. Current
+platform guards run before selection and again after remaining account overrides.
+
+Service builds use the concurrent root Rust daemon's listener policy and optional
+version-12 account rules. Unix requests use kernel peer credentials and bounded
+host account/group lookup. HTTPS uses authenticated username assertions with the
+explicit limitations in [managed service](managed-service.md). Local builds have
+empty account overrides and no rule-directory discovery. Matching explicit rule
+grants join before replacing defaults; conflicting backend, catalog or scoped
+environment values fail. Workspace access/default overrides select the composed
+mode before remaining invocation/execution/MCP overrides apply once.
+
+One captured model object and expanded Pi environment feed the managed model
+runtime, which omits built-in, personal-file and downloaded catalog sources.
+Authentication defaults to administrative credentials; named personal providers
+require main-policy opt-in. Model auth resolves only the captured Pi values,
+without shell-key, command-expression or SDK default-chain fallback. Ordinary
+host consumers retain their existing environment behavior. `PI_CODING_AGENT_DIR`
+selects admitted personal credentials and other user state, never administrative
+sources. See [models and authentication](models.md).
+
+The effective sandbox environment reaches the cleared confined backend or overlays
+ordinary direct-command environment. Extension scopes reach only their named
+compiled extensions. Policy, models and managed environment remain fixed across
+logical session changes, executor recreation and managed children.
 
 Mode overlays change only CWD writability, exports, and complete Bash/write/edit
 invocation entries. Main `audit.tools` is normalized into existing effective tool
@@ -347,9 +349,9 @@ same normalized rule wherever reused within one main snapshot.
 
 `--list-workspace-modes` performs main validation and authenticated mode-access
 resolution, then prints only permitted names/descriptions and the default. It
-does not load models, resolve main environment-file references, create sessions,
-connect MCP or construct executors. The existing broker still resolves its rule
-values. Selection and listing are process launch operations, not Pi interface
+does not load models, resolve any secret-file references, create sessions,
+connect MCP or construct executors. Service builds use `policy_inspect`; local
+builds use source-only loading. Neither inspection path supplies a runtime bootstrap. Selection and listing are process launch operations, not Pi interface
 modes. The selected mode and final policy remain fixed across conversation
 replacement, reload, executor recreation and managed children; a new process
 resolves them again. `/sandbox` displays metadata and final behavior without
@@ -358,9 +360,9 @@ adding mode labels to the model environment prompt or automatic startup output.
 Before applying the effective environment or starting executors, operational
 startup expands bare `~`, leading `~/`, and account macros in configured scoped
 environment values and hidden/denied paths using the invoking effective OS account.
-Expansion follows the broker merge and is independent of `$HOME` and CWD.
+Expansion follows account override resolution and is independent of `$HOME` and CWD.
 Expanded values retain the existing environment bounds and filesystem checks.
-Installation validation checks syntax without expanding the installer's home.
+Offline installation validation checks syntax without expanding the installer's home.
 
 Managed Bubblewrap and Seatbelt system-prompt context distinguishes the executor's
 tool home from the invoking account's home. It states effective CWD write access,
@@ -386,19 +388,18 @@ arrive with a Pi upgrade; changes to stock execution or overridden previews need
 separate review and adaptation. No call preview reads host target files before
 authorization.
 
-The distribution manifest fixes the config directory, libexec directory,
-launcher path, identity and event-collector sockets, Linux systemd unit directory, and Linux
-Bubblewrap provider and optional macOS tool bundle at build time. A system provider names an unmanaged
-absolute executable. A bundled provider supplies a verified native binary that
-is installed under the root-owned libexec directory and selected by the
-compiled runtime. macOS packages the application and any selected native tools; the Linux-only broker is not
-included. Keeping the product executable behind its configured launcher path provides a canonical command,
-but does not constitute access control against the logged-in user.
+The distribution fixes the source descriptor, libexec directory, launcher,
+Linux Bubblewrap provider and optional native tool bundle at build time. System
+providers name unmanaged absolute executables; verified bundled tools resolve
+beneath the installed libexec directory. Keeping a canonical launcher does not
+constitute access control against the logged-in user. Client archives contain no
+service executable or unit; the Linux daemon has its own package.
 
-The root check has no configuration override. Only the non-interactive
-`--validate-installation` and `--print-execution-backend` commands used by the
-system installers are admitted with effective UID `0`; they validate
-administrative inputs and never start Pi or an execution backend.
+Operational startup rejects effective UID 0. Local offline installation/backend
+validation and wire-fixture validation do not start Pi or an executor. Service
+`--validate-service` is a live non-root operation; candidate skill validation uses
+the invoking account without binding an operational CWD. Exact `--version` stays
+offline, while help validates administrative policy and selected-mode context.
 
 ## Shared skill discovery
 
@@ -411,7 +412,7 @@ ordinary resources. The loader appends enabled defaults after explicit CLI skill
 paths, preserving personal name precedence and `--no-skills`.
 
 The optional distribution `skills_source` only supplies packaged files. Runtime
-discovery still requires the installed root in main policy. No broker policy,
+discovery still requires the installed root in main policy. No account rule,
 package installation machinery, user extension factory or resource-discovery
 hook is added. Shared resources use ordinary user-scope source presentation.
 
@@ -719,28 +720,29 @@ is a recovery path for a Bubblewrap failure.
 
 ## Model-tool event collection
 
-On Linux, the application can connect to a separate root-controlled Unix socket
-collector. It records selected model-tool decisions and execution lifecycle
-metadata, including target paths and bounded Bash commands, while excluding
-file contents and tool output. Human shell commands do not use this path.
+Auditing uses the same concurrent service and HTTP/1.1 protocol over Unix or
+HTTPS as administrative bootstrap. Each request creates a direct, unpooled Undici
+client with explicit socket/TLS options, independent of Pi's global dispatcher.
+The pinned transport submodules bypass Bun's package shim; Undici owns HTTP
+framing and a bounded response-prefix check enforces version 1.1. Compiled clients
+require Bun 1.4.4 or newer for isolated explicit CA trust. Local-file builds may compile that endpoint
+for optional auditing. The daemon attributes Unix requests to kernel UID/PID and
+HTTPS requests to authenticated username assertions, and stamps schema-7 records
+with explicit provenance and local/service policy origin.
 
-The static Rust collector obtains the peer UID and PID from Linux socket
-credentials, resolves the account name through the trusted host account system
-once per connection, and assigns a connection identifier. Every record includes
-`principal_uid`, `principal_user` (null if no account exists), and `principal_pid`;
-records do not include a principal GID or group membership. The client includes its Pi
-session ID and invocation ID for correlation. The collector submits one-line
-structured records to local syslog and acknowledges successful submission.
-Server logging infrastructure owns persistence, rotation, retention, and
-forwarding. This service is independent of user/group configuration resolution;
-it is not an execution backend and does not run tool operations.
+Audited tools require accepted execution intent before effects. The service
+acknowledges successful local syslog submission, not durable storage. The client
+serializes events per handle while separate sessions proceed concurrently.
+Completion failure never retries an effect. A later explicit user-input/export
+checkpoint can check or reopen audit state, without refetching configuration or
+replaying events. Registered commands, background LLM work and queued-message
+draining do not become reconnect schedulers. See [the service contract](managed-service.md#shared-protocol-and-auditing).
 
-The collector's main-config reader requires schema 15 and structurally checks
-the Boolean `audit.tools` map. The application owns exact catalog coverage,
-including disabled and user-hidden configured tools. MCP audit remains in its
-server rules. Audit wire 5 and record schema 6 stay unchanged; records do not
-identify the workspace mode or configuration revision. Reused command-set IDs
-are consistent within one configuration snapshot, not across deployments.
+Common `audit.tools` exhaustively identifies named subjects; MCP audit stays in
+its server rules. Records retain child invocation, configured Bash command and
+user-export metadata. Syslog facility belongs to the listener manifest, not the
+client policy. The service does not execute operations or independently verify
+client-reported effects. Host logging owns persistence, rotation and forwarding.
 
 ## Explicit private-file saving
 

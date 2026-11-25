@@ -1,15 +1,14 @@
 import { constants } from "node:fs";
 import { open } from "node:fs/promises";
 
-import type { AuthoredPiEnvironmentValue, AuthoredSandboxConfig } from "../domain/index.js";
 import type { ManagedExtensionCatalog } from "../managed-extensions/catalog.js";
 import { ConfigError } from "./errors.js";
-import { MAXIMUM_CONFIG_BYTES, parseConfig } from "./parse.js";
+import { MAXIMUM_CONFIG_BYTES, parseConfig, type LocalPolicySource } from "./parse.js";
 
 export async function loadConfig(
   path: string,
   catalog: ManagedExtensionCatalog,
-): Promise<AuthoredSandboxConfig<AuthoredPiEnvironmentValue>> {
+): Promise<LocalPolicySource> {
   let sourceText: string;
   try {
     // Do not wait for a FIFO writer before checking the descriptor's file type.

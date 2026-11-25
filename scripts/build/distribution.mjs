@@ -1,23 +1,19 @@
-import { readFile } from "node:fs/promises";
+import { Buffer } from "node:buffer";
+import { TextDecoder } from "node:util";
+import { URL } from "node:url";
+import { readFile, open } from "node:fs/promises";
+import { constants } from "node:fs";
+import { X509Certificate } from "node:crypto";
 import { dirname, isAbsolute, normalize, resolve } from "node:path";
 
 import { parse as parseToml } from "@iarna/toml";
 import { loadToolBundle } from "./tool-bundle.mjs";
 
-const ROOT_KEYS = new Set([
-  "version",
-  "allow_config_override",
-  "extension_manifests",
-  "skills_source",
-  "platforms",
-]);
+const ROOT_KEYS = new Set(["version", "extension_manifests", "skills_source", "platforms"]);
 const PLATFORM_KEYS = new Set([
-  "config_dir",
+  "configuration",
   "libexec_dir",
   "launcher_path",
-  "service_dir",
-  "identity_socket_path",
-  "audit_socket_path",
   "bubblewrap",
   "tool_bundle",
 ]);
@@ -121,6 +117,176 @@ function parseBubblewrap(value, manifestDirectory, libexecDir) {
   throw new Error("distribution platforms.linux.bubblewrap.mode must be system or bundled");
 }
 
+async function readPrivateInput(path, maximum, description) {
+  try {
+    absolutePath(path, description);
+    const file = await open(path, constants.O_RDONLY | constants.O_NONBLOCK);
+    try {
+      const stat = await file.stat();
+      if (!stat.isFile() || stat.size > maximum) throw new Error();
+      const bytes = Buffer.alloc(maximum + 1);
+      let length = 0;
+      while (length < bytes.length) {
+        const r = await file.read(bytes, length, bytes.length - length, null);
+        if (!r.bytesRead) break;
+        length += r.bytesRead;
+      }
+      if (length > maximum) throw new Error();
+      return new TextDecoder("utf-8", { fatal: true, ignoreBOM: true }).decode(
+        bytes.subarray(0, length),
+      );
+    } finally {
+      await file.close();
+    }
+  } catch {
+    throw new Error(`${description} must be a readable bounded regular UTF-8 input`);
+  }
+}
+async function parseEndpoint(value, platform) {
+  const endpoint = object(value, "distribution endpoint");
+  if (endpoint.transport === "unix") {
+    rejectUnknown(endpoint, new Set(["transport", "socket_path"]), "distribution endpoint");
+    if (platform !== "linux") throw new Error("Unix service endpoints require Linux");
+    return Object.freeze({
+      transport: "unix",
+      socketPath: absolutePath(endpoint.socket_path, "distribution socket_path"),
+    });
+  }
+  if (endpoint.transport !== "https")
+    throw new Error("distribution endpoint transport must be unix or https");
+  rejectUnknown(
+    endpoint,
+    new Set([
+      "transport",
+      "url",
+      "basic_username",
+      "basic_password_file",
+      "send_machine_id",
+      "tls_ca_file",
+    ]),
+    "distribution endpoint",
+  );
+  let url;
+  try {
+    url = new URL(endpoint.url);
+  } catch {
+    throw new Error("distribution endpoint URL is invalid");
+  }
+  if (
+    url.protocol !== "https:" ||
+    url.username ||
+    url.password ||
+    url.search ||
+    url.hash ||
+    url.pathname !== "/v1/service" ||
+    typeof endpoint.url !== "string" ||
+    endpoint.url.includes("?") ||
+    endpoint.url.includes("#")
+  )
+    throw new Error(
+      "distribution endpoint must be an HTTPS /v1/service URL without credentials/query/fragment",
+    );
+  if (
+    typeof endpoint.basic_username !== "string" ||
+    !/^[\x20-\x7e]{1,128}$/u.test(endpoint.basic_username) ||
+    endpoint.basic_username.includes(":")
+  )
+    throw new Error("distribution Basic username is invalid");
+  if (
+    typeof endpoint.send_machine_id !== "boolean" ||
+    (platform !== "darwin" && endpoint.send_machine_id)
+  )
+    throw new Error("distribution send_machine_id must be boolean and requires macOS when enabled");
+  const password = (
+    await readPrivateInput(endpoint.basic_password_file, 8194, "distribution Basic password input")
+  ).replace(/\r?\n$/u, "");
+  if (
+    Buffer.byteLength(password) < 32 ||
+    Buffer.byteLength(password) > 8192 ||
+    /[\p{Cc}\uD800-\uDFFF]/u.test(password)
+  )
+    throw new Error("distribution Basic password must contain 32–8192 bytes without controls");
+  let tlsCa;
+  if (endpoint.tls_ca_file !== undefined) {
+    tlsCa = await readPrivateInput(endpoint.tls_ca_file, 1024 * 1024, "distribution CA input");
+    try {
+      const blocks = tlsCa.match(/-----BEGIN CERTIFICATE-----[\s\S]*?-----END CERTIFICATE-----/gu);
+      if (
+        !blocks?.length ||
+        tlsCa
+          .replace(/-----BEGIN CERTIFICATE-----[\s\S]*?-----END CERTIFICATE-----/gu, "")
+          .trim() ||
+        blocks.some((block) => !new X509Certificate(block).ca)
+      )
+        throw new Error();
+    } catch {
+      throw new Error("distribution CA input must be a valid PEM CA bundle");
+    }
+  }
+  return Object.freeze({
+    transport: "https",
+    url: url.href,
+    basicUsername: endpoint.basic_username,
+    basicPassword: password,
+    sendMachineId: endpoint.send_machine_id,
+    ...(tlsCa === undefined ? {} : { tlsCa }),
+  });
+}
+async function parseConfiguration(value, platform) {
+  const configuration = object(value, "distribution configuration");
+  if (configuration.source === "service") {
+    rejectUnknown(configuration, new Set(["source", "endpoint"]), "distribution configuration");
+    return Object.freeze({
+      source: "service",
+      endpoint: await parseEndpoint(configuration.endpoint, platform),
+    });
+  }
+  if (configuration.source !== "local")
+    throw new Error("distribution configuration source must be local or service");
+  rejectUnknown(
+    configuration,
+    new Set(["source", "config_dir", "allow_config_override", "audit_endpoint"]),
+    "distribution configuration",
+  );
+  const configDir = absolutePath(configuration.config_dir, "distribution config_dir");
+  if (typeof configuration.allow_config_override !== "boolean")
+    throw new Error("distribution allow_config_override must be boolean");
+  return Object.freeze({
+    source: "local",
+    configDir,
+    configPath: `${configDir}/config.toml`,
+    defaultModelsPath: `${configDir}/models.json`,
+    allowConfigOverride: configuration.allow_config_override,
+    ...(configuration.audit_endpoint === undefined
+      ? {}
+      : { auditEndpoint: await parseEndpoint(configuration.audit_endpoint, platform) }),
+  });
+}
+/** Explicit metadata representation: never serialize compiled credentials or secret input paths. */
+export function releaseLayout(layout) {
+  const endpoint = (value) =>
+    value.transport === "unix"
+      ? { ...value }
+      : {
+          transport: "https",
+          url: value.url,
+          basicUsername: value.basicUsername,
+          sendMachineId: value.sendMachineId,
+          tlsTrust: value.tlsCa === undefined ? "public" : "custom",
+        };
+  const config = layout.configuration;
+  const configuration =
+    config.source === "service"
+      ? { source: "service", endpoint: endpoint(config.endpoint) }
+      : {
+          ...config,
+          ...(config.auditEndpoint === undefined
+            ? {}
+            : { auditEndpoint: endpoint(config.auditEndpoint) }),
+        };
+  return { ...layout, configuration };
+}
+
 export async function loadDistribution(path, platform = process.platform) {
   const distributionPath = resolve(path);
   let parsed;
@@ -131,10 +297,7 @@ export async function loadDistribution(path, platform = process.platform) {
   }
   const root = object(parsed, `distribution manifest ${distributionPath}`);
   rejectUnknown(root, ROOT_KEYS, `distribution manifest ${distributionPath}`);
-  if (root.version !== 3) throw new Error("distribution manifest version must be 3");
-  if (typeof root.allow_config_override !== "boolean") {
-    throw new Error("distribution allow_config_override must be a boolean");
-  }
+  if (root.version !== 4) throw new Error("distribution manifest version must be 4");
   if (
     !Array.isArray(root.extension_manifests) ||
     root.extension_manifests.some((entry) => typeof entry !== "string" || entry.length === 0)
@@ -157,10 +320,7 @@ export async function loadDistribution(path, platform = process.platform) {
   rejectUnknown(platforms, new Set(["linux", "darwin"]), "distribution platforms");
   const selected = object(platforms[platform], `distribution platforms.${platform}`);
   rejectUnknown(selected, PLATFORM_KEYS, `distribution platforms.${platform}`);
-  const configDir = absolutePath(
-    selected.config_dir,
-    `distribution platforms.${platform}.config_dir`,
-  );
+  const configuration = await parseConfiguration(selected.configuration, platform);
   const libexecDir = absolutePath(
     selected.libexec_dir,
     `distribution platforms.${platform}.libexec_dir`,
@@ -169,27 +329,8 @@ export async function loadDistribution(path, platform = process.platform) {
     selected.launcher_path,
     `distribution platforms.${platform}.launcher_path`,
   );
-  const identitySocketPath = absolutePath(
-    selected.identity_socket_path,
-    `distribution platforms.${platform}.identity_socket_path`,
-  );
-  const auditSocketPath = absolutePath(
-    selected.audit_socket_path,
-    `distribution platforms.${platform}.audit_socket_path`,
-  );
-  if (auditSocketPath === identitySocketPath) {
-    throw new Error("distribution audit_socket_path must differ from identity_socket_path");
-  }
-  const serviceDir =
-    platform === "linux"
-      ? absolutePath(selected.service_dir, "distribution platforms.linux.service_dir")
-      : undefined;
-  if (
-    platform === "darwin" &&
-    (selected.service_dir !== undefined || selected.bubblewrap !== undefined)
-  ) {
-    throw new Error("distribution platforms.darwin does not support service_dir or bubblewrap");
-  }
+  if (platform === "darwin" && selected.bubblewrap !== undefined)
+    throw new Error("distribution platforms.darwin does not support bubblewrap");
   if (launcherPath === libexecDir || launcherPath.startsWith(`${libexecDir}/`)) {
     throw new Error("distribution launcher_path must be outside libexec_dir");
   }
@@ -209,19 +350,17 @@ export async function loadDistribution(path, platform = process.platform) {
     ...(bubblewrap === undefined ? {} : { bubblewrap }),
     ...(toolBundle === undefined ? {} : { toolBundle }),
     layout: Object.freeze({
-      allowConfigOverride: root.allow_config_override,
-      configDir,
-      configPath: `${configDir}/config.toml`,
-      defaultModelsPath: `${configDir}/models.json`,
+      configuration,
       libexecDir,
       launcherPath,
-      identitySocketPath,
-      auditSocketPath,
       ...(bubblewrap === undefined
         ? {}
         : { bubblewrap: Object.freeze({ mode: bubblewrap.mode, path: bubblewrap.path }) }),
-      ...(serviceDir === undefined ? {} : { serviceDir }),
       ...(toolBundle?.layout ?? {}),
+      nativeInventory: Object.freeze({
+        ...(toolBundle ? { toolBundleSha256: toolBundle.inventorySha256 } : {}),
+        ...(bubblewrap?.mode === "bundled" ? { bubblewrapSha256: bubblewrap.sha256 } : {}),
+      }),
     }),
   });
 }
@@ -230,12 +369,13 @@ export function createCompiledLayoutModule(
   layout,
   { toolBundleDirectory, executableRelative = false } = {},
 ) {
+  const freeze = `const freeze = value => { if (value && typeof value === "object") { Object.values(value).forEach(freeze); Object.freeze(value); } return value; };\n`;
   if (!layout.toolBundle)
-    return `export const compiledLayout = Object.freeze(${JSON.stringify(layout)});\n`;
+    return `${freeze}export const compiledLayout = freeze(${JSON.stringify(layout)});\n`;
   const root = executableRelative
     ? 'join(dirname(realpathSync(process.execPath)), "tools")'
     : JSON.stringify(toolBundleDirectory ?? layout.toolBundle.root);
   const commandNames = Object.keys(layout.toolBundle.commands);
   const hostNames = Object.keys(layout.hostTools ?? {});
-  return `import { dirname, join } from "node:path";\nimport { realpathSync } from "node:fs";\nconst root = ${root};\nconst paths = names => Object.freeze(Object.fromEntries(names.map(name => [name, join(root, "bin", name)])));\nexport const compiledLayout = Object.freeze({...${JSON.stringify(layout)},toolBundle:Object.freeze({root,commands:paths(${JSON.stringify(commandNames)})}),hostTools:paths(${JSON.stringify(hostNames)})});\n`;
+  return `${freeze}import { dirname, join } from "node:path";\nimport { realpathSync } from "node:fs";\nconst root = ${root};\nconst paths = names => Object.freeze(Object.fromEntries(names.map(name => [name, join(root, "bin", name)])));\nexport const compiledLayout = freeze({...${JSON.stringify(layout)},toolBundle:Object.freeze({root,commands:paths(${JSON.stringify(commandNames)})}),hostTools:paths(${JSON.stringify(hostNames)})});\n`;
 }

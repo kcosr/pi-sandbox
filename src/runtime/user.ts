@@ -3,7 +3,8 @@ const ROOT_RUNTIME_ERROR =
 
 const ROOT_ADMINISTRATIVE_COMMANDS = new Set([
   "--validate-installation",
-  "--print-execution-backend",
+  "--validate-bootstrap",
+  "--print-build-capabilities",
 ]);
 
 function effectiveUserId(): number | undefined {

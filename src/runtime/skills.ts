@@ -24,6 +24,7 @@ export async function validateCandidateSkillDirectories(
   directories: readonly string[],
   libexecDirectory: string,
   candidatePayload: string,
+  live = false,
 ): Promise<void> {
   if (!isAbsolute(candidatePayload) || candidatePayload.includes("\0")) {
     throw new Error("candidate payload must be an absolute directory path");
@@ -32,10 +33,14 @@ export async function validateCandidateSkillDirectories(
     throw new Error("candidate payload must be a directory");
   const installedSkills = join(libexecDirectory, "skills");
   for (const directory of directories) {
-    if (directory !== installedSkills && !directory.startsWith(`${installedSkills}/`)) continue;
-    const candidate = join(candidatePayload, "skills", relative(installedSkills, directory));
+    const packaged = directory === installedSkills || directory.startsWith(`${installedSkills}/`);
+    if (!packaged && !live) continue;
+    const candidate = packaged
+      ? join(candidatePayload, "skills", relative(installedSkills, directory))
+      : directory;
     try {
       if (!(await stat(candidate)).isDirectory()) throw new Error("not a directory");
+      if (live) await access(candidate, constants.R_OK | constants.X_OK);
     } catch (cause) {
       throw new Error(
         `config.skills.directories: candidate payload does not provide configured skill root: ${directory}`,

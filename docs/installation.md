@@ -13,9 +13,9 @@ process-only `--disable-extension ID` overrides. Administrators can append
 conditional tool guidance through `[extension_guidance]`; see
 [optional extension preferences](configuration.md#optional-extension-preferences).
 
-Subagent tool provenance uses audit wire 5 and record schema 6. Upgrade the Linux
-application and collector together. Workspace modes require main schema 15 and broker protocol/rule version 11;
-audit wire 5 and record schema 6 remain unchanged.
+The managed service uses API 1, policy schema 16, rule version 12 and audit
+record schema 7. Clients select either service bootstrap or local files at build
+time; auditing uses the same service protocol in both profiles.
 
 ## Requirements
 
@@ -60,101 +60,65 @@ The Git extension requires `/usr/bin/git`. Startup validates the requirements
 for every selected managed extension; separately maintained executables and
 their configuration remain deployment inputs.
 
-The distributed application and optional Linux static identity and event-collector
-services are prebuilt.
-An installed host does not need Bun, Node.js, Rust, a package source tree, a
-compiler, network access, or Pi source. A release without the Git extension
-selected does not require Git. Pi Sandbox does not require QEMU,
-Gondolin, Docker, or a persistent privileged daemon; the optional root broker
-is systemd socket activated per connection on Linux. Broker identity is not
-supported or packaged on macOS; macOS configuration must set
-`identity.mode = "disabled"` and `[audit].enabled = false`.
+The application and Linux service are prebuilt. Installed hosts need no Bun,
+Node.js, Rust, compiler or source checkout. Local builds with audit disabled need
+no service. Service-source clients require their compiled Unix or HTTPS endpoint;
+local builds can compile an optional audit endpoint. macOS supports HTTPS clients,
+including audit events, but does not install a native daemon. HTTPS Linux clients
+also need no daemon on the client host.
 
 ## Release archive and installed layout
 
-Each platform-specific release archive is complete and may be copied to an offline host. It
-contains the executable, its required adjacent static assets, administrative
-defaults, and the installation helper. Installation uses one application
-directory rather than wrapper generations:
+Client archives contain the executable, adjacent assets, manifests, SBOM,
+checksums and transactional installation scripts. Linux defaults are:
 
 ```text
 /usr/bin/pi-sandbox -> /usr/libexec/pi-sandbox/pi-sandbox
-
 /usr/libexec/pi-sandbox/
   pi-sandbox
-  pi-sandbox-identity-broker
-  pi-sandbox-audit-collector
   bwrap                         # bundled-provider releases only
   package.json
+  release-manifest.json
   sbom.cdx.json
-  skills/                       # optional bundled skill tree
-  skills-modes.txt               # checksum-covered per-file modes, when selected
   theme/
   assets/
   export-html/
   photon_rs_bg.wasm
-  native/linux/prebuilds/<platform>/
-    linux-platform-x11.node
-  defaults/
+  native/linux/prebuilds/<platform>/linux-platform-x11.node
+  skills/                       # optional selected skill tree
+  skills-modes.txt               # complete, checksummed modes when selected
+  defaults/                     # LOCAL configuration builds only
     config.toml
     models.json
-  systemd/
-    pi-sandbox-identity-broker.socket
-    pi-sandbox-identity-broker@.service
-    pi-sandbox-audit.socket
-    pi-sandbox-audit@.service
   licenses/
-    LICENSE
-    identity-broker/
-      THIRD-PARTY-NOTICES.md
-      <vendored package license texts>
-    bubblewrap/                 # bundled-provider releases only
-      LICENSE
-
-/usr/lib/systemd/system/
-  pi-sandbox-identity-broker.socket -> packaged unit
-  pi-sandbox-identity-broker@.service -> packaged unit
-  pi-sandbox-audit.socket -> packaged unit
-  pi-sandbox-audit@.service -> packaged unit
-
-/etc/pi-sandbox/
-  config.toml
-  models.json
 ```
 
-These are the default paths. The build-selected distribution manifest may set
-different absolute root-owned config, libexec, launcher, identity-socket, and
-Linux service-unit paths. It also selects a system or bundled Bubblewrap
-provider. Those choices are compiled into the application and
-rendered into its installer, uninstaller, systemd units, and release manifest.
+macOS uses `/usr/local/bin/pi-sandbox` and `/usr/local/libexec/pi-sandbox`, with
+its native `darwin-platform.node` asset. Neither client archive includes broker,
+collector or systemd units. Local defaults install under the compiled `config_dir`
+(`/etc/pi-sandbox` in the public distribution); service-source archives contain
+no local administrative defaults and create no configuration directory.
 
-The default macOS layout omits both Rust services, their licenses, and systemd units:
+Linux builds also emit an independent `pi-sandbox-service-VERSION-linux-ARCH.tar.gz`:
 
 ```text
-/usr/local/bin/pi-sandbox -> /usr/local/libexec/pi-sandbox/pi-sandbox
-
-/usr/local/libexec/pi-sandbox/
-  pi-sandbox
-  package.json
-  sbom.cdx.json
-  theme/
-  assets/
-  export-html/
-  photon_rs_bg.wasm
-  native/darwin/prebuilds/<platform>/
-    darwin-platform.node
-  defaults/
-  licenses/
-
-/etc/pi-sandbox/
-  config.toml
-  models.json
+/usr/libexec/pi-sandbox-service/pi-sandbox-service
+/usr/lib/systemd/system/pi-sandbox-service.service
+/usr/share/pi-sandbox-service/examples/
 ```
 
-Broker mode may additionally read
-`/etc/pi-sandbox/users.d/*.toml` and `/etc/pi-sandbox/groups.d/*.toml`. The optional live directories and their
-root-owned mode-0600 drop-ins are deliberately absent from the release and are
-never created, replaced, backed up, or removed by the installer or uninstaller.
+The service archive includes its own SBOM, static Rust/TLS dependency licenses,
+checksums and install/uninstall scripts. It never provisions live policy, rules,
+passwords or TLS keys. Deployment owns `/etc/pi-sandbox-service/main/service.toml` and
+service activation. Examples are templates, not active configuration. The daemon
+unit is one concurrent root process with `MemoryMax=4G`, `TasksMax=256` and
+`LimitNOFILE=16384`; it owns `/run/pi-sandbox` and is not socket activated per user.
+
+Common client installation paths and native tool selection are compiled into the
+application and rendered into the installer and release manifest. A `DESTDIR`
+changes only the installation destination, never the runtime endpoint or source.
+Deployment-owned user/group rules belong to service listener rule directories;
+client installers do not create or modify them.
 
 The executable embeds Pi's image-resize and codemode workers and its QuickJS
 runtime data. Code mode is disabled in packaged defaults and enabled only by
@@ -169,12 +133,12 @@ compiled extension kinds, identifiers, versions, tool names, manifest and entryp
 digests, optional repository/revision provenance, private bundle digest, and
 the selected Bubblewrap provider, runtime path, version, and binary digest.
 
-`/etc/pi-sandbox/config.toml` is the default policy entry point. Managed builds
-reject CLI policy selection. A distribution built with `allow_config_override = true`
-accepts a leading `--config FILE`; the selected TOML then supplies the required
-absolute `models_file`. See [configuration modes](configuration.md). Pi Sandbox performs no
-root-ownership or file-mode checks; deployment tooling is responsible for
-ownership and permissions.
+Local builds read their compiled `config_dir/config.toml` and its required
+`models_file` once. Only local builds explicitly compiled with
+`allow_config_override = true` admit a leading `--config FILE`. Service builds
+admit neither local file selection nor an environment endpoint override. They
+fetch policy, account overrides, environment and model catalog in memory through
+the compiled endpoint. See [configuration modes](configuration.md).
 
 ## Building a release
 
@@ -193,7 +157,7 @@ building from the final release tag.
 
 Release builds use Node.js 24 or newer with `NODE_ENV` unset. Linux release
 builds also use Rust/Cargo 1.85 or newer; Rust dependencies are pinned and
-vendored so the broker builds offline:
+vendored so the service builds offline:
 
 ```sh
 env -u NODE_ENV npm ci
@@ -203,7 +167,7 @@ env -u NODE_ENV npm run build:release
 `build:release` compiles and packages without running test suites. It still
 verifies pinned source hashes, configuration and distribution inputs, package
 layout, SBOM, manifests, checksums, version and installation metadata. It does
-not start operational sessions or require a running broker/audit service.
+not start operational sessions or require a running policy or audit service.
 Use `verify:release` with the same arguments when qualification is wanted: it
 runs the full repository suites, patched-Pi API/integration/theme tests and
 packaged-runtime smoke checks as well as the same build/package/integrity path.
@@ -220,31 +184,33 @@ env -u NODE_ENV npm run build:release -- \
 ```
 
 ```toml
-version = 3
-allow_config_override = false
-extension_manifests = [
-  "/path/to/pi-sandbox-extension.json",
-  "/path/to/private-extension/pi-sandbox-extension.json",
-]
+version = 4
+extension_manifests = ["/path/to/pi-sandbox-extension.json"]
 
 [platforms.linux]
-config_dir = "/etc/pi-sandbox"
 libexec_dir = "/usr/libexec/pi-sandbox"
 launcher_path = "/usr/bin/pi-sandbox"
-service_dir = "/usr/lib/systemd/system"
-identity_socket_path = "/run/pi-sandbox-identity/broker.sock"
-audit_socket_path = "/run/pi-sandbox-audit/collector.sock"
-
+[platforms.linux.configuration]
+source = "local"
+config_dir = "/etc/pi-sandbox"
+allow_config_override = false
 [platforms.linux.bubblewrap]
 mode = "system"
 path = "/usr/bin/bwrap"
 
 [platforms.darwin]
-config_dir = "/etc/pi-sandbox"
 libexec_dir = "/usr/local/libexec/pi-sandbox"
 launcher_path = "/usr/local/bin/pi-sandbox"
-identity_socket_path = "/run/pi-sandbox-identity/broker.sock"
-audit_socket_path = "/run/pi-sandbox-audit/collector.sock"
+[platforms.darwin.configuration]
+source = "service"
+[platforms.darwin.configuration.endpoint]
+transport = "https"
+url = "https://policy.example.org/v1/service"
+basic_username = "company-macos"
+basic_password_file = "/private/build-inputs/service-password"
+send_machine_id = false
+# Optional custom CA bundle; omit to use public CA roots:
+# tls_ca_file = "/private/build-inputs/internal-ca.pem"
 ```
 
 Linux may instead package a prebuilt Bubblewrap binary:
@@ -367,21 +333,32 @@ Then select it with an empty `[extensions.example-tools]` table and provide a
 complete `[tools.example_lookup]` policy. Factories that register commands,
 event handlers, renderers, flags, or other non-tool features are rejected.
 
-The version-3 distribution manifest requires `allow_config_override = false`
-for managed installations or `true` to expose the runtime `--config FILE` prefix.
-This is compiled into the executable and recorded in the release manifest.
-Older distribution manifest versions are rejected. The switch does not change
-installer generation or installation paths: the installer still manages the
-compiled layout and packaged defaults. A local test may extract the payload
-and run its executable directly with `--config`, without installing services.
+The version-4 descriptor requires the strict `configuration` union. Local builds
+require `config_dir` and `allow_config_override`; `audit_endpoint` is optional and
+uses the same endpoint shape as service builds. Service builds require `endpoint`
+and reject local config fields. Unix endpoints require Linux and an absolute
+`socket_path`. HTTPS endpoints require the exact `/v1/service` URL, build-time
+Basic credential input and explicit `send_machine_id` (true is macOS-only).
+Endpoint, credentials and CA roots are fixed in the executable. Build inputs are
+not runtime environment variables. There is no fallback to local files.
 
-The distribution manifest also sets `config_dir`, `libexec_dir`,
-`launcher_path`, `identity_socket_path`, `audit_socket_path`, and, on Linux, `service_dir` for each
-platform, plus the Linux Bubblewrap provider. These installation paths are
-normalized absolute paths fixed at build time. Only the application policy path
-can be selected at launch, when the build enables `--config`. A
-packaged default config must point `models_file` at that layout's
-`config_dir/models.json`.
+HTTPS builds, including local builds with HTTPS auditing, are deployment-private:
+credentials can be extracted by users who control their machines. Public examples
+contain no usable credential. The builder redacts credential contents and input
+paths from release metadata and protects credential-bearing archives with mode 0600. Public CA roots are the default; an explicit CA bundle replaces that trust
+set. Plain HTTP, redirects, userinfo and ambient proxy/CA overrides are rejected.
+
+Local release builds accept `--config` and `--models`; the default policy must
+point `models_file` at `config_dir/models.json`. Service release builds reject
+those options and omit `defaults/`. Older distribution schemas and former socket,
+service-directory and top-level configuration fields are rejected.
+
+Release compilation requires Bun 1.4.4 or newer stable. Earlier runtimes can add
+ambient or system CAs to an explicit CA set, violating the service trust boundary.
+The builder checks this minimum before creating build output. The Bun version is
+recorded in the SBOM; deployed applications embed that runtime and need rebuilding
+to receive runtime or bundled-root updates. JavaScript-only development builds do
+not compile a Bun runtime.
 
 The build produces a native archive for its current Linux or macOS architecture.
 It downloads, or accepts a locally supplied copy of, the official Pi
@@ -389,7 +366,7 @@ It downloads, or accepts a locally supplied copy of, the official Pi
 SHA-256 digest, extracts the source into temporary or ignored build storage,
 applies the small patch series in `patches/pi`, compiles Pi plus the separate Pi
 Sandbox extension and selected modules into the Bun application, and
-builds the broker as a static native executable on Linux. Pi still loads only the single
+builds the separate service archive with a static native executable on Linux. Pi still loads only the single
 forced Pi Sandbox extension factory. The extracted Pi worktree and external
 extension sources are not included in the release archive.
 
@@ -398,7 +375,7 @@ authoritative upstream contract.
 
 ### Bundling shared skills
 
-A version-3 distribution can select a prepared directory with a top-level input
+A version-4 distribution can select a prepared directory with a top-level input
 resolved relative to its manifest:
 
 ```toml
@@ -407,7 +384,7 @@ skills_source = "./shared-skills"
 
 The builder copies the complete tree, including support files, into
 `payload/pi-sandbox/skills`. Installation places it at the selected platform's
-`libexec_dir/skills`. The selected default policy must explicitly include that
+`libexec_dir/skills`. For local builds, the selected default policy must explicitly include that
 exact installed root in `[skills].directories`; selecting a source does not
 silently activate an implicit runtime path. Conversely, defaults referencing
 that package-owned root or a descendant require a source containing the directory.
@@ -424,163 +401,90 @@ existing shell/awk prerequisites. The release manifest and SBOM include the
 bundle's hashes, modes and prepared-tree provenance. A selected empty tree has
 an empty sidecar; an unselected bundle has neither directory nor sidecar.
 
-Upgrades preserve existing administrative configuration by default. The candidate
-validator checks the configuration actually selected for installation against the
-replacement payload before swapping it. Removing a bundle or a subdirectory still
-referenced by retained policy fails; update that policy first or explicitly select
-replacement defaults. Installation-only `--validate-installation` accepts
-`--candidate-payload DIR` alongside optional `--root DESTDIR` for this check.
-External roots are not opened during installation. Runtime startup still checks
-all configured roots as the invoking user. Rollback and uninstall follow ordinary
-payload handling; external skill trees are never copied, removed or rewritten.
+Local upgrades validate retained or replacement policy against the candidate
+payload before publication. External roots remain symbolic during this offline
+check. Service-source builds with selected skills require live target-account
+validation: `install.sh --validation-user NAME` (repeat for each deployment policy
+or permission context). The fetched policy must include the exact installed
+`libexec_dir/skills` root. The installer stages final modes beneath the traversable
+root-owned libexec parent, then invokes the staged candidate from `/` under each
+non-root account with a clean environment. This avoids unreadable root unpack
+paths. Failure leaves the installed payload intact. Runtime checks roots for every
+invoking user, including accounts added later.
+
+`DESTDIR` is offline packaging: verify payload inventory, modes and compiled
+capabilities without service contact or account switching; reject
+`--validation-user`. A subsequently installed service skills package still needs
+the live target-account check. Offline staging does not certify live policy or
+skill access. External skill trees are never copied or removed.
 
 ## Installing and upgrading
 
-Extract the release archive and run its helper as root:
+Extract the client archive and run `sudo ./install.sh`. Run the application as the
+intended non-root user. The installer verifies checksums, complete asset/mode
+inventory, compiled source, platform and architecture before publishing the
+payload. It checks selected native prerequisites without installing OS packages.
+No installer contacts a model provider or starts Pi tools.
+
+Local installations copy defaults only when absent and preserve existing policy
+on ordinary upgrades. The candidate runs
+`--validate-installation [--root DIR] --candidate-payload DIR` before the payload
+swap, validating all workspace modes, model authentication admission and inventory
+without reading referenced secrets or resolving user/machine macros. Successful
+stdout is the authored default backend. `--replace-config` validates packaged
+policy/catalog in a private staging tree and retains the existing backup/rollback
+transaction. Local uninstall retains configuration unless `--remove-config` is
+explicitly selected. Local installations do not accept `--validation-user`.
+
+Service installations reject `--replace-config`; uninstall rejects
+`--remove-config`. `--print-build-capabilities` is offline and reports compiled
+source, native providers and inventory hashes, not an effective backend. Service
+policy can be qualified with `--validate-service --candidate-payload DIR`, run as
+the intended non-root account on its target platform. The command fetches and
+validates one bootstrap entirely in memory, including resolved secrets, all modes,
+the account default, candidate skills and bounded backend capability checks. It
+never constructs an operational executor. Output contains status and opaque
+revision, never configuration contents. Validation is mandatory before publication
+for service packages with bundled skills, using `--validation-user` as described
+above. Runtime still validates its own fresh snapshot.
+
+Both profiles support offline `--validate-bootstrap FILE --candidate-payload DIR`
+for a synthetic successful bootstrap envelope. It performs symbolic validation,
+not an operational policy-source override. Test bundles are private temporary
+fixtures. Production service validation does not export secrets to a bundle.
+
+Policy schema 16 retains workspace selection semantics and requires
+`model_auth.personal_providers`. Remove authored `identity` and `audit.facility`;
+facility belongs to the service listener. Service rules use version 12. Update
+rules and policy explicitly before activation; no compatibility parser or automatic
+conversion is supplied. A service client never reads client-side rules. Linux Unix
+listeners resolve kernel-authenticated accounts and host groups; HTTPS listeners
+use asserted usernames and admit username rules only. See the
+[rule contract](managed-service.md) and [model authentication](models.md).
+
+Install the independent Linux service archive separately. Provision protected
+manifest, policy/catalog/rule files and TLS/password inputs, then run:
 
 ```sh
-sudo ./install.sh
+sudo /usr/libexec/pi-sandbox-service/pi-sandbox-service --validate --manifest /etc/pi-sandbox-service/main/service.toml
+sudo systemctl daemon-reload
+sudo systemctl enable --now pi-sandbox-service.service
 ```
 
-Root authority is for installation only. Launch `pi-sandbox` from the intended
-working directory as the unprivileged user whose host permissions and state
-should apply. Interactive startup with effective UID `0` is rejected without a
-configuration override. The installer may invoke the executable's
-non-interactive configuration validation commands as root; those commands do
-not start Pi or an execution backend.
+Offline daemon validation checks source shape and protected metadata without
+reading password, private-key or environment-secret contents. Activation validates
+TLS/key pairing and credentials. Restart the daemon for manifest/TLS/credential
+changes; new bootstrap requests read current policy and rules. Existing application
+processes retain their captured configuration snapshot. To uninstall the daemon,
+disable and stop `pi-sandbox-service.service`, then run its archive's uninstaller.
+Live deployment configuration, keys and passwords remain untouched. Client
+uninstall does not affect the independent service.
 
-The default distribution installs under `/usr` on Linux and `/usr/local` on
-macOS, with `/etc/pi-sandbox` for administrative configuration. A custom
-distribution uses its compiled paths. The macOS installer validates
-the native direct/Seatbelt configuration and GNU prerequisites and never installs broker
-or service-manager files.
-
-The installer serializes concurrent updates with
-`/usr/libexec/.pi-sandbox.install.lock`. If an interrupted installation leaves
-that directory behind, first verify that no installer is running, then remove
-the lock directory and retry.
-
-The helper refuses a live system installation when the platform prerequisites
-described above are absent or not executable. Selected extension prerequisites are checked when
-the effective configuration is admitted. Neither path installs operating-system
-packages; install those dependencies first. Staged `DESTDIR` installation
-skips host checks because dependency resolution belongs to the target image.
-
-The installer installs or upgrades both executables, packaged assets, and
-managed systemd unit symlinks. It does not enable or start the broker socket. On the
-first installation it also copies the packaged defaults to
-`/etc/pi-sandbox/config.toml` and `/etc/pi-sandbox/models.json`. On an ordinary
-upgrade it preserves all existing files under `/etc/pi-sandbox` and validates
-them with the new executable before completing the installation.
-
-After a successful operation, the installer prints both executables, the
-launcher and unit symlinks, runtime support directory, live administrative
-files, and any backups it created. Configuration entries are labeled as
-installed, replaced, or preserved. It separately identifies `users.d` and `groups.d` as
-optional administrator-managed directories that it did not create or alter.
-
-To intentionally deploy the package's administrative configuration as well as
-its code, use:
-
-```sh
-sudo ./install.sh --replace-config
-```
-
-`--replace-config` validates the packaged files, makes recoverable backups of
-the active configuration and model files, and then replaces them atomically.
-There is no implicit configuration replacement. This supports both complete
-archive deployments and systems where Salt or another configuration manager
-owns `/etc/pi-sandbox`.
-
-The installed configuration uses `config_version = 15`. It requires common
-`audit`/`audit.tools`, `workspace`, `sessions`, `codemode`, `mcp.servers`,
-`execution`, `filesystem`, `extensions` and scoped environment tables. Named-tool
-audit booleans belong in the exhaustive `audit.tools` map, not invocation entries.
-Common CWD writability, exports and Bash/write/edit policies may be omitted only
-when every mode supplies complete effective values. Unknown fields, obsolete
-schemas and missing effective policies fail before installation swaps binaries.
-
-Set the shared backend to Bubblewrap on Linux, Seatbelt on macOS, or explicit
-direct execution where intended. Every mode is validated, including definitions
-outside the allowed list, with current-platform checks. Direct requires host
-networking, writable CWD, empty hidden/denied paths and disabled exports; macOS
-requires disabled identity and audit. Selecting a mode never changes backend.
-A retained schema-14 file must be migrated explicitly; the installer does not
-rewrite it. See [workspace policy migration](#workspace-policy-migration).
-
-`[sessions] retention_days = 365` remains the packaged conversation-retention
-default. Use `0` to disable cleanup and timestamp updates. Older configurations
-must also supply all current required fields, remove obsolete `process_lifetime`
-settings and review existing home/account expansion. No default command timeout
-is imposed; `execution.max_command_timeout_seconds` optionally caps commands.
-
-Broker users must update preserved `users.d` and `groups.d` files to
-`version = 11` and deploy protocol-11 application/broker components together.
-Invocation policies still omit audit, which remains common main policy. The
-installer neither rewrites nor preflights the broker rule store, including with
-`--replace-config`; migrate rules before activating the upgraded broker. Old
-rules fail at identity resolution. Older rules must also remove obsolete
-execution lifetime fields and any resulting empty execution table. See the
-[rule contract](identity-broker.md).
-
-Upgrade the Linux audit collector alongside the application for main schema 15.
-Audit wire 5/record schema 6 are unchanged. Restart Pi processes after changing
-administrative configuration or rules; existing processes retain their selected
-mode and effective policy.
-
-The macOS packaged default selects Seatbelt with networking
-disabled, using `config/default/config.seatbelt.toml`. Ordinary upgrades preserve
-existing configuration, including an explicit direct backend. Builds can select
-`config/default/config.direct.toml` with `--config` when direct execution is intended.
-Seatbelt requires `network.mode` of `none` or `host`, empty hidden
-paths, disabled broker identity and disabled audit. No helper service, watcher,
-Python runtime or private namespace is installed. macOS arm64 and x86-64 release
-qualification must run separately.
-
-Installer validation checks home-relative syntax without expanding it to the
-root installer's home or requiring per-user hidden paths to exist. Operational
-startup expands against the invoking effective user's OS account home and
-validates the resulting paths, silently skipping missing Bubblewrap hidden targets
-but rejecting missing Seatbelt denied directories.
-Model and installation paths remain absolute.
-
-When the optional identity broker is enabled, `users.d/*.toml` and `groups.d/*.toml` may overlay
-scoped environment and supply workspace allowed/default choices, model, execution,
-network, filesystem, and complete tool-policy overrides, plus per-server MCP enablement and approval policies, for
-the account and its primary/supplementary groups. MCP definitions, credential
-mappings, timeouts, exposure and audit remain in the main configuration. Matching
-explicit permissions combine using least restrictive wins before overlaying defaults. Global/default values belong in the main
-`config.toml`; there is no separate defaults or aggregate users file. If no rules
-match, the main selection metadata and the selected mode's policy remain unchanged. An
-execution override may select `bubblewrap` or `direct`; the final effective
-configuration must still pair `direct` with `network.mode = "host"` and
-`filesystem.cwd_writable = true` with empty `filesystem.hidden_paths`.
-
-See [Models and authentication](models.md) for the distinction between the
-active catalog and packaged defaults, API-key resolution, and model
-troubleshooting.
-
-See [User and group environment and overrides](identity-broker.md) to create optional
-user/group drop-ins and enable the socket. After installing or upgrading units on a live
-host, run `systemctl daemon-reload` before enabling or restarting the socket.
-
-On Linux, disable any enabled optional sockets and stop event-collector
-connections before uninstalling:
-
-```sh
-sudo systemctl disable --now pi-sandbox-identity-broker.socket pi-sandbox-audit.socket
-sudo systemctl stop 'pi-sandbox-audit@*.service'
-sudo ./uninstall.sh
-```
-
-The uninstaller refuses to remove active or enabled sockets or active
-event-collector connections. It never
-removes `users.d`, `groups.d`, or their contents, including with `--remove-config`, and reloads
-systemd after removing the managed units.
-
-This project does not build an RPM. The archive layout and installer semantics
-are intentionally straightforward enough for an administrator to wrap in an
-RPM or another site-specific package later.
+The client installer serializes updates with a lock under its libexec parent. If
+an interrupted installation leaves a lock, verify that no installer is running
+before removing it. `DESTDIR` supports non-root offline image staging; it does not
+redirect runtime authority. No RPM or automatic logging-system configuration is
+provided. macOS architecture qualification remains native and separate.
 
 ## User state
 
@@ -631,7 +535,7 @@ resolution without starting a model session or executor.
 
 Before starting the interactive application, the executable validates the
 compiled extension catalog, loads and validates every main-authored mode, checks
-platform compatibility before broker access, resolves account mode access and
+platform compatibility before service bootstrap, resolves account mode access and
 selection, applies remaining account policy, and validates the final platform,
 selected extensions, effective model catalog, exact
 tool policy, and conditional executable prerequisites, and probes the selected
@@ -658,7 +562,7 @@ available.
 Run `pi-sandbox` directly as the intended unprivileged account rather than with
 `sudo`. The application does not offer a root-mode configuration switch. Root
 remains appropriate for `install.sh`, `uninstall.sh`, and administration of the
-system configuration and optional identity broker.
+system configuration and configured service.
 
 ### Administrative configuration is rejected
 
@@ -721,44 +625,35 @@ and relaunch Pi if the sandbox probe or installation admission failed.
 
 ## Local syslog integration
 
-Linux releases include `pi-sandbox-audit-collector` and the
-`pi-sandbox-audit.socket` / `pi-sandbox-audit@.service` systemd units. Enable the
-socket before setting `[audit].enabled = true` in the parent configuration:
+The Linux daemon accepts bootstrap, policy inspection and audit operations on one
+`POST /v1/service` protocol over Unix sockets or HTTPS. Each listener requires
+`audit_facility = "local0"` through `"local7"`; current policy `audit.enabled`
+controls audit opening. Local-source audit clients use their compiled optional
+endpoint and explicit local policy provenance. Service-source clients attach the
+opaque revision of their captured bootstrap. These identifiers are provenance,
+not attestations or durable receipts.
 
-```sh
-sudo systemctl daemon-reload
-sudo systemctl enable --now pi-sandbox-audit.socket
-```
+The host supplies `/dev/log`. Every accepted event is a bounded schema-7 syslog
+datagram under `pi-sandbox`, with Unix peer or HTTPS asserted identity, session,
+sequence and policy origin. The daemon resolves the local syslog destination on
+each send, so logging-socket replacement can recover. Host logging owns storage,
+forwarding and retention. ACK means local syslog submission, not durable storage.
 
-The default endpoint is `/run/pi-sandbox-audit/collector.sock`; a distribution
-may select another absolute path at build time with `audit_socket_path`.
-The root collector reads the parent configuration for the enabled state and
-syslog facility. No user/group rule changes these settings. Identity-broker mode is
-not required. The host must provide its standard local syslog socket at
-`/dev/log` and `/usr/bin/getent` for trusted account-name lookup. The resolver
-uses host NSS and locally reachable account-service sockets; it has no direct
-network LDAP access. Name resolution runs once per connection with a four-second
-budget. The application allows ten seconds for connection/acknowledgment.
-Records use schema 2 and identify each submission with `principal_uid`,
-`principal_user` (null if the UID has no account), and `principal_pid`. No
-principal GID or group membership is included.
+An audited tool/export must receive its required pre-effect ACK before proceeding.
+Failures invalidate the audit handle and fail the operation; events and tool
+execution are not replayed. A later explicit user submission performs the bounded
+reconnect checkpoint, so an outage does not permanently poison the application.
+Registered local commands remain available. Shared root/subagent audit state and
+independent daemon sessions preserve concurrent execution without a global tool
+serialization gate.
 
-The configuration file and every ancestor directory must be root-owned, must
-not be symlinks, and must not be group- or world-writable (normally `0644` for
-the file and `0755` for directories). Configuration rejection details appear in
-the collector service journal.
-
-The packaged socket allows 128 concurrent connections host-wide and eight per
-UID. Each logging-enabled process holds one connection. Exceeding these limits
-prevents the additional process from logging and its logged tools fail closed.
-Administrators can adjust these limits with a systemd socket unit drop-in.
-
-Events are emitted under the fixed `pi-sandbox` identifier using the configured
-`local0` through `local7` facility. Configure the host's logging service to store
-and forward those events as desired. There is no application-managed log file,
-rotation policy, remote logging destination, or durable-delivery promise. The
-application requires an acknowledgment that the collector submitted each
-required record to the local syslog socket.
+Manifest limits bound connections and sessions independently of the fixed worker
+pools. Defaults are 128 total connections, 16 per UID/32 per IP and 256 sessions,
+8 per principal; supported ceilings are documented in the service specification.
+The six-second request deadline and bounded queues do not promise cancellation of
+blocked host filesystem I/O. Service operational logs omit credentials, environment
+values and request bodies. HTTPS shared credentials authorize ingress and cannot
+prove a root-controlled Mac's asserted username. See [security](security.md).
 
 ## Release component inventory
 
@@ -766,8 +661,8 @@ Each release includes `sbom.cdx.json`, a CycloneDX 1.6 software bill of material
 covered by the release checksums. It records the application binary hash,
 source commit and working-tree status, pinned Pi source and patch provenance,
 actual JavaScript bundle inputs, selected compiled extensions, Bun version,
-packaged native assets and executable hashes, Linux Rust dependency inventories, and bundled
-Bubblewrap when selected. Cargo inventories include build-only dependencies.
+packaged native assets and executable hashes, and bundled
+Bubblewrap when selected. The independent service SBOM records pinned Rust/TLS runtime and build dependencies.
 System libraries and Bun's internal third-party dependencies are outside the
 inventory's stated coverage. Supply the SBOM alongside the matching release
 when using dependency scanners.
@@ -790,12 +685,12 @@ adapters and preserves administrator-selected permissions and audit controls.
 
 To preserve an existing schema-14 deployment's behavior:
 
-1. Set main schema 15. Move every named tool's inline audit Boolean to
+1. Set main schema 16. Move every named tool's inline audit Boolean to
    `audit.tools`, remove the old fields and leave MCP per-rule audit unchanged.
 2. Keep existing filesystem, exports and invocation values as common defaults.
    Add one administrator-named empty mode, and make it the sole allowed and
    default choice. An optional description explains that choice to users.
-3. Update any user/group rule files to version 11. They may omit workspace
+3. Update any user/group rule files to version 12. They may omit workspace
    metadata to inherit the main selection choices.
 4. Before adding modes, review mode-agnostic account CWD and tool overrides.
    They apply after selection: writable-CWD overrides invalidate export-enabled
@@ -803,11 +698,11 @@ To preserve an existing schema-14 deployment's behavior:
    differences into mode definitions and account grants where intended.
 5. Add other mode definitions and allowed/default grants deliberately. Validate
    all definitions and relevant account combinations before deploying matching
-   application, broker and collector components.
+   application and service components.
 
 Fresh confined packages offer host and sandbox with host as default; direct
 packages offer only host. Seatbelt keeps Bash disabled in both packaged modes.
 Ordinary upgrades preserve site policy instead of replacing it with those new
 choices. Both installers validate retained main configuration before swapping
-binaries, but do not validate live broker rules. There is no compatibility parser,
-automatic conversion, persistent scratch storage or new service.
+binaries, but do not validate live service rules. There is no compatibility parser,
+automatic conversion or persistent scratch storage.

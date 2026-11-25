@@ -26,10 +26,9 @@ export function prepareWritableSmokeWorkspace(config) {
 export async function prepareHostIndependentSmokeConfig(configPath, hiddenFile, decoyHome) {
   const config = prepareWritableSmokeWorkspace(parseToml(await readFile(configPath, "utf8")));
   // The build host need not carry executables required only on the target system.
-  // It also need not run the production identity broker or audit collector.
+  // Audit is disabled for this isolated local-source runtime smoke.
   // The release builder already validates the real selected extension config and inventory;
   // this smoke test exercises the packaged Pi application with its core sandbox tools.
-  config.identity = { mode: "disabled" };
   config.audit = { ...config.audit, enabled: false };
   config.audit.tools = Object.fromEntries(
     SANDBOX_TOOL_NAMES.map((name) => [name, config.audit.tools[name]]),

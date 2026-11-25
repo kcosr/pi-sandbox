@@ -3,7 +3,7 @@ import { open } from "node:fs/promises";
 
 import {
   MAXIMUM_ENVIRONMENT_VALUE_BYTES,
-  parseBrokerManagedEnvironment,
+  parseResolvedManagedEnvironment,
   type ManagedEnvironment,
   type PendingPiEnvironmentValue,
   type ResolvedPiEnvironmentValue,
@@ -78,5 +78,5 @@ export async function resolveEnvironmentFiles(
     }
     pi.push([name, Object.freeze({ literal })]);
   }
-  return parseBrokerManagedEnvironment({ ...environment, pi: Object.fromEntries(pi) });
+  return parseResolvedManagedEnvironment({ ...environment, pi: Object.fromEntries(pi) });
 }

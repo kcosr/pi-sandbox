@@ -1,41 +1,34 @@
+import {
+  createManagedModelRuntimeFactory,
+  type ManagedModelRuntimeFactory,
+} from "./model-runtime.js";
+import {
+  createServiceClient,
+  formatWorkspaceModes,
+  listWorkspaceModes,
+  resolveEffectiveAdministrativeConfiguration,
+  runAdministrativeCommand,
+} from "./administration.js";
+import { policyOrigin } from "../config/source.js";
 import type { SandboxExportSource } from "../../packages/sandbox-extension/src/runtime/export/contracts.js";
 import type { SandboxImportTarget } from "../../packages/sandbox-extension/src/runtime/import/contracts.js";
 import { usesSandboxGitDestination } from "../config/git-destination.js";
 import { sandboxGitArguments } from "../../packages/git-extension/src/sandbox-clone.js";
 import { createExportAudit } from "../audit/exports.js";
 import { canonicalizeCommandPathPrepend } from "../../packages/sandbox-extension/src/runtime/command-path.js";
-import { readFile } from "node:fs/promises";
-import { isAbsolute, join, resolve } from "node:path";
 
-import { InMemoryModelsStore } from "@earendil-works/pi-ai";
 import {
   getAgentDir,
   main as piMain,
-  ModelRuntime,
-  type CreateModelRuntimeOptions,
+  type ModelRuntime,
   type ExtensionFactory,
   type ExtensionCommandContext,
 } from "@earendil-works/pi-coding-agent";
 
 import { buildLayout } from "../build-layout/index.js";
 import { DISPLAY_VERSION } from "../version.js";
-import { connectAuditClient, type AuditClient } from "../audit/client.js";
-import {
-  loadConfig,
-  resolveWorkspaceAccess,
-  resolveWorkspaceSelection,
-  type AuthoredSandboxConfig,
-  type WorkspaceAccess,
-  type WorkspaceSelection,
-} from "../config/index.js";
-import type {
-  AccountIdentity,
-  AuthoredPiEnvironmentValue,
-  EnvironmentVariables,
-  ManagedEnvironment,
-  SandboxConfig,
-} from "../domain/index.js";
-import { expandManagedHomePaths, overlayManagedEnvironment } from "../domain/index.js";
+import { AuditManager, type AuditClient } from "../audit/client.js";
+import type { EnvironmentVariables, ManagedEnvironment, SandboxConfig } from "../domain/index.js";
 import { createPiSandboxExtension } from "../extension/index.js";
 import { resolveMcpServers } from "../mcp/resolve.js";
 import { loadMcpPreferences } from "../mcp/preferences.js";
@@ -43,11 +36,6 @@ import {
   createHostCommandExecutor,
   type HostCommandExecutor,
 } from "../../packages/sandbox-extension/src/runtime/host-command/index.js";
-import {
-  applyIdentityOverrides,
-  type BrokerIdentityResolver,
-  configureManagedIdentity,
-} from "../identity/index.js";
 import { managedExtensionCatalog } from "../managed-extensions/registry.js";
 import type { ManagedExtensionCatalog } from "../managed-extensions/catalog.js";
 import {
@@ -69,35 +57,20 @@ import {
   isManagedToolSelected,
   managedExtensionSelection,
 } from "./arguments.js";
-import { validateCandidateSkillDirectories, validateSharedSkillDirectories } from "./skills.js";
+import { validateSharedSkillDirectories } from "./skills.js";
 import { applyManagedEnvironment } from "./environment.js";
-import { resolveEnvironmentFiles } from "./environment-files.js";
 import { assertExecutionPrerequisites } from "./prerequisites.js";
 import { createWorkspaceBoundary } from "./workspace.js";
 import { createManagedCleanup, createManagedExecutor } from "./managed-executor.js";
 import { createConfiguredBashAnalyzer } from "./bash-analysis.js";
-import {
-  createAccountIdentityResolver,
-  readAccountIdentity,
-  resolvePromptAccountHome,
-} from "./account-home.js";
-import { createMachineIdResolver, readMachineId } from "./machine-id.js";
+import { createAccountIdentityResolver } from "./account-home.js";
+import { createMachineIdResolver } from "./machine-id.js";
 import type { SandboxArguments } from "./config-arguments.js";
 import {
   createSessionMaintenance,
   touchSessionFile,
   type SessionMaintenanceContext,
 } from "./session-retention.js";
-
-export const SYSTEM_CONFIG_PATH = buildLayout.configPath;
-
-export interface ManagedModelRuntimeOptions extends CreateModelRuntimeOptions {
-  readonly includeBuiltinCatalog: false;
-}
-
-export type ManagedModelRuntimeFactory = (
-  options?: CreateModelRuntimeOptions,
-) => Promise<ModelRuntime>;
 
 export interface ManagedMainOptions {
   readonly includeBuiltinTools: false;
@@ -108,6 +81,7 @@ export interface ManagedMainOptions {
   readonly validateSessionCwd: (cwd: string) => void;
   readonly beforeRun: (context: SessionMaintenanceContext) => Promise<void>;
   readonly beforeInterface: () => Promise<void>;
+  readonly beforeExternalMessage: () => Promise<void>;
   readonly beforeInteractiveQuit: (
     ctx: ExtensionCommandContext,
     signal: AbortSignal,
@@ -115,71 +89,6 @@ export interface ManagedMainOptions {
 }
 
 export type ManagedMain = (args: string[], options: ManagedMainOptions) => Promise<void>;
-
-function pathUnderRoot(root: string, absolutePath: string): string {
-  if (!isAbsolute(root)) throw new Error("validation root must be absolute");
-  if (!isAbsolute(absolutePath)) throw new Error("administrative path must be absolute");
-  const normalizedRoot = resolve(root);
-  return normalizedRoot === "/" ? absolutePath : join(normalizedRoot, absolutePath.slice(1));
-}
-
-async function createConfiguredModelRuntime(
-  modelsPath: string,
-  options: CreateModelRuntimeOptions = {},
-): Promise<ModelRuntime> {
-  const managedOptions: ManagedModelRuntimeOptions = {
-    ...options,
-    modelsPath,
-    modelsStore: new InMemoryModelsStore(),
-    allowModelNetwork: false,
-    includeBuiltinCatalog: false,
-  };
-  const runtime = await ModelRuntime.create(managedOptions);
-  const error = runtime.getError();
-  if (error !== undefined) throw new Error(error);
-  return runtime;
-}
-
-export function createManagedModelRuntimeFactory(modelsPath: string): ManagedModelRuntimeFactory {
-  return async (options = {}) => createConfiguredModelRuntime(modelsPath, options);
-}
-
-async function loadAdministrativeConfig(
-  root: string,
-  configPath: string,
-): Promise<AuthoredSandboxConfig<AuthoredPiEnvironmentValue>> {
-  return loadConfig(pathUnderRoot(root, configPath), managedExtensionCatalog);
-}
-
-/** Validate every main-authored mode before identity resolution or installer work. */
-async function loadPlatformWorkspaceConfig(root: string, configPath: string) {
-  const authored = await loadAdministrativeConfig(root, configPath);
-  for (const mode of Object.values(authored.workspace.modes)) assertExecutionPlatform(mode.config);
-  const shared = authored.workspace.modes[authored.workspace.default]!.config;
-  return { authored, shared };
-}
-
-/** Listing resolves admission only, without model/environment/executor startup. */
-export async function listWorkspaceModes(
-  root = "/",
-  configPath = SYSTEM_CONFIG_PATH,
-  resolveIdentity?: BrokerIdentityResolver,
-): Promise<WorkspaceAccess> {
-  const { authored, shared } = await loadPlatformWorkspaceConfig(root, configPath);
-  const identity = await configureManagedIdentity(shared.identity, resolveIdentity);
-  return resolveWorkspaceAccess(authored, identity.overrides.workspace);
-}
-
-export function formatWorkspaceModes(access: WorkspaceAccess): string {
-  return (
-    access.allowed
-      .map(
-        (mode) =>
-          `${mode.name}${mode.name === access.default ? " (default)" : ""}${mode.description === undefined ? "" : ` — ${mode.description}`}`,
-      )
-      .join("\n") + "\n"
-  );
-}
 
 export function instantiateConfiguredManagedExtensions(
   config: SandboxConfig,
@@ -221,94 +130,6 @@ function extensionNeedsHostExecutor(
     const mode = config.tools[tool.name]?.mode;
     return mode === "allow" || mode === "ask";
   });
-}
-
-async function readAdministrativeModels(
-  config: Pick<SandboxConfig, "modelsFile">,
-  root = "/",
-): Promise<string> {
-  const modelsPath = pathUnderRoot(root, config.modelsFile);
-  await readFile(modelsPath, "utf8");
-  return modelsPath;
-}
-
-export async function validateAdministrativeConfiguration(
-  root = "/",
-  configPath = SYSTEM_CONFIG_PATH,
-  candidatePayload?: string,
-): Promise<SandboxConfig<AuthoredPiEnvironmentValue>> {
-  const { shared: config } = await loadPlatformWorkspaceConfig(root, configPath);
-  if (candidatePayload !== undefined) {
-    await validateCandidateSkillDirectories(
-      config.skills.directories,
-      buildLayout.libexecDir,
-      candidatePayload,
-    );
-  }
-  const modelsPath = await readAdministrativeModels(config, root);
-  await createConfiguredModelRuntime(modelsPath, { refreshOnCreate: false });
-  return config;
-}
-
-export async function resolveEffectiveAdministrativeConfiguration(
-  root = "/",
-  environment: NodeJS.ProcessEnv = process.env,
-  resolveIdentity?: BrokerIdentityResolver,
-  configPath = SYSTEM_CONFIG_PATH,
-  getAccountIdentity: () => AccountIdentity = readAccountIdentity,
-  getMachineId: () => string = readMachineId,
-  requestedWorkspaceMode?: string,
-): Promise<{
-  readonly config: SandboxConfig;
-  readonly modelsPath: string;
-  readonly identityEnvironment: ManagedEnvironment;
-  readonly accountHome?: string;
-  readonly workspaceSelection: WorkspaceSelection;
-}> {
-  const { authored, shared } = await loadPlatformWorkspaceConfig(root, configPath);
-  const identity = await configureManagedIdentity(shared.identity, resolveIdentity);
-  const { config: baseConfig, selection: workspaceSelection } = resolveWorkspaceSelection(
-    authored,
-    identity.overrides.workspace,
-    requestedWorkspaceMode,
-  );
-  const combinedEnvironment = overlayManagedEnvironment(
-    baseConfig.environment,
-    identity.environment,
-  );
-  const overridden = applyIdentityOverrides(baseConfig, identity.overrides);
-  assertExecutionPlatform(overridden);
-  const account = createAccountIdentityResolver(getAccountIdentity);
-  // Resolve only effective configured values, before any managed HOME takes
-  // effect. The account lookup must not trust the process's HOME value.
-  const expanded = expandManagedHomePaths(
-    overridden.filesystem,
-    await resolveEnvironmentFiles(combinedEnvironment),
-    account,
-    createMachineIdResolver(getMachineId),
-  );
-  const effectiveEnvironment = expanded.environment;
-  const config = Object.freeze({
-    ...overridden,
-    filesystem: expanded.filesystem,
-    environment: effectiveEnvironment,
-  });
-  const accountHome =
-    config.execution.backend === "direct" ? undefined : await resolvePromptAccountHome(account);
-  const lease = applyManagedEnvironment(effectiveEnvironment.pi, environment);
-  try {
-    const modelsPath = await readAdministrativeModels(config, root);
-    await createConfiguredModelRuntime(modelsPath, { refreshOnCreate: false });
-    return {
-      config,
-      modelsPath,
-      identityEnvironment: effectiveEnvironment,
-      workspaceSelection,
-      ...(accountHome === undefined ? {} : { accountHome }),
-    };
-  } finally {
-    lease.restore();
-  }
 }
 
 async function createProbedExecutor(
@@ -414,46 +235,6 @@ function executionStartupMessage(config: SandboxConfig): string {
   return "Direct execution could not establish its bounded command runner; verify the documented host prerequisites";
 }
 
-export function assertExecutionPlatform(
-  config: Pick<SandboxConfig, "execution" | "network" | "filesystem" | "identity" | "audit">,
-  platform: NodeJS.Platform = process.platform,
-): void {
-  if (platform !== "linux" && platform !== "darwin") {
-    throw new Error(`Unsupported operating system: ${platform}`);
-  }
-  if (config.execution.backend === "bubblewrap" && platform !== "linux") {
-    throw new Error("Bubblewrap execution is supported only on Linux");
-  }
-  if (config.execution.backend === "seatbelt") {
-    if (platform !== "darwin") throw new Error("Seatbelt execution is supported only on macOS");
-    if (config.network.mode === "local")
-      throw new Error("Seatbelt execution requires network.mode = none or host");
-    if (config.filesystem.hiddenPaths.length > 0)
-      throw new Error("Seatbelt execution requires filesystem.hidden_paths = []");
-  } else if (config.filesystem.deniedPaths.length > 0) {
-    throw new Error("filesystem.denied_paths requires Seatbelt execution");
-  }
-  if (config.execution.backend === "direct" && config.network.mode !== "host") {
-    throw new Error("Direct execution requires network.mode = host");
-  }
-  if (config.execution.backend === "direct" && !config.filesystem.cwdWritable) {
-    throw new Error("Direct execution requires filesystem.cwd_writable = true");
-  }
-  if (config.execution.backend === "direct" && config.filesystem.hiddenPaths.length > 0) {
-    throw new Error("Direct execution requires filesystem.hidden_paths = []");
-  }
-  if (platform === "darwin" && config.identity.mode !== "disabled") {
-    throw new Error(
-      "The identity broker is supported only on Linux; macOS requires identity.mode = disabled",
-    );
-  }
-  if (platform === "darwin" && config.audit.enabled) {
-    throw new Error(
-      "Tool logging is supported only on Linux; macOS requires audit.enabled = false",
-    );
-  }
-}
-
 export function actionableErrorMessage(error: unknown): string {
   const pending = [error];
   const seen = new Set<unknown>();
@@ -553,41 +334,6 @@ export function resolveManagedExtensionHostEnvironments(
   return Object.freeze(resolved);
 }
 
-function parseInstallationValidation(
-  args: readonly string[],
-): { root: string; candidatePayload?: string } | undefined {
-  if (args[0] !== "--validate-installation") return undefined;
-  const usage =
-    "usage: pi-sandbox --validate-installation [--root DESTDIR] [--candidate-payload DIR]";
-  const options = new Map<string, string>();
-  for (let index = 1; index < args.length; index += 2) {
-    const flag = args[index]!;
-    const value = args[index + 1];
-    if (
-      (flag !== "--root" && flag !== "--candidate-payload") ||
-      options.has(flag) ||
-      value === undefined ||
-      !isAbsolute(value) ||
-      value.includes("\0")
-    )
-      throw new Error(usage);
-    options.set(flag, value);
-  }
-  return {
-    root: options.get("--root") ?? "/",
-    ...(options.has("--candidate-payload")
-      ? { candidatePayload: options.get("--candidate-payload")! }
-      : {}),
-  };
-}
-
-function parseBackendQueryRoot(args: readonly string[]): string | undefined {
-  if (args[0] !== "--print-execution-backend") return undefined;
-  if (args.length === 1) return "/";
-  if (args.length === 3 && args[1] === "--root" && args[2] !== undefined) return args[2];
-  throw new Error("usage: pi-sandbox --print-execution-backend [--root DESTDIR]");
-}
-
 export async function runPiSandbox({
   piArgs: args,
   configPath,
@@ -599,39 +345,35 @@ export async function runPiSandbox({
     process.stdout.write(`${DISPLAY_VERSION}\n`);
     return;
   }
-  const validation = parseInstallationValidation(args);
-  if (validation !== undefined) {
-    await validateAdministrativeConfiguration(
-      validation.root,
-      configPath,
-      validation.candidatePayload,
-    );
-    return;
-  }
-  const backendQueryRoot = parseBackendQueryRoot(args);
-  if (backendQueryRoot !== undefined) {
-    const config = await validateAdministrativeConfiguration(backendQueryRoot, configPath);
-    process.stdout.write(`${config.execution.backend}\n`);
-    return;
-  }
-  if (listModes === true) {
-    process.stdout.write(formatWorkspaceModes(await listWorkspaceModes("/", configPath)));
-    return;
-  }
-
-  const ambientHostEnvironment = { ...process.env };
+  if (await runAdministrativeCommand(args, configPath)) return;
+  const ambientHostEnvironment = Object.freeze({ ...process.env });
   const getAccountIdentity = createAccountIdentityResolver();
   const getMachineId = createMachineIdResolver();
-  const { config, modelsPath, identityEnvironment, accountHome, workspaceSelection } =
-    await resolveEffectiveAdministrativeConfiguration(
-      "/",
-      process.env,
-      undefined,
-      configPath,
-      getAccountIdentity,
-      getMachineId,
-      workspaceMode,
-    );
+  const source = buildLayout.configuration;
+  const endpoint = source.source === "service" ? source.endpoint : source.auditEndpoint;
+  const service =
+    endpoint === undefined
+      ? undefined
+      : createServiceClient(endpoint, getAccountIdentity, getMachineId);
+  const sourceOptions = {
+    ...(configPath === undefined ? {} : { configPath }),
+    ...(service === undefined ? {} : { service }),
+    getAccountIdentity,
+    getMachineId,
+    ...(workspaceMode === undefined ? {} : { workspaceMode }),
+  };
+  if (listModes === true) {
+    process.stdout.write(formatWorkspaceModes(await listWorkspaceModes(sourceOptions)));
+    return;
+  }
+  const { config, models, provenance, accountHome, workspaceSelection } =
+    await resolveEffectiveAdministrativeConfiguration(sourceOptions);
+  const identityEnvironment = config.environment;
+  const modelFactory = createManagedModelRuntimeFactory({
+    models,
+    environment: identityEnvironment.pi,
+    personalProviders: config.modelAuth.personalProviders,
+  });
   const optionalIds = new Set([
     "subagents",
     ...Object.values(config.extensions).map((extension) => extension.id),
@@ -704,7 +446,10 @@ export async function runPiSandbox({
     ...(auditClient === undefined ? [] : [auditClient]),
   ]);
   try {
-    if (config.audit.enabled) auditClient = await connectAuditClient(buildLayout.auditSocketPath);
+    if (config.audit.enabled) {
+      if (service === undefined) throw new Error("Auditing requires a compiled service endpoint");
+      auditClient = new AuditManager(service, cwd, policyOrigin(provenance));
+    }
     for (const instance of managedExtensions) {
       if (!extensionNeedsHostExecutor(config, instance)) continue;
       hostExecutors[instance.extension.id] = createHostCommandExecutor({
@@ -718,7 +463,7 @@ export async function runPiSandbox({
       const servers = isManagedMcpSelected(args)
         ? await resolveMcpServers(
             config.mcp,
-            process.env,
+            Object.freeze({ ...ambientHostEnvironment, ...identityEnvironment.pi }),
             getAccountIdentity,
             undefined,
             getMachineId,
@@ -738,7 +483,7 @@ export async function runPiSandbox({
           selected: (name) => isManagedToolSelected(args, name),
         },
         cwd,
-        configPath,
+        provenance,
         workspaceSelection,
         userStateDir,
         getModelRuntime: () => {
@@ -756,7 +501,9 @@ export async function runPiSandbox({
         executor,
         getExportSource: () => exportSource,
         getImportTarget: () => importTarget,
-        ...(auditClient === undefined ? {} : { exportAudit: createExportAudit(auditClient) }),
+        ...(auditClient === undefined
+          ? {}
+          : { createExportAudit: (id: string) => createExportAudit(auditClient!, id) }),
         ...(accountHome === undefined ? {} : { accountHome }),
         ...(bashAnalyzer === undefined ? {} : { bashAnalyzer }),
         ...(auditClient === undefined ? {} : { auditClient }),
@@ -773,7 +520,11 @@ export async function runPiSandbox({
           "Pi Sandbox: --disable-extension ID / --enable-extension ID override optional extension preferences for this process.\nUse /extensions to change saved preferences.\n\n",
         );
       }
-      if (buildLayout.allowConfigOverride && (args[0] === "--help" || args[0] === "-h")) {
+      if (
+        buildLayout.configuration.source === "local" &&
+        buildLayout.configuration.allowConfigOverride &&
+        (args[0] === "--help" || args[0] === "-h")
+      ) {
         process.stdout.write(
           "Pi Sandbox: --config FILE selects a TOML policy before Pi arguments.\n\n",
         );
@@ -784,7 +535,7 @@ export async function runPiSandbox({
         defaultSkillPaths: config.skills.directories,
         extensionFactories: [{ name: "pi-sandbox", factory: extension }],
         createModelRuntime: async (options = {}) => {
-          activeModelRuntime = await createConfiguredModelRuntime(modelsPath, options);
+          activeModelRuntime = await modelFactory(options);
           return activeModelRuntime;
         },
         validateSessionCwd,
@@ -796,6 +547,9 @@ export async function runPiSandbox({
           },
         }),
         beforeInterface: () => executor.probe(),
+        beforeExternalMessage: async () => {
+          await auditClient?.checkpoint();
+        },
         beforeInteractiveQuit: (ctx, signal) => beforeInteractiveQuit(ctx, signal),
       });
     } finally {

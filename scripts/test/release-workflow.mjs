@@ -1,13 +1,18 @@
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
 import { readFileSync } from "node:fs";
-import { copyFile, mkdtemp, readFile, readdir, rm, writeFile } from "node:fs/promises";
+import { copyFile, mkdir, mkdtemp, readFile, readdir, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import test from "node:test";
 import { parse as parseToml, stringify as stringifyToml } from "@iarna/toml";
-import { buildRelease, parseReleaseArguments, ReleaseArgumentError } from "../build-release.mjs";
+import {
+  assertBunVersion,
+  buildRelease,
+  parseReleaseArguments,
+  ReleaseArgumentError,
+} from "../build-release.mjs";
 import { verifyRelease } from "../verify-release.mjs";
 import { createReleaseVerification, runVerificationCommand } from "./release-verification.mjs";
 import {
@@ -25,10 +30,21 @@ const packagedContext = {
   extractedRelease,
   os: "linux",
   packagedConfig: { execution: { backend: "bubblewrap" } },
-  layout: { allowConfigOverride: false },
+  layout: { configuration: { source: "local", allowConfigOverride: false } },
 };
 const expectedUpstreamSuites = [
   "packages/coding-agent/test/auth-check.test.ts",
+  "packages/coding-agent/test/authoritative-model-runtime.test.ts",
+  "packages/coding-agent/test/managed-auth-storage.test.ts",
+  "packages/coding-agent/test/managed-external-input.test.ts",
+  "packages/coding-agent/test/rpc-prompt-response-semantics.test.ts",
+  "packages/ai/test/explicit-cloud.test.ts",
+  "packages/ai/test/authoritative-sdk.test.ts",
+  "packages/ai/test/node-http-proxy.test.ts",
+  "packages/ai/test/openrouter-images.test.ts",
+  "packages/ai/test/authoritative-oauth-environment.test.ts",
+  "packages/ai/test/bedrock-credentials.test.ts",
+  "packages/ai/test/google-vertex-api-key-resolution.test.ts",
   "packages/coding-agent/test/managed-model-runtime.test.ts",
   "packages/coding-agent/test/managed-main.test.ts",
   "packages/coding-agent/test/default-skill-paths.test.ts",
@@ -129,10 +145,52 @@ test("both workflows reject unknown or incomplete arguments before work", async 
   }
 });
 
+test("release compilation requires a stable Bun with isolated explicit trust", () => {
+  for (const version of ["1.4.4", "1.4.5", "1.5.0", "2.0.0"])
+    assert.equal(assertBunVersion(version), version);
+  for (const version of ["1.3.14", "1.4.3", "0.99.0", "1.4.4-canary.1", "1.04.4", "invalid"])
+    assert.throws(() => assertBunVersion(version), /Bun 1\.4\.4 or newer stable/);
+});
+
+test("an old Bun is rejected before build output or temporary source mutation", async () => {
+  const temporary = await mkdtemp(join(tmpdir(), "pi-release-bun-minimum-"));
+  try {
+    const bin = join(temporary, "bin"),
+      output = join(temporary, "output");
+    await mkdir(bin);
+    await mkdir(output);
+    await writeFile(join(bin, "bun"), "#!/bin/sh\nprintf '1.3.14\\n'\n", { mode: 0o755 });
+    await writeFile(join(output, "retained"), "previous output");
+    for (const script of ["build-release.mjs", "verify-release.mjs"]) {
+      const result = spawnSync(
+        process.execPath,
+        [join(repositoryRoot, "scripts", script), "--out", output],
+        {
+          cwd: repositoryRoot,
+          env: { ...process.env, PATH: `${bin}:${process.env.PATH}`, TMPDIR: temporary },
+          encoding: "utf8",
+          timeout: 10000,
+        },
+      );
+      assert.equal(result.status, 1, result.stderr);
+      assert.match(result.stderr, /Bun 1\.4\.4 or newer stable.*found 1\.3\.14/);
+      assert.equal(result.stdout, "");
+    }
+    assert.deepEqual((await readdir(temporary)).sort(), ["bin", "output"]);
+    assert.deepEqual(await readdir(output), ["retained"]);
+    assert.equal(await readFile(join(output, "retained"), "utf8"), "previous output");
+  } finally {
+    await rm(temporary, { recursive: true, force: true });
+  }
+});
+
 test("build-only rejects a bad source pin and cleans its temporary tree", async () => {
   const temporary = await mkdtemp(join(tmpdir(), "pi-release-integrity-"));
   try {
     const archive = join(temporary, "wrong-source.tar.gz");
+    const bin = join(temporary, "bin");
+    await mkdir(bin);
+    await writeFile(join(bin, "bun"), "#!/bin/sh\nprintf '1.4.4\\n'\n", { mode: 0o755 });
     await writeFile(archive, "invalid source bytes");
     const result = spawnSync(
       process.execPath,
@@ -145,7 +203,7 @@ test("build-only rejects a bad source pin and cleans its temporary tree", async 
       ],
       {
         cwd: repositoryRoot,
-        env: { ...process.env, TMPDIR: temporary },
+        env: { ...process.env, PATH: `${bin}:${process.env.PATH}`, TMPDIR: temporary },
         encoding: "utf8",
         timeout: 10000,
       },
@@ -154,7 +212,7 @@ test("build-only rejects a bad source pin and cleans its temporary tree", async 
     assert.equal(result.status, 1, result.stderr);
     assert.match(result.stderr, /Pi source archive SHA-256 mismatch/);
     assert.doesNotMatch(result.stdout, /Testing|Checking managed Pi API contracts/);
-    assert.deepEqual(await readdir(temporary), ["wrong-source.tar.gz"]);
+    assert.deepEqual((await readdir(temporary)).sort(), ["bin", "wrong-source.tar.gz"]);
   } finally {
     await rm(temporary, { recursive: true, force: true });
   }
@@ -240,12 +298,13 @@ test("packaged verification preserves platform gates and environment", async () 
         PI_SANDBOX_TEST_TMPDIR: "/var/tmp/release-fixture",
       },
       async (...command) => commands.push(command),
+      async () => {},
     );
     await verification.verifyPackagedRelease({
       ...packagedContext,
       os,
       packagedConfig: { execution: { backend } },
-      layout: { allowConfigOverride },
+      layout: { configuration: { source: "local", allowConfigOverride } },
     });
     assert.equal(commands.length, script === undefined ? 0 : 1);
     if (script === undefined) continue;
@@ -289,7 +348,7 @@ test("packaged failures and child spawn/exit failures reject verification", asyn
   );
 });
 
-test("packaged smoke disables both services only in its temporary config copy", async () => {
+test("packaged smoke disables auditing only in its temporary config copy", async () => {
   const temporary = await mkdtemp(join(tmpdir(), "pi-smoke-config-"));
   try {
     const original = join(temporary, "packaged-config.toml");
@@ -297,8 +356,7 @@ test("packaged smoke disables both services only in its temporary config copy", 
     const config = parseToml(
       await readFile(join(repositoryRoot, "config/default/config.toml"), "utf8"),
     );
-    config.identity = { mode: "broker" };
-    config.audit = { ...config.audit, enabled: true, facility: "local5" };
+    config.audit = { ...config.audit, enabled: true };
     config.subagents = { enabled: true, max_concurrent: 4, max_total: 32 };
     config.tools.subagents = { mode: "allow", session_grant: "never" };
     config.audit.tools.subagents = true;
@@ -310,10 +368,10 @@ test("packaged smoke disables both services only in its temporary config copy", 
       true,
     );
     const actual = parseToml(await readFile(fixture, "utf8"));
-    assert.deepEqual(actual.identity, { mode: "disabled" });
+    assert.equal(actual.identity, undefined);
     const auditTools = { ...config.audit.tools };
     delete auditTools.subagents;
-    assert.deepEqual(actual.audit, { enabled: false, facility: "local5", tools: auditTools });
+    assert.deepEqual(actual.audit, { enabled: false, tools: auditTools });
     assert.equal(actual.subagents, undefined);
     assert.equal(actual.tools.subagents, undefined);
     assert.equal(actual.models_file, config.models_file);

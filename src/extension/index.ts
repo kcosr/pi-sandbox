@@ -606,7 +606,9 @@ export function createPiSandboxExtension(dependencies: ExtensionDependencies): E
       ...(dependencies.accountHome === undefined ? {} : { accountHome: dependencies.accountHome }),
       getSource: () => dependencies.getExportSource?.(),
       admitted: canSave,
-      ...(dependencies.exportAudit === undefined ? {} : { audit: dependencies.exportAudit }),
+      ...(dependencies.createExportAudit === undefined
+        ? {}
+        : { createAudit: dependencies.createExportAudit }),
       beforeCapture: async () => {
         await subagents?.quiesce();
       },
@@ -656,13 +658,12 @@ export function createPiSandboxExtension(dependencies: ExtensionDependencies): E
               codemodeEnabled: config.codemode.enabled,
               mcpServerCount: Object.keys(config.mcp.servers).length,
               cwd: dependencies.cwd,
-              configPath: dependencies.configPath,
+              provenance: dependencies.provenance,
+              audit: dependencies.auditClient?.diagnostics(),
               workspaceSelection: dependencies.workspaceSelection,
               exports: config.exports,
-              modelsFile: config.modelsFile,
               execution: config.execution,
               filesystem: config.filesystem,
-              identity: config.identity,
               network: config.network,
               extensions: Object.keys(config.extensions),
               userStateDir: dependencies.userStateDir,
@@ -838,7 +839,9 @@ export function createPiSandboxExtension(dependencies: ExtensionDependencies): E
         ]);
         state.policy?.clearSessionGrants();
         state.executor = undefined;
-        const audit = await Promise.allSettled([state.auditor?.end() ?? Promise.resolve()]);
+        const audit = await Promise.allSettled([
+          state.auditor?.end({ preserveSession: event?.reason === "reload" }) ?? Promise.resolve(),
+        ]);
         if ([...children, ...cleanup, ...audit].some((result) => result.status === "rejected"))
           throw new Error("Managed tool shutdown failed");
       } finally {

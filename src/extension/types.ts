@@ -1,3 +1,4 @@
+import type { ConfigurationProvenance } from "../config/source.js";
 import type { ResolvedMcpServer } from "../mcp/resolve.js";
 import type { ManagedMcpPreferences } from "../mcp/preferences.js";
 import type { ExecutionBackend, SandboxConfig } from "../domain/index.js";
@@ -20,7 +21,7 @@ export interface ExtensionDependencies {
     readonly selected: (name: string) => boolean;
   };
   readonly cwd: string;
-  readonly configPath: string;
+  readonly provenance: ConfigurationProvenance;
   readonly workspaceSelection: WorkspaceSelection;
   readonly userStateDir: string;
   readonly getModelRuntime?: () => ModelRuntime;
@@ -42,7 +43,7 @@ export interface ExtensionDependencies {
   readonly getExportSource?: () => SandboxExportSource | undefined;
   /** Trusted transfer capability for admitted managed operations, never a model tool. */
   readonly getImportTarget?: () => SandboxImportTarget | undefined;
-  readonly exportAudit?: ExportAudit;
+  readonly createExportAudit?: (sessionId: string) => Promise<ExportAudit>;
   /** Required exactly when the effective Bash policy has a command-class policy. */
   readonly bashAnalyzer?: BashCommandAnalyzer;
   readonly auditClient?: AuditClient;

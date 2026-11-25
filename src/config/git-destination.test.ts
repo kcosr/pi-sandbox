@@ -4,7 +4,7 @@ import { createManagedExtensionCatalog } from "../managed-extensions/catalog.js"
 import gitCloneExtension from "../managed-extensions/git-clone/index.js";
 import { parseConfig as parseAuthoredConfig } from "./parse.js";
 import { resolveWorkspaceSelection } from "./workspace.js";
-import { applyIdentityOverrides, parseBrokerResponse } from "../identity/client.js";
+import { applyAccountOverrides, parseAccountOverrides } from "./account-overrides.js";
 import type { SandboxConfig } from "../domain/index.js";
 
 const catalog = createManagedExtensionCatalog([
@@ -28,7 +28,7 @@ function source(destination?: string): string {
   );
 }
 function parseConfig(...args: Parameters<typeof parseAuthoredConfig>) {
-  return resolveWorkspaceSelection(parseAuthoredConfig(...args)).config;
+  return resolveWorkspaceSelection(parseAuthoredConfig(...args).policy).config;
 }
 function resolved(destination?: string): SandboxConfig {
   return parseConfig(source(destination), "test", catalog) as SandboxConfig;
@@ -68,9 +68,9 @@ describe("Git clone deployment destination", () => {
   });
   it("rechecks broker backend changes and preserves the main destination", () => {
     const config = resolved("sandbox_home");
-    expect(applyIdentityOverrides(config, { tools: {} }).extensions).toBe(config.extensions);
+    expect(applyAccountOverrides(config, { tools: {} }).extensions).toBe(config.extensions);
     expect(() =>
-      applyIdentityOverrides(config, {
+      applyAccountOverrides(config, {
         execution: { backend: "direct" },
         network: { mode: "host" },
         tools: {},
@@ -78,19 +78,12 @@ describe("Git clone deployment destination", () => {
     ).toThrow("requires Bubblewrap");
     const host = resolved();
     expect(
-      applyIdentityOverrides(host, { filesystem: { cwdWritable: false }, tools: {} }).extensions,
+      applyAccountOverrides(host, { filesystem: { cwdWritable: false }, tools: {} }).extensions,
     ).toBe(host.extensions);
   });
   it("rejects broker attempts to replace the destination", () => {
     expect(() =>
-      parseBrokerResponse(
-        JSON.stringify({
-          version: 11,
-          status: "ok",
-          environment: { pi: {}, sandbox: {}, extensions: {} },
-          overrides: { extensions: { git: { destination: "host_cwd" } } },
-        }),
-      ),
+      parseAccountOverrides({ tools: {}, extensions: { git: { destination: "host_cwd" } } }),
     ).toThrow();
   });
 });

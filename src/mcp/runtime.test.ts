@@ -1,3 +1,4 @@
+import { createTestAuditClient } from "../service/fixture.test-support.js";
 import { describe, expect, it, vi } from "vitest";
 import { validateToolArguments, type ToolCall } from "@earendil-works/pi-ai";
 import type { StreamableHttpTransport } from "@earendil-works/pi-mcp";
@@ -101,11 +102,7 @@ describe("managed MCP admission", () => {
     "authorizes and dispatches the same normalized snapshot with %s exposure",
     async (exposure) => {
       const submit = vi.fn(() => Promise.resolve());
-      const auditor = new ToolAuditor(
-        { submit, close: () => Promise.resolve() },
-        "/work",
-        "/home/test",
-      );
+      const auditor = new ToolAuditor(createTestAuditClient(submit), "/work", "/home/test");
       const { runtime, connection, policy } = setup(
         { exposure, defaultPolicy: { ...allow, mode: "ask", audit: true } },
         () => true,
@@ -252,11 +249,7 @@ describe("managed MCP admission", () => {
 
   it("retains deferred discovery metadata through admission, approval and audit wrappers", async () => {
     const submit = vi.fn(() => Promise.resolve());
-    const auditor = new ToolAuditor(
-      { submit, close: () => Promise.resolve() },
-      "/work",
-      "/home/test",
-    );
+    const auditor = new ToolAuditor(createTestAuditClient(submit), "/work", "/home/test");
     const { runtime, connection } = setup(
       { exposure: "codemode", defaultPolicy: { ...allow, mode: "ask", audit: true } },
       () => true,
@@ -525,11 +518,7 @@ describe("MCP identity approval layers", () => {
     "preserves approval, global audit and revision-scoped grants with %s exposure",
     async (exposure) => {
       const submit = vi.fn(() => Promise.resolve());
-      const auditor = new ToolAuditor(
-        { submit, close: () => Promise.resolve() },
-        "/work",
-        "/home/test",
-      );
+      const auditor = new ToolAuditor(createTestAuditClient(submit), "/work", "/home/test");
       const server: McpServerConfig = {
         ...config,
         exposure,

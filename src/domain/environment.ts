@@ -1,3 +1,4 @@
+import { validateAccountTemplate } from "./account-macros.js";
 import { isNormalizedAbsoluteFilePath } from "../../packages/sandbox-extension/src/runtime/paths.js";
 import type {
   AuthoredPiEnvironmentValue,
@@ -73,13 +74,22 @@ export function parseAuthoredManagedEnvironment(
   );
 }
 
-/** The broker may return opaque contents, never a path for the caller to read. */
-export function parseBrokerManagedEnvironment(
+/** A source loader may return opaque contents, never a path for the caller to read. */
+export function parseResolvedManagedEnvironment(
   value: unknown,
 ): ManagedEnvironment<ResolvedPiEnvironmentValue> {
-  return parseEnvironment(value, (entry) =>
+  const environment = parseEnvironment(value, (entry) =>
     typeof entry === "string" ? parseStringValue(entry) : parseLiteralValue(entry),
   );
+  for (const scope of [
+    environment.pi,
+    environment.sandbox,
+    ...Object.values(environment.extensions),
+  ]) {
+    for (const entry of Object.values(scope))
+      if (typeof entry === "string") validateAccountTemplate(entry);
+  }
+  return environment;
 }
 
 /** Internal overlay state; this parser is not an authored or wire entry point. */

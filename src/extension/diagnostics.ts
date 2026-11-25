@@ -1,9 +1,8 @@
+import type { ConfigurationProvenance } from "../config/source.js";
 import {
   SUBAGENT_TOOL_NAMES,
   SUBAGENTS_POLICY_SUBJECT,
-  IDENTITY_BROKER_SOCKET_PATH,
   type ApprovalSubject,
-  type IdentityConfig,
   type ExecutionConfig,
   type NetworkConfig,
   type SandboxConfig,
@@ -30,13 +29,12 @@ interface SandboxSummaryInput {
   readonly mcpServerCount?: number;
   readonly initialized: boolean;
   readonly cwd: string;
-  readonly configPath: string;
+  readonly provenance: ConfigurationProvenance;
+  readonly audit?: { readonly connected: boolean; readonly failure?: string } | undefined;
   readonly workspaceSelection: WorkspaceSelection;
   readonly exports: SandboxConfig["exports"];
-  readonly modelsFile: string;
   readonly filesystem: SandboxConfig["filesystem"];
   readonly execution: ExecutionConfig;
-  readonly identity: IdentityConfig;
   readonly network: NetworkConfig;
   readonly extensions: readonly string[];
   readonly userStateDir: string;
@@ -125,13 +123,26 @@ export function formatSandboxSummary(input: SandboxSummaryInput): string {
     ["MCP servers", String(input.mcpServerCount ?? 0)],
     ["Execution", executionDisplay(input.execution)],
     ["Network", networkDisplay(input.network, input.execution)],
-    ["Config", input.configPath],
-    ["Models", input.modelsFile],
-    ["Extensions", input.extensions.length === 0 ? "none" : input.extensions.join(", ")],
+    ["Config source", input.provenance.source],
+    ...(input.provenance.source === "local"
+      ? ([
+          ["Config", input.provenance.configPath],
+          ["Models", input.provenance.modelsPath],
+        ] as const)
+      : ([
+          ["Service", input.provenance.location],
+          ["Policy revision", input.provenance.revision],
+          ["Identity", input.provenance.identitySource],
+        ] as const)),
     [
-      "Identity",
-      input.identity.mode === "disabled" ? "disabled" : `broker via ${IDENTITY_BROKER_SOCKET_PATH}`,
+      "Audit",
+      input.audit === undefined
+        ? "disabled"
+        : input.audit.connected
+          ? "connected"
+          : "unavailable; submit a message to reconnect",
     ],
+    ["Extensions", input.extensions.length === 0 ? "none" : input.extensions.join(", ")],
     ["User state", input.userStateDir],
   ];
   return `${input.initialized ? "Pi Sandbox: initialized" : "Pi Sandbox: unavailable"}\n\n${formatKeyValues(rows)}\n\nUse /sandbox mounts or /sandbox policy for details.`;

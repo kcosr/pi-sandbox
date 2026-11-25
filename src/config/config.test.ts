@@ -38,7 +38,7 @@ function completeConfig(
       `[tools.${toolName}]\n${overrides[toolName] ?? 'mode = "allow"\nsession_grant = "never"'}`,
   );
   const audit = TOOL_NAMES.map((name) => `${name} = false`).join("\n");
-  return `config_version = 15\nmodels_file = "/etc/pi-sandbox/models.json"\n\n[codemode]\nenabled = false\n\n[mcp.servers]\n\n[exports]\nenabled = false\n\n[sessions]\nretention_days = 0\n\n[audit]\nenabled = false\nfacility = "local0"\n\n[audit.tools]\n${audit}\n\n[workspace]\ndefault = "host"\nallowed = ["host"]\n\n[workspace.modes.host]\n\n[filesystem]\ncwd_writable = true\nhidden_paths = []\ndenied_paths = []\n\n[execution]\nbackend = "bubblewrap"\n\n[identity]\nmode = "disabled"\n\n[network]\nmode = "none"\n\n[environment.pi]\n\n[environment.sandbox]\n\n[environment.extensions]\n\n[extensions]\n\n${sections.join("\n\n")}\n`;
+  return `config_version = 16\nmodels_file = "/etc/pi-sandbox/models.json"\n\n[codemode]\nenabled = false\n\n[mcp.servers]\n\n[exports]\nenabled = false\n\n[sessions]\nretention_days = 0\n\n[audit]\nenabled = false\n\n[audit.tools]\n${audit}\n\n[workspace]\ndefault = "host"\nallowed = ["host"]\n\n[workspace.modes.host]\n\n[filesystem]\ncwd_writable = true\nhidden_paths = []\ndenied_paths = []\n\n[execution]\nbackend = "bubblewrap"\n\n[model_auth]\npersonal_providers = []\n\n[network]\nmode = "none"\n\n[environment.pi]\n\n[environment.sandbox]\n\n[environment.extensions]\n\n[extensions]\n\n${sections.join("\n\n")}\n`;
 }
 
 function parseConfig(
@@ -46,7 +46,8 @@ function parseConfig(
   source = "<string>",
   catalog: ManagedExtensionCatalog = EMPTY_EXTENSION_CATALOG,
 ): SandboxConfig<AuthoredPiEnvironmentValue> {
-  return resolveWorkspaceSelection(parseConfigWithCatalog(sourceText, source, catalog)).config;
+  return resolveWorkspaceSelection(parseConfigWithCatalog(sourceText, source, catalog).policy)
+    .config;
 }
 
 describe("parseConfig", () => {
@@ -176,7 +177,7 @@ describe("parseConfig", () => {
       source.replace("[exports]\nenabled = false", "[exports]\nenabled = false\npath = '/'"),
       source.replace("[exports]\nenabled = false", "[exports]\nenabled = true"),
       admitted.replace('backend = "bubblewrap"', 'backend = "direct"'),
-      source.replace("config_version = 15", "config_version = 13"),
+      source.replace("config_version = 16", "config_version = 13"),
     ])
       expect(() => parseConfig(invalid)).toThrow();
   });
@@ -266,7 +267,7 @@ operands = { min = 0, max = 0 }
         "denied_paths = []",
         `denied_paths = ${JSON.stringify(Array.from({ length: 64 }, (_, i) => `/private/${i}`))}`,
       ),
-      seatbelt.replace("config_version = 15", "config_version = 11"),
+      seatbelt.replace("config_version = 16", "config_version = 11"),
       completeConfig().replace("denied_paths = []", 'denied_paths = ["/Users/private"]'),
     ])
       expect(() => parseConfig(source)).toThrow();
@@ -285,17 +286,18 @@ operands = { min = 0, max = 0 }
     );
 
     expect(config).toEqual({
-      configVersion: 15,
+      configVersion: 16,
+      modelAuth: { personalProviders: [] },
       skills: { directories: [] },
       exports: { enabled: false },
       codemode: { enabled: false, timeoutMs: 300000 },
       mcp: { servers: {} },
       sessions: { retentionDays: 0 },
       filesystem: { cwdWritable: true, deniedPaths: [], hiddenPaths: [] },
-      audit: { enabled: false, facility: "local0" },
-      modelsFile: "/etc/pi-sandbox/models.json",
+      audit: { enabled: false },
+
       execution: { backend: "bubblewrap" },
-      identity: { mode: "disabled" },
+
       network: { mode: "none" },
       environment: { pi: {}, sandbox: {}, extensions: {} },
       extensions: {},
@@ -326,7 +328,7 @@ operands = { min = 0, max = 0 }
     for (const retentionDays of ["-1", "36501", "1.5", '"365"', "false", "[]", "inf", "nan"]) {
       expect(() =>
         parseConfig(source.replace("retention_days = 0", `retention_days = ${retentionDays}`)),
-      ).toThrow("config.sessions.retention_days must be an integer between 0 and 36500");
+      ).toThrow();
     }
     expect(() =>
       parseConfig(
@@ -379,36 +381,16 @@ operands = { min = 0, max = 0 }
       parseConfig(source.replace("[audit]\nenabled = false", "[audit]\nenabled = true")).audit,
     ).toEqual({
       enabled: true,
-      facility: "local0",
     });
-    for (const facility of [
-      "local0",
-      "local1",
-      "local2",
-      "local3",
-      "local4",
-      "local5",
-      "local6",
-      "local7",
-    ]) {
-      expect(
-        parseConfig(source.replace('facility = "local0"', `facility = "${facility}"`)).audit
-          .facility,
-      ).toBe(facility);
-    }
     for (const [before, after, issue] of [
-      ['[audit]\nenabled = false\nfacility = "local0"\n\n', "", "config.audit.enabled is required"],
+      ["[audit]\nenabled = false\n\n", "", "config.audit.enabled is required"],
       [
         "[audit]\nenabled = false",
         '[audit]\nenabled = "false"',
         "config.audit.enabled must be a boolean",
       ],
-      ['facility = "local0"', 'facility = "user"', "config.audit.facility must be one of"],
-      [
-        'facility = "local0"',
-        'facility = "local0"\npath = "/tmp/events"',
-        "config.audit.path is not a recognized field",
-      ],
+      ["[audit]", '[audit]\nfacility = "user"', "config.audit.facility is not a recognized field"],
+      ["[audit]", '[audit]\npath = "/tmp/events"', "config.audit.path is not a recognized field"],
       ["read = false\n", "", "config.audit.tools.read is required"],
       ["read = false", 'read = "false"', "config.audit.tools.read must be a boolean"],
     ]) {
@@ -448,8 +430,8 @@ operands = { min = 0, max = 0 }
           .replace('mode = "none"', 'mode = "host"'),
       ),
     ).toThrow("config.filesystem.hidden_paths must be empty");
-    expect(() => parseConfig(source.replace("config_version = 15", "config_version = 8"))).toThrow(
-      "integer 15",
+    expect(() => parseConfig(source.replace("config_version = 16", "config_version = 8"))).toThrow(
+      "integer 16",
     );
   });
 
@@ -514,11 +496,11 @@ operands = { min = 0, max = 0 }
 
   it("rejects unsupported config versions and types", () => {
     expect(() =>
-      parseConfig(completeConfig().replace("config_version = 15", 'config_version = "9"')),
-    ).toThrow("config.config_version must be the integer 15");
+      parseConfig(completeConfig().replace("config_version = 16", 'config_version = "9"')),
+    ).toThrow("config.config_version must be the integer 16");
     expect(() =>
-      parseConfig(completeConfig().replace("config_version = 15", "config_version = 4")),
-    ).toThrow("config.config_version must be the integer 15");
+      parseConfig(completeConfig().replace("config_version = 16", "config_version = 4")),
+    ).toThrow("config.config_version must be the integer 16");
   });
 
   it("requires models_file to be a normalized absolute file path", () => {
@@ -551,7 +533,7 @@ operands = { min = 0, max = 0 }
   it("rejects unknown fields at every schema level", () => {
     expect(() =>
       parseConfig(
-        completeConfig().replace("config_version = 15", "config_version = 15\nunexpected = true"),
+        completeConfig().replace("config_version = 16", "config_version = 16\nunexpected = true"),
       ),
     ).toThrow("config.unexpected is not a recognized field");
     expect(() =>
@@ -715,12 +697,12 @@ operands = { min = 0, max = 0 }
   });
 
   it("rejects missing root fields and tables with the wrong shape", () => {
-    expect(() => parseConfig(completeConfig().replace("config_version = 15\n", ""))).toThrow(
+    expect(() => parseConfig(completeConfig().replace("config_version = 16\n", ""))).toThrow(
       "config.config_version is required",
     );
     expect(() =>
       parseConfig(
-        'config_version = 15\nmodels_file = "/etc/pi-sandbox/models.json"\nexecution = "direct"\nidentity = "disabled"\nnetwork = "none"\nextensions = "none"\ntools = "all"\n[workspace]\ndefault = "host"\nallowed = ["host"]\n[workspace.modes.host]\n',
+        'config_version = 16\nmodels_file = "/etc/pi-sandbox/models.json"\nexecution = "direct"\nidentity = "disabled"\nnetwork = "none"\nextensions = "none"\ntools = "all"\n[workspace]\ndefault = "host"\nallowed = ["host"]\n[workspace.modes.host]\n',
       ),
     ).toThrow("config.tools must be a table");
     expect(() =>
@@ -733,13 +715,16 @@ operands = { min = 0, max = 0 }
     ).toThrow("config.tools.read must be a table");
   });
 
-  it("parses strict disabled and broker identity modes", () => {
-    expect(parseConfig(completeConfig()).identity).toEqual({ mode: "disabled" });
+  it("requires explicit model authentication admission and rejects obsolete identity policy", () => {
+    expect(parseConfig(completeConfig()).modelAuth).toEqual({ personalProviders: [] });
+    expect(() => parseConfig(completeConfig() + '\n[identity]\nmode = "disabled"\n')).toThrow(
+      "not a recognized field",
+    );
     expect(
       parseConfig(
-        completeConfig().replace('[identity]\nmode = "disabled"', '[identity]\nmode = "broker"'),
-      ).identity,
-    ).toEqual({ mode: "broker" });
+        completeConfig().replace("personal_providers = []", 'personal_providers = ["example"]'),
+      ).modelAuth.personalProviders,
+    ).toEqual(["example"]);
   });
 
   it("requires an explicit execution backend and host networking for direct execution", () => {
@@ -788,7 +773,7 @@ operands = { min = 0, max = 0 }
       expect(parseConfig(capped(String(seconds))).execution.maximumTimeoutMs).toBe(ms);
     }
     for (const value of ["0", "-1", "inf", "nan", "2147483.648", '"60"', "true"]) {
-      expect(() => parseConfig(capped(value))).toThrow("max_command_timeout_seconds");
+      expect(() => parseConfig(capped(value))).toThrow();
     }
     for (const backend of ["bubblewrap", "seatbelt", "direct"]) {
       const source = capped("3600")
@@ -800,8 +785,8 @@ operands = { min = 0, max = 0 }
       ).toThrow("process_lifetime is not a recognized field");
     }
     expect(() =>
-      parseConfig(completeConfig().replace("config_version = 15", "config_version = 12")),
-    ).toThrow("must be the integer 15");
+      parseConfig(completeConfig().replace("config_version = 16", "config_version = 12")),
+    ).toThrow("must be the integer 16");
   });
 
   it("accepts ordered literal main command paths without reading the installation filesystem", () => {
@@ -884,21 +869,18 @@ operands = { min = 0, max = 0 }
     ).toThrow("config.filesystem.command_path_prepend is not a recognized field");
   });
 
-  it("rejects incomplete or ambiguous identity configuration", () => {
-    expect(() =>
-      parseConfig(completeConfig().replace('[identity]\nmode = "disabled"\n\n', "")),
-    ).toThrow("config.identity is required");
-    expect(() =>
-      parseConfig(completeConfig().replace('mode = "disabled"', 'mode = "optional"')),
-    ).toThrow("config.identity.mode must be one of: disabled, broker");
-    expect(() =>
-      parseConfig(
-        completeConfig().replace(
-          'mode = "disabled"',
-          'mode = "disabled"\nsocket_path = "/run/pi-sandbox-identity/broker.sock"',
-        ),
-      ),
-    ).toThrow("config.identity.socket_path is not a recognized field");
+  it("rejects incomplete or ambiguous model authentication admission", () => {
+    for (const replacement of [
+      "",
+      'personal_providers = "all"',
+      'personal_providers = ["a", "a"]',
+      'personal_providers = [""]',
+      "personal_providers = []\nextra = true",
+    ]) {
+      expect(() =>
+        parseConfig(completeConfig().replace("personal_providers = []", replacement)),
+      ).toThrow();
+    }
   });
 
   it("parses only explicit none, local and host network modes", () => {
@@ -1099,7 +1081,9 @@ describe("loadConfig", () => {
     const { directory, path } = await fileFixture();
     const alias = join(directory, "alias.toml");
     await symlink(path, alias);
-    expect((await loadConfig(alias, EMPTY_EXTENSION_CATALOG)).workspace.default).toBe("host");
+    expect((await loadConfig(alias, EMPTY_EXTENSION_CATALOG)).policy.workspace.default).toBe(
+      "host",
+    );
     await expect(loadConfig(directory, EMPTY_EXTENSION_CATALOG)).rejects.toThrow(
       "configuration must be a regular file",
     );
@@ -1139,7 +1123,7 @@ describe("loadConfig", () => {
     const { path } = await fileFixture(
       contents + " ".repeat(1024 * 1024 - Buffer.byteLength(contents)),
     );
-    expect((await loadConfig(path, EMPTY_EXTENSION_CATALOG)).workspace.default).toBe("host");
+    expect((await loadConfig(path, EMPTY_EXTENSION_CATALOG)).policy.workspace.default).toBe("host");
     await writeFile(path, contents + " ".repeat(1024 * 1024 + 1 - Buffer.byteLength(contents)));
     await expect(loadConfig(path, EMPTY_EXTENSION_CATALOG)).rejects.toThrow(
       "configuration exceeds 1048576 bytes",
@@ -1154,17 +1138,18 @@ describe("loadConfig", () => {
 
     await expect(
       loadConfig(path, EMPTY_EXTENSION_CATALOG).then(
-        (authored) => resolveWorkspaceSelection(authored).config,
+        (authored) => resolveWorkspaceSelection(authored.policy).config,
       ),
     ).resolves.toMatchObject({
-      configVersion: 15,
+      configVersion: 16,
+      modelAuth: { personalProviders: [] },
       skills: { directories: [] },
       exports: { enabled: false },
       codemode: { enabled: false, timeoutMs: 300000 },
       mcp: { servers: {} },
       sessions: { retentionDays: 0 },
       filesystem: { cwdWritable: true, deniedPaths: [], hiddenPaths: [] },
-      audit: { enabled: false, facility: "local0" },
+      audit: { enabled: false },
     });
   });
 

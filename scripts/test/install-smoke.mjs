@@ -66,13 +66,6 @@ try {
 
   const installBase = path.join(installRoot, "usr/libexec/pi-sandbox");
   const launcher = path.join(installRoot, "usr/bin/pi-sandbox");
-  const broker = path.join(installBase, "pi-sandbox-identity-broker");
-  const systemdDirectory = path.join(installRoot, "usr/lib/systemd/system");
-  const socketUnit = path.join(systemdDirectory, "pi-sandbox-identity-broker.socket");
-  const serviceUnit = path.join(systemdDirectory, "pi-sandbox-identity-broker@.service");
-  const auditCollector = path.join(installBase, "pi-sandbox-audit-collector");
-  const auditSocketUnit = path.join(systemdDirectory, "pi-sandbox-audit.socket");
-  const auditServiceUnit = path.join(systemdDirectory, "pi-sandbox-audit@.service");
   const etcDirectory = path.join(installRoot, "etc/pi-sandbox");
   const config = path.join(etcDirectory, "config.toml");
   const models = path.join(etcDirectory, "models.json");
@@ -81,7 +74,6 @@ try {
     `  ${installBase}/pi-sandbox (executable)`,
     "installed executable path",
   );
-  assertIncludes(initialInstall.stdout, `  ${broker} (identity broker executable)`, "broker path");
   assertIncludes(
     initialInstall.stdout,
     `  ${launcher} -> ${installBase}/pi-sandbox`,
@@ -90,27 +82,7 @@ try {
   assertIncludes(initialInstall.stdout, `  ${config} (installed)`, "installed configuration path");
   assertIncludes(initialInstall.stdout, `  ${models} (installed)`, "installed models path");
   assertEqual(await readlink(launcher), "../libexec/pi-sandbox/pi-sandbox", "launcher link");
-  assertEqual(
-    await readlink(socketUnit),
-    "../../../libexec/pi-sandbox/systemd/pi-sandbox-identity-broker.socket",
-    "socket unit link",
-  );
-  assertEqual(
-    await readlink(serviceUnit),
-    "../../../libexec/pi-sandbox/systemd/pi-sandbox-identity-broker@.service",
-    "service unit link",
-  );
   await assertMode(path.join(installBase, "pi-sandbox"), 0o755);
-  await assertMode(broker, 0o755);
-  await assertMode(path.join(installBase, "sbom.cdx.json"), 0o644);
-  await assertMode(auditCollector, 0o755);
-  for (const unit of [auditSocketUnit, auditServiceUnit]) {
-    assertEqual(
-      await readlink(unit),
-      `../../../libexec/pi-sandbox/systemd/${path.basename(unit)}`,
-      "audit unit link",
-    );
-  }
   await assertMode(path.join(installBase, "defaults/config.toml"), 0o644);
   assertEqual(await readFile(config, "utf8"), configContents("1"), "initial config");
   assertEqual(await readFile(models, "utf8"), modelsContents("1"), "initial models");
@@ -246,7 +218,7 @@ try {
   const oldSchemaConfig = path.join(oldSchemaRoot, "etc/pi-sandbox/config.toml");
   const oldSchemaBinary = path.join(oldSchemaRoot, "usr/libexec/pi-sandbox/pi-sandbox");
   const retainedBinary = `${await readFile(oldSchemaBinary, "utf8")}# retained binary marker\n`;
-  const retainedPolicy = configContents("1").replace("config_version = 15", "config_version = 14");
+  const retainedPolicy = configContents("1").replace("config_version = 16", "config_version = 14");
   await writeFile(oldSchemaBinary, retainedBinary);
   await writeFile(oldSchemaConfig, retainedPolicy);
   const oldSchemaFailure = assertRunFails(path.join(release2, "install.sh"), [], {
@@ -254,7 +226,7 @@ try {
   });
   assertIncludes(
     oldSchemaFailure.stderr,
-    "config.config_version must be the integer 15",
+    "config.config_version must be the integer 16",
     "old schema diagnostic",
   );
   assertEqual(
@@ -278,38 +250,6 @@ try {
   await writeFile(path.join(occupiedLauncherRoot, "usr/bin/pi-sandbox"), "unrelated\n");
   assertRunFails(path.join(release1, "install.sh"), [], { DESTDIR: occupiedLauncherRoot });
   await assertMissing(path.join(occupiedLauncherRoot, "usr/libexec/pi-sandbox"));
-
-  for (const unit of ["pi-sandbox-audit.socket", "pi-sandbox-audit@.service"]) {
-    const occupiedRoot = path.join(temporaryRoot, `occupied-${unit}`);
-    const unitPath = path.join(occupiedRoot, "usr/lib/systemd/system", unit);
-    await mkdir(path.dirname(unitPath), { recursive: true });
-    await writeFile(unitPath, "unrelated\n");
-    assertRunFails(path.join(release1, "install.sh"), [], { DESTDIR: occupiedRoot });
-    await assertMissing(path.join(occupiedRoot, "usr/libexec/pi-sandbox"));
-    assertEqual(await readFile(unitPath, "utf8"), "unrelated\n", "unmanaged audit unit preserved");
-    assertRunFails(path.join(release1, "uninstall.sh"), [], { DESTDIR: occupiedRoot });
-    assertEqual(
-      await readFile(unitPath, "utf8"),
-      "unrelated\n",
-      "uninstall preserves unmanaged audit unit",
-    );
-  }
-
-  const unsafeUninstallRoot = path.join(temporaryRoot, "unsafe-uninstall-root");
-  run(path.join(release1, "install.sh"), [], { DESTDIR: unsafeUninstallRoot });
-  const unsafeAuditUnit = path.join(
-    unsafeUninstallRoot,
-    "usr/lib/systemd/system/pi-sandbox-audit.socket",
-  );
-  await rm(unsafeAuditUnit);
-  await writeFile(unsafeAuditUnit, "operator-managed\n");
-  assertRunFails(path.join(release1, "uninstall.sh"), [], { DESTDIR: unsafeUninstallRoot });
-  await assertMode(path.join(unsafeUninstallRoot, "usr/libexec/pi-sandbox/pi-sandbox"), 0o755);
-  assertEqual(
-    await readlink(path.join(unsafeUninstallRoot, "usr/bin/pi-sandbox")),
-    "../libexec/pi-sandbox/pi-sandbox",
-    "failed uninstall preserves launcher",
-  );
 
   const symlinkConfigRoot = path.join(temporaryRoot, "symlink-config-root");
   const sentinel = path.join(temporaryRoot, "sentinel");
@@ -342,10 +282,6 @@ try {
   );
   run(path.join(release2, "uninstall.sh"), [], { DESTDIR: installRoot });
   await assertMissing(launcher);
-  await assertMissing(socketUnit);
-  await assertMissing(serviceUnit);
-  await assertMissing(auditSocketUnit);
-  await assertMissing(auditServiceUnit);
   await assertMissing(installBase);
   assertEqual(await readFile(config, "utf8"), configContents("2"), "retained config");
   assertEqual(await readFile(models, "utf8"), modelsContents("2"), "retained models");
@@ -383,7 +319,6 @@ async function createRelease(
   await mkdir(path.join(payload, "theme"));
   await mkdir(path.join(payload, "assets"));
   await mkdir(path.join(payload, "export-html"));
-  await mkdir(path.join(payload, "systemd"));
   await copyFile(
     path.join(repositoryRoot, "scripts/install/install.sh"),
     path.join(directory, "install.sh"),
@@ -406,7 +341,9 @@ async function createRelease(
     `#!/bin/sh
 set -eu
 operation=\${1:-}
-case "$operation" in --validate-installation|--print-execution-backend) ;; *) exit 64 ;; esac
+case "$operation" in
+  --print-build-capabilities) echo '{"configuration_source":"local","architecture":"${process.arch}","platform":"linux"}'; exit 0 ;;
+  --validate-installation) ;; *) exit 64 ;; esac
 shift
 root=
 candidate_payload=
@@ -421,30 +358,16 @@ while [ "$#" -gt 0 ]; do
 done
 config="$root/etc/pi-sandbox/config.toml"
 ${skillCandidateFixture("/usr/libexec/pi-sandbox")}
-grep -q '^config_version = 15$' "$config" || { echo 'config.config_version must be the integer 15' >&2; exit 1; }
+grep -q '^config_version = 16$' "$config" || { echo 'config.config_version must be the integer 16' >&2; exit 1; }
 grep -q '^# valid = true$' "$config"
 models_path=$(awk -F '"' '/^models_file = "/ { print $2; exit }' "$config")
 [ -n "$models_path" ]
 grep -q '"valid":true' "$root$models_path"
-[ "$operation" != --print-execution-backend ] || echo ${executionBackend}
+echo ${executionBackend}
 `,
     { mode: 0o755 },
   );
   await writeFile(path.join(payload, "package.json"), `${JSON.stringify({ release })}\n`);
-  await writeFile(path.join(payload, "pi-sandbox-identity-broker"), "#!/bin/sh\nexit 0\n", {
-    mode: 0o755,
-  });
-  await writeFile(path.join(payload, "pi-sandbox-audit-collector"), "#!/bin/sh\nexit 0\n", {
-    mode: 0o755,
-  });
-  await writeFile(
-    path.join(payload, "systemd/pi-sandbox-audit.socket"),
-    "[Socket]\nListenStream=/run/pi-sandbox-audit/collector.sock\n",
-  );
-  await writeFile(
-    path.join(payload, "systemd/pi-sandbox-audit@.service"),
-    "[Service]\nStandardInput=socket\n",
-  );
   if (bundledBubblewrap) {
     await writeFile(
       path.join(payload, "bwrap"),
@@ -452,14 +375,6 @@ grep -q '"valid":true' "$root$models_path"
       { mode: 0o755 },
     );
   }
-  await writeFile(
-    path.join(payload, "systemd/pi-sandbox-identity-broker.socket"),
-    "[Socket]\nListenStream=/run/pi-sandbox-identity/broker.sock\n",
-  );
-  await writeFile(
-    path.join(payload, "systemd/pi-sandbox-identity-broker@.service"),
-    "[Service]\nStandardInput=socket\n",
-  );
   await writeFile(path.join(payload, "theme/dark.json"), "{}\n");
   await writeFile(path.join(payload, "assets/release.txt"), `release ${release}\n`);
   await writeFile(path.join(payload, "export-html/index.html"), "<!doctype html>\n");

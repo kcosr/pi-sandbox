@@ -4,7 +4,12 @@ import { execFileSync } from "node:child_process";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { loadDistribution } from "./build/distribution.mjs";
-import { buildRelease, parseReleaseArguments, ReleaseArgumentError } from "./build-release.mjs";
+import {
+  assertBunVersion,
+  buildRelease,
+  parseReleaseArguments,
+  ReleaseArgumentError,
+} from "./build-release.mjs";
 import { createReleaseVerification, runVerificationCommand } from "./test/release-verification.mjs";
 
 const repositoryRoot = dirname(dirname(fileURLToPath(import.meta.url)));
@@ -23,6 +28,7 @@ export async function verifyRelease(buildArguments) {
       `release verification requires Node.js 24 or newer; found ${process.versions.node}`,
     );
   }
+  assertBunVersion(execFileSync("bun", ["--version"], { encoding: "utf8" }).trim());
 
   const environment = { ...process.env };
   delete environment.NODE_ENV;
@@ -63,10 +69,22 @@ export async function verifyRelease(buildArguments) {
     process.platform === "linux"
       ? [
           ...extensionChecks,
-          ["npm", ["run", "test:broker"]],
-          ["npm", ["run", "test:audit-collector"]],
+          ["npm", ["run", "test:service"]],
           ["npm", ["run", "test:systemd"]],
           ["npm", ["run", "build"]],
+          [
+            "sudo",
+            [
+              "-n",
+              "unshare",
+              "--mount",
+              "--fork",
+              "python3",
+              "service/tests/root-smoke.py",
+              "dist/native/pi-sandbox-service",
+              repositoryRoot,
+            ],
+          ],
           ["npm", ["run", "test:install"]],
         ]
       : process.platform === "darwin"

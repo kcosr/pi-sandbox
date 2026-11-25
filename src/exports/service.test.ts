@@ -192,10 +192,11 @@ describe("user-only sandbox save coordinator", () => {
       cwd: directory,
       getSource: () => source,
       admitted: () => true,
-      audit: (event) => {
-        events.push(event);
-        return Promise.resolve();
-      },
+      createAudit: () =>
+        Promise.resolve((event) => {
+          events.push(event);
+          return Promise.resolve();
+        }),
     });
     await controller.run(fixture.ctx);
     expect(openSource.mock.calls[0]![0]!.aborted).toBe(true);

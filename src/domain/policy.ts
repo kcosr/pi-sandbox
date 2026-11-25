@@ -22,10 +22,6 @@ export type {
 import type { CodeModeConfig, McpConfig, McpServerOverride } from "./mcp.js";
 import type { SubagentsConfig } from "./subagents.js";
 
-import { buildLayout } from "../build-layout/index.js";
-
-export const IDENTITY_BROKER_SOCKET_PATH = buildLayout.identitySocketPath;
-
 import type { NetworkMode } from "../../packages/sandbox-extension/src/runtime/contracts.js";
 export {
   NETWORK_MODES,
@@ -57,20 +53,11 @@ export interface ToolPolicy extends SubjectPolicy {
   readonly audit: boolean;
 }
 
-export const AUDIT_FACILITIES = Object.freeze([
-  "local0",
-  "local1",
-  "local2",
-  "local3",
-  "local4",
-  "local5",
-  "local6",
-  "local7",
-] as const);
-export type AuditFacility = (typeof AUDIT_FACILITIES)[number];
 export interface AuditConfig {
   readonly enabled: boolean;
-  readonly facility: AuditFacility;
+}
+export interface ModelAuthConfig {
+  readonly personalProviders: readonly string[];
 }
 
 export interface ExportsConfig {
@@ -93,19 +80,8 @@ export interface ExtensionConfig {
   readonly toolNames: readonly string[];
 }
 
-export interface DisabledIdentityConfig {
-  readonly mode: "disabled";
-}
-
-export interface BrokerIdentityConfig {
-  readonly mode: "broker";
-}
-
-export type IdentityConfig = DisabledIdentityConfig | BrokerIdentityConfig;
-
-export interface IdentityOverrides {
+export interface AccountOverrides {
   readonly workspace?: WorkspaceOverrides;
-  readonly modelsFile?: string;
   readonly execution?: Pick<ExecutionConfig, "backend">;
   readonly network?: NetworkConfig;
   readonly filesystem?: Pick<FilesystemConfig, "cwdWritable">;
@@ -121,7 +97,7 @@ export interface EnvironmentFileReference {
   readonly file: string;
 }
 
-/** File contents cross the broker boundary without becoming expandable templates. */
+/** File contents cross the source boundary without becoming expandable templates. */
 export interface LiteralEnvironmentValue {
   readonly literal: string;
 }
@@ -137,7 +113,7 @@ export interface ManagedEnvironment<PiValue = string> {
 }
 
 export interface SandboxConfig<PiValue = string> {
-  readonly configVersion: 15;
+  readonly configVersion: 16;
   /** Administrator-authored prompt additions, keyed by optional extension ID. */
   readonly extensionGuidance?: Readonly<Record<string, string>>;
   readonly subagents?: SubagentsConfig;
@@ -147,9 +123,8 @@ export interface SandboxConfig<PiValue = string> {
   readonly sessions: SessionsConfig;
   readonly exports: ExportsConfig;
   readonly skills: SkillsConfig;
-  readonly modelsFile: string;
   readonly execution: ExecutionConfig;
-  readonly identity: IdentityConfig;
+  readonly modelAuth: ModelAuthConfig;
   readonly network: NetworkConfig;
   readonly filesystem: FilesystemConfig;
   readonly environment: ManagedEnvironment<PiValue>;

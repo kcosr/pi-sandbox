@@ -10,9 +10,13 @@ export const EXPORT_AUDIT_EVENTS = [
   "export_replace_complete",
 ] as const;
 
-export function createExportAudit(client: AuditClient): ExportAudit {
+export async function createExportAudit(
+  client: AuditClient,
+  sessionId: string,
+): Promise<ExportAudit> {
+  const binding = await client.checkpoint(sessionId);
   return async ({ type, sessionId, ...details }) => {
-    await client.submit({ event: type, pi_session_id: sessionId, user_export: details });
+    await client.submit(binding, { event: type, pi_session_id: sessionId, user_export: details });
   };
 }
 

@@ -11,34 +11,29 @@ const root = await mkdtemp(join(tmpdir(), "pi-sandbox-systemd-verify-"));
 
 try {
   const unitDirectory = join(root, "usr/lib/systemd/system");
-  const executableDirectory = join(root, "usr/libexec/pi-sandbox");
+  const executableDirectory = join(root, "usr/libexec/pi-sandbox-service");
   await mkdir(unitDirectory, { recursive: true });
   await mkdir(executableDirectory, { recursive: true });
-  for (const unit of [
-    "pi-sandbox-identity-broker.socket",
-    "pi-sandbox-identity-broker@.service",
-    "pi-sandbox-audit.socket",
-    "pi-sandbox-audit@.service",
-  ]) {
+  for (const unit of ["pi-sandbox-service.service"]) {
     await copyFile(join(repositoryRoot, "packaging/systemd", unit), join(unitDirectory, unit));
   }
-  for (const target of ["basic.target", "shutdown.target", "sockets.target", "sysinit.target"]) {
+  for (const target of [
+    "basic.target",
+    "shutdown.target",
+    "sockets.target",
+    "network.target",
+    "multi-user.target",
+    "sysinit.target",
+  ]) {
     await writeFile(join(unitDirectory, target), `[Unit]\nDescription=${target}\n`);
   }
-  for (const executable of ["pi-sandbox-identity-broker", "pi-sandbox-audit-collector"]) {
+  for (const executable of ["pi-sandbox-service"]) {
     const filename = join(executableDirectory, executable);
     await writeFile(filename, "#!/bin/sh\nexit 0\n");
     await chmod(filename, 0o755);
   }
 
-  await run("systemd-analyze", [
-    "verify",
-    `--root=${root}`,
-    "pi-sandbox-identity-broker.socket",
-    "pi-sandbox-identity-broker@.service",
-    "pi-sandbox-audit.socket",
-    "pi-sandbox-audit@.service",
-  ]);
+  await run("systemd-analyze", ["verify", `--root=${root}`, "pi-sandbox-service.service"]);
 } finally {
   await rm(root, { recursive: true, force: true });
 }

@@ -2,53 +2,48 @@
 
 ## Configuration ownership
 
-Pi Sandbox reads the `config_dir/config.toml` path compiled from the
-distribution manifest by default. Version 3 of that manifest requires an explicit
-`allow_config_override` boolean. The default distribution sets it to `false`
-and rejects `--config`. No environment variable, user setting, or project file
-can enable this capability.
+Distribution schema 4 fixes a `configuration` descriptor per platform. A service
+source obtains policy, scoped environment, account overrides and the model catalog
+from one compiled Unix/HTTPS endpoint. A local source reads its compiled
+`config_dir/config.toml` and required absolute `models_file` as the invoking user.
+The executable cannot change source kind at runtime. Neither user state, settings,
+project discovery nor environment can redirect these inputs.
 
-A distribution built with `allow_config_override = true` accepts a leading
-`--config FILE` (or `--config=FILE`) before all Pi arguments. Relative paths
-resolve against the launch directory. The option is consumed by Pi Sandbox;
-it is never passed to Pi. A missing, repeated, or misplaced option is an error.
-An unreadable or invalid selected file fails startup without falling back to
-the compiled default. With no option, the compiled default remains selected.
+The public distribution uses local files with `allow_config_override = false`.
+A custom local distribution may compile that flag as true, admitting a leading
+`--config FILE` or `--config=FILE` before Pi arguments. Relative policy paths resolve
+against the launch directory; catalog paths remain absolute. Missing, repeated,
+misplaced or invalid selections fail without falling back to the default. Service
+builds always reject `--config`. Enabling the local switch delegates policy choice,
+including tools and backend, to the invoking user while preserving compiled tools,
+the root runtime guard and fixed backend executables.
 
 ```sh
+# Only for a local build compiled with allow_config_override = true:
 pi-sandbox --config ./lab/config.toml --model local/example
 pi-sandbox --config ./lab/config.toml --validate-installation
 ```
 
-The selected TOML contains a required absolute `models_file` path. Relative
-model paths are not resolved against the TOML directory. Pi Sandbox loads this
-file as the complete model catalog and disables Pi's internal model catalog.
-`/sandbox` reports the selected TOML and effective models path.
+Both profiles produce the same immutable source/resolved snapshot. Service rules
+may select a complete catalog and join account-specific environment, workspace
+access/defaults, execution/network/CWD and tool/MCP invocation overrides. Local
+profiles have no rule lookup and use an empty account patch. Neither source merges
+user-owned model definitions. Service requests never fall back to local files.
+See [managed service](managed-service.md) for the distribution union, identity,
+rule matching and audit endpoint contract.
 
-Enabling the CLI option lets the invoking user choose policy, including tool
-permissions and the execution backend. Use this build mode for development,
-evaluation, or other caller-controlled configurations. Forced extension loading,
-compiled tools, the root runtime check, and build-selected sandbox
-executables still apply. Identity broker and audit service sockets and their
-configuration remain independently installed; `--config` does not relocate
-service configuration or user/group drop-in directories.
-
-The main configuration contains the global `pi`, `sandbox`, and
-extension-specific scoped environment. The required `identity` table either
-disables user resolution or selects the fixed administrator broker. Broker mode
-may overlay a combined patch from `config_dir/users.d/*.toml` and
-`config_dir/groups.d/*.toml` for the caller and its primary/supplementary groups, including scoped environment, selected model file, execution
-backend, network mode, CWD write access, workspace allowed/default choices,
-MCP server enablement and approval policies, and any subset of model-tool policies.
-Workspace selection precedes the other account overrides. If no rules match,
-the main selection metadata and selected mode's policy remain unchanged. See
-[user and group environment and overrides](identity-broker.md).
+The main policy owns global `pi`, `sandbox` and extension-scoped environment, plus
+required `[model_auth].personal_providers` (empty by default). The `identity` table
+has been removed; source selection and rule lookup are not runtime policy choices.
+Local audit is optional through a compiled `audit_endpoint`; enabling it without
+an endpoint fails source validation. Service builds use their one endpoint for
+bootstrap and audit.
 
 The required `execution` table selects `bubblewrap`, `seatbelt`, or `direct`. Bubblewrap is
 available only on Linux. Direct execution is available on Linux and macOS and
 runs approved built-in operations with the invoking user's ordinary host
 filesystem and process authority. It is an explicit operating mode, never a
-fallback after a sandbox failure. Seatbelt is the macOS packaged selection with the distinct contract below. macOS requires `identity.mode = disabled`.
+fallback after a sandbox failure. Seatbelt is the macOS packaged selection with the distinct contract below. macOS clients may use the HTTPS service for configuration and auditing.
 
 The required `network` table selects `none`, `local`, or `host` for built-in tools and
 shell commands. Bubblewrap supports all three. Seatbelt accepts only `none` or `host`; `local` is rejected. Direct execution requires `host` so a
@@ -62,12 +57,13 @@ into this release. An empty table selects none. Each selected extension parses
 its own strict configuration. Runtime paths, user/project extensions, and
 uncompiled extension identifiers are rejected.
 
-Configuration uses main schema 15 and is limited to 1 MiB of UTF-8 source,
+Configuration uses main schema 16 and is limited to 1 MiB of UTF-8 source,
 including when audit is disabled. Configuration is strict: unsupported versions, missing effective tool policies, unknown
 fields, unknown tools, invalid values, duplicate TOML keys, and missing,
 unreadable, or invalid configuration and model files are errors. Startup fails
-closed. Deployment is responsible for ownership and permissions; Pi Sandbox
-does not perform root-ownership or metadata checks on these files.
+closed. Local-file access uses normal filesystem permissions and symlink behavior;
+deployment controls file protection. Service-owned inputs additionally follow
+the daemon's protected administrative-file rules.
 
 In managed builds, project-local files are untrusted content and cannot broaden
 the installed policy. Configurable builds load a project policy only when the
@@ -108,7 +104,9 @@ and symlink aliases are allowed; the authored spelling is retained for filters.
 At startup each root must be an existing readable, traversable directory for the
 invoking user, even with `--no-skills`. Invalid roots stop startup before the UI.
 Use stable local directories unless dependence on a network mount is intentional.
-Installation validation checks external paths structurally without opening them.
+Offline local installation validation checks external paths structurally without
+opening them. Live service candidate validation checks readable/traversable roots
+as each selected unprivileged validation user.
 
 Pi recursively discovers skills, including nested groups. It stops descending
 once it finds a directory's `SKILL.md`, so that skill's supporting files are not
@@ -134,8 +132,7 @@ user's agent directory. `--no-skills` removes discovered skills, while explicit
 flag or user/group policy override. `/reload` refreshes contents and preferences;
 restart the application after changing the administrative root list.
 
-This optional field is supported by the current schema 15. Shared skills were
-introduced in Pi Sandbox 0.12.0 with schema 14; older binaries reject the field.
+This optional field is supported by schema 16. Older incompatible schemas are rejected.
 
 ### File-backed Pi environment values
 
@@ -147,9 +144,9 @@ it in TOML:
 SERVICE_TOKEN = { file = "/etc/pi-sandbox/secrets/service-token" }
 ```
 
-The same syntax works in administrator user/group rules. Main-config references
-are read by the application as the invoking user; matching rule references are
-read by the [identity broker](identity-broker.md#file-backed-pi-values). Ordinary
+The same syntax works in service account rules. Local main references are read
+by the application as the invoking user. Service bootstrap reads all effective
+main/rule references in the [daemon](managed-service.md#file-backed-pi-values). Ordinary
 filesystem permissions and symlink resolution apply. Deployment owns file access
 and protection; an unreadable file fails startup. There are no additional
 secret-file ownership or permission-mode requirements.
@@ -165,11 +162,11 @@ UTF-8 bytes without NUL. All other contents, including whitespace, a byte-order
 mark, and macro-looking text, are preserved. File contents never undergo the
 string expansion described below.
 
-Only effective references are read: a broker value replacing a main-config
+Only effective references are read: an account value replacing a main-config
 reference prevents that main file from being opened. Each reader takes one
 snapshot per distinct path during startup; subsequent launches read files again.
 Use atomic replacement for rotation. Existing processes retain their values.
-Installation validation and packaging check reference syntax without opening or
+Offline installation validation and packaging check reference syntax without opening or
 copying the referenced files. Packaged configuration may contain the references,
 but no secret contents are embedded by this mechanism.
 
@@ -189,7 +186,7 @@ and the environment fields listed above also support `{{machine_id}}`, which
 expands to the host's hardware UUID (`IOPlatformUUID`). `filesystem.hidden_paths`
 is available only with Linux Bubblewrap and cannot resolve this macOS-only macro.
 
-Expansion happens once at operational startup, after broker rules are merged,
+Expansion happens once at operational startup, after service account rules are merged,
 using the invoking effective user's canonical OS account name, numeric UID,
 and home. It ignores `$HOME`, `$USER`, `$LOGNAME`, `SUDO_USER`, and CWD. The lookup
 uses `/usr/bin/getent` on Linux or `/usr/bin/dscacheutil` on macOS, with a cleared
@@ -201,11 +198,11 @@ only when an effective configured value requests `{{machine_id}}`, using fixed
 `/usr/sbin/ioreg` with cleared environment, bounded output, and a five-second
 deadline. One startup shares the result across policy and MCP resolution; it
 does not consult environment variables or a user-selected executable. Values
-overwritten during broker merging are not resolved. A referenced machine ID on
+overwritten during account merging are not resolved. A referenced machine ID on
 an unsupported platform or an unavailable/invalid UUID fails effective policy
 startup. A failure used only by an MCP stdio `env` value instead marks that
 server `configuration-value-unavailable`. An unused machine-ID macro triggers no hardware lookup.
-Installation validation leaves the macro symbolic and performs no hardware lookup.
+Offline installation validation leaves the macro symbolic and performs no hardware lookup.
 
 The UUID is the same across accounts on a physical Mac and normally survives
 OS upgrades, but hardware replacement or VM identity changes can change it.
@@ -225,7 +222,7 @@ userinfo, and fragments are rejected; encoded braces remain literal URL data.
 
 `models_file`, configuration-file locations, build-time installation paths, MCP
 URLs, executable paths and argv, literal HTTP headers, and arbitrary extension settings
-do not support expansion. Installation validation checks syntax without looking
+do not support expansion. Offline installation validation checks syntax without looking
 up the installer's identity, resolving per-user credentials, or requiring hidden
 targets to exist. Operational startup validates expanded paths before masking.
 
@@ -274,13 +271,13 @@ Every authored entry is checked even if replaced by all modes. Each composed
 mode must then be complete and valid, including disallowed and unselected
 definitions. Individually valid common values need not form a launchable policy
 on their own if every composed mode resolves their cross-field conflicts.
-Current-platform checks run before broker access and in installation/backend
+Current-platform checks run before account resolution and in installation/backend
 validation. Only the selected final policy performs application-side account/macros,
 secret-file, CWD and executor checks. Errors identify the affected mode and
 configuration paths; an explicit selection cannot rescue an invalid definition
 or effective default.
 
-Linux [account rules](identity-broker.md#workspace-mode-selection) may replace
+Service [account rules](managed-service.md#workspace-mode-selection) may replace
 allowed/default metadata. Matching explicit allowed arrays are unioned; distinct
 explicit defaults conflict. The effective default must remain allowed even with
 an explicit CLI selector. After selection, ordinary account overrides apply
@@ -293,7 +290,7 @@ only an optional leading `--config`; combining it with a mode selector, Pi args
 or another metadata/private operation is an error. Listing validates main policy
 and authenticated selection metadata but starts no model, MCP connection or
 executor and does not resolve main environment file references or operational
-CWD prerequisites. The existing broker still resolves its matching rule values.
+CWD prerequisites. Neither local listing nor service `policy_inspect` reads a catalog or secret file.
 The operational root-user guard applies. Missing descriptions display only the
 name; descriptions are explanatory text, not permission guarantees.
 
@@ -314,7 +311,7 @@ conversation in a new process resolves current policy again.
 ## Complete example
 
 ```toml
-config_version = 15
+config_version = 16
 models_file = "/etc/pi-sandbox/models.json"
 
 [codemode]
@@ -324,7 +321,6 @@ enabled = false
 
 [audit]
 enabled = false
-facility = "local0"
 
 [exports]
 enabled = false
@@ -340,8 +336,8 @@ denied_paths = []
 [execution]
 backend = "bubblewrap"
 
-[identity]
-mode = "disabled"
+[model_auth]
+personal_providers = []
 
 [network]
 mode = "none"
@@ -437,17 +433,17 @@ and is never advertised to the model. Setting `[tools.bash]` to `disabled`
 therefore removes model Bash while preserving the user's `!` command.
 
 These TOML sections define built-in and compiled-extension tool policy. MCP tools
-use the separate per-server policy below. A broker user/group rule
+use the separate per-server policy below. A service user/group rule
 may override execution backend and network mode and may atomically
 replace individual complete policies, including setting
 `git_clone` or another selected extension tool to `deny` or `disabled`. User/group environment values
 never select an extension, add a tool, change a policy, or authorize a call.
 
 `models_file` is also required and must name a normalized absolute file path.
-The administrator may place catalogs elsewhere. In broker mode a root-managed
-user/group rule may replace it; no user environment, CLI argument, Pi setting, or
-project file can do so. `--model` may select only a model present in the
-effective file.
+The administrator may place catalogs elsewhere; service account rules may select
+another complete catalog. No Pi environment, model-path argument, setting or
+project file can replace it. Pi retains its explicit custom model-ID behavior
+within configured providers; provider services enforce model-ID access limits.
 
 ## Subagents
 
@@ -498,7 +494,8 @@ for ordinary Pi and SDK hosts; managed Pi retains background completion and does
 not expose that option in administrative TOML.
 The standalone-only `forwardActivity` option also defaults off; managed Pi does
 not forward child activity or expose that option in administrative TOML.
-The optional table uses main schema 15; broker protocol/rules use version 11. Audit child provenance requires the paired application/collector update below.
+The optional table uses main schema 16; service rules use version 12. Child
+provenance uses service protocol 1 and audit record schema 7.
 
 ## Code mode and MCP servers
 
@@ -572,7 +569,7 @@ structurally but do not resolve their credential references or identity, check
 executables, connect, or start a process. Independently configured
 `environment.pi` values still apply to Pi.
 
-On Linux, administrator-owned [user/group rules](identity-broker.md#mcp-tool-approval-policies)
+Administrator-owned service [user/group rules](managed-service.md#mcp-tool-approval-policies)
 may override a known server's `enabled`, `default_policy`, and ordered
 `tool_rules`. Explicit enabled flags combine with true winning before replacing
 the main default. Each file contributes its first matching approval rule or its
@@ -651,7 +648,7 @@ startup.
 Both MCP transports are host capabilities. Stdio servers are trusted host programs
 with the invoking account's authority. Bubblewrap filesystem masks and network
 isolation do not restrict MCP servers or their connections. The existing
-`environment.pi` scope, including broker account/group overrides, can supply
+`environment.pi` scope, including service account/group overrides, can supply
 per-user mapped credentials. The environment snapshot is fixed at process startup;
 policy or credential changes require a restart. Missing or invalid resolved
 credentials disable only the affected server and produce a sanitized status.
@@ -817,7 +814,8 @@ detached descendants can escape those attempts. Survivors retain their original
 grants, including after close or owner death. Changing policy or closing Pi does not revoke a surviving process's
 original grants. See [security.md](security.md#macos-seatbelt).
 
-macOS still requires `identity.mode = "disabled"` and `[audit].enabled = false`.
+macOS clients may obtain policy and submit audit events through HTTPS; no local
+privileged daemon is required.
 Managed host Git and MCP retain their separate host authority.
 
 ## Session retention
@@ -889,12 +887,12 @@ anonymous connected Unix stream pairs remain available for process IPC.
 `host` is deliberately unrestricted. Bubblewrap does not provide IP, port,
 hostname, or destination filtering, and Pi Sandbox does not imply such filtering
 when this mode is selected. There is no dedicated network CLI or environment
-override; the selected TOML supplies the mode. In broker
-mode, an administrator-owned user/group rule may replace the base network mode.
+override; the selected TOML supplies the mode. With service
+account rules, an administrator-owned user/group rule may replace the base network mode.
 Provider traffic from host-side Pi is unaffected by these settings.
 
 `direct` requires `host`. This requirement is checked both for the base TOML
-and after broker execution and network overrides are applied.
+and after account execution and network overrides are applied.
 
 Managed host tools are unaffected by this table: they deliberately use the
 invoking user's host network namespace and ordinary host controls.
@@ -992,7 +990,7 @@ boundary; fatal worker/transport failure may abort the executor. Direct and
 Seatbelt cleanup is best effort. Seatbelt survivors retain their original grants
 after close or owner death; no watcher, helper or grant revocation is provided.
 
-The removed `process_lifetime` field is rejected by managed schema 15. There is
+The removed `process_lifetime` field is rejected by managed schema 16. There is
 one lifecycle contract rather than separate command and sandbox modes.
 
 ## Compiled extensions
@@ -1001,7 +999,7 @@ Extension selection is an administrative runtime choice within the catalog
 fixed at build time. `[extensions]` is required even when empty. Selecting an
 extension enables its configuration and adds its tool names to the exact
 required policy set; `mode = "disabled"` hides a selected tool but does not
-remove the requirement to state its policy. User/group broker drop-ins can replace
+remove the requirement to state its policy. User/group service account rules can replace
 policies for selected tools, but cannot select extensions or change extension
 configuration.
 
@@ -1132,8 +1130,8 @@ Pi Sandbox registers one read-only diagnostic command:
 ```
 
 `/sandbox` reports whether the selected backend is initialized, its process
-lifetime, execution backend, launch directory, selected configuration path,
-effective selected model file, identity mode, effective network mode, CWD access,
+lifetime, execution backend, launch directory, configuration source and origin,
+local policy/catalog paths when applicable, effective network mode, CWD access,
 user-state directory, code-mode enablement, and MCP server count. It also shows
 the selected workspace mode, CLI/default source, optional description and
 effective export state (disabled or enabled, TUI-only). `/sandbox mounts`
@@ -1287,7 +1285,7 @@ command with an unlisted option, is unclassified and uses the main policy.
 
 ### Class policy validation
 
-The table is an additive optional field of configuration schema 15. It accepts
+The table is an additive optional field of configuration schema 16. It accepts
 exactly `mode` (`allow`, `ask` or `deny`) and `session_grant` (`never` or
 `offer`). Availability remains tool-level: `disabled` is not a class mode, and
 Logging stays in common `audit.tools.bash`. Each violation is reported in the ordinary
@@ -1327,10 +1325,10 @@ and group rules are applied, rule 6 is checked again on the effective policy and
 startup fails with:
 
 ```text
-effective tool policy after identity overrides is invalid: tools.bash.known_read_only.mode "allow" requires tools.<tool>.mode "allow" (it is "<mode>"); allow read, grep, find, ls or use a stricter bash.known_read_only mode in the base configuration or identity broker rules
+effective tool policy after identity overrides is invalid: tools.bash.known_read_only.mode "allow" requires tools.<tool>.mode "allow" (it is "<mode>"); allow read, grep, find, ls or use a stricter bash.known_read_only mode in the base configuration or identity service account rules
 ```
 
-See [identity broker](identity-broker.md#known-read-only-bash-class) for
+See [service account rules](managed-service.md#known-read-only-bash-class) for
 merging and replacement.
 
 ### Decisions
@@ -1701,7 +1699,7 @@ authored command-set table is limited to 128 KiB. Configured approval evidence
 is limited to 256 stages; larger calls fall back to the main Bash policy.
 
 These definitions belong only to the main administrator configuration. User/group
-rules cannot define or replace them. A broker-selected Bash policy preserves the
+rules cannot define or replace them. A account-selected Bash policy preserves the
 selected mode's main-authored definitions; `disabled` still removes Bash, while `deny` can have these
 explicit allow exceptions. No custom-rule session grant is created. A call that
 does not qualify uses the ordinary Bash prompt and its ordinary session-grant
@@ -1710,9 +1708,8 @@ scope. Restart after changing definitions.
 `/sandbox policy bash` lists the configured shapes separately. Bash decision
 audit records use `command_class = "configured_command"` and the matching
 `command_set_ids`; `known_read_only_version` still identifies the built-in registry,
-not a safety certification of custom utilities. Upgrade application and collector
-together for audit wire version 5 and record schema 6. The current main schema is
-15; broker protocol and rule version are 11.
+not a safety certification of custom utilities. Service protocol version 1 uses
+record schema 7; main policy is schema 16 and service rules are version 12.
 
 An administrator must review the executable's behavior, plugins, configuration,
 response-file syntax and environment dependencies. Configured value-taking options
@@ -1724,19 +1721,19 @@ network access enforced by the selected backend. See [security](security.md#admi
 
 ## Tool event logging
 
-The configuration requires an `[audit]` table with `enabled`, `facility`, and
-an exhaustive `[audit.tools]` Boolean map. It contains exactly every configured
-named policy subject: seven built-ins, all tools of selected extensions, and
-`subagents` when admitted. Include disabled, CLI-excluded and user-hidden tools;
-exclude unselected extensions, the five individual subagent operations,
-`user_shell`, `codemode` and dynamic MCP tools. Missing, unknown or non-Boolean
-entries fail even with global audit disabled. Named invocation entries reject
-the old inline `audit` field. MCP keeps audit in its per-server policy rules.
-`facility` is one of `local0` through `local7`. The fixed syslog identifier is
-`pi-sandbox`. Packaged defaults disable the feature globally, select `local0`,
-and mark write, edit, and Bash tools for logging while leaving
-read/search tools unlogged. Set `enabled = true` to activate the collector
-connection on Linux. macOS requires `enabled = false`.
+The configuration requires `[audit].enabled` and an exhaustive `[audit.tools]`
+Boolean map. It contains exactly every configured named policy subject: seven
+built-ins, selected extension tools and `subagents` when admitted. Include
+disabled, CLI-excluded and user-hidden tools. Exclude unselected extensions,
+individual subagent operation names, `user_shell`, `codemode` and dynamic MCP
+tools. Missing, unknown or non-Boolean entries fail even with audit disabled.
+Named invocation entries reject inline `audit`; MCP retains per-server rules.
+
+Syslog facility is the service listener's `audit_facility`, never a client policy
+field. Packaged local defaults disable audit and mark write/edit/Bash for logging.
+A local build needs a compiled audit endpoint before policy can enable it. Both
+Linux and macOS can use HTTPS; Linux also supports Unix transport. See
+[managed service](managed-service.md#shared-protocol-and-auditing).
 
 A tool's boolean selects its permission-decision and execution lifecycle events.
 It does not change tool visibility, approval, or execution authority. Session
@@ -1775,9 +1772,11 @@ snapshot because IDs are not versioned across deployments.
 `session_grant`.
 
 Before an admitted logged tool runs, its execution-intent record must be
-acknowledged by the collector. Acknowledgment means successful submission to
-local syslog, not storage or remote delivery. Submission failure prevents new
-logged operations. Failure to submit a completion record never retries the
+acknowledged by the service. Acknowledgment means successful submission to
+local syslog, not storage or remote delivery. Submission failure blocks new
+logged operations until a later explicit user-message or export checkpoint can
+check/reopen audit state. Failed events and effects are never replayed. The
+immutable administrative snapshot is unchanged by reconnect. Failure to submit a completion record never retries the
 operation; its externally observable outcome may remain unknown.
 
 Managed extension definitions may supply an optional `auditTarget` function
@@ -1798,7 +1797,7 @@ enabled = false
 
 Packaged host modes keep it disabled; confined sandbox modes enable it. To enable `/sandbox save`, set `enabled = true`
 and `filesystem.cwd_writable = false` with Bubblewrap or Seatbelt. Startup rejects
-an incompatible base or effective broker policy; user/group rules cannot enable or
+an incompatible base or effective account policy; user/group rules cannot enable or
 change exports. This does not change tool invocation policy. Administrators may
 enable saving even when the agent's write tool is `ask`, `deny` or `disabled`;
 the user command is independent of all model-tool invocation policies. They may

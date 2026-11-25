@@ -1,10 +1,11 @@
 #!/bin/sh
 set -eu
+configuration_source=local
 
 remove_config=0
 while [ "$#" -gt 0 ]; do
   case "$1" in
-    --remove-config) remove_config=1; shift ;;
+    --remove-config) [ "$configuration_source" = local ] || { echo "--remove-config requires a local configuration build" >&2; exit 2; }; remove_config=1; shift ;;
     *) echo "usage: uninstall.sh [--remove-config]" >&2; exit 2 ;;
   esac
 done

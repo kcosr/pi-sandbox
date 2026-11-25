@@ -79,7 +79,9 @@ policy does not revoke those grants. Scratch deletion is not a substitute for
 process revocation. No watcher, guardian, observer or new host service attempts
 to provide stronger lifecycle guarantees.
 
-macOS broker identity and audit collection remain disabled. Host `git_clone`
+macOS clients may use the HTTPS configuration/audit service. No privileged
+service is installed on the Mac; HTTPS identity is an authenticated assertion,
+not a kernel-verified remote account. Host `git_clone`
 retains ordinary execution and its accepted destination race; Seatbelt introduces
 no staging publisher or clone-specific process cleanup. Qualify runtime behavior
 on each supported macOS architecture and version; arm64 execution does not prove
@@ -216,29 +218,39 @@ tool into a host operation. Direct execution is admitted only from the
 effective selected configuration and is never selected
 after a Bubblewrap or Seatbelt failure.
 
-In managed builds (`allow_config_override = false`), the distribution's
-compiled `config_dir/config.toml` is the fixed global policy and
-scoped-environment source. A build with `allow_config_override = true` instead
-allows the caller to explicitly select that source with a leading `--config FILE`.
-This build mode delegates policy choice to the caller and is unsuitable for
-forcing staff to use administrator-selected permissions. The option cannot
-change the compiled extension catalog, root runtime check, or Bubblewrap binary.
-Service sockets and service-owned configuration remain build-selected. In broker mode, optional root-only rules in
-`config_dir/users.d/*.toml` and `config_dir/groups.d/*.toml` may provide matching account/group scoped-environment
-and administrator-selected model/execution/network/filesystem/tool patch, plus
-MCP server enablement, workspace allowed/default choices and tool approval policies.
-If no rules match, main selection metadata and the selected mode's policy remain
-unchanged. Pi's
-internal model catalog is disabled. `PI_CODING_AGENT_DIR` may
-redirect user state but cannot redirect these administrative inputs. Missing,
-unreadable, or invalid effective inputs abort operational startup. An exact
-`--version` is metadata-only and does not read those inputs. The broker requires the
-drop-in directory to be root-owned and not group/other writable, and all
-files to be root-owned regular files with mode `0600`; ownership and
-permissions for the main TOML and model files remain deployment responsibilities.
-Every rule is structurally validated, including unmatched files. The broker does
-not read the main server inventory; the application checks server existence only
-for the combined matching patch.
+The build-selected source is immutable. Service builds use one compiled Unix or
+HTTPS endpoint for policy, catalog and resolved environment, without a local-file
+or cached fallback. Local builds read their fixed `config_dir/config.toml` and
+absolute `models_file`; only an explicitly configurable local build admits
+`--config FILE`. That capability delegates policy choice to the caller and cannot
+force administrator permissions. It does not change compiled extensions, root
+runtime checks or selected sandbox executables. Source kind, endpoint and TLS
+trust cannot be replaced by policy, user state, CLI or environment.
+
+Both profiles validate one immutable administrative snapshot. Pi's built-in and
+user model catalogs are disabled. Model keys/headers resolve only from the captured
+administrative environment, never ambient shell values or commands. Personal
+credentials require named main-policy admission and cannot change configured
+endpoints/routing or add providers. Invalid personal credentials fail their own
+operation without silently switching identity. Native cloud SDK default chains
+are disabled; selected personal cloud methods remain bounded explicit sources.
+`PI_CODING_AGENT_DIR` may redirect admitted personal state but not administrative
+inputs. Exact `--version` is offline; ordinary help validates source/mode context.
+
+The Linux service protects its administrative manifest, policy/catalog/rule inputs
+and socket ancestry. Every rule is structurally validated; only matching rules
+are checked against the listener's tool/MCP/mode inventories. Local file loading
+uses ordinary permissions and symlink following, so deployment is responsible for
+its protection. Secret-file references also use normal permission/symlink rules;
+protect service read targets from untrusted redirection.
+
+Unix connections bind identity to `SO_PEERCRED`. HTTPS authenticates a shared Basic
+credential and trusts the submitted OS username, optionally recording a machine
+ID. A bundled credential is extractable and its holders can impersonate another
+admitted user, including retrieving that user's service-provided values. TLS
+protects transport and server identity, not endpoint-owner attestation. A custom
+compiled CA replaces the bundled public roots; mutable host trust, proxies and
+insecure-TLS variables cannot redirect this client. See [managed service](managed-service.md#identity-and-trust).
 
 The selected main-authored mode supplies the default tool policy. Matching user/group rules combine
 explicit permissions using least restrictive wins before replacing defaults.
@@ -255,9 +267,9 @@ or common audit choices. Mode names/descriptions are display metadata, not
 security assertions. An allowed mode may relax common invocation defaults, and
 ordinary account overrides apply afterward, so the final policy controls access.
 
-Main schema 15 validates every authored entry and every composed mode, even
+Main schema 16 validates every authored entry and every composed mode, even
 disallowed definitions, within a bounded 1 MiB source. Current-platform guards
-run before broker access and during installation/backend validation, then again
+run before account resolution and during installation/backend validation, then again
 after account overrides. Actual account/path/CWD/executor checks apply to the
 selected final policy. Invalid effective defaults fail even with an explicit
 mode choice. Matching explicit allowed lists union; one restrictive account
@@ -273,7 +285,7 @@ host fallback:
 - the interactive application is launched with effective UID `0`;
 - administrative configuration or the selected model catalog is missing or
   invalid;
-- the broker is unavailable, any user/group drop-in is structurally invalid, or
+- the required service is unavailable, any user/group drop-in is structurally invalid, or
   a matching override refers to an unavailable tool, workspace mode or MCP server;
 - an unsafe managed-executable argument is supplied;
 - the selected command process cannot start or report a coherent result;
@@ -393,7 +405,7 @@ Home-relative hidden paths (`~` or `~/...`) are expanded using the invoking
 effective user's OS account home, independently of ambient or configured
 `HOME`. All reserved-path, canonical-path, and target-type checks apply to
 the result. The same prefix convention expands configured scoped environment
-values after the broker merge without granting access to hidden paths or
+values after the account merge without granting access to hidden paths or
 bypassing variable admission and size limits. It does not evaluate shell
 expressions or expand arbitrary configuration strings.
 
@@ -428,21 +440,21 @@ in Bubblewrap; Seatbelt uses writable real host scratch directories.
 
 ## Audit correlation
 
-The application and collector use strict audit wire version 5; the collector emits
-record schema version 6 and requires configuration version 15. They must be
-installed from the same release. MCP records carry the configured server ID,
+The application and service use strict service protocol version 1; the service
+emits audit record schema 7 and accepts policy schema 16. Records include explicit
+Unix/HTTPS identity provenance, service epoch and local/service policy origin. MCP records carry the configured server ID,
 original tool name, and `http` or `stdio` transport. Nested audited calls carry
 `parent_invocation_id` from trusted execution context, never from script arguments.
 An unaudited nested tool does not produce decision records for its parent.
 
 Child tool records remain attached to the root audit session and carry the complete
 `child_id`, `child_session_id`, `child_task_id` trio. These values come from trusted
-invocation context, including nested Code Mode/MCP calls. The collector rejects
+invocation context, including nested Code Mode/MCP calls. The service rejects
 partial child identities. Task text and preview content are not audit fields.
 
 With a Bash class policy, Bash decision records carry the paired
 `command_class` and `known_read_only_version` fields. Both the application and
-the collector require them together, only on Bash `tool_execution_intent` and
+the service require them together, only on Bash `tool_execution_intent` and
 `tool_denied` events, with a version from 1 through 4294967295. They describe
 the classification used for policy, not the command's actual effects. Custom-rule
 decisions use `configured_command` with a nonempty, bounded list of matching
@@ -450,7 +462,7 @@ decisions use `configured_command` with a nonempty, bounded list of matching
 those IDs. The registry version continues to describe only the built-in profiles.
 
 Named-tool audit choices are exhaustive in common `audit.tools` and cannot be
-changed by modes or account rules. The collector validates that map structurally;
+changed by modes or account rules. The service validates that map structurally;
 the application checks exact configured-subject coverage even with auditing
 disabled. MCP audit remains server-rule-specific. Records do not carry the
 selected workspace mode or policy revision. Command-set IDs reused across common
@@ -535,7 +547,7 @@ seccomp permits `socket`. Sandboxed commands can therefore reach host loopback,
 LAN, Internet, metadata endpoints, and visible or abstract Unix-domain services
 subject only to ordinary host controls. This is not filtered egress. Bubblewrap
 does not enforce IP, port, hostname, or destination rules. Only the fixed base
-configuration or a root-managed user/group broker drop-in can select this mode.
+configuration or a root-managed service user/group rule can select this mode.
 
 In every mode the classic seccomp BPF program denies the three `io_uring`
 control syscalls. In `none` and `local`, anonymous `socketpair()` is restricted to
@@ -566,21 +578,22 @@ Provider calls made by the trusted host-side Pi process are unaffected.
 ## Environment and IPC
 
 Pi-scoped `{ file = "/absolute/path" }` references separate credentials from
-configuration; they do not add an access-control boundary. Main references are
-read with the invoking user's permissions. Broker references are read with the
-broker's privileges only after rule matching and merging. Deployment protects
-the files, containing directories and symlink targets, especially against
-untrusted redirection of a broker read. Existing broker rule-file protection is
-unchanged. Matching users can retrieve their own resolved patch through the
-broker socket, so granted values are not secrets from those users.
+configuration; they do not hide values from their recipients. Local builds read
+main references as the invoking user. Service bootstrap joins rules and then
+reads effective main/rule references with daemon privileges. Deployment protects
+files, directories and symlink targets against untrusted redirection. Unix users
+can retrieve their own values; holders of a shared HTTPS credential can assert
+other admitted usernames and retrieve theirs. Unmatched and overwritten
+references are not read.
 
 Readers bound input, require regular UTF-8 files, reject NUL and empty values,
 and keep file contents out of account/machine expansion and error diagnostics.
 File-derived values enter only the Pi scope; MCP receives them only through
 explicit mappings. Source-file visibility is independent of environment scope:
 a user-readable secret may still be readable by tools unless deployment masks
-or denies its location. Installation validation and packaging do not read or
-copy referenced secret files.
+or denies its location. Offline installation/fixture validation and packaging do not read or copy
+referenced secrets. Live service validation obtains an actual bootstrap and therefore
+resolves effective secrets under service authority.
 
 The Bubblewrap worker starts from a cleared environment and gives command
 children fixed values required for execution plus the effective configured
@@ -593,10 +606,9 @@ sockets.
 The host sends sandbox-operation requests through anonymous pipes inherited when it starts the
 worker. Length-prefixed protocol frames prevent output and partial reads from
 changing message boundaries. No socket or filesystem IPC endpoint accepts
-requests inside the tool sandbox. Separately, optional user resolution occurs
-before sandbox startup through a root systemd Unix socket. That broker derives
-the caller's UID from `SO_PEERCRED`, returns only the matching user/group patch,
-and never enters the Bubblewrap boundary. The worker
+requests inside the tool sandbox. Separately, service-source bootstrap occurs before sandbox startup over the
+fixed Unix/HTTPS endpoint. The daemon never enters the Bubblewrap boundary and
+does not execute tools. The worker
 runs independent commands without a fixed active/outstanding count limit.
 Background descendants may persist between calls and logical sessions with their
 existing authority, without a new approval for every action. Per-request failures
@@ -648,7 +660,7 @@ execution-context checks pass. Such a command:
 This is capability equivalence, not harmlessness. With `read`, `grep`, `find`
 and `ls` already `allow`, a known read-only command can observe nothing those
 tools cannot observe inside the same boundary; this is why class `allow`
-requires them, both in the base TOML and after broker overrides. Reading is still
+requires them, both in the base TOML and after account overrides. Reading is still
 disclosure to the model and its provider. Credentials and other data the
 backend exposes can be read without a prompt, exactly as with the typed tools.
 Use `filesystem.hidden_paths` or `filesystem.denied_paths` to remove such data
@@ -869,9 +881,9 @@ local IPC.
 - Resource exhaustion requires separate host controls; v1 does not claim a
   complete cgroup or seccomp policy.
 - The local user can run unrelated software outside the managed executable.
-- A local user can request and inspect their own broker patch; the broker
-  protects other users' drop-ins, not the current user from their own
-  values.
+- A Unix user can inspect their own service bootstrap. Shared HTTPS credential
+  holders can impersonate other asserted users; returned values are not secrets
+  from their recipients or from another holder claiming the same username.
 - An approved managed host tool has the invoking user's host authority within
   the operation exposed by its compiled implementation and inherited program
   configuration.
@@ -881,20 +893,22 @@ resource controls where those risks matter.
 
 ## Model-tool event records
 
-Optional Linux event collection attributes submissions to the Unix account
-identified by kernel socket credentials. The root collector supplies identity
-fields; a client cannot select a different UID or account name. Every event
-records `principal_uid` and the trusted resolved `principal_user` (null for an
-unmapped UID), plus the peer PID. Group membership is not included in events. Pi session identifiers, tool
-metadata, and reported outcomes originate in the trusted application. Shared
-Unix accounts remain shared principals.
+Optional event collection uses kernel identity for Unix transport and authenticated
+username assertions for HTTPS. Records label this provenance explicitly; remote
+UID/PID are never inferred from server-side accounts. Shared Unix accounts remain
+shared principals, and shared HTTPS credentials permit assertion impersonation.
+Pi session identifiers, tool metadata and outcomes originate in the client.
 
-Root ownership protects the collector endpoint. Protection, retention, and
-forwarding of accepted records belong to the host syslog infrastructure.
-Successful local submission does not prove durable storage. The feature does
-not independently verify human consent, execution, or completeness against a
-hostile account owner, who can run unrelated software or submit false reports
-under their own UID.
+Root ownership protects the Unix service endpoint and daemon inputs. Host syslog
+owns protection, persistence and forwarding of accepted records. Acknowledgment
+means successful local submission, not durable storage. Audited intent must be
+accepted before effects, including publication-time checks for user exports.
+A later explicit input/export checkpoint may reconnect after failure, with no
+event/effect replay or policy refresh. A lost acknowledgment is ambiguous: the
+record may already have been submitted, while the client still blocks the effect.
+This is not independent proof of human consent, execution or completeness against
+a hostile account owner. Listener-wide auditing also cannot enforce the policy
+choices of an independently managed local client.
 
 Records exclude file contents, edit diffs, and tool output. Target paths, the
 launch CWD, and bounded Bash commands are intentional identifying fields and
@@ -985,7 +999,7 @@ still race the final identity check and rename; these checks are not an atomic
 compare-and-swap guarantee. Publication is per file, with no destructive rollback or
 whole-export crash/power-loss guarantee.
 
-When audit is enabled, wire 5/record schema 6 carries typed user export summaries
+When audit is enabled, service protocol 1/record schema 7 carries typed user export summaries
 and per-replacement intent/outcome events, separately from model-tool events. An
 acknowledged intent precedes publication. Audit failure stops further publication;
 the UI retains exact already-saved results. Events contain bounded metadata and a

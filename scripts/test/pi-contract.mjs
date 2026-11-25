@@ -50,6 +50,22 @@ function removeMember(interfaceName, memberName) {
   };
 }
 
+function removeConstructorOption(className, memberName) {
+  return (source) => {
+    const parsed = ts.createSourceFile("fixture.d.ts", source, ts.ScriptTarget.Latest, true);
+    const declaration = parsed.statements.find(
+      (node) => ts.isClassDeclaration(node) && node.name?.text === className,
+    );
+    assert.ok(declaration);
+    const constructor = declaration.members.find(ts.isConstructorDeclaration);
+    const type = constructor?.parameters[1]?.type;
+    assert.ok(type && ts.isTypeLiteralNode(type));
+    const member = type.members.find((node) => node.name?.getText(parsed) === memberName);
+    assert.ok(member);
+    return source.slice(0, member.getFullStart()) + source.slice(member.end);
+  };
+}
+
 function changeManagementCallback(source) {
   const member = interfaceMember(source, "McpManagementOptions", "updateConfig");
   assert.ok(member.type !== undefined && ts.isFunctionTypeNode(member.type));
@@ -112,6 +128,16 @@ try {
 
   const cases = [
     [
+      "missing bounded credential storage",
+      "core/auth-storage.d.ts",
+      removeConstructorOption("FileAuthStorageBackend", "maximumBytes"),
+    ],
+    [
+      "missing atomic credential storage",
+      "core/auth-storage.d.ts",
+      removeConstructorOption("FileAuthStorageBackend", "atomicWrites"),
+    ],
+    [
       "missing stock tool exclusion",
       "main.d.ts",
       removeMember("MainOptions", "includeBuiltinTools"),
@@ -124,6 +150,36 @@ try {
     ],
     ["changed default skill path type", "main.d.ts", changeDefaultSkillPaths],
     ["missing main hook", "main.d.ts", removeMember("MainOptions", "beforeRun")],
+    [
+      "missing external-input checkpoint",
+      "main.d.ts",
+      removeMember("MainOptions", "beforeExternalMessage"),
+    ],
+    [
+      "missing object model source",
+      "core/model-runtime.d.ts",
+      removeMember("CreateModelRuntimeOptions", "modelsConfig"),
+    ],
+    [
+      "missing managed auth authority",
+      "core/model-runtime.d.ts",
+      removeMember("CreateModelRuntimeOptions", "authPolicy"),
+    ],
+    [
+      "missing read-only credentials option",
+      "core/model-runtime.d.ts",
+      removeMember("CreateModelRuntimeOptions", "readOnlyCredentials"),
+    ],
+    [
+      "missing personal admission",
+      "core/authoritative-auth.d.ts",
+      removeMember("ModelRuntimeAuthPolicy", "personalProviders"),
+    ],
+    [
+      "missing authoritative environment",
+      "core/authoritative-auth.d.ts",
+      removeMember("ModelRuntimeAuthPolicy", "environment"),
+    ],
     ["missing mandatory startup hook", "main.d.ts", removeMember("MainOptions", "beforeInterface")],
     [
       "missing interactive quit hook",

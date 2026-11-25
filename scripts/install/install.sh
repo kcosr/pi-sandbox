@@ -1,17 +1,25 @@
 #!/bin/sh
 set -eu
+configuration_source=local
+expected_arch=x64
+expected_platform=linux
 bundled_commands=''
 bundle_has() { case " $bundled_commands " in *" $1 "*) return 0 ;; *) return 1 ;; esac; }
 
 usage() {
-  echo "usage: install.sh [--replace-config]" >&2
+  echo "usage: install.sh [--replace-config | --validation-user NAME ...]" >&2
   exit 2
 }
 
 replace_config=0
+validation_users=
 while [ "$#" -gt 0 ]; do
   case "$1" in
-    --replace-config) replace_config=1; shift ;;
+    --replace-config) [ "$configuration_source" = local ] || { echo "--replace-config requires a local configuration build" >&2; exit 2; }; replace_config=1; shift ;;
+    --validation-user)
+      [ "$configuration_source" = service ] && [ "$#" -ge 2 ] || usage
+      case "$2" in ""|-*|*[!a-zA-Z0-9_.-]*) usage ;; esac
+      validation_users="$validation_users $2"; shift 2 ;;
     *) usage ;;
   esac
 done
@@ -83,14 +91,8 @@ bubblewrap_mode=system
 bubblewrap_runtime="/usr/bin/bwrap"
 bundled_bubblewrap="$payload/bwrap"
 candidate="$payload/pi-sandbox"
-candidate_broker="$payload/pi-sandbox-identity-broker"
-candidate_audit="$payload/pi-sandbox-audit-collector"
-audit_socket_unit_source="$payload/systemd/pi-sandbox-audit.socket"
-audit_service_unit_source="$payload/systemd/pi-sandbox-audit@.service"
 defaults_config="$payload/defaults/config.toml"
 defaults_models="$payload/defaults/models.json"
-socket_unit_source="$payload/systemd/pi-sandbox-identity-broker.socket"
-service_unit_source="$payload/systemd/pi-sandbox-identity-broker@.service"
 
 [ -f "$checksums" ] && [ ! -L "$checksums" ] || {
   echo "release SHA256SUMS is missing or invalid" >&2
@@ -100,6 +102,13 @@ service_unit_source="$payload/systemd/pi-sandbox-identity-broker@.service"
   echo "release payload is missing or invalid" >&2
   exit 1
 }
+if [ "$configuration_source" = local ]; then
+  for required in "$defaults_config" "$defaults_models"; do
+    [ -f "$required" ] && [ ! -L "$required" ] || { echo "local defaults are missing" >&2; exit 1; }
+  done
+else
+  [ ! -e "$payload/defaults" ] || { echo "service builds must not contain local defaults" >&2; exit 1; }
+fi
 [ -z "$(find "$payload" ! -type d ! -type f -print -quit)" ] || {
   echo "release payload contains an unsupported file type" >&2
   exit 1
@@ -108,20 +117,12 @@ service_unit_source="$payload/systemd/pi-sandbox-identity-broker@.service"
   echo "release executable is missing or invalid" >&2
   exit 1
 }
-for required in "$payload/sbom.cdx.json" "$candidate_audit" "$audit_socket_unit_source" "$audit_service_unit_source" "$candidate_broker" "$defaults_config" "$defaults_models" "$socket_unit_source" "$service_unit_source" "$payload/release-manifest.json"; do
+for required in "$payload/sbom.cdx.json" "$payload/release-manifest.json"; do
   [ -f "$required" ] && [ ! -L "$required" ] || {
     echo "release payload is incomplete" >&2
     exit 1
   }
 done
-[ -x "$candidate_broker" ] || {
-  echo "release identity broker is not executable" >&2
-  exit 1
-}
-[ -x "$candidate_audit" ] || {
-  echo "release audit collector is not executable" >&2
-  exit 1
-}
 case "$bubblewrap_mode" in
   system) ;;
   bundled)
@@ -206,18 +207,9 @@ libexec_parent=${install_base%/*}
 etc_target="${root_prefix}/etc/pi-sandbox"
 launcher="${root_prefix}/usr/bin/pi-sandbox"
 bin_target=${launcher%/*}
-systemd_target="${root_prefix}/usr/lib/systemd/system"
-socket_unit="$systemd_target/pi-sandbox-identity-broker.socket"
-audit_socket_unit="$systemd_target/pi-sandbox-audit.socket"
-service_unit="$systemd_target/pi-sandbox-identity-broker@.service"
-audit_service_unit="$systemd_target/pi-sandbox-audit@.service"
 config="$etc_target/config.toml"
 models="$etc_target/models.json"
 expected_link="../libexec/pi-sandbox/pi-sandbox"
-expected_socket_unit_link="../../../libexec/pi-sandbox/systemd/pi-sandbox-identity-broker.socket"
-expected_audit_socket_unit_link="../../../libexec/pi-sandbox/systemd/pi-sandbox-audit.socket"
-expected_service_unit_link="../../../libexec/pi-sandbox/systemd/pi-sandbox-identity-broker@.service"
-expected_audit_service_unit_link="../../../libexec/pi-sandbox/systemd/pi-sandbox-audit@.service"
 
 path_exists() { [ -e "$1" ] || [ -L "$1" ]; }
 require_regular() {
@@ -227,7 +219,7 @@ require_regular() {
   }
 }
 
-for parent in "$libexec_parent" "$etc_target" "$bin_target" "$systemd_target"; do
+for parent in "$libexec_parent" "$bin_target"; do
   if path_exists "$parent"; then
     [ -d "$parent" ] && [ ! -L "$parent" ] || {
       echo "installation destination parent must be a regular directory" >&2
@@ -248,32 +240,9 @@ if path_exists "$launcher"; then
     exit 1
   }
 fi
-if path_exists "$socket_unit"; then
-  [ -L "$socket_unit" ] && [ "$(readlink "$socket_unit")" = "$expected_socket_unit_link" ] || {
-    echo "existing pi-sandbox identity broker socket unit is not the managed symlink" >&2
-    exit 1
-  }
-fi
-if path_exists "$service_unit"; then
-  [ -L "$service_unit" ] && [ "$(readlink "$service_unit")" = "$expected_service_unit_link" ] || {
-    echo "existing pi-sandbox identity broker service unit is not the managed symlink" >&2
-    exit 1
-  }
-fi
-if path_exists "$audit_socket_unit"; then
-  [ -L "$audit_socket_unit" ] && [ "$(readlink "$audit_socket_unit")" = "$expected_audit_socket_unit_link" ] || {
-    echo "existing pi-sandbox audit collector socket unit is not the managed symlink" >&2
-    exit 1
-  }
-fi
-if path_exists "$audit_service_unit"; then
-  [ -L "$audit_service_unit" ] && [ "$(readlink "$audit_service_unit")" = "$expected_audit_service_unit_link" ] || {
-    echo "existing pi-sandbox audit collector service unit is not the managed symlink" >&2
-    exit 1
-  }
-fi
 config_present=0
 models_present=0
+if [ "$configuration_source" = local ]; then
 if path_exists "$config"; then require_regular "$config" configuration; config_present=1; fi
 if path_exists "$models"; then require_regular "$models" models.json; models_present=1; fi
 if [ "$config_present" -eq 0 ] && [ "$models_present" -eq 1 ] && [ "$replace_config" -eq 0 ]; then
@@ -281,8 +250,13 @@ if [ "$config_present" -eq 0 ] && [ "$models_present" -eq 1 ] && [ "$replace_con
   exit 1
 fi
 
-mkdir -p "$libexec_parent" "$etc_target" "$bin_target" "$systemd_target"
-chmod 0755 "$libexec_parent" "$etc_target" "$bin_target" "$systemd_target"
+  if path_exists "$etc_target"; then [ -d "$etc_target" ] && [ ! -L "$etc_target" ] || { echo "configuration parent must be a regular directory" >&2; exit 1; }; fi
+  mkdir -p "$etc_target"
+  chmod 0755 "$etc_target"
+fi
+
+mkdir -p "$libexec_parent" "$bin_target"
+chmod 0755 "$libexec_parent" "$bin_target"
 lock_dir="$libexec_parent/.pi-sandbox.install.lock"
 mkdir "$lock_dir" 2>/dev/null || {
   echo "another pi-sandbox installation is in progress; if it was interrupted, verify no installer is running and remove $lock_dir" >&2
@@ -295,14 +269,6 @@ config_stage=
 models_stage=
 link_stage=
 launcher_created=0
-socket_unit_stage=
-audit_socket_unit_stage=
-service_unit_stage=
-audit_service_unit_stage=
-socket_unit_created=0
-audit_socket_unit_created=0
-service_unit_created=0
-audit_service_unit_created=0
 code_committed=0
 old_code_moved=0
 old_code_path=
@@ -339,19 +305,11 @@ cleanup() {
     if [ "$old_code_moved" -eq 1 ] && [ -n "$old_code_path" ] && [ -d "$old_code_path" ]; then
       mv -T -- "$old_code_path" "$install_base" >/dev/null 2>&1 || true
     fi
-    [ "$socket_unit_created" -eq 0 ] || rm -f -- "$socket_unit"
-    [ "$audit_socket_unit_created" -eq 0 ] || rm -f -- "$audit_socket_unit"
-    [ "$service_unit_created" -eq 0 ] || rm -f -- "$service_unit"
-    [ "$audit_service_unit_created" -eq 0 ] || rm -f -- "$audit_service_unit"
     [ "$launcher_created" -eq 0 ] || rm -f -- "$launcher"
   fi
   [ -z "$config_stage" ] || rm -f -- "$config_stage"
   [ -z "$models_stage" ] || rm -f -- "$models_stage"
   [ -z "$link_stage" ] || rm -f -- "$link_stage"
-  [ -z "$socket_unit_stage" ] || rm -f -- "$socket_unit_stage"
-  [ -z "$audit_socket_unit_stage" ] || rm -f -- "$audit_socket_unit_stage"
-  [ -z "$service_unit_stage" ] || rm -f -- "$service_unit_stage"
-  [ -z "$audit_service_unit_stage" ] || rm -f -- "$audit_service_unit_stage"
   [ -z "$stage" ] || rm -rf -- "$stage"
   [ -z "$old_code_path" ] || rm -rf -- "$old_code_path"
   [ -z "$validation_root" ] || rm -rf -- "$validation_root"
@@ -361,21 +319,27 @@ cleanup() {
 trap cleanup EXIT
 trap 'exit 1' HUP INT TERM
 
+capabilities=$("$candidate" --print-build-capabilities)
+case "$capabilities" in *\"configuration_source\":\"$configuration_source\"*) ;; *) echo "candidate configuration source mismatch" >&2; exit 1 ;; esac
+case "$capabilities" in *\"platform\":\"$expected_platform\"*) ;; *) echo "candidate platform mismatch" >&2; exit 1 ;; esac
+case "$capabilities" in *\"architecture\":\"$expected_arch\"*) ;; *) echo "candidate architecture mismatch" >&2; exit 1 ;; esac
+if [ -n "$destdir" ] && [ -n "$validation_users" ]; then echo "--validation-user is not valid with DESTDIR" >&2; exit 2; fi
+if [ "$configuration_source" = local ]; then
 if [ "$config_present" -eq 1 ] && [ "$replace_config" -eq 0 ]; then
   if [ -n "$destdir" ]; then
-    "$candidate" --validate-installation --root "$destdir" --candidate-payload "$payload"
-    execution_backend=$("$candidate" --print-execution-backend --root "$destdir")
+    execution_backend=$("$candidate" --validate-installation --root "$destdir" --candidate-payload "$payload")
   else
-    "$candidate" --validate-installation --candidate-payload "$payload"
-    execution_backend=$("$candidate" --print-execution-backend)
+    execution_backend=$("$candidate" --validate-installation --candidate-payload "$payload")
   fi
 else
   validation_root=$(mktemp -d)
   mkdir -p "$validation_root/etc/pi-sandbox"
   install -m 0644 "$defaults_config" "$validation_root/etc/pi-sandbox/config.toml"
   install -m 0644 "$defaults_models" "$validation_root/etc/pi-sandbox/models.json"
-  "$candidate" --validate-installation --root "$validation_root" --candidate-payload "$payload"
-  execution_backend=$("$candidate" --print-execution-backend --root "$validation_root")
+  execution_backend=$("$candidate" --validate-installation --root "$validation_root" --candidate-payload "$payload")
+fi
+else
+  execution_backend=service
 fi
 case "$execution_backend" in
   bubblewrap)
@@ -404,7 +368,7 @@ case "$execution_backend" in
       done
     fi
     ;;
-  direct) ;;
+  direct|service) ;;
   *) echo "candidate reported an invalid execution backend" >&2; exit 1 ;;
 esac
 
@@ -416,8 +380,6 @@ chmod 0755 "$stage/pi-sandbox"
 for native_dir in "$stage/tools/bin" "$stage/tools/lib"; do
   if [ -d "$native_dir" ]; then find "$native_dir" -type f -exec chmod 0755 {} +; fi
 done
-chmod 0755 "$stage/pi-sandbox-identity-broker"
-chmod 0755 "$stage/pi-sandbox-audit-collector"
 if [ "$bubblewrap_mode" = bundled ]; then chmod 0755 "$stage/bwrap"; fi
 
 if [ "$skills_present" -eq 1 ]; then
@@ -426,8 +388,19 @@ if [ "$skills_present" -eq 1 ]; then
   done < "$payload/skills-modes.txt"
 fi
 
+if [ "$configuration_source" = service ] && [ -z "$destdir" ]; then
+  if [ "$skills_present" -eq 1 ] && [ -z "$validation_users" ]; then
+    echo "service builds containing skills require --validation-user NAME before publication" >&2; exit 2
+  fi
+  for validation_user in $validation_users; do
+    validation_uid=$(id -u "$validation_user") || { echo "validation user does not exist" >&2; exit 2; }
+    [ "$validation_uid" -ne 0 ] || { echo "validation user must be non-root" >&2; exit 2; }
+    (cd / && sudo -H -u "$validation_user" sh -c 'exec env -i HOME="$HOME" USER="$USER" LOGNAME="$LOGNAME" PATH=/usr/bin:/bin "$@"' sh "$stage/pi-sandbox" --validate-service --candidate-payload "$stage")
+  done
+fi
+
 install_defaults=0
-if [ "$config_present" -eq 0 ] || [ "$replace_config" -eq 1 ]; then
+if [ "$configuration_source" = local ] && { [ "$config_present" -eq 0 ] || [ "$replace_config" -eq 1 ]; }; then
   install_defaults=1
   config_stage=$(mktemp "$etc_target/.config.toml.XXXXXX")
   models_stage=$(mktemp "$etc_target/.models.json.XXXXXX")
@@ -482,52 +455,6 @@ if ! path_exists "$launcher"; then
   link_stage=
 fi
 
-if ! path_exists "$socket_unit"; then
-  socket_unit_stage="$systemd_target/.pi-sandbox-identity-broker.socket.$$"
-  [ ! -e "$socket_unit_stage" ] && [ ! -L "$socket_unit_stage" ] || {
-    echo "temporary socket unit path already exists" >&2
-    exit 1
-  }
-  ln -s "$expected_socket_unit_link" "$socket_unit_stage"
-  socket_unit_created=1
-  mv -Tf -- "$socket_unit_stage" "$socket_unit"
-  socket_unit_stage=
-fi
-if ! path_exists "$service_unit"; then
-  service_unit_stage="$systemd_target/.pi-sandbox-identity-broker@.service.$$"
-  [ ! -e "$service_unit_stage" ] && [ ! -L "$service_unit_stage" ] || {
-    echo "temporary service unit path already exists" >&2
-    exit 1
-  }
-  ln -s "$expected_service_unit_link" "$service_unit_stage"
-  service_unit_created=1
-  mv -Tf -- "$service_unit_stage" "$service_unit"
-  service_unit_stage=
-fi
-
-if ! path_exists "$audit_socket_unit"; then
-  audit_socket_unit_stage="$systemd_target/.pi-sandbox-audit.socket.$$"
-  [ ! -e "$audit_socket_unit_stage" ] && [ ! -L "$audit_socket_unit_stage" ] || {
-    echo "temporary socket unit path already exists" >&2
-    exit 1
-  }
-  ln -s "$expected_audit_socket_unit_link" "$audit_socket_unit_stage"
-  audit_socket_unit_created=1
-  mv -Tf -- "$audit_socket_unit_stage" "$audit_socket_unit"
-  audit_socket_unit_stage=
-fi
-if ! path_exists "$audit_service_unit"; then
-  audit_service_unit_stage="$systemd_target/.pi-sandbox-audit@.service.$$"
-  [ ! -e "$audit_service_unit_stage" ] && [ ! -L "$audit_service_unit_stage" ] || {
-    echo "temporary service unit path already exists" >&2
-    exit 1
-  }
-  ln -s "$expected_audit_service_unit_link" "$audit_service_unit_stage"
-  audit_service_unit_created=1
-  mv -Tf -- "$audit_service_unit_stage" "$audit_service_unit"
-  audit_service_unit_stage=
-fi
-
 installation_complete=1
 if [ "$install_defaults" -eq 0 ]; then
   config_action=preserved
@@ -539,8 +466,6 @@ fi
 
 printf '%s\n' "installed pi-sandbox files:"
 printf '  %s (executable)\n' "$install_base/pi-sandbox"
-printf '  %s (identity broker executable)\n' "$install_base/pi-sandbox-identity-broker"
-printf '  %s (audit collector executable)\n' "$install_base/pi-sandbox-audit-collector"
 if [ "$bubblewrap_mode" = bundled ]; then
   printf '  %s (bundled Bubblewrap executable)\n' "$install_base/bwrap"
 else
@@ -548,10 +473,7 @@ else
 fi
 printf '  %s -> %s\n' "$launcher" "$install_base/pi-sandbox"
 printf '  %s (runtime support files)\n' "$install_base/"
-printf '  %s -> %s\n' "$socket_unit" "$install_base/systemd/pi-sandbox-identity-broker.socket"
-printf '  %s -> %s\n' "$audit_socket_unit" "$install_base/systemd/pi-sandbox-audit.socket"
-printf '  %s -> %s\n' "$service_unit" "$install_base/systemd/pi-sandbox-identity-broker@.service"
-printf '  %s -> %s\n' "$audit_service_unit" "$install_base/systemd/pi-sandbox-audit@.service"
+if [ "$configuration_source" = local ]; then
 printf '%s\n' "live administrator configuration:"
 printf '  %s (%s)\n' "$config" "$config_action"
 if [ "$install_defaults" -eq 1 ] || [ "$models_present" -eq 1 ]; then
@@ -563,6 +485,4 @@ fi
 if [ "$models_present" -eq 1 ] && [ "$replace_config" -eq 1 ]; then
   printf '  %s (model catalog backup)\n' "$backup_models"
 fi
-printf '%s\n' "optional administrator-managed identity overrides (directories not installed or replaced):"
-printf '  %s\n' "$etc_target/users.d/"
-printf '  %s\n' "$etc_target/groups.d/"
+fi

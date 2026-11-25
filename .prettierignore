@@ -4,6 +4,6 @@ node_modules
 package-lock.json
 .pi
 scratch
-broker/target
-broker/vendor
-audit-collector/target
+
+service/target
+service/vendor

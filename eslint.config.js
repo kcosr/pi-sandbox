@@ -2,7 +2,16 @@ import eslint from "@eslint/js";
 import tseslint from "typescript-eslint";
 
 export default tseslint.config(
-  { ignores: ["dist/**", "packages/**/dist/**", "coverage/**", "eslint.config.js"] },
+  {
+    ignores: [
+      "dist/**",
+      "packages/**/dist/**",
+      "coverage/**",
+      "service/vendor/**",
+      "service/target/**",
+      "eslint.config.js",
+    ],
+  },
   eslint.configs.recommended,
   ...tseslint.configs.recommendedTypeChecked,
   {
