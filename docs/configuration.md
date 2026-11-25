@@ -38,9 +38,10 @@ extension-specific scoped environment. The required `identity` table either
 disables user resolution or selects the fixed administrator broker. Broker mode
 may overlay a combined patch from `config_dir/users.d/*.toml` and
 `config_dir/groups.d/*.toml` for the caller and its primary/supplementary groups, including scoped environment, selected model file, execution
-backend, network mode, CWD write access, MCP server enablement and approval policies, and any subset of
-model-tool policies. If no rules match,
-the main configuration remains unchanged. See
+backend, network mode, CWD write access, workspace allowed/default choices,
+MCP server enablement and approval policies, and any subset of model-tool policies.
+Workspace selection precedes the other account overrides. If no rules match,
+the main selection metadata and selected mode's policy remain unchanged. See
 [user and group environment and overrides](identity-broker.md).
 
 The required `execution` table selects `bubblewrap`, `seatbelt`, or `direct`. Bubblewrap is
@@ -61,7 +62,8 @@ into this release. An empty table selects none. Each selected extension parses
 its own strict configuration. Runtime paths, user/project extensions, and
 uncompiled extension identifiers are rejected.
 
-Configuration is strict: unsupported versions, missing tool policies, unknown
+Configuration uses main schema 15 and is limited to 1 MiB of UTF-8 source,
+including when audit is disabled. Configuration is strict: unsupported versions, missing effective tool policies, unknown
 fields, unknown tools, invalid values, duplicate TOML keys, and missing,
 unreadable, or invalid configuration and model files are errors. Startup fails
 closed. Deployment is responsible for ownership and permissions; Pi Sandbox
@@ -69,7 +71,10 @@ does not perform root-ownership or metadata checks on these files.
 
 In managed builds, project-local files are untrusted content and cannot broaden
 the installed policy. Configurable builds load a project policy only when the
-caller explicitly selects it with `--config`. The only merge combines administrator-owned user/group rules through the broker. Matching explicit permissions use least restrictive wins before overlaying defaults; user rules have no special precedence.
+caller explicitly selects it with `--config`. Main-authored workspace modes
+overlay common defaults; matching administrator-owned user/group rules then
+combine explicit permissions using least restrictive wins before replacing
+the selected mode's defaults. User rules have no special precedence.
 
 `PI_CODING_AGENT_DIR` remains supported for user state such as credentials,
 sessions, settings, skills, themes, and logs. It never changes the administrative
@@ -129,8 +134,8 @@ user's agent directory. `--no-skills` removes discovered skills, while explicit
 flag or user/group policy override. `/reload` refreshes contents and preferences;
 restart the application after changing the administrative root list.
 
-This optional field is part of schema 14, introduced in Pi Sandbox 0.12.0. Upgrade
-the application before adding it to policy; older binaries reject unknown fields.
+This optional field is supported by the current schema 15. Shared skills were
+introduced in Pi Sandbox 0.12.0 with schema 14; older binaries reject the field.
 
 ### File-backed Pi environment values
 
@@ -174,7 +179,7 @@ configure the appropriate filesystem exclusions where necessary.
 
 ### Home-directory and account expansion
 
-Schema 13 expands bare `~` and a leading `~/` in `filesystem.hidden_paths` and `filesystem.denied_paths`,
+The main configuration expands bare `~` and a leading `~/` in `filesystem.hidden_paths` and `filesystem.denied_paths`,
 every configured string value under `environment.pi`, `environment.sandbox`, and
 `environment.extensions.<id>`, and MCP stdio `env` values. These fields also
 accept `{{username}}` and `{{uid}}` anywhere in a string. For example,
@@ -224,10 +229,92 @@ do not support expansion. Installation validation checks syntax without looking
 up the installer's identity, resolving per-user credentials, or requiring hidden
 targets to exist. Operational startup validates expanded paths before masking.
 
+## Workspace modes
+
+Every operational launch selects one administrator-defined workspace mode. Use
+`--workspace-mode NAME` or `--workspace-mode=NAME`, after the optional leading
+`--config` and before Pi arguments. Without a selector, use the effective
+configured default. Pi's `--mode rpc` selects an interface and is unrelated.
+There is no implicit system mode, mode-less launch, personal saved preference,
+project-defined mode or live mode switch.
+
+```sh
+pi-sandbox --list-workspace-modes
+pi-sandbox --workspace-mode sandbox
+pi-sandbox --workspace-mode host --mode rpc
+```
+
+The required `[workspace]` table contains `default`, `allowed` and `modes`.
+Define 1–32 modes; names match `[a-z][a-z0-9_-]{0,31}`. The main allowed list is
+nonempty, distinct and limited to 32 defined names; its default must be allowed.
+Definitions outside that list may be granted by account rules. Names such as
+`host` and `sandbox` are examples, not built-in presets or backend selectors.
+
+Each mode may supply only:
+
+- `description`: optional nonblank single-line text, at most 256 UTF-8 bytes,
+  with no control/format characters or Unicode line/paragraph separators;
+- `filesystem.cwd_writable` and `exports.enabled`; and
+- complete `tools.bash`, `tools.write`, and `tools.edit` invocation entries.
+
+An empty mode inherits all common values. Present nested overlay tables must
+not be empty. Common CWD writability, exports and the three invocation entries
+may be omitted only if every mode supplies complete effective values. A present
+common exports table still requires `enabled`. All other required common fields
+remain required. Omitted optional fields keep their documented defaults.
+
+Tool replacement is atomic: every supplied entry requires `mode` and
+`session_grant`. For Bash, omitting `known_read_only` or `command_sets` removes
+the inherited exception from that mode. A mode can replace a common
+ask/deny/disabled policy with allow, but it cannot add tools or extensions.
+Audit, backend, networking, visibility exclusions, environment, models, MCP,
+Git destination and other extension settings remain outside mode overlays.
+
+Every authored entry is checked even if replaced by all modes. Each composed
+mode must then be complete and valid, including disallowed and unselected
+definitions. Individually valid common values need not form a launchable policy
+on their own if every composed mode resolves their cross-field conflicts.
+Current-platform checks run before broker access and in installation/backend
+validation. Only the selected final policy performs application-side account/macros,
+secret-file, CWD and executor checks. Errors identify the affected mode and
+configuration paths; an explicit selection cannot rescue an invalid definition
+or effective default.
+
+Linux [account rules](identity-broker.md#workspace-mode-selection) may replace
+allowed/default metadata. Matching explicit allowed arrays are unioned; distinct
+explicit defaults conflict. The effective default must remain allowed even with
+an explicit CLI selector. After selection, ordinary account overrides apply
+once and may change approvals or make CWD/export combinations invalid. They
+cannot change definitions, descriptions or audit choices.
+
+`--list-workspace-modes` prints only effective allowed modes and their literal
+descriptions, sorted by identifier, marking the effective default. It accepts
+only an optional leading `--config`; combining it with a mode selector, Pi args
+or another metadata/private operation is an error. Listing validates main policy
+and authenticated selection metadata but starts no model, MCP connection or
+executor and does not resolve main environment file references or operational
+CWD prerequisites. The existing broker still resolves its matching rule values.
+The operational root-user guard applies. Missing descriptions display only the
+name; descriptions are explanatory text, not permission guarantees.
+
+Fresh packaged policies have these choices, all with session grants set to never:
+
+| Backend    | Default host mode                                        | Optional sandbox mode                                      |
+| ---------- | -------------------------------------------------------- | ---------------------------------------------------------- |
+| Bubblewrap | Writable CWD, exports off, Bash/write/edit ask           | Read-only CWD, exports on, Bash/write/edit allow           |
+| Seatbelt   | Writable CWD, exports off, Bash disabled, write/edit ask | Read-only CWD, exports on, Bash disabled, write/edit allow |
+| Direct     | Writable CWD, exports off, Bash disabled, write/edit ask | Not defined                                                |
+
+Confined packages allow both names and default to host; direct allows only host.
+Administrators can author other valid policies. Modes do not copy projects or
+change the launch directory. Selection is fixed for the process, including
+conversation changes, executor recreation and managed children. A resumed
+conversation in a new process resolves current policy again.
+
 ## Complete example
 
 ```toml
-config_version = 14
+config_version = 15
 models_file = "/etc/pi-sandbox/models.json"
 
 [codemode]
@@ -269,50 +356,81 @@ mode = "none"
 allowed_hosts = ["github.com", "git.example.com"]
 allowed_schemes = ["https", "ssh"]
 
+[audit.tools]
+read = false
+grep = false
+find = false
+ls = false
+write = true
+edit = true
+bash = true
+git_clone = true
+
 [tools.read]
 mode = "allow"
 session_grant = "never"
-audit = false
 
 [tools.grep]
 mode = "allow"
 session_grant = "never"
-audit = false
 
 [tools.find]
 mode = "allow"
 session_grant = "never"
-audit = false
 
 [tools.ls]
 mode = "allow"
 session_grant = "never"
-audit = false
 
 [tools.write]
 mode = "ask"
 session_grant = "never"
-audit = true
 
 [tools.edit]
 mode = "ask"
 session_grant = "never"
-audit = true
 
 [tools.bash]
 mode = "ask"
 session_grant = "never"
-audit = true
 
 [tools.git_clone]
 mode = "ask"
 session_grant = "never"
-audit = true
 
+[workspace]
+default = "host"
+allowed = ["host", "sandbox"]
+
+[workspace.modes.host]
+description = "Work in the host project with approval for changes."
+
+[workspace.modes.sandbox]
+description = "Work in temporary storage and explicitly save deliverables."
+
+[workspace.modes.sandbox.filesystem]
+cwd_writable = false
+
+[workspace.modes.sandbox.exports]
+enabled = true
+
+[workspace.modes.sandbox.tools.bash]
+mode = "allow"
+session_grant = "never"
+
+[workspace.modes.sandbox.tools.write]
+mode = "allow"
+session_grant = "never"
+
+[workspace.modes.sandbox.tools.edit]
+mode = "allow"
+session_grant = "never"
 ```
 
-All seven built-in `[tools.<name>]` sections are required, as is one section for
-every tool contributed by every selected extension. No policy may be present
+Every composed mode requires all seven built-in invocation policies and one for
+every tool contributed by every selected extension. Bash/write/edit may be
+supplied by the mode rather than the common tools table. The common `audit.tools`
+map always covers that entire inventory. No policy may be present
 for an unselected extension tool. User `!` shell is not configurable: it always
 runs without an approval prompt through the selected backend. It is human-only
 and is never advertised to the model. Setting `[tools.bash]` to `disabled`
@@ -342,10 +460,12 @@ enabled = true
 max_concurrent = 4
 max_total = 32
 
+[audit.tools]
+subagents = true
+
 [tools.subagents]
 mode = "allow"
 session_grant = "never"
-audit = true
 ```
 
 `max_concurrent` accepts integers from 1 through 32; `max_total` accepts 1 through 1024. Their defaults are 4 and 32. Both apply across all children of one parent
@@ -358,10 +478,10 @@ at the concurrency limit. The total survives reloading or reopening the saved
 parent. A new parent session starts with its own allowance. These limits bound
 delegated tasks, not model turns or provider tokens within one task.
 
-When disabled, `[tools.subagents]` must be absent. Separate policies such as
+When disabled, `[tools.subagents]` and `audit.tools.subagents` must be absent. Separate policies such as
 `[tools.spawn_agent]` are rejected. User/group rules cannot enable subagents or
 replace their limits; they may override the single admitted `subagents` policy.
-Its `mode`, session-grant choice and `audit` flag apply to spawn, steer, cancel,
+Its `mode`, session-grant choice and common `audit.tools.subagents` flag apply to spawn, steer, cancel,
 resume and inspect together. Approval dialogs and audit events still name the
 actual operation. A management session grant covers all five operations; it
 does not grant the tools used inside a child. `disabled` removes all five tools,
@@ -378,7 +498,7 @@ for ordinary Pi and SDK hosts; managed Pi retains background completion and does
 not expose that option in administrative TOML.
 The standalone-only `forwardActivity` option also defaults off; managed Pi does
 not forward child activity or expose that option in administrative TOML.
-The optional table is additive within main schema 14; broker protocol/rules remain 10. Audit child provenance requires the paired application/collector update below.
+The optional table uses main schema 15; broker protocol/rules use version 11. Audit child provenance requires the paired application/collector update below.
 
 ## Code mode and MCP servers
 
@@ -545,7 +665,9 @@ configuration. Unknown fields and malformed dormant configurations are errors.
 
 ## Launch directory access
 
-Configuration schema 14 requires all three keys in `[filesystem]`:
+Every resolved mode requires these filesystem values. Common `hidden_paths` and
+`denied_paths` remain required; common `cwd_writable` may be omitted if every mode
+supplies it:
 
 ```toml
 [filesystem]
@@ -656,7 +778,7 @@ hidden directory.
 ### Denied directories (Seatbelt)
 
 Seatbelt is the macOS packaged default. Start with
-`config/default/config.seatbelt.toml`, or use these fields in a complete schema-14
+`config/default/config.seatbelt.toml`, or use these fields in a complete schema-15
 configuration:
 
 ```toml
@@ -672,7 +794,7 @@ hidden_paths = []
 denied_paths = ["~/.ssh"]
 ```
 
-`denied_paths` is required in every schema-14 configuration and must be empty
+`denied_paths` is required in every schema-15 configuration and must be empty
 for Bubblewrap and direct execution. Seatbelt requires empty `hidden_paths`.
 It accepts up to 63 unique normalized directory paths, with the same account
 macros and home expansion as hidden paths. Every expanded target must exist and
@@ -700,7 +822,7 @@ Managed host Git and MCP retain their separate host authority.
 
 ## Session retention
 
-Schema 9 requires an administrator-owned session policy in the main TOML:
+The main TOML requires an administrator-owned session policy:
 
 ```toml
 [sessions]
@@ -870,7 +992,7 @@ boundary; fatal worker/transport failure may abort the executor. Direct and
 Seatbelt cleanup is best effort. Seatbelt survivors retain their original grants
 after close or owner death; no watcher, helper or grant revocation is provided.
 
-The removed `process_lifetime` field is rejected by managed schema 14. There is
+The removed `process_lifetime` field is rejected by managed schema 15. There is
 one lifecycle contract rather than separate command and sandbox modes.
 
 ## Compiled extensions
@@ -1012,7 +1134,9 @@ Pi Sandbox registers one read-only diagnostic command:
 `/sandbox` reports whether the selected backend is initialized, its process
 lifetime, execution backend, launch directory, selected configuration path,
 effective selected model file, identity mode, effective network mode, CWD access,
-user-state directory, code-mode enablement, and MCP server count. `/sandbox mounts`
+user-state directory, code-mode enablement, and MCP server count. It also shows
+the selected workspace mode, CLI/default source, optional description and
+effective export state (disabled or enabled, TUI-only). `/sandbox mounts`
 reports Bubblewrap's semantic mount policy, Seatbelt's filesystem policy, or the
 absence of filesystem containment in direct mode. Seatbelt output covers denied
 directories, workspace access, real host scratch and cleanup limitations; it does
@@ -1024,12 +1148,14 @@ class policy adds its own row and detail; see
 [diagnostics](#known-read-only-diagnostics).
 
 The command uses the configuration and backend policy already admitted at
-startup, including the mount plan when Bubblewrap is selected. It does not rerun
+startup, including final account overrides and the mount plan when Bubblewrap is selected. It does not rerun
 a shell command, reread configuration, change policy, create grants, print model definitions, expand
 environment variables, or expose credentials. The diagnostic subject list is
 the exact configured model-tool set plus `user_shell`. Diagnostics distinguish
 sandbox, direct, and managed-host execution scopes and list the selected
-compiled extensions.
+compiled extensions. Mode selection adds no automatic startup output to TUI,
+print, JSON or RPC streams. The model's environment prompt describes actual
+CWD/home/scratch behavior without mode labels or descriptions.
 
 ## Optional extension preferences
 
@@ -1132,10 +1258,12 @@ An optional class policy lets model Bash commands that Pi Sandbox recognizes as
 read-only use a more permissive policy than other Bash commands:
 
 ```toml
+[audit.tools]
+bash = true
+
 [tools.bash]
 mode = "deny"
 session_grant = "never"
-audit = true
 
 [tools.bash.known_read_only]
 mode = "allow"
@@ -1159,13 +1287,14 @@ command with an unlisted option, is unclassified and uses the main policy.
 
 ### Class policy validation
 
-The table is an additive optional field of configuration schema 14. It accepts
+The table is an additive optional field of configuration schema 15. It accepts
 exactly `mode` (`allow`, `ask` or `deny`) and `session_grant` (`never` or
 `offer`). Availability remains tool-level: `disabled` is not a class mode, and
-`audit` stays on `[tools.bash]`. Each violation is reported in the ordinary
+Logging stays in common `audit.tools.bash`. Each violation is reported in the ordinary
 `Invalid pi-sandbox configuration in <path>:` list:
 
-1. The table is accepted only under `[tools.bash]`. Elsewhere it is
+1. The table is accepted only within a common or mode Bash invocation entry. In
+   common policy, other tool names report
    `config.tools.<tool>.known_read_only is not a recognized field`. A non-table
    value is `config.tools.bash.known_read_only must be a table`.
 2. Missing or extra fields report
@@ -1181,8 +1310,10 @@ exactly `mode` (`allow`, `ask` or `deny`) and `session_grant` (`never` or
 5. A class policy is not permitted under a disabled main policy:
    `config.tools.bash.known_read_only is not permitted when config.tools.bash.mode is "disabled"; availability is tool-level only`.
 6. Class `allow` requires `read`, `grep`, `find` and `ls` to be `allow`, one
-   issue per tool:
+   issue per tool for each composed mode, prefixed `workspace mode "<name>": `:
    `config.tools.bash.known_read_only.mode "allow" requires config.tools.<tool>.mode "allow" (it is "<mode>")`.
+   When the mode supplies Bash policy, its path is
+   `config.workspace.modes.<name>.tools.bash.known_read_only.mode`.
 
 Rule 4 exists because the model chooses the command text and can always move a
 command out of the class, for example by adding a variable or an unlisted
@@ -1478,10 +1609,12 @@ specific literal argument shapes. They are separate from the reviewed
 are suitable for automatic approval, not that the program is inherently read-only.
 
 ```toml
+[audit.tools]
+bash = true
+
 [tools.bash]
 mode = "ask"
 session_grant = "offer"
-audit = true
 
 [tools.bash.known_read_only]
 mode = "allow"
@@ -1569,7 +1702,7 @@ is limited to 256 stages; larger calls fall back to the main Bash policy.
 
 These definitions belong only to the main administrator configuration. User/group
 rules cannot define or replace them. A broker-selected Bash policy preserves the
-main definitions; `disabled` still removes Bash, while `deny` can have these
+selected mode's main-authored definitions; `disabled` still removes Bash, while `deny` can have these
 explicit allow exceptions. No custom-rule session grant is created. A call that
 does not qualify uses the ordinary Bash prompt and its ordinary session-grant
 scope. Restart after changing definitions.
@@ -1579,7 +1712,7 @@ audit records use `command_class = "configured_command"` and the matching
 `command_set_ids`; `known_read_only_version` still identifies the built-in registry,
 not a safety certification of custom utilities. Upgrade application and collector
 together for audit wire version 5 and record schema 6. The current main schema is
-14; broker protocol/rule version 10 is unchanged.
+15; broker protocol and rule version are 11.
 
 An administrator must review the executable's behavior, plugins, configuration,
 response-file syntax and environment dependencies. Configured value-taking options
@@ -1591,8 +1724,14 @@ network access enforced by the selected backend. See [security](security.md#admi
 
 ## Tool event logging
 
-The configuration requires an `[audit]` table with `enabled` and
-`facility`, and an `audit` boolean in every base `[tools.<name>]` policy.
+The configuration requires an `[audit]` table with `enabled`, `facility`, and
+an exhaustive `[audit.tools]` Boolean map. It contains exactly every configured
+named policy subject: seven built-ins, all tools of selected extensions, and
+`subagents` when admitted. Include disabled, CLI-excluded and user-hidden tools;
+exclude unselected extensions, the five individual subagent operations,
+`user_shell`, `codemode` and dynamic MCP tools. Missing, unknown or non-Boolean
+entries fail even with global audit disabled. Named invocation entries reject
+the old inline `audit` field. MCP keeps audit in its per-server policy rules.
 `facility` is one of `local0` through `local7`. The fixed syslog identifier is
 `pi-sandbox`. Packaged defaults disable the feature globally, select `local0`,
 and mark write, edit, and Bash tools for logging while leaving
@@ -1604,9 +1743,9 @@ It does not change tool visibility, approval, or execution authority. Session
 lifecycle events are emitted whenever logging is enabled, independently of the
 individual tool selections. Human `!` commands are excluded.
 
-These settings belong exclusively to the parent configuration. user/group rules
-cannot contain `[audit]` or tool-level `audit` fields. A combined override replaces
-its tool's invocation permissions while retaining the parent's logging choice.
+These settings belong exclusively to the common main configuration. Modes and
+user/group rules cannot change them. A combined override replaces its tool's
+invocation permissions while retaining the common logging choice.
 
 Logged fields identify the tool, execution boundary, permission decision,
 invocation, Pi session, and outcome. File tools include their resolved absolute
@@ -1626,7 +1765,12 @@ decision. Both fields appear together, only on those two Bash events, and are
 absent when neither a class policy nor command sets are configured.
 `configured_command` additionally carries a nonempty, bounded `command_set_ids`
 list identifying the matching administrator rules; other classes omit that list.
-The registry version does not certify custom utilities as read-only.
+The registry version does not certify custom utilities as read-only. Records do
+not name the selected workspace mode or policy revision. A command-set ID must
+have the same normalized definition everywhere in one main configuration,
+including unused common entries and disallowed modes; different definitions need
+different IDs. Historical interpretation still requires the applicable policy
+snapshot because IDs are not versioned across deployments.
 `approval_source` keeps its existing values; a class-scoped grant reports
 `session_grant`.
 
@@ -1644,14 +1788,15 @@ function record tool identity, permission decisions, and outcomes only.
 
 ## User-controlled saving of private files
 
-Configuration schema 14 requires this main-only section:
+Every composed mode requires an export policy. It may inherit this common table
+or supply `exports.enabled` in its main-authored mode definition:
 
 ```toml
 [exports]
 enabled = false
 ```
 
-Packaged policies keep it disabled. To enable `/sandbox save`, set `enabled = true`
+Packaged host modes keep it disabled; confined sandbox modes enable it. To enable `/sandbox save`, set `enabled = true`
 and `filesystem.cwd_writable = false` with Bubblewrap or Seatbelt. Startup rejects
 an incompatible base or effective broker policy; user/group rules cannot enable or
 change exports. This does not change tool invocation policy. Administrators may

@@ -20,7 +20,14 @@ import {
 import { buildLayout } from "../build-layout/index.js";
 import { DISPLAY_VERSION } from "../version.js";
 import { connectAuditClient, type AuditClient } from "../audit/client.js";
-import { loadConfig } from "../config/index.js";
+import {
+  loadConfig,
+  resolveWorkspaceAccess,
+  resolveWorkspaceSelection,
+  type AuthoredSandboxConfig,
+  type WorkspaceAccess,
+  type WorkspaceSelection,
+} from "../config/index.js";
 import type {
   AccountIdentity,
   AuthoredPiEnvironmentValue,
@@ -140,8 +147,38 @@ export function createManagedModelRuntimeFactory(modelsPath: string): ManagedMod
 async function loadAdministrativeConfig(
   root: string,
   configPath: string,
-): Promise<SandboxConfig<AuthoredPiEnvironmentValue>> {
+): Promise<AuthoredSandboxConfig<AuthoredPiEnvironmentValue>> {
   return loadConfig(pathUnderRoot(root, configPath), managedExtensionCatalog);
+}
+
+/** Validate every main-authored mode before identity resolution or installer work. */
+async function loadPlatformWorkspaceConfig(root: string, configPath: string) {
+  const authored = await loadAdministrativeConfig(root, configPath);
+  for (const mode of Object.values(authored.workspace.modes)) assertExecutionPlatform(mode.config);
+  const shared = authored.workspace.modes[authored.workspace.default]!.config;
+  return { authored, shared };
+}
+
+/** Listing resolves admission only, without model/environment/executor startup. */
+export async function listWorkspaceModes(
+  root = "/",
+  configPath = SYSTEM_CONFIG_PATH,
+  resolveIdentity?: BrokerIdentityResolver,
+): Promise<WorkspaceAccess> {
+  const { authored, shared } = await loadPlatformWorkspaceConfig(root, configPath);
+  const identity = await configureManagedIdentity(shared.identity, resolveIdentity);
+  return resolveWorkspaceAccess(authored, identity.overrides.workspace);
+}
+
+export function formatWorkspaceModes(access: WorkspaceAccess): string {
+  return (
+    access.allowed
+      .map(
+        (mode) =>
+          `${mode.name}${mode.name === access.default ? " (default)" : ""}${mode.description === undefined ? "" : ` — ${mode.description}`}`,
+      )
+      .join("\n") + "\n"
+  );
 }
 
 export function instantiateConfiguredManagedExtensions(
@@ -200,8 +237,7 @@ export async function validateAdministrativeConfiguration(
   configPath = SYSTEM_CONFIG_PATH,
   candidatePayload?: string,
 ): Promise<SandboxConfig<AuthoredPiEnvironmentValue>> {
-  const config = await loadAdministrativeConfig(root, configPath);
-  assertExecutionPlatform(config);
+  const { shared: config } = await loadPlatformWorkspaceConfig(root, configPath);
   if (candidatePayload !== undefined) {
     await validateCandidateSkillDirectories(
       config.skills.directories,
@@ -221,15 +257,21 @@ export async function resolveEffectiveAdministrativeConfiguration(
   configPath = SYSTEM_CONFIG_PATH,
   getAccountIdentity: () => AccountIdentity = readAccountIdentity,
   getMachineId: () => string = readMachineId,
+  requestedWorkspaceMode?: string,
 ): Promise<{
   readonly config: SandboxConfig;
   readonly modelsPath: string;
   readonly identityEnvironment: ManagedEnvironment;
   readonly accountHome?: string;
+  readonly workspaceSelection: WorkspaceSelection;
 }> {
-  const baseConfig = await loadAdministrativeConfig(root, configPath);
-  assertExecutionPlatform(baseConfig);
-  const identity = await configureManagedIdentity(baseConfig.identity, resolveIdentity);
+  const { authored, shared } = await loadPlatformWorkspaceConfig(root, configPath);
+  const identity = await configureManagedIdentity(shared.identity, resolveIdentity);
+  const { config: baseConfig, selection: workspaceSelection } = resolveWorkspaceSelection(
+    authored,
+    identity.overrides.workspace,
+    requestedWorkspaceMode,
+  );
   const combinedEnvironment = overlayManagedEnvironment(
     baseConfig.environment,
     identity.environment,
@@ -261,6 +303,7 @@ export async function resolveEffectiveAdministrativeConfiguration(
       config,
       modelsPath,
       identityEnvironment: effectiveEnvironment,
+      workspaceSelection,
       ...(accountHome === undefined ? {} : { accountHome }),
     };
   } finally {
@@ -545,7 +588,12 @@ function parseBackendQueryRoot(args: readonly string[]): string | undefined {
   throw new Error("usage: pi-sandbox --print-execution-backend [--root DESTDIR]");
 }
 
-export async function runPiSandbox({ piArgs: args, configPath }: SandboxArguments): Promise<void> {
+export async function runPiSandbox({
+  piArgs: args,
+  configPath,
+  workspaceMode,
+  listWorkspaceModes: listModes,
+}: SandboxArguments): Promise<void> {
   // Supervisors probe the worker before selecting its workspace. Metadata needs no authority.
   if (args.length === 1 && args[0] === "--version") {
     process.stdout.write(`${DISPLAY_VERSION}\n`);
@@ -566,11 +614,15 @@ export async function runPiSandbox({ piArgs: args, configPath }: SandboxArgument
     process.stdout.write(`${config.execution.backend}\n`);
     return;
   }
+  if (listModes === true) {
+    process.stdout.write(formatWorkspaceModes(await listWorkspaceModes("/", configPath)));
+    return;
+  }
 
   const ambientHostEnvironment = { ...process.env };
   const getAccountIdentity = createAccountIdentityResolver();
   const getMachineId = createMachineIdResolver();
-  const { config, modelsPath, identityEnvironment, accountHome } =
+  const { config, modelsPath, identityEnvironment, accountHome, workspaceSelection } =
     await resolveEffectiveAdministrativeConfiguration(
       "/",
       process.env,
@@ -578,6 +630,7 @@ export async function runPiSandbox({ piArgs: args, configPath }: SandboxArgument
       configPath,
       getAccountIdentity,
       getMachineId,
+      workspaceMode,
     );
   const optionalIds = new Set([
     "subagents",
@@ -686,6 +739,7 @@ export async function runPiSandbox({ piArgs: args, configPath }: SandboxArgument
         },
         cwd,
         configPath,
+        workspaceSelection,
         userStateDir,
         getModelRuntime: () => {
           if (activeModelRuntime === undefined)
@@ -712,6 +766,9 @@ export async function runPiSandbox({ piArgs: args, configPath }: SandboxArgument
       });
       const managedMain = piMain as unknown as ManagedMain;
       if (args[0] === "--help" || args[0] === "-h") {
+        process.stdout.write(
+          `Pi Sandbox: --workspace-mode NAME selects an allowed workspace mode before Pi arguments (selected: ${workspaceSelection.name}).\nWithout a selector, the configured account default is used. Use --list-workspace-modes for available choices and descriptions. File exports are available only in the terminal UI when enabled by policy.\n\n`,
+        );
         process.stdout.write(
           "Pi Sandbox: --disable-extension ID / --enable-extension ID override optional extension preferences for this process.\nUse /extensions to change saved preferences.\n\n",
         );

@@ -141,6 +141,7 @@ describe.skipIf(!REAL_BWRAP_AVAILABLE)(
       await createPiSandboxExtension({
         cwd: workspace,
         configPath: "/etc/pi-sandbox/config.toml",
+        workspaceSelection: { name: "host", source: "default" },
         userStateDir: "/home/test/.pi/agent",
         loadConfig: () => Promise.resolve(allowAllConfig()),
         executor,
@@ -284,6 +285,7 @@ describe.skipIf(!REAL_BWRAP_AVAILABLE).each(["/var/tmp", "/tmp"])(
       await createPiSandboxExtension({
         cwd: workspace,
         configPath: "/etc/pi-sandbox/config.toml",
+        workspaceSelection: { name: "host", source: "default" },
         userStateDir: "/home/test/.pi/agent",
         loadConfig: () =>
           Promise.resolve({
@@ -438,6 +440,7 @@ describe.skipIf(!REAL_BWRAP_AVAILABLE)(
       await createPiSandboxExtension({
         cwd: workspace,
         configPath: "/etc/pi-sandbox/config.toml",
+        workspaceSelection: { name: "host", source: "default" },
         userStateDir: "/home/test/.pi/agent",
         loadConfig: () => Promise.resolve(config),
         executor,
@@ -747,7 +750,7 @@ function nonInteractiveContext(): ExtensionContext {
 function allowAllConfig(): SandboxConfig {
   const allow = { audit: false, mode: "allow", sessionGrant: "never" } as const;
   return {
-    configVersion: 14,
+    configVersion: 15,
     skills: { directories: [] },
     exports: { enabled: false },
     codemode: { enabled: false, timeoutMs: 300000 },

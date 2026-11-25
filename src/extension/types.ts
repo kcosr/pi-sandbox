@@ -10,6 +10,7 @@ import type { ExportAudit } from "../exports/contracts.js";
 import type { ExtensionCommandContext, ModelRuntime } from "@earendil-works/pi-coding-agent";
 import type { AuditClient } from "../audit/client.js";
 import type { BashCommandAnalyzer } from "../permissions/bash/contracts.js";
+import type { WorkspaceSelection } from "../config/index.js";
 
 export interface ExtensionDependencies {
   readonly features?: {
@@ -20,6 +21,7 @@ export interface ExtensionDependencies {
   };
   readonly cwd: string;
   readonly configPath: string;
+  readonly workspaceSelection: WorkspaceSelection;
   readonly userStateDir: string;
   readonly getModelRuntime?: () => ModelRuntime;
   readonly toolArguments?: readonly string[];

@@ -10,7 +10,8 @@ import { setTimeout as delay } from "node:timers/promises";
 import { parse as parseToml, stringify as stringifyToml } from "@iarna/toml";
 import { testParallelTools } from "./parallel-tools-smoke.mjs";
 
-const toolPolicy = (mode) => ({ mode, session_grant: "never", audit: false });
+const toolPolicy = (mode) => ({ mode, session_grant: "never" });
+const mcpPolicy = (mode) => ({ ...toolPolicy(mode), audit: false });
 const schema = { type: "object", properties: {}, additionalProperties: true };
 const httpTools = ["search_allowed", "mutate_record", "delete_record", "hidden_secret"].map(
   (name) => ({
@@ -270,12 +271,12 @@ export async function testManagedMcpCodemode({
           url: `http://127.0.0.1:${port}${httpPath}`,
           exposure: "direct",
           headers_from_env: { Authorization: "DOCS_AUTHORIZATION" },
-          default_policy: toolPolicy("disabled"),
+          default_policy: mcpPolicy("disabled"),
           tool_rules: [
-            { match: "search_allowed", ...toolPolicy("allow") },
-            { match: "search_*", ...toolPolicy("deny") },
-            { match: "mutate_*", ...toolPolicy("ask") },
-            { match: "delete_*", ...toolPolicy("deny") },
+            { match: "search_allowed", ...mcpPolicy("allow") },
+            { match: "search_*", ...mcpPolicy("deny") },
+            { match: "mutate_*", ...mcpPolicy("ask") },
+            { match: "delete_*", ...mcpPolicy("deny") },
           ],
         },
         local: {
@@ -286,7 +287,7 @@ export async function testManagedMcpCodemode({
           exposure: "codemode",
           env: { PID_LOG: pidLog, ACCOUNT_TAG: "{{username}}/{{uid}}" },
           env_from_env: { SERVICE_TOKEN: "LOCAL_TOKEN" },
-          default_policy: toolPolicy("allow"),
+          default_policy: mcpPolicy("allow"),
         },
       },
     };

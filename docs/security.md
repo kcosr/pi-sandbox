@@ -226,8 +226,9 @@ change the compiled extension catalog, root runtime check, or Bubblewrap binary.
 Service sockets and service-owned configuration remain build-selected. In broker mode, optional root-only rules in
 `config_dir/users.d/*.toml` and `config_dir/groups.d/*.toml` may provide matching account/group scoped-environment
 and administrator-selected model/execution/network/filesystem/tool patch, plus
-MCP server enablement and tool approval policies. If no rules
-match, the main configuration remains unchanged. Pi's
+MCP server enablement, workspace allowed/default choices and tool approval policies.
+If no rules match, main selection metadata and the selected mode's policy remain
+unchanged. Pi's
 internal model catalog is disabled. `PI_CODING_AGENT_DIR` may
 redirect user state but cannot redirect these administrative inputs. Missing,
 unreadable, or invalid effective inputs abort operational startup. An exact
@@ -239,12 +240,31 @@ Every rule is structurally validated, including unmatched files. The broker does
 not read the main server inventory; the application checks server existence only
 for the combined matching patch.
 
-The base TOML remains the default tool policy. Matching user/group rules combine
+The selected main-authored mode supplies the default tool policy. Matching user/group rules combine
 explicit permissions using least restrictive wins before replacing defaults.
 A restrictive rule cannot revoke a grant from another matching rule; user rules
 have no special precedence. Conflicting backend, model, or scoped environment
 values fail startup. Environment values do not select extensions,
 enable tools, grant approvals, or otherwise change policy.
+
+Every launch resolves a required named workspace mode; there is no mode-less
+fallback or personal/project mode definition. A mode changes only CWD
+writability, exports and complete Bash/write/edit invocation policy. It cannot
+change backend, networking, visibility exclusions, models, MCP, Git authority
+or common audit choices. Mode names/descriptions are display metadata, not
+security assertions. An allowed mode may relax common invocation defaults, and
+ordinary account overrides apply afterward, so the final policy controls access.
+
+Main schema 15 validates every authored entry and every composed mode, even
+disallowed definitions, within a bounded 1 MiB source. Current-platform guards
+run before broker access and during installation/backend validation, then again
+after account overrides. Actual account/path/CWD/executor checks apply to the
+selected final policy. Invalid effective defaults fail even with an explicit
+mode choice. Matching explicit allowed lists union; one restrictive account
+rule cannot revoke another matching grant. Conflicting explicit defaults fail.
+Listings disclose only effective selectable names/descriptions, not other
+inventory or account rules. Selection remains fixed throughout a process and
+its children, including conversation changes and executor recreation.
 
 The following conditions deny the operation or abort startup rather than use a
 host fallback:
@@ -254,7 +274,7 @@ host fallback:
 - administrative configuration or the selected model catalog is missing or
   invalid;
 - the broker is unavailable, any user/group drop-in is structurally invalid, or
-  a matching override refers to an unavailable tool or unknown MCP server;
+  a matching override refers to an unavailable tool, workspace mode or MCP server;
 - an unsafe managed-executable argument is supplied;
 - the selected command process cannot start or report a coherent result;
 - a required model-tool approval cannot be obtained;
@@ -409,7 +429,7 @@ in Bubblewrap; Seatbelt uses writable real host scratch directories.
 ## Audit correlation
 
 The application and collector use strict audit wire version 5; the collector emits
-record schema version 6 and requires configuration version 14. They must be
+record schema version 6 and requires configuration version 15. They must be
 installed from the same release. MCP records carry the configured server ID,
 original tool name, and `http` or `stdio` transport. Nested audited calls carry
 `parent_invocation_id` from trusted execution context, never from script arguments.
@@ -428,6 +448,15 @@ the classification used for policy, not the command's actual effects. Custom-rul
 decisions use `configured_command` with a nonempty, bounded list of matching
 `command_set_ids`, never the `known_read_only` label. Other classes cannot carry
 those IDs. The registry version continues to describe only the built-in profiles.
+
+Named-tool audit choices are exhaustive in common `audit.tools` and cannot be
+changed by modes or account rules. The collector validates that map structurally;
+the application checks exact configured-subject coverage even with auditing
+disabled. MCP audit remains server-rule-specific. Records do not carry the
+selected workspace mode or policy revision. Command-set IDs reused across common
+and mode entries must have identical normalized definitions within one snapshot,
+including overwritten/disallowed entries. IDs are not versioned across policy
+changes, so retained policy snapshots remain necessary for historical evidence.
 
 When global auditing is enabled, code mode records outer lifecycle metadata
 without script source; nested built-in and MCP tools follow their own audit

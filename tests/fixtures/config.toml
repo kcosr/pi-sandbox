@@ -1,4 +1,4 @@
-config_version = 14
+config_version = 15
 models_file = "/etc/pi-sandbox/models.json"
 
 [codemode]
@@ -41,34 +41,42 @@ mode = "none"
 [tools.read]
 mode = "allow"
 session_grant = "never"
-audit = false
 
 [tools.grep]
 mode = "allow"
 session_grant = "never"
-audit = false
 
 [tools.find]
 mode = "allow"
 session_grant = "never"
-audit = false
 
 [tools.ls]
 mode = "allow"
 session_grant = "never"
-audit = false
 
 [tools.write]
 mode = "ask"
 session_grant = "never"
-audit = true
 
 [tools.edit]
 mode = "ask"
 session_grant = "never"
-audit = true
 
 [tools.bash]
 mode = "ask"
 session_grant = "never"
-audit = true
+
+[audit.tools]
+read = false
+grep = false
+find = false
+ls = false
+write = true
+edit = true
+bash = true
+
+[workspace]
+default = "host"
+allowed = ["host"]
+
+[workspace.modes.host]

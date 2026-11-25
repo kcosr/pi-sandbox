@@ -30,10 +30,216 @@ import {
   resolveEffectiveAdministrativeConfiguration,
   resolveManagedExtensionHostEnvironments,
   validateAdministrativeConfiguration,
+  listWorkspaceModes,
+  formatWorkspaceModes,
 } from "./main.js";
 
 const temporaryDirectories: string[] = [];
 const originalPlatform = Object.getOwnPropertyDescriptor(process, "platform")!;
+
+async function addWorkspaceChoices(root: string, broker = false) {
+  const configPath = rooted(root, SYSTEM_CONFIG_PATH);
+  let source = (await readFile(configPath, "utf8"))
+    .replace('allowed = ["host"]', 'allowed = ["host", "sandbox"]')
+    .replace(
+      "[workspace.modes.host]",
+      '[workspace.modes.host]\ndescription = "Edit the host project."',
+    );
+  if (broker)
+    source = source.replace('[identity]\nmode = "disabled"', '[identity]\nmode = "broker"');
+  source += `
+[workspace.modes.sandbox]
+description = "Use temporary files and save deliverables."
+[workspace.modes.sandbox.filesystem]
+cwd_writable = false
+[workspace.modes.sandbox.exports]
+enabled = true
+[workspace.modes.sandbox.tools.bash]
+mode = "allow"
+session_grant = "never"
+[workspace.modes.sandbox.tools.write]
+mode = "allow"
+session_grant = "never"
+[workspace.modes.sandbox.tools.edit]
+mode = "allow"
+session_grant = "never"
+`;
+  await writeFile(configPath, source);
+  return configPath;
+}
+
+describe("workspace mode startup", () => {
+  const environment = { pi: {}, sandbox: {}, extensions: {} };
+
+  it("selects a composed mode before applying account tool policy", async () => {
+    const root = await createRoot();
+    await addWorkspaceChoices(root, true);
+    await writeFile(rooted(root, "/etc/pi-sandbox/models.json"), '{"providers":{}}');
+    const resolve = () =>
+      Promise.resolve({
+        environment,
+        overrides: {
+          workspace: { allowed: ["sandbox"], default: "sandbox" },
+          tools: { write: { mode: "ask", sessionGrant: "never" } },
+        } satisfies IdentityOverrides,
+      });
+    const result = await resolveEffectiveAdministrativeConfiguration(root, {}, resolve);
+    expect(result.workspaceSelection).toEqual({
+      name: "sandbox",
+      source: "default",
+      description: "Use temporary files and save deliverables.",
+    });
+    expect(result.config.filesystem.cwdWritable).toBe(false);
+    expect(result.config.exports.enabled).toBe(true);
+    expect(result.config.tools.write).toEqual({ mode: "ask", sessionGrant: "never", audit: true });
+    expect(result.config.tools.bash!.mode).toBe("allow");
+    const explicit = await resolveEffectiveAdministrativeConfiguration(
+      root,
+      {},
+      resolve,
+      SYSTEM_CONFIG_PATH,
+      undefined,
+      undefined,
+      "sandbox",
+    );
+    expect(explicit.workspaceSelection.source).toBe("cli");
+    await expect(
+      resolveEffectiveAdministrativeConfiguration(
+        root,
+        {},
+        resolve,
+        SYSTEM_CONFIG_PATH,
+        undefined,
+        undefined,
+        "host",
+      ),
+    ).rejects.toThrow("Allowed modes: sandbox");
+  });
+
+  it("fails final policy when an account makes an exporting mode writable", async () => {
+    const root = await createRoot();
+    await addWorkspaceChoices(root, true);
+    await expect(
+      resolveEffectiveAdministrativeConfiguration(root, {}, () =>
+        Promise.resolve({
+          environment,
+          overrides: {
+            workspace: { default: "sandbox" },
+            filesystem: { cwdWritable: true },
+            tools: {},
+          },
+        }),
+      ),
+    ).rejects.toThrow("exports");
+  });
+
+  it("lists only admitted descriptions without models or main secret-file resolution", async () => {
+    const root = await createRoot();
+    const configPath = await addWorkspaceChoices(root, true);
+    await writeFile(
+      configPath,
+      (await readFile(configPath, "utf8")).replace(
+        "[environment.pi]",
+        '[environment.pi]\nMISSING = { file = "/nonexistent/workspace-list-secret" }',
+      ),
+    );
+    const access = await listWorkspaceModes(root, SYSTEM_CONFIG_PATH, () =>
+      Promise.resolve({
+        environment,
+        overrides: {
+          workspace: { allowed: ["sandbox"], default: "sandbox" },
+          tools: {},
+        },
+      }),
+    );
+    expect(formatWorkspaceModes(access)).toBe(
+      "sandbox (default) — Use temporary files and save deliverables.\n",
+    );
+    expect(formatWorkspaceModes({ default: "host", allowed: [{ name: "host" }] })).toBe(
+      "host (default)\n",
+    );
+    await expect(
+      listWorkspaceModes(root, SYSTEM_CONFIG_PATH, () =>
+        Promise.resolve({
+          environment,
+          overrides: {
+            workspace: { allowed: [] },
+            tools: {},
+          },
+        }),
+      ),
+    ).rejects.toThrow("No workspace mode is selectable");
+  });
+
+  it("runs listing as a CLI action without opening the missing model catalog", async () => {
+    const root = await createRoot();
+    const configPath = await addWorkspaceChoices(root);
+    const output = vi.spyOn(process.stdout, "write").mockReturnValue(true);
+    try {
+      await runPiSandbox(
+        parseSandboxArguments(["--config", configPath, "--list-workspace-modes"], {
+          configPath,
+          allowConfigOverride: true,
+        }),
+      );
+      expect(output).toHaveBeenCalledWith(
+        "host (default) — Edit the host project.\nsandbox — Use temporary files and save deliverables.\n",
+      );
+    } finally {
+      output.mockRestore();
+    }
+  });
+
+  it("rejects wrong-platform main policy before broker IPC in startup, listing and validation", async () => {
+    const root = await createRoot(undefined, "darwin");
+    const configPath = await addWorkspaceChoices(root, true);
+    const source = (await readFile(configPath, "utf8")).replace(
+      'backend = "bubblewrap"',
+      'backend = "seatbelt"',
+    );
+    await writeFile(configPath, source);
+    const broker = vi.fn();
+    await expect(resolveEffectiveAdministrativeConfiguration(root, {}, broker)).rejects.toThrow(
+      "macOS requires identity.mode = disabled",
+    );
+    await expect(listWorkspaceModes(root, SYSTEM_CONFIG_PATH, broker)).rejects.toThrow(
+      "macOS requires identity.mode = disabled",
+    );
+    await expect(validateAdministrativeConfiguration(root)).rejects.toThrow(
+      "macOS requires identity.mode = disabled",
+    );
+    expect(broker).not.toHaveBeenCalled();
+  });
+
+  it("validates unselected modes during installation and backend queries", async () => {
+    const root = await createRoot();
+    const configPath = await addWorkspaceChoices(root);
+    await writeFile(rooted(root, "/etc/pi-sandbox/models.json"), '{"providers":{}}');
+    const query = {
+      configPath: SYSTEM_CONFIG_PATH,
+      piArgs: ["--print-execution-backend", "--root", root],
+    };
+    expect((await validateAdministrativeConfiguration(root)).filesystem.cwdWritable).toBe(true);
+    const output = vi.spyOn(process.stdout, "write").mockReturnValue(true);
+    try {
+      await runPiSandbox(query);
+      expect(output).toHaveBeenCalledWith("bubblewrap\n");
+    } finally {
+      output.mockRestore();
+    }
+    await writeFile(
+      configPath,
+      (await readFile(configPath, "utf8")).replace(
+        "[workspace.modes.sandbox.filesystem]\ncwd_writable = false",
+        "[workspace.modes.sandbox.filesystem]\ncwd_writable = true",
+      ),
+    );
+    await expect(validateAdministrativeConfiguration(root)).rejects.toThrow(
+      'workspace mode "sandbox"',
+    );
+    await expect(runPiSandbox(query)).rejects.toThrow('workspace mode "sandbox"');
+  });
+});
 
 afterEach(async () => {
   Object.defineProperty(process, "platform", originalPlatform);
@@ -132,7 +338,7 @@ describe("administrative configuration", () => {
 
   it("enforces the execution backend's platform contract", () => {
     const config = {
-      configVersion: 14,
+      configVersion: 15,
       skills: { directories: [] },
       exports: { enabled: false },
       codemode: { enabled: false, timeoutMs: 300000 },
@@ -378,7 +584,7 @@ describe("administrative configuration", () => {
     ]);
     const allow = { audit: false, mode: "allow", sessionGrant: "never" } as const;
     const config = {
-      configVersion: 14,
+      configVersion: 15,
       skills: { directories: [] },
       exports: { enabled: false },
       codemode: { enabled: false, timeoutMs: 300000 },
@@ -617,7 +823,7 @@ describe("administrative configuration", () => {
     await writeFile(rooted(root, "/etc/pi-sandbox/models.json"), '{"providers":{}}');
     // The fixture selects Linux, where resolving this macro would fail.
     const config = await validateAdministrativeConfiguration(root);
-    expect(config.configVersion).toBe(14);
+    expect(config.configVersion).toBe(15);
     expect(config.filesystem.hiddenPaths).toEqual(["/srv/{{machine_id}}"]);
     expect(config.environment.pi.PI_MACHINE_ID).toBe("{{machine_id}}");
   });
@@ -1043,7 +1249,7 @@ default_policy = { mode = "ask", session_grant = "never", audit = true }`,
     );
     const broker = parseBrokerResponse(
       JSON.stringify({
-        version: 10,
+        version: 11,
         status: "ok",
         environment: { pi: { DOCS_TOKEN: "scoped-token" }, sandbox: {}, extensions: {} },
         overrides: { mcp: { servers: { docs: { enabled: true }, local: { enabled: false } } } },
@@ -1395,7 +1601,7 @@ describe("effective file-backed Pi environment", () => {
     const caller = { TOKEN: "ambient", KEEP: "unchanged" };
     const broker = parseBrokerResponse(
       JSON.stringify({
-        version: 10,
+        version: 11,
         status: "ok",
         environment: { pi: { TOKEN: { literal } }, sandbox: {}, extensions: {} },
         overrides: {},

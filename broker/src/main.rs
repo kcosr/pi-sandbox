@@ -16,13 +16,14 @@ use host_identity::{Account, HostIdentityResolver};
 use serde::de::{MapAccess, Visitor};
 use serde::{Deserialize, Deserializer, Serialize};
 
-const PROTOCOL_VERSION: u32 = 10;
-const OVERRIDE_VERSION: u32 = 10;
+const PROTOCOL_VERSION: u32 = 11;
+const OVERRIDE_VERSION: u32 = 11;
 const MAX_OVERRIDE_FILES: usize = 256;
 const MAX_STORE_BYTES: usize = 4 * 1024 * 1024;
 const MAX_REQUEST_BYTES: usize = 1024;
 const MAX_OVERRIDE_FILE_BYTES: u64 = 1024 * 1024;
 const MAX_TOOL_OVERRIDES: usize = 256;
+const MAX_WORKSPACE_MODES: usize = 32;
 const MAX_MCP_SERVER_OVERRIDES: usize = 32;
 const MAX_MCP_POLICY_LAYERS: usize = 256;
 const MAX_MCP_RULES_PER_SERVER: usize = 256;
@@ -260,6 +261,8 @@ impl<'de> Deserialize<'de> for ExtensionEnvironments {
 #[serde(deny_unknown_fields)]
 struct IdentityOverrides<M = McpOverrides> {
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    workspace: Option<WorkspaceOverrides>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     models_file: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     execution: Option<ExecutionOverrides>,
@@ -271,6 +274,16 @@ struct IdentityOverrides<M = McpOverrides> {
     mcp: Option<M>,
     #[serde(default, skip_serializing_if = "ToolOverrides::is_empty")]
     tools: ToolOverrides,
+}
+
+#[derive(Debug, Default, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+struct WorkspaceOverrides {
+    // Keep authored arrays intact until structural validation rejects duplicates.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    allowed: Option<Vec<String>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    default: Option<String>,
 }
 
 #[derive(Debug, Default, Deserialize, Serialize, PartialEq, Eq)]
@@ -1075,6 +1088,18 @@ fn merge_record(
     }
     let old = &mut target.overrides;
     let new = incoming.overrides;
+    if let Some(workspace) = new.workspace {
+        let current = old
+            .workspace
+            .get_or_insert_with(WorkspaceOverrides::default);
+        merge_equal(&mut current.default, workspace.default)?;
+        if let Some(allowed) = workspace.allowed {
+            let combined = current.allowed.get_or_insert_with(Vec::new);
+            combined.extend(allowed);
+            combined.sort_unstable();
+            combined.dedup();
+        }
+    }
     merge_equal(&mut old.models_file, new.models_file)?;
     if let Some(execution) = new.execution {
         let current = old
@@ -1213,6 +1238,10 @@ fn valid_overrides<M: ValidMcpOverrides>(overrides: &IdentityOverrides<M>) -> bo
             .as_ref()
             .is_none_or(|execution| execution.backend.is_some())
         && overrides.mcp.as_ref().is_none_or(ValidMcpOverrides::valid)
+        && overrides
+            .workspace
+            .as_ref()
+            .is_none_or(valid_workspace_overrides)
         && overrides.tools.len() <= MAX_TOOL_OVERRIDES
         && overrides.tools.iter().all(|(name, policy)| {
             valid_tool_name(name)
@@ -1223,6 +1252,27 @@ fn valid_overrides<M: ValidMcpOverrides>(overrides: &IdentityOverrides<M>) -> bo
                         && (class.session_grant == SessionGrantPolicy::Never
                             || class.mode == ClassMode::Ask)
                 })
+        })
+}
+
+fn valid_workspace_id(value: &str) -> bool {
+    !value.is_empty()
+        && value.len() <= 32
+        && value.as_bytes()[0].is_ascii_lowercase()
+        && value.bytes().all(|byte| {
+            byte.is_ascii_lowercase() || byte.is_ascii_digit() || byte == b'_' || byte == b'-'
+        })
+}
+
+fn valid_workspace_overrides(workspace: &WorkspaceOverrides) -> bool {
+    (workspace.allowed.is_some() || workspace.default.is_some())
+        && workspace.default.as_deref().is_none_or(valid_workspace_id)
+        && workspace.allowed.as_ref().is_none_or(|allowed| {
+            let mut seen = BTreeSet::new();
+            allowed.len() <= MAX_WORKSPACE_MODES
+                && allowed
+                    .iter()
+                    .all(|name| valid_workspace_id(name) && seen.insert(name))
         })
 }
 
@@ -1520,7 +1570,7 @@ mod tests {
     #[test]
     fn parses_a_strict_per_uid_override() {
         let source = br#"
-version = 10
+version = 11
 uid = 1000
 
 comment = "development account"
@@ -1614,7 +1664,7 @@ session_grant = "offer"
                     (RecordKind::Group, "group = \"admin\""),
                 ] {
                     let source = format!(
-                        "version = 10\n{selector}\n{}",
+                        "version = 11\n{selector}\n{}",
                         bash_rule(*main, Some(*class))
                     );
                     let parsed = parse_record(source.as_bytes(), kind);
@@ -1641,7 +1691,7 @@ session_grant = "offer"
             }
         }
         let inline = parse_user_for_test(
-            b"version = 10\nuid = 7\n[overrides.tools.bash]\nmode = \"deny\"\nsession_grant = \"never\"\nknown_read_only = { mode = \"allow\", session_grant = \"never\" }\n",
+            b"version = 11\nuid = 7\n[overrides.tools.bash]\nmode = \"deny\"\nsession_grant = \"never\"\nknown_read_only = { mode = \"allow\", session_grant = \"never\" }\n",
             7,
         )
         .unwrap();
@@ -1651,7 +1701,7 @@ session_grant = "offer"
         );
         let without = parse_user_for_test(
             format!(
-                "version = 10\nuid = 7\n{}",
+                "version = 11\nuid = 7\n{}",
                 bash_rule(("deny", "never"), None)
             )
             .as_bytes(),
@@ -1670,7 +1720,7 @@ session_grant = "offer"
             "[overrides.tools.{tool}.known_read_only]\nmode = \"allow\"\nsession_grant = \"never\"";
         for tool in ["read", "write", "git_clone", "bash_extra"] {
             let source = format!(
-                "version = 10\nuid = 7\n[overrides.tools.{tool}]\nmode = \"deny\"\nsession_grant = \"never\"\n{}\n",
+                "version = 11\nuid = 7\n[overrides.tools.{tool}]\nmode = \"deny\"\nsession_grant = \"never\"\n{}\n",
                 class.replace("{tool}", tool)
             );
             assert_eq!(
@@ -1685,7 +1735,7 @@ session_grant = "offer"
             "overrides.tools.bash.known_read_only.nested",
         ] {
             let source = format!(
-                "version = 10\nuid = 7\n[overrides.tools.bash]\nmode = \"deny\"\nsession_grant = \"never\"\n[{table}]\nmode = \"allow\"\nsession_grant = \"never\"\n"
+                "version = 11\nuid = 7\n[overrides.tools.bash]\nmode = \"deny\"\nsession_grant = \"never\"\n[{table}]\nmode = \"allow\"\nsession_grant = \"never\"\n"
             );
             assert_eq!(
                 parse_user_for_test(source.as_bytes(), 7),
@@ -1706,7 +1756,7 @@ session_grant = "offer"
             "mode = \"allow\"\nsession_grant = \"never\"\nversion = 1",
         ] {
             let source = format!(
-                "version = 10\nuid = 7\n[overrides.tools.bash]\nmode = \"deny\"\nsession_grant = \"never\"\n[overrides.tools.bash.known_read_only]\n{fields}\n"
+                "version = 11\nuid = 7\n[overrides.tools.bash]\nmode = \"deny\"\nsession_grant = \"never\"\n[overrides.tools.bash.known_read_only]\n{fields}\n"
             );
             assert_eq!(
                 parse_user_for_test(source.as_bytes(), 7),
@@ -1716,7 +1766,7 @@ session_grant = "offer"
         }
         for value in ["\"allow\"", "true", "[]"] {
             let source = format!(
-                "version = 10\nuid = 7\n[overrides.tools.bash]\nmode = \"deny\"\nsession_grant = \"never\"\nknown_read_only = {value}\n"
+                "version = 11\nuid = 7\n[overrides.tools.bash]\nmode = \"deny\"\nsession_grant = \"never\"\nknown_read_only = {value}\n"
             );
             assert_eq!(
                 parse_user_for_test(source.as_bytes(), 7),
@@ -1924,7 +1974,7 @@ session_grant = "offer"
         fs::write(
             &file,
             format!(
-                "version = 10\nuid = {uid}\n{}",
+                "version = 11\nuid = {uid}\n{}",
                 bash_rule(("deny", "never"), Some(("ask", "offer")))
             ),
         )
@@ -1933,7 +1983,7 @@ session_grant = "offer"
         let (mut client, mut server_input) = UnixStream::pair().expect("socket pair");
         let mut server_output = server_input.try_clone().expect("clone server socket");
         client
-            .write_all(b"{\"version\":10,\"operation\":\"resolve-identity\"}\n")
+            .write_all(b"{\"version\":11,\"operation\":\"resolve-identity\"}\n")
             .expect("write request");
         let server_fd = server_input.as_raw_fd();
         serve_one(&root, &mut server_input, &mut server_output, server_fd, uid)
@@ -1946,7 +1996,7 @@ session_grant = "offer"
         fs::remove_dir_all(root).unwrap();
         assert_eq!(
             response,
-            "{\"version\":10,\"status\":\"ok\",\"environment\":{\"pi\":{},\"sandbox\":{},\"extensions\":{}},\"overrides\":{\"tools\":{\"bash\":{\"mode\":\"deny\",\"session_grant\":\"never\",\"known_read_only\":{\"mode\":\"ask\",\"session_grant\":\"offer\"}}}}}\n"
+            "{\"version\":11,\"status\":\"ok\",\"environment\":{\"pi\":{},\"sandbox\":{},\"extensions\":{}},\"overrides\":{\"tools\":{\"bash\":{\"mode\":\"deny\",\"session_grant\":\"never\",\"known_read_only\":{\"mode\":\"ask\",\"session_grant\":\"offer\"}}}}}\n"
         );
     }
 
@@ -1956,7 +2006,7 @@ session_grant = "offer"
             "[overrides.execution]\nbackend = \"smolvm\"",
             "[overrides.smolvm]\nimage = \"/tmp/tools.smolmachine\"",
         ] {
-            let value = format!("version = 10\nuid = 7\n{fields}\n");
+            let value = format!("version = 11\nuid = 7\n{fields}\n");
             assert!(parse_user_for_test(value.as_bytes(), 7).is_err());
         }
     }
@@ -1964,7 +2014,7 @@ session_grant = "offer"
     #[test]
     fn parses_complete_filesystem_overrides_and_rejects_invalid_shapes() {
         assert_eq!(
-            parse_user_for_test(b"version = 10\nuid = 7\n", 7)
+            parse_user_for_test(b"version = 11\nuid = 7\n", 7)
                 .unwrap()
                 .overrides
                 .filesystem,
@@ -1972,7 +2022,7 @@ session_grant = "offer"
         );
         for cwd_writable in [true, false] {
             let source = format!(
-                "version = 10\nuid = 7\n[overrides.filesystem]\ncwd_writable = {cwd_writable}\n"
+                "version = 11\nuid = 7\n[overrides.filesystem]\ncwd_writable = {cwd_writable}\n"
             );
             let user = parse_user_for_test(source.as_bytes(), 7).unwrap();
             assert_eq!(
@@ -1989,7 +2039,7 @@ session_grant = "offer"
             "cwd_writable = true\nextra = true",
             "cwdWritable = true",
         ] {
-            let source = format!("version = 10\nuid = 7\n[overrides.filesystem]\n{fields}\n");
+            let source = format!("version = 11\nuid = 7\n[overrides.filesystem]\n{fields}\n");
             assert_eq!(
                 parse_user_for_test(source.as_bytes(), 7),
                 Err(LookupError::InvalidFile)
@@ -2034,7 +2084,7 @@ session_grant = "offer"
         ] {
             assert!(
                 parse_user_for_test(
-                    format!("version = 10\nuid = 7\n[overrides.execution]\n{fields}\n").as_bytes(),
+                    format!("version = 11\nuid = 7\n[overrides.execution]\n{fields}\n").as_bytes(),
                     7
                 )
                 .is_err()
@@ -2050,7 +2100,7 @@ session_grant = "offer"
         ] {
             for field in ["command_path_prepend", "commandPathPrepend"] {
                 let source = format!(
-                    "version = 10\n{selector}\n[overrides.execution]\nbackend = \"bubblewrap\"\n{field} = [\"/usr/libexec/pi-sandbox\"]\n"
+                    "version = 11\n{selector}\n[overrides.execution]\nbackend = \"bubblewrap\"\n{field} = [\"/usr/libexec/pi-sandbox\"]\n"
                 );
                 assert_eq!(
                     parse_record(source.as_bytes(), kind),
@@ -2066,11 +2116,11 @@ session_grant = "offer"
             b"version = 4\nuid = 7\n",
             b"version = 7\nuid = 7\n",
             b"version = 8\nuid = 7\n",
-            b"version = 10\nuid = 8\n",
-            b"version = 10\nuid = 7\nextra = true\n",
-            b"version = 10\nuid = 7\n[overrides.tools.write]\nmode = \"allow\"\nsession_grant = \"offer\"\n",
-            b"version = 10\nuid = 7\n[overrides.execution]\nbackend = \"container\"\n",
-            b"version = 10\nuid = 7\n[overrides.network]\nmode = \"filtered\"\n",
+            b"version = 11\nuid = 8\n",
+            b"version = 11\nuid = 7\nextra = true\n",
+            b"version = 11\nuid = 7\n[overrides.tools.write]\nmode = \"allow\"\nsession_grant = \"offer\"\n",
+            b"version = 11\nuid = 7\n[overrides.execution]\nbackend = \"container\"\n",
+            b"version = 11\nuid = 7\n[overrides.network]\nmode = \"filtered\"\n",
         ];
         for source in cases {
             assert_eq!(
@@ -2083,7 +2133,7 @@ session_grant = "offer"
             "[overrides.audit]\nenabled = false\nfacility = \"local0\"",
             "[audit]\nenabled = false\nfacility = \"local0\"",
         ] {
-            let source = format!("version = 10\nuid = 7\n{fields}\n");
+            let source = format!("version = 11\nuid = 7\n{fields}\n");
             assert_eq!(
                 parse_user_for_test(source.as_bytes(), 7),
                 Err(LookupError::InvalidFile)
@@ -2099,7 +2149,7 @@ session_grant = "offer"
         ] {
             for table in ["skills", "overrides.skills"] {
                 let source =
-                    format!("version = 10\n{selector}\n[{table}]\ndirectories = ['/srv/skills']\n");
+                    format!("version = 11\n{selector}\n[{table}]\ndirectories = ['/srv/skills']\n");
                 assert!(matches!(
                     parse_record(source.as_bytes(), kind),
                     Err(LookupError::InvalidFile)
@@ -2113,7 +2163,7 @@ session_grant = "offer"
         for selector in ["uid = 1000", "gid = 1000"] {
             for table in ["subagents", "overrides.subagents"] {
                 let text = format!(
-                    "version = 10\n{selector}\n[{table}]\nenabled = true\nmax_concurrent = 8\nmax_total = 64\n"
+                    "version = 11\n{selector}\n[{table}]\nenabled = true\nmax_concurrent = 8\nmax_total = 64\n"
                 );
                 assert!(toml::from_str::<IdentityRecord>(&text).is_err());
             }
@@ -2127,7 +2177,7 @@ session_grant = "offer"
             (RecordKind::Group, "gid = 7"),
         ] {
             let text = format!(
-                "version = 10\n{selector}\n[overrides.tools.subagents]\nmode = 'ask'\nsession_grant = 'offer'\n"
+                "version = 11\n{selector}\n[overrides.tools.subagents]\nmode = 'ask'\nsession_grant = 'offer'\n"
             );
             let record = parse_record(text.as_bytes(), kind).unwrap();
             let wire = serde_json::to_value(record.overrides).unwrap();
@@ -2144,7 +2194,7 @@ session_grant = "offer"
             (RecordKind::Group, "gid = 7"),
         ] {
             for table in ["sessions", "overrides.sessions"] {
-                let source = format!("version = 10\n{selector}\n[{table}]\nretention_days = 0\n");
+                let source = format!("version = 11\n{selector}\n[{table}]\nretention_days = 0\n");
                 assert!(matches!(
                     parse_record(source.as_bytes(), kind),
                     Err(LookupError::InvalidFile)
@@ -2170,7 +2220,7 @@ session_grant = "offer"
             ] {
                 for scope in ["pi", "sandbox", "extensions.service"] {
                     let source = format!(
-                        "version = 10\n{selector}\n[environment.{scope}]\nACCOUNT = {value:?}\n"
+                        "version = 11\n{selector}\n[environment.{scope}]\nACCOUNT = {value:?}\n"
                     );
                     assert!(parse_record(source.as_bytes(), kind).is_ok());
                 }
@@ -2192,7 +2242,7 @@ session_grant = "offer"
             ] {
                 for scope in ["pi", "sandbox", "extensions.service"] {
                     let source = format!(
-                        "version = 10\n{selector}\n[environment.{scope}]\nACCOUNT = {value:?}\n"
+                        "version = 11\n{selector}\n[environment.{scope}]\nACCOUNT = {value:?}\n"
                     );
                     assert!(matches!(
                         parse_record(source.as_bytes(), kind),
@@ -2211,7 +2261,7 @@ session_grant = "offer"
                 (RecordKind::Group, "group = \"admin\""),
             ] {
                 let source = format!(
-                    "version = 10\n{selector}\n[overrides.mcp.servers.docs]\nenabled = {enabled}\n"
+                    "version = 11\n{selector}\n[overrides.mcp.servers.docs]\nenabled = {enabled}\n"
                 );
                 let record = parse_record(source.as_bytes(), kind).unwrap();
                 assert_eq!(
@@ -2257,7 +2307,7 @@ session_grant = "offer"
                 (RecordKind::User, "uid = 7"),
                 (RecordKind::Group, "gid = 7"),
             ] {
-                let source = format!("version = 10\n{selector}\n{body}\n");
+                let source = format!("version = 11\n{selector}\n{body}\n");
                 assert_eq!(
                     parse_record(source.as_bytes(), kind),
                     Err(LookupError::InvalidFile),
@@ -2284,7 +2334,7 @@ session_grant = "offer"
             "a".repeat(33),
         ] {
             let source = format!(
-                "version = 10\nuid = 7\n[overrides.mcp.servers.{name:?}]\nenabled = true\n"
+                "version = 11\nuid = 7\n[overrides.mcp.servers.{name:?}]\nenabled = true\n"
             );
             assert_eq!(
                 parse_user_for_test(source.as_bytes(), 7),
@@ -2294,13 +2344,13 @@ session_grant = "offer"
         }
         for name in ["a".to_owned(), "docs_2".into(), "a".repeat(32)] {
             let source =
-                format!("version = 10\nuid = 7\n[overrides.mcp.servers.{name}]\nenabled = true\n");
+                format!("version = 11\nuid = 7\n[overrides.mcp.servers.{name}]\nenabled = true\n");
             assert!(parse_user_for_test(source.as_bytes(), 7).is_ok());
         }
         let body = (0..MAX_MCP_SERVER_OVERRIDES)
             .map(|i| format!("[overrides.mcp.servers.server_{i}]\nenabled = false\n"))
             .collect::<String>();
-        let source = format!("version = 10\nuid = 7\n{body}");
+        let source = format!("version = 11\nuid = 7\n{body}");
         assert!(parse_user_for_test(source.as_bytes(), 7).is_ok());
         let extra = "[overrides.mcp.servers.extra]\nenabled = true\n";
         assert_eq!(
@@ -2363,7 +2413,7 @@ session_grant = "offer"
     }
 
     #[test]
-    fn serves_mcp_policy_layers_from_protected_rules_with_the_new_protocol() {
+    fn serves_mcp_and_workspace_policies_from_protected_rules_with_the_new_protocol() {
         use std::fs;
         use std::os::unix::fs::PermissionsExt;
         let root = temporary_path();
@@ -2377,12 +2427,12 @@ session_grant = "offer"
         fs::write(
             &file,
             format!(
-                "version = 10\nuid = {uid}\n[overrides.mcp.servers.docs]\nenabled = true\ndefault_policy = {{ mode = 'ask', session_grant = 'offer' }}\ntool_rules = [{{ match = 'search_*', mode = 'allow', session_grant = 'never' }}]\n[overrides.mcp.servers.local]\nenabled = false\n"
+                "version = 11\nuid = {uid}\n[overrides.mcp.servers.docs]\nenabled = true\ndefault_policy = {{ mode = 'ask', session_grant = 'offer' }}\ntool_rules = [{{ match = 'search_*', mode = 'allow', session_grant = 'never' }}]\n[overrides.mcp.servers.local]\nenabled = false\n[overrides.workspace]\nallowed = ['sandbox', 'host']\ndefault = 'host'\n"
             ),
         )
         .unwrap();
         fs::set_permissions(&file, fs::Permissions::from_mode(0o600)).unwrap();
-        for version in [9, 10] {
+        for version in [10, 11] {
             let (mut client, mut server_input) = UnixStream::pair().expect("socket pair");
             let mut server_output = server_input.try_clone().expect("clone server socket");
             writeln!(
@@ -2398,12 +2448,12 @@ session_grant = "offer"
                 .expect("finish response");
             let mut response = String::new();
             client.read_to_string(&mut response).expect("read response");
-            let expected = if version == 10 {
+            let expected = if version == 11 {
                 serde_json::json!({
-                    "version": 10,
+                    "version": 11,
                     "status": "ok",
                     "environment": { "pi": {}, "sandbox": {}, "extensions": {} },
-                    "overrides": { "mcp": { "servers": {
+                    "overrides": { "workspace": { "allowed": ["host", "sandbox"], "default": "host" }, "mcp": { "servers": {
                         "docs": { "enabled": true, "policy_layers": [{
                             "default_policy": { "mode": "ask", "session_grant": "offer" },
                             "tool_rules": [{ "match": "search_*", "mode": "allow", "session_grant": "never" }]
@@ -2412,7 +2462,7 @@ session_grant = "offer"
                     } } }
                 })
             } else {
-                serde_json::json!({ "version": 10, "status": "error", "code": "protocol_error" })
+                serde_json::json!({ "version": 11, "status": "error", "code": "protocol_error" })
             };
             assert_eq!(
                 serde_json::from_str::<serde_json::Value>(&response).unwrap(),
@@ -2452,7 +2502,7 @@ session_grant = "offer"
                     ),
                 ] {
                     let source = format!(
-                        "version = 10\n{selector}\n[overrides.mcp.servers.docs]\n{fields}\n"
+                        "version = 11\n{selector}\n[overrides.mcp.servers.docs]\n{fields}\n"
                     );
                     let authored = parse_record(source.as_bytes(), kind).unwrap();
                     let resolved = resolve(vec![authored]).unwrap();
@@ -2501,7 +2551,7 @@ session_grant = "offer"
                 (RecordKind::Group, "gid = 20"),
             ] {
                 let source =
-                    format!("version = 10\n{selector}\n[overrides.mcp.servers.docs]\n{fields}\n");
+                    format!("version = 11\n{selector}\n[overrides.mcp.servers.docs]\n{fields}\n");
                 assert_eq!(
                     parse_record(source.as_bytes(), kind),
                     Err(LookupError::InvalidFile),
@@ -2541,7 +2591,7 @@ session_grant = "offer"
         assert!(!valid_mcp_pattern(&"é".repeat(65)));
         for character in ['\u{feff}', '?', '[', ']', '{', '}', '\\'] {
             let source = format!(
-                "version = 10\nuid = 1000\n[overrides.mcp.servers.docs]\ntool_rules = [{{ match = '{}', mode = 'allow', session_grant = 'never' }}]",
+                "version = 11\nuid = 1000\n[overrides.mcp.servers.docs]\ntool_rules = [{{ match = '{}', mode = 'allow', session_grant = 'never' }}]",
                 character
             );
             assert_eq!(
@@ -2623,7 +2673,7 @@ session_grant = "offer"
     fn mcp_limits_apply_per_file_and_after_whole_layer_deduplication() {
         let full = mcp_rule_body("docs", MAX_MCP_RULES_PER_SERVER, "rule");
         let source = format!(
-            "version = 10\nuid = 1000\n{}",
+            "version = 11\nuid = 1000\n{}",
             mcp_rule_body("docs", MAX_MCP_RULES_PER_SERVER + 1, "rule")
         );
         assert_eq!(
@@ -2668,7 +2718,7 @@ session_grant = "offer"
             resolve(vec![record("uid = 1000", &all), record("gid = 20", &extra)]),
             Err(LookupError::InvalidFile)
         );
-        let source = format!("version = 10\nuid = 1000\n{all}{extra}");
+        let source = format!("version = 11\nuid = 1000\n{all}{extra}");
         assert_eq!(
             parse_record(source.as_bytes(), RecordKind::User),
             Err(LookupError::InvalidFile)
@@ -2715,7 +2765,7 @@ session_grant = "offer"
     fn final_mcp_byte_budget_does_not_make_boolean_join_order_dependent() {
         let records = |mut quotes: usize| {
             (0..4).map(|server| {
-                let mut source = format!("version = 10\nuid = 1000\n[overrides.mcp.servers.server{server}]\n");
+                let mut source = format!("version = 11\nuid = 1000\n[overrides.mcp.servers.server{server}]\n");
                 if server == 0 {
                     source.push_str("enabled = false\n");
                 }
@@ -2770,7 +2820,7 @@ session_grant = "offer"
         write_success(&mut output, &user).unwrap();
         assert_eq!(
             serde_json::from_slice::<serde_json::Value>(&output).unwrap(),
-            serde_json::json!({"version": 10, "status": "error", "code": "identity_store_unavailable"})
+            serde_json::json!({"version": 11, "status": "error", "code": "identity_store_unavailable"})
         );
         assert_eq!(output.last(), Some(&b'\n'));
     }
@@ -2780,7 +2830,7 @@ session_grant = "offer"
         use std::fs;
         use std::os::unix::fs::PermissionsExt;
         let uid = unsafe { libc::geteuid() };
-        let mut source = format!("version = 10\nuid = {uid}\n[environment.pi]\n");
+        let mut source = format!("version = 11\nuid = {uid}\n[environment.pi]\n");
         let escaped = serde_json::to_string(&"\u{1}".repeat(8180)).unwrap();
         for index in 0..8 {
             source.push_str(&format!("VALUE{index} = {escaped}\n"));
@@ -2824,7 +2874,7 @@ session_grant = "offer"
         let (mut client, mut server_input) = UnixStream::pair().unwrap();
         let mut server_output = server_input.try_clone().unwrap();
         client
-            .write_all(b"{\"version\":10,\"operation\":\"resolve-identity\"}\n")
+            .write_all(b"{\"version\":11,\"operation\":\"resolve-identity\"}\n")
             .unwrap();
         let fd = server_input.as_raw_fd();
         serve_one(&root, &mut server_input, &mut server_output, fd, uid).unwrap();
@@ -2833,7 +2883,7 @@ session_grant = "offer"
         client.read_to_string(&mut response).unwrap();
         assert_eq!(
             response,
-            "{\"version\":10,\"status\":\"error\",\"code\":\"identity_store_unavailable\"}\n"
+            "{\"version\":11,\"status\":\"error\",\"code\":\"identity_store_unavailable\"}\n"
         );
         fs::remove_dir_all(root).unwrap();
     }
@@ -2841,11 +2891,11 @@ session_grant = "offer"
     #[test]
     fn rejects_invalid_and_oversized_environment_values() {
         let cases: &[&[u8]] = &[
-            b"version = 10\nuid = 7\n[environment.pi]\nBad-Name = \"x\"\n",
-            b"version = 10\nuid = 7\n[environment.pi]\nPI_SANDBOX_SECRET = \"x\"\n",
-            b"version = 10\nuid = 7\n[environment.pi]\nLD_PRELOAD = \"x\"\n",
-            b"version = 10\nuid = 7\n[environment.sandbox]\nHOME = \"/tmp\"\n",
-            b"version = 10\nuid = 7\n[environment.extensions.Bad_ID]\nTOKEN = \"x\"\n",
+            b"version = 11\nuid = 7\n[environment.pi]\nBad-Name = \"x\"\n",
+            b"version = 11\nuid = 7\n[environment.pi]\nPI_SANDBOX_SECRET = \"x\"\n",
+            b"version = 11\nuid = 7\n[environment.pi]\nLD_PRELOAD = \"x\"\n",
+            b"version = 11\nuid = 7\n[environment.sandbox]\nHOME = \"/tmp\"\n",
+            b"version = 11\nuid = 7\n[environment.extensions.Bad_ID]\nTOKEN = \"x\"\n",
         ];
         for source in cases {
             assert_eq!(
@@ -2854,7 +2904,7 @@ session_grant = "offer"
             );
         }
 
-        let mut too_many = String::from("version = 10\nuid = 7\n[environment.pi]\n");
+        let mut too_many = String::from("version = 11\nuid = 7\n[environment.pi]\n");
         for index in 0..=MAX_ENVIRONMENT_VARIABLES_PER_SCOPE {
             too_many.push_str(&format!("VARIABLE_{index} = \"x\"\n"));
         }
@@ -2864,14 +2914,14 @@ session_grant = "offer"
         );
 
         let oversized_name = format!(
-            "version = 10\nuid = 7\n[environment.pi]\n{} = \"x\"\n",
+            "version = 11\nuid = 7\n[environment.pi]\n{} = \"x\"\n",
             format!("A{}", "A".repeat(MAX_ENVIRONMENT_VARIABLE_NAME_BYTES))
         );
         let oversized_value = format!(
-            "version = 10\nuid = 7\n[environment.pi]\nTOKEN = \"{}\"\n",
+            "version = 11\nuid = 7\n[environment.pi]\nTOKEN = \"{}\"\n",
             "x".repeat(MAX_ENVIRONMENT_VALUE_BYTES + 1)
         );
-        let mut too_many_extensions = String::from("version = 10\nuid = 7\n");
+        let mut too_many_extensions = String::from("version = 11\nuid = 7\n");
         for index in 0..=MAX_EXTENSION_ENVIRONMENTS {
             too_many_extensions.push_str(&format!(
                 "[environment.extensions.extension-{index}]\nTOKEN = \"x\"\n"
@@ -2893,7 +2943,7 @@ session_grant = "offer"
             "/etc/pi-sandbox//models.json",
             "/etc/pi-sandbox/models.json/",
         ] {
-            let source = format!("version = 10\nuid = 7\n[overrides]\nmodels_file = {path:?}\n");
+            let source = format!("version = 11\nuid = 7\n[overrides]\nmodels_file = {path:?}\n");
             assert_eq!(
                 parse_user_for_test(source.as_bytes(), 7),
                 Err(LookupError::InvalidFile)
@@ -2907,7 +2957,7 @@ session_grant = "offer"
         let (mut client, mut server_input) = UnixStream::pair().expect("socket pair");
         let mut server_output = server_input.try_clone().expect("clone server socket");
         client
-            .write_all(b"{\"version\":10,\"operation\":\"resolve-identity\"}\n")
+            .write_all(b"{\"version\":11,\"operation\":\"resolve-identity\"}\n")
             .expect("write request");
         let server_fd = server_input.as_raw_fd();
         serve_one(
@@ -2925,13 +2975,13 @@ session_grant = "offer"
         client.read_to_string(&mut response).expect("read response");
         assert_eq!(
             response,
-            "{\"version\":10,\"status\":\"ok\",\"environment\":{\"pi\":{},\"sandbox\":{},\"extensions\":{}},\"overrides\":{}}\n"
+            "{\"version\":11,\"status\":\"ok\",\"environment\":{\"pi\":{},\"sandbox\":{},\"extensions\":{}},\"overrides\":{}}\n"
         );
     }
 
     #[test]
     fn requires_a_bounded_newline_delimited_request() {
-        let request = b"{\"version\":10,\"operation\":\"resolve-identity\"}";
+        let request = b"{\"version\":11,\"operation\":\"resolve-identity\"}";
         assert!(read_request(&mut io::Cursor::new(request)).is_err());
         let mut oversized = vec![b' '; MAX_REQUEST_BYTES + 1];
         oversized.push(b'\n');
@@ -2983,7 +3033,197 @@ session_grant = "offer"
         } else {
             RecordKind::Group
         };
-        parse_record(format!("version = 10\n{selector}\n{body}").as_bytes(), kind).unwrap()
+        parse_record(format!("version = 11\n{selector}\n{body}").as_bytes(), kind).unwrap()
+    }
+
+    #[test]
+    fn workspace_records_reject_duplicate_grants_and_non_selection_fields() {
+        for (selector, kind) in [
+            ("uid = 999", RecordKind::User),
+            ("gid = 999", RecordKind::Group),
+        ] {
+            for body in [
+                "[overrides.workspace]",
+                "[overrides.workspace]\nallowed = ['host', 'host']",
+                "[overrides.workspace]\nallowed = 'host'",
+                "[overrides.workspace]\nallowed = [1]",
+                "[overrides.workspace]\ndefault = ''",
+                "[overrides.workspace]\ndefault = 'Host'",
+                "[overrides.workspace]\nallowed = ['a b']",
+                "[overrides.workspace]\nallowed = ['_host']",
+                "[overrides.workspace]\nallowed = ['hóst']",
+                "[overrides.workspace]\nallowed = []\ndescription = 'not allowed'",
+                "[overrides.workspace.modes.host]",
+            ] {
+                let source = format!("version = 11\n{selector}\n{body}");
+                assert_eq!(
+                    parse_record(source.as_bytes(), kind),
+                    Err(LookupError::InvalidFile)
+                );
+            }
+            for body in [
+                "[overrides.workspace]\nallowed = []",
+                "[overrides.workspace]\ndefault = 'sandbox'",
+                "[overrides.workspace]\nallowed = ['sandbox', 'host', 'constructor', 'custom-name_1']\ndefault = 'host'",
+            ] {
+                let source = format!("version = 11\n{selector}\n{body}");
+                assert!(parse_record(source.as_bytes(), kind).is_ok());
+            }
+            let body = format!("[overrides.workspace]\ndefault = '{}'", "a".repeat(33));
+            let source = format!("version = 11\n{selector}\n{body}");
+            assert_eq!(
+                parse_record(source.as_bytes(), kind),
+                Err(LookupError::InvalidFile)
+            );
+        }
+        assert_eq!(
+            parse_record(b"version = 10\nuid = 1000", RecordKind::User),
+            Err(LookupError::InvalidFile)
+        );
+    }
+
+    #[test]
+    fn workspace_union_keeps_explicit_empty_and_omitted_distinct() {
+        for reverse in [false, true] {
+            let mut records = vec![
+                record(
+                    "uid = 1000",
+                    "[overrides.workspace]\nallowed = ['sandbox', 'host']\ndefault = 'sandbox'",
+                ),
+                record(
+                    "group = 'admin'",
+                    "[overrides.workspace]\nallowed = ['host', 'custom']\ndefault = 'sandbox'",
+                ),
+                record("gid = 10", "[overrides.workspace]\nallowed = []"),
+                record(
+                    "uid = 999",
+                    "[overrides.workspace]\nallowed = ['unmatched']\ndefault = 'unmatched'",
+                ),
+            ];
+            if reverse {
+                records.reverse();
+            }
+            let result = resolve(records).unwrap();
+            assert_eq!(
+                serde_json::to_value(result.overrides).unwrap(),
+                serde_json::json!({
+                    "workspace": { "allowed": ["custom", "host", "sandbox"], "default": "sandbox" }
+                })
+            );
+        }
+        assert!(
+            resolve(vec![record(
+                "uid = 999",
+                "[overrides.workspace]\nallowed = ['host']"
+            )])
+            .unwrap()
+            .overrides
+            .workspace
+            .is_none()
+        );
+        for (body, expected) in [
+            ("allowed = []", serde_json::json!({"allowed":[]})),
+            ("default = 'host'", serde_json::json!({"default":"host"})),
+        ] {
+            let result = resolve(vec![record(
+                "uid = 1000",
+                &format!("[overrides.workspace]\n{body}"),
+            )])
+            .unwrap();
+            assert_eq!(
+                serde_json::to_value(result.overrides.workspace).unwrap(),
+                expected
+            );
+        }
+    }
+
+    #[test]
+    fn workspace_defaults_must_agree_and_union_has_a_combined_bound() {
+        assert_eq!(
+            resolve(vec![
+                record("gid = 10", "[overrides.workspace]\ndefault = 'host'"),
+                record(
+                    "group = 'admin'",
+                    "[overrides.workspace]\ndefault = 'sandbox'"
+                ),
+            ]),
+            Err(LookupError::InvalidFile)
+        );
+        let names = |count: usize| {
+            (0..count)
+                .map(|index| format!("'mode{index:02}'"))
+                .collect::<Vec<_>>()
+                .join(",")
+        };
+        let at_limit = format!(
+            "[overrides.workspace]\nallowed = [{}]",
+            names(MAX_WORKSPACE_MODES)
+        );
+        assert!(
+            resolve(vec![
+                record("uid = 1000", &at_limit),
+                record("gid = 20", &at_limit)
+            ])
+            .is_ok()
+        );
+        assert_eq!(
+            resolve(vec![
+                record("uid = 1000", &at_limit),
+                record("gid = 20", "[overrides.workspace]\nallowed = ['extra']")
+            ]),
+            Err(LookupError::InvalidFile)
+        );
+        let over_limit = format!(
+            "version = 11\nuid = 999\n[overrides.workspace]\nallowed = [{}]",
+            names(MAX_WORKSPACE_MODES + 1)
+        );
+        assert_eq!(
+            parse_record(over_limit.as_bytes(), RecordKind::User),
+            Err(LookupError::InvalidFile)
+        );
+    }
+
+    #[test]
+    fn workspace_failures_use_the_existing_opaque_store_error() {
+        use std::fs;
+        use std::os::unix::fs::PermissionsExt;
+        let root = temporary_path();
+        let users = root.join("users.d");
+        fs::create_dir_all(&users).unwrap();
+        let uid = unsafe { libc::geteuid() };
+        let first = users.join("first.toml");
+        let second = users.join("second.toml");
+        fs::write(
+            &first,
+            format!("version = 11\nuid = {uid}\n[overrides.workspace]\ndefault = 'host'"),
+        )
+        .unwrap();
+        fs::set_permissions(&first, fs::Permissions::from_mode(0o600)).unwrap();
+        for invalid_rule in [
+            format!("version = 11\nuid = {uid}\n[overrides.workspace]\ndefault = 'sandbox'"),
+            format!(
+                "version = 11\nuid = {}\n[overrides.workspace]\nallowed = ['host', 'host']",
+                uid.wrapping_add(1)
+            ),
+        ] {
+            fs::write(&second, invalid_rule).unwrap();
+            fs::set_permissions(&second, fs::Permissions::from_mode(0o600)).unwrap();
+            let (mut client, mut input) = UnixStream::pair().unwrap();
+            let mut output = input.try_clone().unwrap();
+            client
+                .write_all(b"{\"version\":11,\"operation\":\"resolve-identity\"}\n")
+                .unwrap();
+            let fd = input.as_raw_fd();
+            serve_one(&root, &mut input, &mut output, fd, uid).unwrap();
+            output.shutdown(Shutdown::Write).unwrap();
+            let mut response = String::new();
+            client.read_to_string(&mut response).unwrap();
+            assert_eq!(
+                response,
+                "{\"version\":11,\"status\":\"error\",\"code\":\"identity_store_unavailable\"}\n"
+            );
+        }
+        fs::remove_dir_all(root).unwrap();
     }
     fn resolve(
         records: Vec<IdentityRecord>,
@@ -3008,14 +3248,14 @@ session_grant = "offer"
         ] {
             assert_eq!(
                 parse_record(
-                    format!("version = 10\n{selector}").as_bytes(),
+                    format!("version = 11\n{selector}").as_bytes(),
                     RecordKind::User
                 ),
                 Err(LookupError::InvalidFile)
             );
         }
-        assert!(parse_record(b"version = 10\ngroup = \"admin\"", RecordKind::Group).is_ok());
-        assert!(parse_record(b"version = 10\ngid = 20", RecordKind::Group).is_ok());
+        assert!(parse_record(b"version = 11\ngroup = \"admin\"", RecordKind::Group).is_ok());
+        assert!(parse_record(b"version = 11\ngid = 20", RecordKind::Group).is_ok());
     }
     #[test]
     fn matches_user_and_primary_and_supplementary_groups_additively() {
@@ -3196,7 +3436,7 @@ session_grant = "offer"
             "{ file = '/secrets/token/' }",
             "{ file = \"/secrets/\\n\" }",
         ] {
-            let source = format!("version = 10\nuid = 999\n[environment.pi]\nTOKEN = {value}");
+            let source = format!("version = 11\nuid = 999\n[environment.pi]\nTOKEN = {value}");
             assert_eq!(
                 parse_record(source.as_bytes(), RecordKind::User),
                 Err(LookupError::InvalidFile)
@@ -3204,7 +3444,7 @@ session_grant = "offer"
         }
         for scope in ["sandbox", "extensions.service-api"] {
             let source = format!(
-                "version = 10\nuid = 1000\n[environment.{scope}]\nTOKEN = {{ file = '/secrets/token' }}"
+                "version = 11\nuid = 1000\n[environment.{scope}]\nTOKEN = {{ file = '/secrets/token' }}"
             );
             assert_eq!(
                 parse_record(source.as_bytes(), RecordKind::User),
@@ -3212,7 +3452,7 @@ session_grant = "offer"
             );
         }
         let oversized = format!(
-            "version = 10\nuid = 1000\n[environment.pi]\nTOKEN = {{ file = '/{}' }}",
+            "version = 11\nuid = 1000\n[environment.pi]\nTOKEN = {{ file = '/{}' }}",
             "x".repeat(MAX_SECRET_PATH_BYTES)
         );
         assert_eq!(
@@ -3326,7 +3566,7 @@ session_grant = "offer"
         let mut output = Vec::new();
         write_success(&mut output, &result).unwrap();
         let wire: serde_json::Value = serde_json::from_slice(&output).unwrap();
-        assert_eq!(wire["version"], 10);
+        assert_eq!(wire["version"], 11);
         assert_eq!(
             wire["environment"]["pi"]["TOKEN"],
             serde_json::json!({"literal": secret})
@@ -3520,7 +3760,7 @@ session_grant = "offer"
         fs::write(
             &rule,
             format!(
-                "version = 10\nuid = {uid}\n[environment.pi]\nA_TOKEN = {{ file = {:?} }}\nZ_MISSING = {{ file = {:?} }}",
+                "version = 11\nuid = {uid}\n[environment.pi]\nA_TOKEN = {{ file = {:?} }}\nZ_MISSING = {{ file = {:?} }}",
                 readable.to_str().unwrap(), missing.to_str().unwrap()
             ),
         )
@@ -3529,7 +3769,7 @@ session_grant = "offer"
         let (mut client, mut server_input) = UnixStream::pair().unwrap();
         let mut server_output = server_input.try_clone().unwrap();
         client
-            .write_all(b"{\"version\":10,\"operation\":\"resolve-identity\"}\n")
+            .write_all(b"{\"version\":11,\"operation\":\"resolve-identity\"}\n")
             .unwrap();
         let fd = server_input.as_raw_fd();
         serve_one(&root, &mut server_input, &mut server_output, fd, uid).unwrap();
@@ -3538,7 +3778,7 @@ session_grant = "offer"
         client.read_to_string(&mut response).unwrap();
         assert_eq!(
             response,
-            "{\"version\":10,\"status\":\"error\",\"code\":\"identity_store_unavailable\"}\n"
+            "{\"version\":11,\"status\":\"error\",\"code\":\"identity_store_unavailable\"}\n"
         );
         fs::remove_dir_all(root).unwrap();
     }
@@ -3553,7 +3793,7 @@ session_grant = "offer"
         let file = users.join("arbitrary-label.toml");
         fs::write(
             &file,
-            "version = 10\nuid = 1000\n[overrides.network]\nmode = \"host\"",
+            "version = 11\nuid = 1000\n[overrides.network]\nmode = \"host\"",
         )
         .unwrap();
         fs::set_permissions(&file, fs::Permissions::from_mode(0o600)).unwrap();
@@ -3577,23 +3817,23 @@ session_grant = "offer"
         symlink(&file, &link).unwrap();
         assert_eq!(lookup(), Err(LookupError::Io));
         fs::remove_file(&link).unwrap();
-        fs::write(&file, "version = 10\nuid = 999\nunknown = true").unwrap();
+        fs::write(&file, "version = 11\nuid = 999\nunknown = true").unwrap();
         assert_eq!(lookup(), Err(LookupError::InvalidFile));
         fs::write(
             &file,
-            "version = 10\nuid = 999\n[overrides.mcp.servers.docs]\nenabled = \"false\"",
+            "version = 11\nuid = 999\n[overrides.mcp.servers.docs]\nenabled = \"false\"",
         )
         .unwrap();
         assert_eq!(lookup(), Err(LookupError::InvalidFile));
         fs::write(
             &file,
-            "version = 10\nuid = 999\n[overrides.mcp.servers.docs]\ndefault_policy = { mode = 'allow', session_grant = 'offer' }",
+            "version = 11\nuid = 999\n[overrides.mcp.servers.docs]\ndefault_policy = { mode = 'allow', session_grant = 'offer' }",
         )
         .unwrap();
         assert!(lookup().is_err());
         fs::write(
             &file,
-            "version = 10\nuid = 999\n[overrides.mcp.servers.unknown_to_base]\nenabled = false",
+            "version = 11\nuid = 999\n[overrides.mcp.servers.unknown_to_base]\nenabled = false",
         )
         .unwrap();
         assert!(lookup().unwrap().overrides.mcp.is_none());
@@ -3627,7 +3867,7 @@ session_grant = "offer"
         fs::set_permissions(&groups, fs::Permissions::from_mode(0o755)).unwrap();
         for i in 0..=MAX_OVERRIDE_FILES {
             let file = groups.join(format!("{i}.toml"));
-            fs::write(&file, "version = 10\ngid = 20").unwrap();
+            fs::write(&file, "version = 11\ngid = 20").unwrap();
             fs::set_permissions(&file, fs::Permissions::from_mode(0o600)).unwrap();
         }
         assert_eq!(lookup(), Err(LookupError::InvalidFile));
@@ -3638,7 +3878,7 @@ session_grant = "offer"
             fs::write(
                 &file,
                 format!(
-                    "version = 10\ngid = 20\n#{}",
+                    "version = 11\ngid = 20\n#{}",
                     "x".repeat(MAX_OVERRIDE_FILE_BYTES as usize - 30)
                 ),
             )

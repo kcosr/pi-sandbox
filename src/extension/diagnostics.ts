@@ -21,6 +21,7 @@ import {
   type SessionGrantScope,
 } from "../permissions/index.js";
 import { COMMAND_CLASSES, type BashCommandAnalyzer } from "../permissions/bash/contracts.js";
+import type { WorkspaceSelection } from "../config/index.js";
 
 export type SandboxDiagnosticSubject = string;
 
@@ -30,6 +31,8 @@ interface SandboxSummaryInput {
   readonly initialized: boolean;
   readonly cwd: string;
   readonly configPath: string;
+  readonly workspaceSelection: WorkspaceSelection;
+  readonly exports: SandboxConfig["exports"];
   readonly modelsFile: string;
   readonly filesystem: SandboxConfig["filesystem"];
   readonly execution: ExecutionConfig;
@@ -79,6 +82,12 @@ const SANDBOX_SUBJECT_SCOPES: Readonly<Record<string, readonly string[]>> = Obje
 
 export function formatSandboxSummary(input: SandboxSummaryInput): string {
   const rows: Array<readonly [string, string]> = [
+    ["Workspace mode", input.workspaceSelection.name],
+    ["Mode selection", input.workspaceSelection.source === "cli" ? "CLI" : "default"],
+    ...(input.workspaceSelection.description === undefined
+      ? []
+      : [["Description", input.workspaceSelection.description] as const]),
+    ["File exports", input.exports.enabled ? "enabled (TUI-only)" : "disabled"],
     ["Launch CWD", input.cwd],
     [
       "Hidden paths",

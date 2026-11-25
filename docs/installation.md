@@ -1,7 +1,8 @@
 # Installation and operation
 
 The application includes optional subagent support; enable it through the main
-`[subagents]` settings and the single `[tools.subagents]` permission policy. Ordinary Pi distributions
+`[subagents]` settings, the single `[tools.subagents]` permission policy, and its
+`audit.tools.subagents` Boolean. Ordinary Pi distributions
 can instead package `@kcosr/pi-subagents-extension`, built and packed alongside the
 sandbox and Git packages. Its normal entry needs no Pi Sandbox patches or managed
 approval components. See the [package documentation](../packages/subagents-extension/README.md)
@@ -13,8 +14,8 @@ conditional tool guidance through `[extension_guidance]`; see
 [optional extension preferences](configuration.md#optional-extension-preferences).
 
 Subagent tool provenance uses audit wire 5 and record schema 6. Upgrade the Linux
-application and collector together. Main configuration schema 14 and broker/rule
-version 10 are unchanged.
+application and collector together. Workspace modes require main schema 15 and broker protocol/rule version 11;
+audit wire 5 and record schema 6 remain unchanged.
 
 ## Requirements
 
@@ -491,52 +492,41 @@ There is no implicit configuration replacement. This supports both complete
 archive deployments and systems where Salt or another configuration manager
 owns `/etc/pi-sandbox`.
 
-The installed configuration uses `config_version = 14` and must include the
-`[audit]`, `[sessions]`, `[codemode]`, `[mcp.servers]`, `[execution]`, `[filesystem]`, and `[extensions]` tables, an `audit` boolean on every
-base tool policy, explicit `filesystem.hidden_paths` and `filesystem.denied_paths` (both empty by default), and explicit `[environment.pi]`,
-`[environment.sandbox]`, and `[environment.extensions]` tables, even when the
-environment tables are empty. Set `execution.backend = "bubblewrap"` on Linux
-for containment, use `execution.backend = "seatbelt"` on macOS for the documented Seatbelt policy, or use `execution.backend = "direct"` on Linux/macOS for
-policy-gated execution in the user's host security context. Direct mode also
-requires `network.mode = "host"`, `filesystem.cwd_writable = true`, and
-empty `filesystem.hidden_paths` and `filesystem.denied_paths`; macOS
-requires disabled identity. If a
-preserved site configuration does not satisfy the current schema, update the
-site-managed TOML first or use `--replace-config` to install the packaged
-defaults.
+The installed configuration uses `config_version = 15`. It requires common
+`audit`/`audit.tools`, `workspace`, `sessions`, `codemode`, `mcp.servers`,
+`execution`, `filesystem`, `extensions` and scoped environment tables. Named-tool
+audit booleans belong in the exhaustive `audit.tools` map, not invocation entries.
+Common CWD writability, exports and Bash/write/edit policies may be omitted only
+when every mode supplies complete effective values. Unknown fields, obsolete
+schemas and missing effective policies fail before installation swaps binaries.
 
-`[sessions] retention_days = 365` is the packaged conversation-retention
-default. The required value is an integer from `0` to `36500`; use `0` to disable
-cleanup and last-use timestamp updates. This policy belongs to the main TOML
-and is not accepted in user/group overrides. Older configurations are not
-automatically migrated. Schema 9 adds home-directory expansion in hidden paths
-and configured scoped environment values; review values equal to `~` or
-starting with `~/` before updating the version. Configurations older than
-schema 8 also need the required session policy. Alternatively, explicitly
-replace configuration with the packaged defaults.
+Set the shared backend to Bubblewrap on Linux, Seatbelt on macOS, or explicit
+direct execution where intended. Every mode is validated, including definitions
+outside the allowed list, with current-platform checks. Direct requires host
+networking, writable CWD, empty hidden/denied paths and disabled exports; macOS
+requires disabled identity and audit. Selecting a mode never changes backend.
+A retained schema-14 file must be migrated explicitly; the installer does not
+rewrite it. See [workspace policy migration](#workspace-policy-migration).
 
-To migrate schema 11 or 12, remove `process_lifetime` from `[execution]` and set
-`config_version = 14`. Schema 11 also needs `denied_paths = []` in `[filesystem]`.
-Commands now complete independently; background descendants may survive until
-executor shutdown, with best-effort cleanup outside Linux's namespace boundary.
-No default command timeout is imposed. Set the optional base-policy
-`execution.max_command_timeout_seconds` when an administrator maximum is needed.
+`[sessions] retention_days = 365` remains the packaged conversation-retention
+default. Use `0` to disable cleanup and timestamp updates. Older configurations
+must also supply all current required fields, remove obsolete `process_lifetime`
+settings and review existing home/account expansion. No default command timeout
+is imposed; `execution.max_command_timeout_seconds` optionally caps commands.
 
 Broker users must update preserved `users.d` and `groups.d` files to
-`version = 10` and upgrade the broker and application together for protocol 10.
-Existing version-10 rules need no edits for file-backed values.
-Version-8/9 rules need only the version change. Optional MCP overrides then use
-server-local `enabled`, `default_policy`, and ordered `tool_rules`; invocation
-pairs omit `audit`, which stays global. See the
-[rule contract](identity-broker.md#mcp-tool-approval-policies).
-Rules older than version 8 must also remove
-`overrides.execution.process_lifetime` and an empty `[overrides.execution]`
-table if no backend override remains. The installer does not rewrite these
-rule files, including with `--replace-config`. Main configuration now requires schema 14
-and an explicit exports section. Upgrade the application and audit collector together:
-audit wire version 5/record schema 6 includes configured Bash command provenance and
-user export events, and rejects older wire versions. Restart Pi processes after
-updating administrative rules; an already running process retains its policy.
+`version = 11` and deploy protocol-11 application/broker components together.
+Invocation policies still omit audit, which remains common main policy. The
+installer neither rewrites nor preflights the broker rule store, including with
+`--replace-config`; migrate rules before activating the upgraded broker. Old
+rules fail at identity resolution. Older rules must also remove obsolete
+execution lifetime fields and any resulting empty execution table. See the
+[rule contract](identity-broker.md).
+
+Upgrade the Linux audit collector alongside the application for main schema 15.
+Audit wire 5/record schema 6 are unchanged. Restart Pi processes after changing
+administrative configuration or rules; existing processes retain their selected
+mode and effective policy.
 
 The macOS packaged default selects Seatbelt with networking
 disabled, using `config/default/config.seatbelt.toml`. Ordinary upgrades preserve
@@ -555,13 +545,13 @@ but rejecting missing Seatbelt denied directories.
 Model and installation paths remain absolute.
 
 When the optional identity broker is enabled, `users.d/*.toml` and `groups.d/*.toml` may overlay
-scoped environment and supply model, execution, network, filesystem, and complete
-tool-policy overrides, plus per-server MCP enablement and approval policies, for
+scoped environment and supply workspace allowed/default choices, model, execution,
+network, filesystem, and complete tool-policy overrides, plus per-server MCP enablement and approval policies, for
 the account and its primary/supplementary groups. MCP definitions, credential
 mappings, timeouts, exposure and audit remain in the main configuration. Matching
 explicit permissions combine using least restrictive wins before overlaying defaults. Global/default values belong in the main
 `config.toml`; there is no separate defaults or aggregate users file. If no rules
-match, the main configuration remains unchanged. An
+match, the main selection metadata and the selected mode's policy remain unchanged. An
 execution override may select `bubblewrap` or `direct`; the final effective
 configuration must still pair `direct` with `network.mode = "host"` and
 `filesystem.cwd_writable = true` with empty `filesystem.hidden_paths`.
@@ -632,9 +622,18 @@ cd /home/alice/worktrees/example
 pi-sandbox
 ```
 
+Use `pi-sandbox --list-workspace-modes` to inspect the modes your account may
+select, descriptions and default. Select one with `--workspace-mode NAME`
+before Pi arguments; without that flag the configured effective default applies.
+For builds permitting caller-selected policy, the optional `--config FILE`
+prefix must come first. Listing uses main validation and existing identity
+resolution without starting a model session or executor.
+
 Before starting the interactive application, the executable validates the
-compiled extension catalog, loads the base policy, optionally resolves the
-calling account and groups, validates the selected extensions, effective model catalog, exact
+compiled extension catalog, loads and validates every main-authored mode, checks
+platform compatibility before broker access, resolves account mode access and
+selection, applies remaining account policy, and validates the final platform,
+selected extensions, effective model catalog, exact
 tool policy, and conditional executable prerequisites, and probes the selected
 execution backend for the launch directory. Any failure stops startup. No
 stock tool or host-execution fallback is available.
@@ -787,12 +786,28 @@ adjacent source checkout. See [sandbox configuration and usage](../packages/sand
 The managed executable embeds the reusable implementations through its own
 adapters and preserves administrator-selected permissions and audit controls.
 
-### Export-policy schema upgrade
+### Workspace policy migration
 
-This version requires `config_version = 14` and an explicit `[exports]` table with
-`enabled = false` unless user-directed private-file saving is intended. Existing
-version-13 files are rejected; update the administrative file during upgrade.
-Enabling exports also requires a confined backend and `filesystem.cwd_writable = false`.
-Upgrade the Linux application and audit collector together for audit wire 5 and
-record schema 6. Broker protocol and rule version remain 10. No persistent private
-home or new service is installed.
+To preserve an existing schema-14 deployment's behavior:
+
+1. Set main schema 15. Move every named tool's inline audit Boolean to
+   `audit.tools`, remove the old fields and leave MCP per-rule audit unchanged.
+2. Keep existing filesystem, exports and invocation values as common defaults.
+   Add one administrator-named empty mode, and make it the sole allowed and
+   default choice. An optional description explains that choice to users.
+3. Update any user/group rule files to version 11. They may omit workspace
+   metadata to inherit the main selection choices.
+4. Before adding modes, review mode-agnostic account CWD and tool overrides.
+   They apply after selection: writable-CWD overrides invalidate export-enabled
+   modes, and tool overrides may replace a mode's approval behavior. Move those
+   differences into mode definitions and account grants where intended.
+5. Add other mode definitions and allowed/default grants deliberately. Validate
+   all definitions and relevant account combinations before deploying matching
+   application, broker and collector components.
+
+Fresh confined packages offer host and sandbox with host as default; direct
+packages offer only host. Seatbelt keeps Bash disabled in both packaged modes.
+Ordinary upgrades preserve site policy instead of replacing it with those new
+choices. Both installers validate retained main configuration before swapping
+binaries, but do not validate live broker rules. There is no compatibility parser,
+automatic conversion, persistent scratch storage or new service.

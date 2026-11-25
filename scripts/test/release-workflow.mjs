@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
+import { readFileSync } from "node:fs";
 import { copyFile, mkdtemp, readFile, readdir, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
@@ -9,7 +10,11 @@ import { parse as parseToml, stringify as stringifyToml } from "@iarna/toml";
 import { buildRelease, parseReleaseArguments, ReleaseArgumentError } from "../build-release.mjs";
 import { verifyRelease } from "../verify-release.mjs";
 import { createReleaseVerification, runVerificationCommand } from "./release-verification.mjs";
-import { prepareHostIndependentSmokeConfig } from "./packaged-smoke-config.mjs";
+import {
+  prepareHostIndependentSmokeConfig,
+  prepareWritableSmokeWorkspace,
+} from "./packaged-smoke-config.mjs";
+import { testWorkspaceModes } from "./workspace-modes-smoke.mjs";
 
 const repositoryRoot = dirname(dirname(dirname(fileURLToPath(import.meta.url))));
 const sourceRoot = join(repositoryRoot, "unused-upstream-fixture");
@@ -293,9 +298,10 @@ test("packaged smoke disables both services only in its temporary config copy", 
       await readFile(join(repositoryRoot, "config/default/config.toml"), "utf8"),
     );
     config.identity = { mode: "broker" };
-    config.audit = { enabled: true, facility: "local5" };
+    config.audit = { ...config.audit, enabled: true, facility: "local5" };
     config.subagents = { enabled: true, max_concurrent: 4, max_total: 32 };
-    config.tools.subagents = { mode: "allow", session_grant: "never", audit: true };
+    config.tools.subagents = { mode: "allow", session_grant: "never" };
+    config.audit.tools.subagents = true;
     const source = stringifyToml(config);
     await writeFile(original, source);
     await copyFile(original, fixture);
@@ -305,7 +311,9 @@ test("packaged smoke disables both services only in its temporary config copy", 
     );
     const actual = parseToml(await readFile(fixture, "utf8"));
     assert.deepEqual(actual.identity, { mode: "disabled" });
-    assert.deepEqual(actual.audit, { enabled: false, facility: "local5" });
+    const auditTools = { ...config.audit.tools };
+    delete auditTools.subagents;
+    assert.deepEqual(actual.audit, { enabled: false, facility: "local5", tools: auditTools });
     assert.equal(actual.subagents, undefined);
     assert.equal(actual.tools.subagents, undefined);
     assert.equal(actual.models_file, config.models_file);
@@ -314,6 +322,158 @@ test("packaged smoke disables both services only in its temporary config copy", 
       prepareHostIndependentSmokeConfig(original + ".missing", "/secret", "/decoy"),
       /ENOENT/,
     );
+  } finally {
+    await rm(temporary, { recursive: true, force: true });
+  }
+});
+
+test("packaged smoke composes partial common policy from the authored default without inherited Bash exceptions", async () => {
+  const temporary = await mkdtemp(join(tmpdir(), "pi-smoke-partial-config-"));
+  try {
+    for (const commonBash of [false, true]) {
+      const config = parseToml(
+        await readFile(join(repositoryRoot, "config/default/config.toml"), "utf8"),
+      );
+      delete config.filesystem.cwd_writable;
+      delete config.exports;
+      delete config.tools.write;
+      delete config.tools.edit;
+      if (commonBash) {
+        config.tools.bash = {
+          mode: "ask",
+          session_grant: "offer",
+          known_read_only: { mode: "allow", session_grant: "never" },
+          command_sets: {
+            utility: {
+              command: "utility",
+              mode: "allow",
+              session_grant: "never",
+              operands: { min: 0, max: 0 },
+            },
+          },
+        };
+      } else delete config.tools.bash;
+      const selectedTools = {
+        bash: { mode: "ask", session_grant: "never" },
+        write: { mode: "allow", session_grant: "never" },
+        edit: { mode: "deny", session_grant: "never" },
+      };
+      config.workspace = {
+        default: "review",
+        allowed: ["review"],
+        modes: {
+          review: {
+            filesystem: { cwd_writable: false },
+            exports: { enabled: true },
+            tools: selectedTools,
+          },
+        },
+      };
+      const fixture = join(temporary, `partial-${commonBash}.toml`);
+      await writeFile(fixture, stringifyToml(config));
+      await prepareHostIndependentSmokeConfig(fixture, "/work/secret", "/home/fixture-decoy");
+      const actual = parseToml(await readFile(fixture, "utf8"));
+      assert.equal(actual.filesystem.cwd_writable, true);
+      assert.deepEqual(actual.exports, { enabled: false });
+      assert.deepEqual(actual.workspace, {
+        default: "host",
+        allowed: ["host"],
+        modes: { host: {} },
+      });
+      for (const name of ["bash", "write", "edit"])
+        assert.deepEqual(actual.tools[name], selectedTools[name]);
+      assert.equal(actual.tools.bash.known_read_only, undefined);
+      assert.equal(actual.tools.bash.command_sets, undefined);
+      assert.deepEqual(actual.tools.read, config.tools.read);
+    }
+  } finally {
+    await rm(temporary, { recursive: true, force: true });
+  }
+});
+
+test("Seatbelt smoke materializes mode-owned policies without enabling Bash or exports", async () => {
+  const config = parseToml(
+    await readFile(join(repositoryRoot, "config/default/config.seatbelt.toml"), "utf8"),
+  );
+  const selectedTools = {
+    bash: config.tools.bash,
+    write: config.tools.write,
+    edit: config.tools.edit,
+  };
+  delete config.filesystem.cwd_writable;
+  delete config.exports;
+  for (const name of Object.keys(selectedTools)) delete config.tools[name];
+  config.workspace = {
+    default: "review",
+    allowed: ["review"],
+    modes: {
+      review: {
+        filesystem: { cwd_writable: false },
+        exports: { enabled: true },
+        tools: selectedTools,
+      },
+    },
+  };
+  const actual = prepareWritableSmokeWorkspace(config);
+  assert.equal(actual.execution.backend, "seatbelt");
+  assert.equal(actual.filesystem.cwd_writable, true);
+  assert.deepEqual(actual.exports, { enabled: false });
+  assert.deepEqual(actual.workspace, { default: "host", allowed: ["host"], modes: { host: {} } });
+  for (const name of Object.keys(selectedTools))
+    assert.deepEqual(actual.tools[name], selectedTools[name]);
+  assert.equal(actual.tools.bash.mode, "disabled");
+});
+
+test("workspace-mode smoke prepares an omitted-common-policy fixture before launching the executable", async () => {
+  const temporary = await mkdtemp(join(tmpdir(), "pi-workspace-smoke-config-"));
+  try {
+    const config = parseToml(
+      await readFile(join(repositoryRoot, "config/default/config.seatbelt.toml"), "utf8"),
+    );
+    const selectedTools = {
+      bash: config.tools.bash,
+      write: config.tools.write,
+      edit: config.tools.edit,
+    };
+    delete config.filesystem.cwd_writable;
+    delete config.exports;
+    for (const name of Object.keys(selectedTools)) delete config.tools[name];
+    config.workspace = {
+      default: "review",
+      allowed: ["review"],
+      modes: {
+        review: {
+          filesystem: { cwd_writable: false },
+          exports: { enabled: true },
+          tools: selectedTools,
+        },
+      },
+    };
+    const source = stringifyToml(config);
+    const fixture = join(temporary, "config.toml");
+    await writeFile(fixture, source);
+    const stopBeforeLaunch = new Error("fixture prepared; no native executable needed");
+    let prepared;
+    await assert.rejects(
+      testWorkspaceModes({
+        configPath: fixture,
+        workspace: temporary,
+        launch(args) {
+          assert.deepEqual(args, ["--validate-installation"]);
+          prepared = parseToml(readFileSync(fixture, "utf8"));
+          throw stopBeforeLaunch;
+        },
+      }),
+      (error) => error === stopBeforeLaunch,
+    );
+    assert.equal(prepared.config_version, 14, "first compiled check rejects the old schema");
+    assert.equal(prepared.filesystem.cwd_writable, true);
+    assert.deepEqual(prepared.exports, { enabled: false });
+    for (const name of Object.keys(selectedTools))
+      assert.deepEqual(prepared.tools[name], { mode: "ask", session_grant: "never" });
+    assert.equal(prepared.workspace.modes.sandbox.filesystem.cwd_writable, false);
+    assert.equal(prepared.workspace.modes.sandbox.exports.enabled, true);
+    assert.equal(await readFile(fixture, "utf8"), source, "the supplied policy is restored");
   } finally {
     await rm(temporary, { recursive: true, force: true });
   }

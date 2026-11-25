@@ -2,7 +2,8 @@ import { readFile } from "node:fs/promises";
 import { describe, expect, it } from "vitest";
 import { createManagedExtensionCatalog } from "../managed-extensions/catalog.js";
 import gitCloneExtension from "../managed-extensions/git-clone/index.js";
-import { parseConfig } from "./parse.js";
+import { parseConfig as parseAuthoredConfig } from "./parse.js";
+import { resolveWorkspaceSelection } from "./workspace.js";
 import { applyIdentityOverrides, parseBrokerResponse } from "../identity/client.js";
 import type { SandboxConfig } from "../domain/index.js";
 
@@ -22,9 +23,12 @@ const catalog = createManagedExtensionCatalog([
 const base = await readFile(new URL("../../config/default/config.toml", import.meta.url), "utf8");
 function source(destination?: string): string {
   return (
-    base +
-    `\n[extensions.git]\nallowed_hosts = ["example.invalid"]\nallowed_schemes = ["https", "ssh"]\n${destination === undefined ? "" : `destination = "${destination}"\n`}\n[tools.git_clone]\nmode = "ask"\nsession_grant = "never"\naudit = true\n`
+    base.replace("[audit.tools]", "[audit.tools]\ngit_clone = true") +
+    `\n[extensions.git]\nallowed_hosts = ["example.invalid"]\nallowed_schemes = ["https", "ssh"]\n${destination === undefined ? "" : `destination = "${destination}"\n`}\n[tools.git_clone]\nmode = "ask"\nsession_grant = "never"\n`
   );
+}
+function parseConfig(...args: Parameters<typeof parseAuthoredConfig>) {
+  return resolveWorkspaceSelection(parseAuthoredConfig(...args)).config;
 }
 function resolved(destination?: string): SandboxConfig {
   return parseConfig(source(destination), "test", catalog) as SandboxConfig;
@@ -81,7 +85,7 @@ describe("Git clone deployment destination", () => {
     expect(() =>
       parseBrokerResponse(
         JSON.stringify({
-          version: 10,
+          version: 11,
           status: "ok",
           environment: { pi: {}, sandbox: {}, extensions: {} },
           overrides: { extensions: { git: { destination: "host_cwd" } } },

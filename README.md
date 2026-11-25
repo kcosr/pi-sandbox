@@ -217,13 +217,26 @@ a leading `--config FILE` option for caller-selected policy. Managed builds
 set it to `false` and reject the flag. The selected TOML still requires an
 absolute `models_file`; no built-in model catalog is enabled.
 
+Every launch selects an administrator-defined workspace mode. Use
+`--list-workspace-modes` to show permitted names, descriptions and the effective
+default, or `--workspace-mode NAME` before Pi arguments to select one. If used,
+the optional `--config FILE` prefix comes first. Fresh confined packages offer
+host (writable project, approvals, exports off) and sandbox (read-only project,
+temporary work, explicit user export), with host as default. Seatbelt keeps
+model Bash disabled in both packaged modes; direct packages offer only host.
+Mode names are administrator-authored and do not guarantee final permissions.
+
 Broker mode may additionally use root-managed
 `/etc/pi-sandbox/users.d/*.toml` and `/etc/pi-sandbox/groups.d/*.toml` drop-ins. Both directories are optional;
-without a matching file the main configuration applies unchanged.
+without a matching file the main allowed/default choices and selected mode's
+policy apply unchanged. Account rules may override mode access/default and then
+the selected mode's ordinary tool and filesystem policy.
 See [user and group environment and overrides](docs/identity-broker.md).
 
-Policy configuration is strict and versioned. Every model tool must be present;
-missing, unreadable, invalid, and unknown policy fields stop startup. Details
+Policy configuration is strict: main schema 15 and broker/rule version 11.
+Every composed mode requires complete tool permissions; shared `audit.tools`
+explicitly covers every configured named subject. Missing, unreadable, invalid,
+and unknown policy fields stop startup. Details
 and a complete example are in
 [configuration and approvals](docs/configuration.md).
 Provider definitions, API-key resolution, and model troubleshooting are in
@@ -231,7 +244,8 @@ Provider definitions, API-key resolution, and model troubleshooting are in
 
 ## Interactive diagnostics
 
-The `/sandbox` command reports the initialized boundary without exposing secrets or
+The `/sandbox` command reports the selected workspace mode, description,
+CLI/default source, final CWD access and export state alongside the initialized boundary without exposing secrets or
 adding content to the model conversation. Use `/sandbox mounts` for the concise
 effective mount policy, `/sandbox policy` for all tool policies, the fixed user
 shell behavior, and current session grants, or `/sandbox policy <subject>` for one subject. See

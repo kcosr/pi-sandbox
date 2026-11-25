@@ -5,7 +5,7 @@ import { formatSandboxMounts, formatSandboxPolicy, formatSandboxSummary } from "
 
 function diagnosticConfig(): SandboxConfig {
   return {
-    configVersion: 14,
+    configVersion: 15,
     skills: { directories: [] },
     exports: { enabled: false },
     codemode: { enabled: false, timeoutMs: 300000 },
@@ -33,6 +33,31 @@ function diagnosticConfig(): SandboxConfig {
 }
 
 describe("sandbox diagnostics", () => {
+  it("reports selected metadata alongside final effective access and exports", () => {
+    const summary = formatSandboxSummary({
+      initialized: true,
+      cwd: "/work/project",
+      configPath: "/etc/pi-sandbox/config.toml",
+      modelsFile: "/etc/pi-sandbox/models.json",
+      workspaceSelection: {
+        name: "review",
+        source: "cli",
+        description: "Inspect changes and save deliverables.",
+      },
+      exports: { enabled: true },
+      filesystem: { cwdWritable: false, hiddenPaths: [], deniedPaths: [] },
+      execution: { backend: "bubblewrap" },
+      identity: { mode: "broker" },
+      network: { mode: "none" },
+      extensions: [],
+      userStateDir: "/home/alice/.pi/agent",
+    });
+    expect(summary).toMatch(/Workspace mode:\s+review/);
+    expect(summary).toMatch(/Mode selection:\s+CLI/);
+    expect(summary).toMatch(/Description:\s+Inspect changes and save deliverables\./);
+    expect(summary).toMatch(/CWD access:\s+read-only/);
+    expect(summary).toMatch(/File exports:\s+enabled \(TUI-only\)/);
+  });
   it("reports one subagent management policy and the actual operations sharing its grant", () => {
     const config = {
       ...diagnosticConfig(),
@@ -85,6 +110,8 @@ describe("sandbox diagnostics", () => {
         initialized: true,
         cwd: "/work/project",
         configPath: "/etc/pi-sandbox/config.toml",
+        workspaceSelection: { name: "host", source: "default" },
+        exports: { enabled: false },
         modelsFile: "/etc/pi-sandbox/models.json",
         filesystem: { cwdWritable: true, deniedPaths: [], hiddenPaths: [] },
         execution: { backend: "bubblewrap" },
@@ -95,22 +122,25 @@ describe("sandbox diagnostics", () => {
       }),
     ).toBe(`Pi Sandbox: initialized
 
-Launch CWD:    /work/project
-Hidden paths:  none
-Denied paths:  none
-CWD access:    read/write
-Lifetime:      pi-sandbox process
-Timeout cap:   none
-Processes:     independent commands; background descendants remain until sandbox shutdown
-Code mode:     disabled
-MCP servers:   0
-Execution:     Bubblewrap sandbox
-Network:       disabled (private namespace)
-Config:        /etc/pi-sandbox/config.toml
-Models:        /etc/pi-sandbox/models.json
-Extensions:    none
-Identity:      disabled
-User state:    /home/alice/.pi/agent
+Workspace mode:  host
+Mode selection:  default
+File exports:    disabled
+Launch CWD:      /work/project
+Hidden paths:    none
+Denied paths:    none
+CWD access:      read/write
+Lifetime:        pi-sandbox process
+Timeout cap:     none
+Processes:       independent commands; background descendants remain until sandbox shutdown
+Code mode:       disabled
+MCP servers:     0
+Execution:       Bubblewrap sandbox
+Network:         disabled (private namespace)
+Config:          /etc/pi-sandbox/config.toml
+Models:          /etc/pi-sandbox/models.json
+Extensions:      none
+Identity:        disabled
+User state:      /home/alice/.pi/agent
 
 Use /sandbox mounts or /sandbox policy for details.`);
   });
@@ -120,6 +150,8 @@ Use /sandbox mounts or /sandbox policy for details.`);
       initialized: true,
       cwd: "/work/project\nNetwork: enabled",
       configPath: "/etc/pi-sandbox/config.toml",
+      workspaceSelection: { name: "host", source: "default" },
+      exports: { enabled: false },
       modelsFile: "/etc/pi-sandbox/models\u001b[31m.json",
       filesystem: { cwdWritable: true, deniedPaths: [], hiddenPaths: [] },
       execution: { backend: "bubblewrap" },
@@ -131,7 +163,7 @@ Use /sandbox mounts or /sandbox policy for details.`);
     expect(output).toContain("/work/project\\u000aNetwork: enabled");
     expect(output).toContain("models\\u001b[31m.json");
     expect(output).toContain("broker via /run/pi-sandbox-identity/broker.sock");
-    expect(output).toContain("Extensions:    git, service-api");
+    expect(output).toContain("Extensions:      git, service-api");
     expect(output).toContain("/home/alice\\u2028forged");
     expect(output).not.toContain("/work/project\nNetwork: enabled");
     expect(output).not.toContain("\u001b");
@@ -236,6 +268,8 @@ Use /sandbox mounts or /sandbox policy for details.`);
       initialized: true,
       cwd: "/work/project",
       configPath: "/etc/pi-sandbox/config.toml",
+      workspaceSelection: { name: "host", source: "default" },
+      exports: { enabled: false },
       modelsFile: config.modelsFile,
       execution: config.execution,
       filesystem: config.filesystem,
@@ -244,7 +278,7 @@ Use /sandbox mounts or /sandbox policy for details.`);
       extensions: [],
       userStateDir: "/home/alice/.pi/agent",
     });
-    expect(summary).toContain("Network:       host (unrestricted)");
+    expect(summary).toContain("Network:         host (unrestricted)");
 
     const detail = formatSandboxPolicy(
       { config, hasSessionGrant: () => false, isToolActive: () => true },
@@ -263,6 +297,8 @@ Use /sandbox mounts or /sandbox policy for details.`);
       initialized: true,
       cwd: "/work/project",
       configPath: "/etc/pi-sandbox/config.toml",
+      workspaceSelection: { name: "host", source: "default" },
+      exports: { enabled: false },
       modelsFile: config.modelsFile,
       execution: config.execution,
       filesystem: config.filesystem,
@@ -291,6 +327,8 @@ Use /sandbox mounts or /sandbox policy for details.`);
       initialized: true,
       cwd: "/work/project",
       configPath: "/etc/pi-sandbox/config.toml",
+      workspaceSelection: { name: "host", source: "default" },
+      exports: { enabled: false },
       modelsFile: config.modelsFile,
       execution: config.execution,
       filesystem: config.filesystem,
@@ -299,7 +337,7 @@ Use /sandbox mounts or /sandbox policy for details.`);
       extensions: [],
       userStateDir: "/Users/alice/.pi/agent",
     });
-    expect(summary).toContain("Execution:     direct host execution (uncontained)");
+    expect(summary).toContain("Execution:       direct host execution (uncontained)");
     expect(formatSandboxMounts("/work/project", config.execution, config.filesystem)).toContain(
       "no mount namespace or filesystem containment boundary",
     );

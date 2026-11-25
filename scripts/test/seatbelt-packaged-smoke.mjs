@@ -12,6 +12,8 @@ import { testRpcSessionLifecycle } from "./rpc-lifecycle-smoke.mjs";
 import { testSharedSkills } from "./skills-smoke.mjs";
 import { testManagedMcpCodemode } from "./mcp-codemode-smoke.mjs";
 import { testManagedSubagents } from "./subagents-smoke.mjs";
+import { testWorkspaceModes } from "./workspace-modes-smoke.mjs";
+import { prepareWritableSmokeWorkspace } from "./packaged-smoke-config.mjs";
 
 if (process.platform !== "darwin" || process.argv.length !== 3) {
   throw new Error(
@@ -35,7 +37,9 @@ try {
   await writeFile(secret, "DENIED_MARKER");
   const configPath = join(temporary, "config.toml");
   const modelsPath = join(temporary, "models.json");
-  const config = parse(await readFile(join(payload, "defaults/config.toml"), "utf8"));
+  const config = prepareWritableSmokeWorkspace(
+    parse(await readFile(join(payload, "defaults/config.toml"), "utf8")),
+  );
   config.models_file = modelsPath;
   config.execution = { backend: "seatbelt" };
   config.network = { mode: "none" };
@@ -44,6 +48,7 @@ try {
   config.audit.enabled = false;
   delete config.subagents;
   delete config.tools.subagents;
+  delete config.audit.tools.subagents;
   config.sessions.retention_days = 365;
   config.skills = { directories: [] };
   config.environment = {
@@ -53,8 +58,8 @@ try {
   };
   await writeFile(configPath, stringify(config));
   await writeFile(modelsPath, await readFile(join(payload, "defaults/models.json")));
-  const launch = (extra = []) => {
-    const child = spawn(executable, ["--config", configPath, "--mode", "rpc", ...extra], {
+  const launchManaged = (extra = []) => {
+    const child = spawn(executable, ["--config", configPath, ...extra], {
       cwd: workspace,
       env: { ...process.env, HOME: home, PI_CODING_AGENT_DIR: state, NO_COLOR: "1" },
       stdio: ["pipe", "pipe", "pipe"],
@@ -63,6 +68,7 @@ try {
     child.once("close", () => children.delete(child));
     return child;
   };
+  const launch = (extra = []) => launchManaged(["--mode", "rpc", ...extra]);
   const child = launch();
   const messages = [];
   let stderr = "";
@@ -145,6 +151,7 @@ try {
     uid: process.geteuid(),
   });
   assert.equal(await readFile(secret, "utf8"), "DENIED_MARKER");
+  await testWorkspaceModes({ launch: launchManaged, configPath, workspace });
   console.log(
     "PASS compiled Seatbelt confinement, diagnostics, sessions, shared skills, EOF, MCP, approvals and Code Mode",
   );

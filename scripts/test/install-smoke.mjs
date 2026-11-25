@@ -20,6 +20,9 @@ import { fileURLToPath } from "node:url";
 import { skillCandidateFixture, verifySkillInstallation } from "./skill-install-fixtures.mjs";
 
 const repositoryRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../..");
+const defaultPolicy = (
+  await readFile(path.join(repositoryRoot, "config/default/config.toml"), "utf8")
+).replace(/\[skills\][\s\S]*?(?=\n\[)/u, "");
 const temporaryRoot = await mkdtemp(
   path.join(process.env.PI_SANDBOX_TEST_TMPDIR ?? os.tmpdir(), "pi-sandbox-install-"),
 );
@@ -117,7 +120,7 @@ try {
     "initial adjacent asset",
   );
 
-  const operatorConfig = `${configContents("1")}operator = "preserved"\n`;
+  const operatorConfig = `${configContents("1")}# operator = "preserved"\n`;
   const operatorModels = `${JSON.stringify({ valid: true, release: "1", operator: "preserved" })}\n`;
   await writeFile(config, operatorConfig);
   await writeFile(models, operatorModels);
@@ -237,6 +240,39 @@ try {
     "validation failure preserved installed payload",
   );
 
+  // These staged candidates model the version gate; parser tests exercise full schema semantics.
+  const oldSchemaRoot = path.join(temporaryRoot, "old-schema-root");
+  run(path.join(release1, "install.sh"), [], { DESTDIR: oldSchemaRoot });
+  const oldSchemaConfig = path.join(oldSchemaRoot, "etc/pi-sandbox/config.toml");
+  const oldSchemaBinary = path.join(oldSchemaRoot, "usr/libexec/pi-sandbox/pi-sandbox");
+  const retainedBinary = `${await readFile(oldSchemaBinary, "utf8")}# retained binary marker\n`;
+  const retainedPolicy = configContents("1").replace("config_version = 15", "config_version = 14");
+  await writeFile(oldSchemaBinary, retainedBinary);
+  await writeFile(oldSchemaConfig, retainedPolicy);
+  const oldSchemaFailure = assertRunFails(path.join(release2, "install.sh"), [], {
+    DESTDIR: oldSchemaRoot,
+  });
+  assertIncludes(
+    oldSchemaFailure.stderr,
+    "config.config_version must be the integer 15",
+    "old schema diagnostic",
+  );
+  assertEqual(
+    await readFile(oldSchemaConfig, "utf8"),
+    retainedPolicy,
+    "old schema policy preserved",
+  );
+  assertEqual(
+    await readFile(oldSchemaBinary, "utf8"),
+    retainedBinary,
+    "old schema binary preserved",
+  );
+  assertEqual(
+    await readFile(path.join(oldSchemaRoot, "usr/libexec/pi-sandbox/assets/release.txt"), "utf8"),
+    "release 1\n",
+    "old schema rejects payload swap",
+  );
+
   const occupiedLauncherRoot = path.join(temporaryRoot, "occupied-launcher-root");
   await mkdir(path.join(occupiedLauncherRoot, "usr/bin"), { recursive: true });
   await writeFile(path.join(occupiedLauncherRoot, "usr/bin/pi-sandbox"), "unrelated\n");
@@ -290,7 +326,7 @@ try {
   const groupsDirectory = path.join(etcDirectory, "groups.d");
   const groups = path.join(groupsDirectory, "admin.toml");
   const groupContents =
-    'version = 10\ngroup = "admin"\n[overrides.tools.bash]\nmode = "ask"\nsession_grant = "offer"\n';
+    'version = 11\ngroup = "admin"\n[overrides.tools.bash]\nmode = "ask"\nsession_grant = "offer"\n';
   await assertMissing(groupsDirectory);
   await mkdir(groupsDirectory, { mode: 0o755 });
   await writeFile(groups, groupContents, { mode: 0o600 });
@@ -299,7 +335,7 @@ try {
   await mkdir(usersDirectory, { mode: 0o755 });
   await writeFile(
     users,
-    'version = 10\nuid = 1000\n\n[overrides.execution]\nbackend = "direct"\n',
+    'version = 11\nuid = 1000\n\n[overrides.execution]\nbackend = "direct"\n',
     {
       mode: 0o600,
     },
@@ -321,7 +357,7 @@ try {
   assertEqual(await readFile(unrelated, "utf8"), "keep\n", "unrelated configuration");
   assertEqual(
     await readFile(users, "utf8"),
-    'version = 10\nuid = 1000\n\n[overrides.execution]\nbackend = "direct"\n',
+    'version = 11\nuid = 1000\n\n[overrides.execution]\nbackend = "direct"\n',
     "retained user override",
   );
   assertEqual(await readFile(groups, "utf8"), groupContents, "retained group override");
@@ -385,7 +421,8 @@ while [ "$#" -gt 0 ]; do
 done
 config="$root/etc/pi-sandbox/config.toml"
 ${skillCandidateFixture("/usr/libexec/pi-sandbox")}
-grep -q '^valid = true$' "$config"
+grep -q '^config_version = 15$' "$config" || { echo 'config.config_version must be the integer 15' >&2; exit 1; }
+grep -q '^# valid = true$' "$config"
 models_path=$(awk -F '"' '/^models_file = "/ { print $2; exit }' "$config")
 [ -n "$models_path" ]
 grep -q '"valid":true' "$root$models_path"
@@ -450,7 +487,7 @@ grep -q '"valid":true' "$root$models_path"
 }
 
 function configContents(release) {
-  return `valid = true\nrelease = "${release}"\nmodels_file = "/etc/pi-sandbox/models.json"\n`;
+  return `# valid = true\n# release = "${release}"\n${defaultPolicy}`;
 }
 
 function modelsContents(release) {
@@ -486,6 +523,7 @@ function assertRunFails(command, args, environment) {
   });
   if (result.error !== undefined) throw result.error;
   if (result.status === 0) throw new Error(`${command} unexpectedly succeeded`);
+  return result;
 }
 
 function assertEqual(actual, expected, label) {

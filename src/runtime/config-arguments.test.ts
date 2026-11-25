@@ -84,3 +84,100 @@ describe("build-controlled configuration arguments", () => {
     expect(() => assertRuntimeUser(interactive.piArgs, 0)).toThrow("refusing to run as root");
   });
 });
+
+describe("workspace launch selection", () => {
+  it.each([["--workspace-mode", "sandbox"], ["--workspace-mode=sandbox"]])(
+    "consumes one selector before Pi arguments: %j",
+    (...prefix) => {
+      expect(parseSandboxArguments([...prefix, "--mode", "rpc"], managed)).toEqual({
+        configPath: managed.configPath,
+        workspaceMode: "sandbox",
+        piArgs: ["--mode", "rpc"],
+      });
+      expect(
+        parseSandboxArguments(["--config", "/tmp/policy.toml", ...prefix], configurable),
+      ).toMatchObject({
+        configPath: "/tmp/policy.toml",
+        workspaceMode: "sandbox",
+        piArgs: [],
+      });
+    },
+  );
+
+  it.each([
+    ["--workspace-mode"],
+    ["--workspace-mode="],
+    ["--workspace-mode", "Host"],
+    ["--workspace-mode", "../host"],
+    ["--workspace-mode", ""],
+    ["--workspace-mode", "x".repeat(33)],
+    ["--workspace-mode", "host", "--workspace-mode=sandbox"],
+    ["--workspace-mode", "host", "--config", "/tmp/policy.toml"],
+    ["prompt", "--workspace-mode=host"],
+    ["--mode", "--workspace-mode=host"],
+    ["--name", "--", "--workspace-mode=host"],
+  ])("rejects malformed or misplaced selection: %j", (...args) => {
+    expect(() => parseSandboxArguments(args, configurable)).toThrow();
+  });
+
+  it.each([
+    "--version",
+    "--validate-installation",
+    "--print-execution-backend",
+    "--pi-sandbox-internal-worker",
+    "--pi-sandbox-internal-export-reader",
+  ])("rejects selectors with metadata/private operation %s before startup", (operation) => {
+    expect(() => parseSandboxArguments(["--workspace-mode=host", operation], managed)).toThrow(
+      "cannot be combined",
+    );
+  });
+
+  it.each([
+    ["--system-prompt", "--workspace-mode=sandbox"],
+    ["--name", "--config=literal"],
+    ["--", "--workspace-mode", "sandbox"],
+    ["--", "--list-workspace-modes"],
+    ["--system-prompt", "--list-workspace-modes"],
+    ["A prompt containing --workspace-mode=host text"],
+  ])("preserves literal Pi values and prompt text: %j", (...args) => {
+    expect(parseSandboxArguments(args, managed)).toEqual({
+      configPath: managed.configPath,
+      piArgs: args,
+    });
+  });
+
+  it("leaves optional-extension switches in their existing positions", () => {
+    expect(
+      parseSandboxArguments(
+        ["--workspace-mode=host", "prompt", "--enable-extension", "git"],
+        managed,
+      ).piArgs,
+    ).toEqual(["prompt", "--enable-extension", "git"]);
+  });
+
+  it("admits standalone listing with the normal root-user boundary", () => {
+    const parsed = parseSandboxArguments(
+      ["--config", "/tmp/policy.toml", "--list-workspace-modes"],
+      configurable,
+    );
+    expect(parsed).toEqual({
+      configPath: "/tmp/policy.toml",
+      piArgs: ["--list-workspace-modes"],
+      listWorkspaceModes: true,
+    });
+    expect(() => assertRuntimeUser(parsed.piArgs, 0)).toThrow("refusing to run as root");
+  });
+
+  it.each([
+    ["--list-workspace-modes", "--list-workspace-modes"],
+    ["--workspace-mode=host", "--list-workspace-modes"],
+    ["--list-workspace-modes", "--mode", "rpc"],
+    ["--list-workspace-modes", "--version"],
+    ["--list-workspace-modes=true"],
+    ["prompt", "--list-workspace-modes"],
+  ])("rejects ambiguous listing: %j", (...args) => {
+    expect(() => parseSandboxArguments(args, managed)).toThrow(
+      "--list-workspace-modes accepts only",
+    );
+  });
+});

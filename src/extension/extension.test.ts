@@ -108,7 +108,7 @@ function config(
   overrides: Partial<Record<ToolName, "allow" | "ask" | "deny" | "disabled">> = {},
 ): SandboxConfig {
   return {
-    configVersion: 14,
+    configVersion: 15,
     skills: { directories: [] },
     exports: { enabled: false },
     codemode: { enabled: false, timeoutMs: 300000 },
@@ -336,6 +336,7 @@ async function start(
   await createPiSandboxExtension({
     cwd: "/work/project",
     configPath: "/etc/pi-sandbox/config.toml",
+    workspaceSelection: { name: "host", source: "default" },
     userStateDir: "/home/test/.pi/agent",
     loadConfig: () => Promise.resolve(cfg),
     executionBackend: cfg.execution.backend,
@@ -372,6 +373,7 @@ describe("managed initial tool activation", () => {
       await createPiSandboxExtension({
         cwd: "/work/project",
         configPath: "/etc/pi-sandbox/config.toml",
+        workspaceSelection: { name: "host", source: "default" },
         userStateDir: directory,
         loadConfig: () => Promise.resolve(cfg),
         executor,
@@ -405,6 +407,7 @@ describe("managed initial tool activation", () => {
       await createPiSandboxExtension({
         cwd: "/work/project",
         configPath: "/etc/pi-sandbox/config.toml",
+        workspaceSelection: { name: "host", source: "default" },
         userStateDir: directory,
         loadConfig: () => Promise.resolve(cfg),
         executor: fakeExecutor(),
@@ -500,6 +503,7 @@ describe("managed initial tool activation", () => {
       await createPiSandboxExtension({
         cwd: "/work/project",
         configPath: "/etc/pi-sandbox/config.toml",
+        workspaceSelection: { name: "host", source: "default" },
         userStateDir: directory,
         loadConfig: () => Promise.resolve(cfg),
         executor: fakeExecutor(),
@@ -592,6 +596,7 @@ describe("managed initial tool activation", () => {
         await createPiSandboxExtension({
           cwd: "/work/project",
           configPath: "/etc/pi-sandbox/config.toml",
+          workspaceSelection: { name: "host", source: "default" },
           userStateDir: directory,
           loadConfig: () => Promise.resolve(cfg),
           executor: fakeExecutor(),
@@ -633,6 +638,7 @@ describe("managed initial tool activation", () => {
     await createPiSandboxExtension({
       cwd: "/work/project",
       configPath: "/etc/pi-sandbox/config.toml",
+      workspaceSelection: { name: "host", source: "default" },
       userStateDir: "/home/test/.pi/agent",
       loadConfig: () => Promise.resolve(cfg),
       executor: fakeExecutor(),
@@ -843,6 +849,7 @@ describe("managed environment prompt lifecycle", () => {
     await createPiSandboxExtension({
       cwd: "/work/project",
       configPath: "/etc/pi-sandbox/config.toml",
+      workspaceSelection: { name: "host", source: "default" },
       userStateDir: "/unrelated/pi-state",
       loadConfig: () => Promise.resolve(config()),
       accountHome: "/home/alice",
@@ -907,6 +914,7 @@ describe("Pi Sandbox extension", () => {
     await createPiSandboxExtension({
       cwd: executor.cwd,
       configPath: "/etc/pi-sandbox/config.toml",
+      workspaceSelection: { name: "host", source: "default" },
       userStateDir: "/home/test/.pi/agent",
       loadConfig: () => Promise.resolve(cfg),
       executor,
@@ -988,6 +996,7 @@ describe("Pi Sandbox extension", () => {
     await createPiSandboxExtension({
       cwd: "/work/project",
       configPath: "/etc/pi-sandbox/config.toml",
+      workspaceSelection: { name: "host", source: "default" },
       userStateDir: "/home/test/.pi/agent",
       loadConfig: () => Promise.resolve(cfg),
       executor,
@@ -1098,6 +1107,7 @@ describe("Pi Sandbox extension", () => {
     await createPiSandboxExtension({
       cwd: "/work/project",
       configPath: "/etc/pi-sandbox/config.toml",
+      workspaceSelection: { name: "host", source: "default" },
       userStateDir: "/home/test/.pi/agent",
       loadConfig: () => Promise.resolve(configWithPiTool("allow")),
       executor: fakeExecutor(),
@@ -1113,6 +1123,7 @@ describe("Pi Sandbox extension", () => {
     await createPiSandboxExtension({
       cwd: "/work/project",
       configPath: "/etc/pi-sandbox/config.toml",
+      workspaceSelection: { name: "host", source: "default" },
       userStateDir: "/home/test/.pi/agent",
       loadConfig: () => Promise.resolve(configWithPiTool("deny")),
       executor: fakeExecutor(),
@@ -1127,6 +1138,7 @@ describe("Pi Sandbox extension", () => {
     await createPiSandboxExtension({
       cwd: "/work/project",
       configPath: "/etc/pi-sandbox/config.toml",
+      workspaceSelection: { name: "host", source: "default" },
       userStateDir: "/home/test/.pi/agent",
       loadConfig: () => Promise.resolve(configWithPiTool("disabled")),
       executor: fakeExecutor(),
@@ -1142,6 +1154,7 @@ describe("Pi Sandbox extension", () => {
     await createPiSandboxExtension({
       cwd: "/work/project",
       configPath: "/etc/pi-sandbox/config.toml",
+      workspaceSelection: { name: "host", source: "default" },
       userStateDir: "/home/test/.pi/agent",
       loadConfig: () => Promise.resolve(configWithPiTool("allow")),
       executor: fakeExecutor(),
@@ -1161,6 +1174,7 @@ describe("Pi Sandbox extension", () => {
     await createPiSandboxExtension({
       cwd: "/work/project",
       configPath: "/etc/pi-sandbox/config.toml",
+      workspaceSelection: { name: "host", source: "default" },
       userStateDir: "/home/test/.pi/agent",
       loadConfig: () => Promise.resolve(configWithPiTool("allow")),
       executor: fakeExecutor(),
@@ -1196,6 +1210,7 @@ describe("Pi Sandbox extension", () => {
     await createPiSandboxExtension({
       cwd: "/work/project",
       configPath: "/etc/pi-sandbox/config.toml",
+      workspaceSelection: { name: "host", source: "default" },
       userStateDir: "/home/test/.pi/agent",
       loadConfig: () => Promise.resolve(configWithManagedTool("ask")),
       executor: sandbox,
@@ -1265,6 +1280,7 @@ describe("Pi Sandbox extension", () => {
     await createPiSandboxExtension({
       cwd: "/work/project",
       configPath: "/etc/pi-sandbox/config.toml",
+      workspaceSelection: { name: "host", source: "default" },
       userStateDir: "/home/test/.pi/agent",
       loadConfig: () => Promise.resolve(configWithManagedTool("deny")),
       executor: fakeExecutor(),
@@ -1293,9 +1309,9 @@ describe("Pi Sandbox extension", () => {
     });
     await command?.handler("", ctx as never);
     expect(notices.at(-1)?.message).toContain("Pi Sandbox: initialized");
-    expect(notices.at(-1)?.message).toContain("Config:        /etc/pi-sandbox/config.toml");
-    expect(notices.at(-1)?.message).toContain("Extensions:    none");
-    expect(notices.at(-1)?.message).toContain("User state:    /home/test/.pi/agent");
+    expect(notices.at(-1)?.message).toContain("Config:          /etc/pi-sandbox/config.toml");
+    expect(notices.at(-1)?.message).toContain("Extensions:      none");
+    expect(notices.at(-1)?.message).toContain("User state:      /home/test/.pi/agent");
 
     await command?.handler("mounts", ctx as never);
     expect(notices.at(-1)?.message).toContain("/work/project  read/write  host launch directory");
@@ -1540,6 +1556,7 @@ describe("Pi Sandbox extension", () => {
     await createPiSandboxExtension({
       cwd: "/work/project",
       configPath: "/etc/pi-sandbox/config.toml",
+      workspaceSelection: { name: "host", source: "default" },
       userStateDir: "/home/test/.pi/agent",
       loadConfig: () => Promise.resolve(config({ write: "ask" })),
       executor,
@@ -1787,6 +1804,7 @@ describe("Pi Sandbox extension", () => {
     await createPiSandboxExtension({
       cwd: "/work/project",
       configPath: "/etc/pi-sandbox/config.toml",
+      workspaceSelection: { name: "host", source: "default" },
       userStateDir: "/home/test/.pi/agent",
       loadConfig: () => Promise.reject(new Error("configuration failed")),
       executor: fakeExecutor(),
@@ -1823,6 +1841,7 @@ describe("Pi Sandbox extension", () => {
     await createPiSandboxExtension({
       cwd: "/work/project",
       configPath: "/etc/pi-sandbox/config.toml",
+      workspaceSelection: { name: "host", source: "default" },
       userStateDir: "/home/test/.pi/agent",
       loadConfig: () => Promise.resolve(config()),
       executor: fakeExecutor(),
@@ -1848,6 +1867,7 @@ describe("Pi Sandbox extension", () => {
     const extension = createPiSandboxExtension({
       cwd: "/work/project",
       configPath: "/etc/pi-sandbox/config.toml",
+      workspaceSelection: { name: "host", source: "default" },
       userStateDir: "/home/test/.pi/agent",
       loadConfig: () => Promise.resolve(config()),
       executor: fakeExecutor(),
@@ -1877,6 +1897,7 @@ describe("Pi Sandbox extension", () => {
     await createPiSandboxExtension({
       cwd: "/work/project",
       configPath: "/etc/pi-sandbox/config.toml",
+      workspaceSelection: { name: "host", source: "default" },
       userStateDir: "/home/test/.pi/agent",
       loadConfig: () => Promise.resolve(config()),
       executor: fakeExecutor(),
@@ -1917,6 +1938,7 @@ describe("Pi Sandbox extension", () => {
     await createPiSandboxExtension({
       cwd: "/work/project",
       configPath: "/etc/pi-sandbox/config.toml",
+      workspaceSelection: { name: "host", source: "default" },
       userStateDir: "/home/test/.pi/agent",
       loadConfig: () => Promise.resolve(config()),
       executor,
@@ -1938,6 +1960,7 @@ describe("Pi Sandbox extension", () => {
       await createPiSandboxExtension({
         cwd: "/work/project",
         configPath: "/etc/pi-sandbox/config.toml",
+        workspaceSelection: { name: "host", source: "default" },
         userStateDir: "/home/test/.pi/agent",
         loadConfig: () => Promise.resolve(config()),
         executor: fakeExecutor(),
@@ -1963,6 +1986,7 @@ describe("Pi Sandbox extension", () => {
     await createPiSandboxExtension({
       cwd: "/work/project",
       configPath: "/etc/pi-sandbox/config.toml",
+      workspaceSelection: { name: "host", source: "default" },
       userStateDir: "/home/test/.pi/agent",
       loadConfig: () => Promise.resolve(config()),
       executor: fakeExecutor(),
@@ -2114,6 +2138,7 @@ describe("known read-only Bash commands", () => {
     await createPiSandboxExtension({
       cwd: "/work/project",
       configPath: "/etc/pi-sandbox/config.toml",
+      workspaceSelection: { name: "host", source: "default" },
       userStateDir: "/home/test/.pi/agent",
       loadConfig: () => Promise.resolve(cfg),
       executor,
@@ -2555,6 +2580,7 @@ describe("known read-only Bash commands", () => {
     await createPiSandboxExtension({
       cwd: "/work/project",
       configPath: "/etc/pi-sandbox/config.toml",
+      workspaceSelection: { name: "host", source: "default" },
       userStateDir: "/home/test/.pi/agent",
       loadConfig: () => Promise.resolve(cfg),
       executor,
@@ -2623,6 +2649,7 @@ try { await tools.bash({ command: "echo x > out" }); } catch (error) { return St
     await createPiSandboxExtension({
       cwd: "/work/project",
       configPath: "/etc/pi-sandbox/config.toml",
+      workspaceSelection: { name: "host", source: "default" },
       userStateDir: "/home/test/.pi/agent",
       loadConfig: () =>
         Promise.resolve(

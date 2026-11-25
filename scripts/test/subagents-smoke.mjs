@@ -13,7 +13,6 @@ const management = ["spawn_agent", "steer_agent", "cancel_agent", "resume_agent"
 const policy = (mode) => ({
   mode,
   session_grant: mode === "ask" ? "offer" : "never",
-  audit: false,
 });
 
 /** Exercise real managed SDK children through the packaged parent, using only a local provider. */
@@ -250,7 +249,7 @@ export async function testManagedSubagents({ launch, configPath, modelsPath, wor
           transport: "http",
           url: `http://127.0.0.1:${server.address().port}/subagent-mcp`,
           exposure: "codemode",
-          default_policy: policy("ask"),
+          default_policy: { ...policy("ask"), audit: false },
         },
       },
     };
@@ -259,6 +258,7 @@ export async function testManagedSubagents({ launch, configPath, modelsPath, wor
     config.tools.edit = policy("disabled");
     config.tools.bash = policy("allow");
     config.tools.subagents = policy("allow");
+    config.audit.tools.subagents = false;
     await writeFile(configPath, stringify(config));
     await writeFile(join(workspace, "subagent-input.txt"), "MANAGED_CHILD_INPUT");
     await writeFile(
