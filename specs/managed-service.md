@@ -267,9 +267,19 @@ administrative controls and existing least-restrictive joins/conflict errors rem
 ## Service ownership and authored inputs
 
 Provide one Linux static Rust executable, `pi-sandbox-service`, and one ordinary
-root systemd service. It binds its configured listeners and handles connections
+root systemd service. The executable may also run directly as an unprivileged
+account when every listener is HTTPS. Any Unix listener, including a mixed
+Unix/HTTPS manifest, requires root. It binds its configured listeners and handles connections
 concurrently; it never spawns a systemd unit or application process per client.
 No new privileged service is installed on macOS: Mac clients use HTTPS.
+
+Derive administrative ownership from the effective service UID; it is not a
+manifest option or client trust setting. Offline `--validate` and normal startup
+use the same account/listener admission and ownership rules. Reject non-root Unix
+or mixed manifests before reading listener material or binding any listener; do
+not partially activate the HTTPS subset. Keep Unix socket and ancestor checks
+root-only on both sides. No protocol/schema change or runtime client endpoint
+override accompanies unprivileged HTTPS hosting.
 
 Use a strict service manifest, version 1. The administrator-owned unit supplies
 its absolute path through `pi-sandbox-service --manifest FILE`; the default unit
@@ -352,7 +362,7 @@ socket access or an HTTPS credential can directly request bootstrap even when it
 official local-file build uses that endpoint only for auditing. Provision a
 listener intended only for local-profile audit clients with a dedicated complete
 policy and catalog containing no inline secrets or secret-file references; do not
-point it at the clients' own local policy. Otherwise the root service could expose
+point it at the clients' own local policy. Otherwise the service could expose
 files those users cannot read directly. Service-package examples must include this
 non-secret audit-deployment configuration and security documentation must explain
 the boundary. This is deployment guidance, not automatic secret detection or a
@@ -396,13 +406,21 @@ Assign final version numbers against then-current main at implementation; never
 accept both old and new shapes. The numbers here are a coordinated breaking
 revision against this baseline, not a reservation against unrelated work.
 
-Administrative manifest/policy/catalog files and their ancestors must be
-root-owned, non-symlink and not group/world writable; policy/catalog may be 0644.
-Preserve rule-directory protection and root-owned non-symlink 0600 rule files.
+Administrative manifest/policy/catalog files must be owned by the effective
+service UID, non-symlink and not group/world writable; policy/catalog may be 0644.
+Ancestors must be non-symlink directories owned by root or that service UID and
+not group/world writable. Preserve rule-directory protection and require rule
+directories and non-symlink 0600 rule files to belong to the service UID. When
+the daemon runs as root, all these inputs and ancestors remain root-owned.
 Rule directories remain optional. Their contents remain deployment-owned, not
 packaged user records. Reject invalid unmatched rule files structurally.
-TLS private keys and Basic-password files require root ownership, non-symlink
-0600 files and protected ancestors; public certificate chains may be 0644.
+TLS private keys and Basic-password files require service-UID ownership, non-symlink
+0600 files and protected ancestors; public certificate chains belong to the same
+UID and may be 0644. An unprivileged HTTPS service may therefore keep inputs under
+its protected home directory. Client trust still comes from the compiled endpoint
+and TLS hostname/chain checks; client users must not hold server keys or authority
+to issue trusted certificates for that hostname. Trial credentials and keys remain
+separate from production.
 Certificate/key inputs are bounded to 1 MiB each and validated as a matching
 usable TLS pair before listener activation. Public chain files include intermediates.
 
@@ -1535,6 +1553,11 @@ Replace the old 32 MiB/16-task unit limits. Start with conservative packaged lim
 preallocated resources. At startup require the effective soft file-descriptor
 limit to be at least `max_connections + 1024` for listeners, files and worker pipes;
 fail clearly before accepting connections when it is insufficient.
+Direct foreground launches inherit the shell limit; explain `ulimit -n` alongside
+systemd `LimitNOFILE`. An unprivileged HTTPS-only deployment needs no system unit
+or staging under `/opt` or `/run`, but must still submit audit records successfully
+to the host's existing `/dev/log`. No audit-sink fallback or relaxed acknowledgment
+gate is introduced. Offline validation does not probe syslog.
 Keep two fixed bounded worker pools and the documented input/connection/session
 bounds. Hold worker slots through response drain, avoiding unbounded parsed-policy
 or response retention. Qualification must measure peak memory/tasks at supported
@@ -1846,6 +1869,11 @@ Required offline acceptance includes:
 - Real Unix and HTTPS clients use one protocol and complete bootstrap. Test Linux
   Unix, Linux HTTPS and macOS HTTPS; qualify each native supported architecture
   separately, including Seatbelt records and ordinary standalone packages.
+- Qualify real unprivileged HTTPS-only daemon bootstrap, username rules, secret
+  reads and syslog acknowledgment in the isolated Linux harness. Require the same
+  rejection in offline validation and startup for non-root Unix/mixed manifests,
+  with no partial binding. Retain wrong-owner, unsafe-mode, symlink and root-owner
+  negative controls, and audited failure when the service UID cannot reach syslog.
 - Both profiles reject obsolete distribution fields and source-incompatible flags;
   service builds reject local catalog redirection. Both profiles reject CA/proxy/endpoint
   environment overrides, redirects, invalid TLS hostname/chain, bad credentials,

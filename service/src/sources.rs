@@ -369,10 +369,11 @@ pub(crate) fn bootstrap(
 }
 pub fn validate(manifest: &Manifest) -> Result<()> {
     manifest.check()?;
+    let owner = manifest.admitted_owner()?;
     for listener in &manifest.listeners {
-        listener.validate_material_metadata(0)?;
+        listener.validate_material_metadata(owner)?;
         if let Some(certificate) = &listener.certificate_file {
-            let bytes = read_protected(Path::new(certificate), 1024 * 1024, false, 0)?;
+            let bytes = read_protected(Path::new(certificate), 1024 * 1024, false, owner)?;
             let certs = rustls_pemfile::certs(&mut bytes.as_slice())
                 .collect::<std::result::Result<Vec<_>, _>>()
                 .map_err(|_| CONFIG)?;
@@ -380,12 +381,12 @@ pub fn validate(manifest: &Manifest) -> Result<()> {
                 return Err(CONFIG);
             }
         }
-        let policy = policy(listener, 0)?;
+        let policy = policy(listener, owner)?;
         let mut catalogs =
-            rules::validate_sources(listener, 0, Instant::now() + Duration::from_secs(30))?;
+            rules::validate_sources(listener, owner, Instant::now() + Duration::from_secs(30))?;
         catalogs.push(policy["models_file"].as_str().ok_or(CONFIG)?.into());
         for path in catalogs.into_iter().collect::<BTreeSet<_>>() {
-            catalog(&path, &policy, 0)?;
+            catalog(&path, &policy, owner)?;
         }
     }
     Ok(())

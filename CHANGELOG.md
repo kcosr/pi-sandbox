@@ -15,6 +15,8 @@
 
 ### Added
 
+- Allow HTTPS-only configuration/audit services to run under an unprivileged
+  account with account-owned protected inputs; Unix listeners remain root-only.
 - Allow user-directed sandbox saving with a writable CWD; enable exports in
   packaged Bubblewrap and Seatbelt host modes while retaining private scratch exclusion.
   ([#60](https://github.com/kcosr/pi-sandbox/pull/60))

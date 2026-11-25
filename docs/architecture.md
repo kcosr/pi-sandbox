@@ -317,10 +317,12 @@ all authored entries and every composed mode, including disallowed definitions,
 before selecting one. Common settings need not be launchable alone. Current
 platform guards run before selection and again after remaining account overrides.
 
-Service builds use the concurrent root Rust daemon's listener policy and optional
+Service builds use the concurrent Rust daemon's listener policy and optional
 version-12 account rules. Unix requests use kernel peer credentials and bounded
 host account/group lookup. HTTPS uses authenticated username assertions with the
-explicit limitations in [managed service](managed-service.md). Local builds have
+explicit limitations in [managed service](managed-service.md). Unix or mixed listeners
+require root; HTTPS-only services may run under an unprivileged account with
+protected account-owned inputs. Client service authentication is unchanged. Local builds have
 empty account overrides and no rule-directory discovery. Matching explicit rule
 grants join before replacing defaults; conflicting backend, catalog or scoped
 environment values fail. Workspace access/default overrides select the composed

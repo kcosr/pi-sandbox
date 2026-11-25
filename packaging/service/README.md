@@ -29,6 +29,30 @@ TLS 1.2 or later and normal certificate hostname validation. Shared credentials
 permit username assertions; they do not attest a device or isolate users sharing
 a credential. Changes to TLS, credentials or the manifest require a restart.
 
+For foreground HTTPS-only use, the executable and inputs may instead live under
+an unprivileged service account's home. Remove every Unix listener. Run validation
+and startup as that account; each administrative file and rule directory must be
+owned by it, with non-symlink ancestors owned by root or that account and no
+group/other writes. Keep the file modes above. Running as root retains root-only
+ownership checks, even for HTTPS-only configurations.
+
+Create inputs with `umask 077`, use absolute physical paths and an unprivileged
+HTTPS port, then run:
+
+```sh
+ulimit -n 4096
+./pi-sandbox-service --validate --manifest "$HOME/pi-service/service.toml"
+exec ./pi-sandbox-service --manifest "$HOME/pi-service/service.toml"
+```
+
+The shell soft limit must be at least `max_connections + 1024`, within its hard
+limit; 4096 covers the default configuration. Existing paths still need correct
+ownership/modes. The account needs access to the host's existing `/dev/log` for
+successful auditing; offline validation does not check syslog, and audit errors
+continue to block audited operations. No systemd unit, `/opt` or `/run` staging is
+needed. Clients retain their compiled endpoint/TLS trust and root-owned Unix socket
+checks. Keep trial server keys and credentials separate from production.
+
 The unit exposes the read-only host `/dev` directory with `DevicePolicy=closed`;
 it does not bind-mount the `/dev/log` socket inode. Host logging-socket replacement
 therefore remains visible to per-send syslog lookup without restarting the service.

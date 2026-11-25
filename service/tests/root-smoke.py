@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Real root daemon qualification inside a private mount namespace, without host logs."""
+"""Real root and unprivileged HTTPS daemons in a private mount namespace, without host logs."""
 import json
 import base64
 import hashlib
@@ -27,6 +27,7 @@ root = Path(tempfile.mkdtemp(prefix="pi-service-test-", dir="/run"))
 os.chmod(root, 0o755)
 child = None
 sink = None
+draining = None
 mounts = []
 pressure_clients = []
 stress_stop = threading.Event()
@@ -73,6 +74,7 @@ policy_file = "{root}/policy.toml"
     def logging_socket(name):
         value = socket.socket(socket.AF_UNIX, socket.SOCK_DGRAM)
         value.bind(str(root / name))
+        os.chmod(root / name, 0o666)
         value.settimeout(3)
         subprocess.run(["mount", "--bind", str(root / name), syslog_target], check=True)
         mounts.append(syslog_target)
@@ -191,24 +193,18 @@ esac
         assert published.read_bytes() == original
         assert not (published.parent / "reject-validation").exists()
         assert not list(published.parent.parent.glob(".pi-sandbox.staging.*"))
-    qualify_live_installer()
-
-    # Exercise supported maximum session capacity through real HTTPS and syslog.
-    sink.settimeout(0.1)
     def drain():
         while not stress_stop.is_set():
             try:
                 sink.recv(40960)
             except socket.timeout:
                 continue
-    draining = threading.Thread(target=drain, daemon=True)
-    draining.start()
     context = ssl.create_default_context(cafile=str(root / "cert.pem"))
     authorization = base64.b64encode(f"qualification:{password}".encode()).decode()
-    def https_request(operation, username, **fields):
+    def https_request(operation, username, *, port=tls_port, **fields):
         body = json.dumps({"version":1,"request_id":os.urandom(16).hex(),"operation":operation,"identity":{"username":username},**fields}).encode()
         headers = (f"POST /v1/service HTTP/1.1\r\nHost: localhost\r\nContent-Type: application/json\r\nContent-Length: {len(body)}\r\nAuthorization: Basic {authorization}\r\nConnection: close\r\n\r\n").encode()
-        with socket.create_connection(("127.0.0.1", tls_port), timeout=10) as tcp:
+        with socket.create_connection(("127.0.0.1", port), timeout=10) as tcp:
             with context.wrap_socket(tcp, server_hostname="localhost") as connection:
                 connection.sendall(headers + body)
                 response = b""
@@ -219,6 +215,162 @@ esac
                     response += part
         head, payload = response.split(b"\r\n\r\n",1)
         return int(head.split()[1]), json.loads(payload)
+    def qualify_unprivileged_https():
+        owner = 31000
+        home = root / "https-owner"
+        home.mkdir(mode=0o700)
+        executable = home / "pi-sandbox-service"
+        shutil.copyfile(binary, executable)
+        executable.chmod(0o755)
+        for name in ("models.json", "cert.pem", "key.pem", "password"):
+            shutil.copyfile(root / name, home / name)
+            (home / name).chmod(0o600 if name in ("key.pem", "password") else 0o644)
+        (home / "policy.toml").write_text(policy.replace(str(root / "models.json"), str(home / "models.json")))
+        (home / "rules/users.d").mkdir(parents=True)
+        (home / "rules/users.d/alice.toml").write_text('version = 12\nuser = "alice"\n[environment.pi]\nQUALIFIED = { file = "' + str(home / "secret") + '" }\n')
+        (home / "rules/users.d/alice.toml").chmod(0o600)
+        (home / "secret").write_text("unprivileged-secret\n")
+        (home / "secret").chmod(0o600)
+        with socket.socket() as reservation:
+            reservation.bind(("127.0.0.1", 0))
+            port = reservation.getsockname()[1]
+        https = f'''[[listeners]]
+id = "user_https"
+transport = "https"
+platform = "linux"
+listen_address = "127.0.0.1:{port}"
+audit_facility = "local3"
+policy_file = "{home}/policy.toml"
+rule_directory = "{home}/rules"
+certificate_file = "{home}/cert.pem"
+private_key_file = "{home}/key.pem"
+[[listeners.credentials]]
+name = "qualification"
+password_file = "{home}/password"
+'''
+        unix = f'''[[listeners]]
+id = "forbidden_unix"
+transport = "unix"
+platform = "linux"
+socket_path = "{home}/forbidden.sock"
+audit_facility = "local3"
+policy_file = "{home}/missing-policy.toml"
+'''
+        prefix = "manifest_version = 1\n"
+        selected = home / "service.toml"
+        selected.write_text(prefix + https)
+        for path in [home, *home.rglob("*")]:
+            os.chown(path, owner, owner)
+            if path.is_dir():
+                path.chmod(0o700)
+            elif path != executable:
+                path.chmod(0o600 if path.name in ("password", "key.pem", "secret", "alice.toml") else 0o644)
+        def as_owner():
+            unit_limits()
+            os.setgroups([])
+            os.setgid(owner)
+            os.setuid(owner)
+        def run_service(validate=False, privileged=False):
+            return subprocess.run([str(executable), *(["--validate"] if validate else []), "--manifest", str(selected)], cwd="/", preexec_fn=unit_limits if privileged else as_owner, capture_output=True, timeout=10)
+        assert run_service(validate=True).returncode == 0, "non-root HTTPS validation failed"
+        # Missing HTTPS material and an occupied port make any pre-admission
+        # material read or bind fail differently from the required admission error.
+        unavailable_https = https
+        for name in ("cert.pem", "key.pem", "password"):
+            unavailable_https = unavailable_https.replace(f'{home}/{name}"', f'{home}/missing-{name}"')
+        with socket.socket() as occupied:
+            occupied.bind(("127.0.0.1", port))
+            occupied.listen()
+            for listeners in (unix, unavailable_https + unix, unix + unavailable_https):
+                selected.write_text(prefix + listeners)
+                for validate in (True, False):
+                    denied = run_service(validate)
+                    assert denied.returncode != 0 and b"not admitted" in denied.stderr, denied.stderr
+                    assert b"Unix listeners require root" in denied.stderr, denied.stderr
+                    assert not (home / "forbidden.sock").exists()
+        selected.write_text(prefix + https)
+        def rejected_configuration():
+            for validate in (True, False):
+                rejected = run_service(validate)
+                assert rejected.returncode != 0 and b"configuration" in rejected.stderr, rejected.stderr
+        # Every protected input uses the process owner, including rules and catalogs.
+        for path in (selected, home / "policy.toml", home / "models.json", home / "rules/users.d/alice.toml", home / "password", home / "key.pem", home / "cert.pem"):
+            os.chown(path, 0, 0)
+            try:
+                # Startup reads policy/rules/catalog lazily; offline validation checks all.
+                rejected = run_service(validate=True)
+                assert rejected.returncode != 0, path
+            finally:
+                os.chown(path, owner, owner)
+        for path, bad_mode in ((selected, 0o664), (home / "key.pem", 0o644), (home / "password", 0o644), (home, 0o770)):
+            original = path.stat().st_mode & 0o777
+            path.chmod(bad_mode)
+            try:
+                rejected_configuration()
+            finally:
+                path.chmod(original)
+        alias = root / "https-owner-alias"
+        alias.symlink_to(home, target_is_directory=True)
+        selected.write_text(prefix + https.replace(str(home), str(alias)))
+        rejected_configuration()
+        selected.write_text(prefix + https)
+        for validate in (True, False):
+            assert run_service(validate, privileged=True).returncode != 0, "root accepted user-owned inputs"
+        # A root-owned leaf still cannot authorize root to trust a user-owned parent.
+        os.chown(selected, 0, 0)
+        try:
+            assert run_service(validate=True, privileged=True).returncode != 0
+        finally:
+            os.chown(selected, owner, owner)
+        with open(home / "operations.log", "wb") as output:
+            process = subprocess.Popen([str(executable), "--manifest", str(selected)], cwd="/", preexec_fn=as_owner, stdin=subprocess.DEVNULL, stdout=output, stderr=output)
+            try:
+                end = time.monotonic() + 5
+                while True:
+                    try:
+                        status, response = https_request("bootstrap", "alice", port=port, policy_schema=16, model_schema="pi-1.5.0", client={"platform":"linux","architecture":"x64","application_version":"qualification","build_id":"offline"})
+                        break
+                    except ConnectionRefusedError:
+                        if process.poll() is not None or time.monotonic() > end:
+                            raise AssertionError("unprivileged daemon did not start: " + (home / "operations.log").read_text())
+                        time.sleep(0.01)
+                assert status == 200, response
+                assert response["result"]["environment"]["pi"]["QUALIFIED"] == {"literal":"unprivileged-secret"}, response
+                for path in (home / "policy.toml", home / "models.json", home / "rules/users.d/alice.toml"):
+                    os.chown(path, 0, 0)
+                    try:
+                        status, response = https_request("bootstrap", "alice", port=port, policy_schema=16, model_schema="pi-1.5.0", client={"platform":"linux","architecture":"x64","application_version":"qualification","build_id":"offline"})
+                        assert status == 503 and response["error"]["code"] == "configuration_unavailable", response
+                    finally:
+                        os.chown(path, owner, owner)
+                status, response = https_request("audit_open", "alice", port=port, client_instance_id=os.urandom(16).hex(), audit_generation=1, pi_session_id="unprivileged", cwd=str(home), policy_origin={"source":"local"})
+                assert status == 200, response
+                session = response["result"]
+                assert record()["identity"] == {"source":"https_assertion", "credential_name":"qualification", "username":"alice"}
+                status, response = https_request("audit_event", "alice", port=port, audit_session_id=session["audit_session_id"], service_epoch=session["service_epoch"], sequence=1, event={"event":"tool_execution_intent","pi_session_id":"unprivileged","invocation_id":"one","tool":"write","boundary":"direct","approval_source":"policy"})
+                assert status == 200 and record()["sequence"] == 1, response
+                # Loss of syslog write permission must still fail the audit gate.
+                (root / "syslog-two").chmod(0o600)
+                try:
+                    status, response = https_request("audit_event", "alice", port=port, audit_session_id=session["audit_session_id"], service_epoch=session["service_epoch"], sequence=2, event={"event":"tool_requested","pi_session_id":"unprivileged","invocation_id":"two","tool":"write","boundary":"direct"})
+                    assert status == 503 and response["error"]["code"] == "audit_unavailable", response
+                finally:
+                    (root / "syslog-two").chmod(0o666)
+            finally:
+                if process.poll() is None:
+                    process.send_signal(signal.SIGTERM)
+                try:
+                    process.wait(timeout=8)
+                except subprocess.TimeoutExpired:
+                    process.kill()
+                    process.wait()
+        print("Unprivileged HTTPS daemon qualification passed: bootstrap, rules/secrets, audit, ownership and Unix/mixed denial")
+    qualify_unprivileged_https()
+    qualify_live_installer()
+    # Exercise supported maximum session capacity through real HTTPS and syslog.
+    sink.settimeout(0.1)
+    draining = threading.Thread(target=drain, daemon=True)
+    draining.start()
     def populate(principal):
         username = f"pressure-{principal}"
         first = None
@@ -277,6 +429,8 @@ finally:
         except subprocess.TimeoutExpired:
             child.kill()
             child.wait()
+    if draining is not None:
+        draining.join(timeout=1)
     if sink is not None:
         sink.close()
     for target in reversed(mounts):

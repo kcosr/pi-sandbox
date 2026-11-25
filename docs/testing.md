@@ -156,6 +156,12 @@ supported 16-listener, 4,096-connection and 8,192-session ceilings, recording me
 thread and descriptor high-water marks under the unit's descriptor limit. Its
 synthetic pressure UIDs hold sockets without making account-dependent requests.
 Actual Unix identity/request checks and account separation remain in the matrix.
+The same isolated harness also runs the binary as a non-root UID with account-owned
+HTTPS inputs. It verifies real TLS bootstrap, username rules and secret reads,
+audit delivery and denied-syslog failure, and matching `--validate`/startup rejection
+of Unix or mixed listeners without partial activation. Wrong file owners, unsafe
+modes, symlinked ancestry and root access to user-owned input trees remain negative
+controls. These checks never send records to the host log service.
 
 On macOS the verifier requires real Seatbelt controls and both Node/Bun runtime
 fixtures. It selects Bun from `PI_SANDBOX_TEST_BUN`, `PI_SANDBOX_BUN`, or the

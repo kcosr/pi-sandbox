@@ -694,7 +694,7 @@ write according to their compiled operation and the invoking user's authority.
 `cwd_writable` changes write access only. Use `hidden_paths` to remove selected
 host file and directory contents from the sandboxed tools' filesystem view.
 
-A root-managed user/group rule may override this setting with
+An administrator-managed service user/group rule may override this setting with
 `[overrides.filesystem] cwd_writable = false`. Omission inherits the parent
 value. The final backend/filesystem combination is validated after overrides;
 switching a read-only base to direct execution also requires overriding
