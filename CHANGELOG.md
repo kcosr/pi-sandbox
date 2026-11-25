@@ -65,6 +65,7 @@
 
 - Version the reusable sandbox extension as `0.10.0`, Git extension as `0.3.0`
   and subagent extension as `0.2.0`; all retain Pi `1.5.0`.
+  ([#62](https://github.com/kcosr/pi-sandbox/pull/62))
 - Capture policy, environment and models once per application process. Restart
   the application to load administrative changes; session refreshes reuse the
   captured configuration. ([#59](https://github.com/kcosr/pi-sandbox/pull/59))
