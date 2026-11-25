@@ -772,7 +772,7 @@ files outside writable workspaces. Do not add untrusted explicit resource paths.
 A tool mount cannot stop host Pi from following a context-file symlink into a
 hidden directory.
 
-### Denied directories (Seatbelt)
+### Denied paths (Seatbelt)
 
 Seatbelt is the macOS packaged default. Start with
 `config/default/config.seatbelt.toml`, or use these fields in a complete schema-15
@@ -793,10 +793,15 @@ denied_paths = ["~/.ssh"]
 
 `denied_paths` is required in every schema-15 configuration and must be empty
 for Bubblewrap and direct execution. Seatbelt requires empty `hidden_paths`.
-It accepts up to 63 unique normalized directory paths, with the same account
-macros and home expansion as hidden paths. Every expanded target must exist and
-be canonical at executor startup; regular files, symlink components and missing
-targets fail closed. A denied ancestor restores only the launch CWD subtree;
+It accepts up to 63 unique normalized file or directory paths, with the same account
+macros and home expansion as hidden paths. Existing targets must be canonical
+regular files or directories. Missing targets are skipped at executor startup;
+permission errors, special files, non-directory ancestors and symlink components
+(including dangling links and ancestors of missing targets) fail closed. Skipped
+paths are not monitored and may be accessible if created later, until restart.
+Atomic host replacement of a denied regular file remains protected without
+stopping commands. Removal or substitution with a symlink/directory fails later
+command admission; directory inode changes also fail closed. A denied ancestor restores only the launch CWD subtree;
 explicit denials within CWD remain effective. Equality with the launch CWD is
 rejected, as are paths that conflict with required runtime grants. Denials
 cannot be removed by a user/group override. Denial is an
@@ -1136,9 +1141,9 @@ user-state directory, code-mode enablement, and MCP server count. It also shows
 the selected workspace mode, CLI/default source, optional description and
 effective export state (disabled or enabled, TUI-only). `/sandbox mounts`
 reports Bubblewrap's semantic mount policy, Seatbelt's filesystem policy, or the
-absence of filesystem containment in direct mode. Seatbelt output covers denied
-directories, workspace access, real host scratch and cleanup limitations; it does
-not describe directory denials as mount masks.
+absence of filesystem containment in direct mode. Seatbelt output covers configured denied
+paths, skipped missing entries, workspace access, real host scratch and cleanup limitations; it does
+not describe path denials as mount masks.
 `/sandbox policy` lists every configured model-tool
 mode, the fixed user-shell behavior, session-grant options, and current
 memory-only grants; an optional subject shows its scope in more detail. A Bash

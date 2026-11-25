@@ -4,7 +4,11 @@ import { mkdir, mkdtemp, readFile, realpath, rm, writeFile } from "node:fs/promi
 import path from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { buildSeatbeltProfile, type SeatbeltPolicy } from "./policy.js";
-import { canonicalizeSeatbeltDirectory, isSeatbeltPathWithin } from "./paths.js";
+import {
+  canonicalizeSeatbeltDirectory,
+  isSeatbeltPathWithin,
+  resolveSeatbeltDeniedPath,
+} from "./paths.js";
 import { startSeatbeltProcess } from "./process.js";
 import { SEATBELT_LAUNCHER } from "./options.js";
 
@@ -19,7 +23,7 @@ describe.skipIf(process.platform !== "darwin")("native Seatbelt policy controls"
       workspace: await canonicalizeSeatbeltDirectory(root),
       workspaceWritable: true,
       temporaryDirectories: [],
-      deniedDirectories: [],
+      deniedPaths: [],
       networkMode: "none",
     };
   });
@@ -42,6 +46,42 @@ describe.skipIf(process.platform !== "darwin")("native Seatbelt policy controls"
       8192,
     ).result;
   }
+
+  it.each([true, false])(
+    "denies individual files with writable CWD=%s",
+    async (workspaceWritable) => {
+      const parent = path.join(root, `credentials-${workspaceWritable}`);
+      await mkdir(parent);
+      const file = path.join(parent, ".git-credentials");
+      const replacement = path.join(root, `replacement-${workspaceWritable}`);
+      await writeFile(file, "protected");
+      await writeFile(`${file}.backup`, "sibling");
+      await writeFile(replacement, "replacement");
+      const result = await run(
+        [
+          "/bin/sh",
+          "-c",
+          `
+      test "$(/bin/cat "$1.backup")" = sibling || exit 90
+      if /bin/cat "$1" >/dev/null 2>&1; then exit 91; fi
+      if (printf changed > "$1") 2>/dev/null; then exit 92; fi
+      if /bin/rm "$1" 2>/dev/null; then exit 93; fi
+      if /bin/mv "$1" "$1.moved" 2>/dev/null; then exit 94; fi
+      if /bin/mv "$2" "$1" 2>/dev/null; then exit 95; fi
+      if /bin/mv "$3" "$3.moved" 2>/dev/null; then exit 96; fi
+      printf protected`,
+          "file-probe",
+          file,
+          replacement,
+          parent,
+        ],
+        { ...policy, workspaceWritable, deniedPaths: [(await resolveSeatbeltDeniedPath(file))!] },
+      );
+      expect(result.exitCode, result.stderr.toString()).toBe(0);
+      expect(result.stdout.toString()).toBe("protected");
+      expect(await readFile(file, "utf8")).toBe("protected");
+    },
+  );
 
   it.each(["none", "host"] as const)(
     "allows a shell to signal its own child with %s networking",
@@ -89,7 +129,7 @@ describe.skipIf(process.platform !== "darwin")("native Seatbelt policy controls"
           denied,
           marker,
         ],
-        { ...policy, deniedDirectories: [denied] },
+        { ...policy, deniedPaths: [denied] },
       );
       expect(result.exitCode, result.stderr.toString()).toBe(0);
       expect(await readFile(marker, "utf8")).toBe("allowed");
@@ -114,7 +154,7 @@ describe.skipIf(process.platform !== "darwin")("native Seatbelt policy controls"
       const selected: SeatbeltPolicy = {
         ...policy,
         workspace: await canonicalizeSeatbeltDirectory(workspace),
-        deniedDirectories: [
+        deniedPaths: [
           await canonicalizeSeatbeltDirectory(ancestor),
           await canonicalizeSeatbeltDirectory(descendant),
         ],

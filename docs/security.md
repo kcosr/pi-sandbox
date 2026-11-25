@@ -49,14 +49,22 @@ scratch directories. `cwd_writable = false` removes CWD write authority.
 Apple marks `sandbox-exec` deprecated. Treat continued availability and policy
 behavior as macOS qualification requirements; an unavailable launcher or failed
 enforcement probe aborts startup rather than selecting direct execution.
-`filesystem.denied_paths` denies reads and writes to canonical existing directories,
+`filesystem.denied_paths` denies reads and writes to canonical existing files and directories,
 including selected CWD descendants. Denials are not empty mounts and may expose
 names in parent listings. A denied ancestor admits only the CWD subtree, with
 explicit interior denials applied afterward. Denying CWD itself is rejected.
 Root `/`, system trees `/System`, `/usr`, `/bin`, `/sbin`, `/dev`, and known
 noncanonical aliases `/tmp`, `/var`, `/etc` are invalid denial targets. Broad
 account/data roots such as `/Users`, `/Volumes`, and `/Library` may be denied,
-but are not valid whole-workspace grants.
+but are not valid whole-workspace grants. Missing targets are skipped at startup;
+if created later, they may be accessible until restart. Symlink components
+(including dangling links), non-directory ancestors, special files and permission
+errors still fail startup. Directory identities retain per-command inode checks.
+Regular files retain canonical-path and type checks, so atomic host replacement
+remains protected without stopping commands; removal or symlink/type substitution
+fails subsequent command admission. Sandbox code cannot create a new hard link
+or clone of a denied file into writable CWD or scratch. Pre-existing hard-link
+aliases remain a limitation of pathname-based denials.
 
 There are no PID, filesystem, IPC or network namespaces, private `/tmp`, VM,
 or parent-death containment. Scratch is real host storage with best-effort removal.
@@ -64,7 +72,7 @@ or parent-death containment. Scratch is real host storage with best-effort remov
 subject to other policy restrictions. Private-loopback `local` is unsupported.
 The policy uses a cleared environment plus fixed values and the admitted sandbox
 scope; those values remain model-visible. Broad filesystem reads can still expose
-credentials outside denied directories. Path aliases and existing filesystem
+credentials outside denied paths. Path aliases and existing filesystem
 relationships must not be treated as inode-level confidentiality guarantees.
 
 Commands may overlap and have bounded argv, stdin and output. Optional caller or

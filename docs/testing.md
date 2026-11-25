@@ -367,8 +367,18 @@ standard-extension acceptance remains `npm run test:extension`.
 
 Verify all seven tools, user `!`, canonical CWD, read-only and writable CWD,
 ordinary outside reads with denied writes, real host scratch, and existing
-canonical directory denials. Reject unsupported `local`, removed lifetime fields,
-nonempty hidden paths, missing/symlink/file denials, contradictory grants and
+canonical file/directory denials. Exercise files under writable and read-only CWD,
+ancestor restoration, sibling access, blocked reads/writes/unlink/replacement and
+ancestor renames, atomic host file replacement without losing protection or command
+availability, rejected symlink/type substitution, missing leaf/parent skips and later
+creation, dangling/ancestor symlinks, permission errors and special-file rejection.
+Native checks must deny new hard links and forced clones of protected files into
+writable CWD or scratch, with working positive controls for each operation.
+Probe forced-clone support outside Seatbelt first: a runtime returning `ENOSYS`
+cannot exercise that control and must report it explicitly without skipping its
+hard-link or other denial checks. Never count an unsupported operation as a policy denial.
+Qualify both native Node/Bun execution and compiled/standalone package paths. Reject unsupported `local`, removed lifetime fields,
+nonempty hidden paths, symlink-component/non-directory-ancestor/special-file denials, contradictory grants and
 unknown launcher fields. Verify none/host networking, no direct fallback, bounded
 input/output, concurrent execution, cancellation and close, and accurate diagnostics.
 

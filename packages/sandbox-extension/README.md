@@ -115,8 +115,13 @@ For opt-in macOS Seatbelt, replace `backend` with:
 
 Seatbelt uses fixed `/usr/bin/sandbox-exec` and the same macOS GNU prerequisites
 as direct mode. `network` accepts only `none` or `host`. `deniedPaths` accepts up
-to 63 unique absolute paths to existing canonical directories; missing targets,
-files, symlink components and contradictory grants fail startup. Unlike managed
+to 63 unique absolute paths to canonical regular files or directories. Missing
+targets are skipped at startup and not monitored; paths created later may be
+accessible until restart. Symlink components (including dangling links and
+ancestors of missing paths), non-directory ancestors, special files, permission
+errors and contradictory grants fail startup. Atomic replacement of a denied
+regular file remains protected without stopping commands; removal, symlink or
+type substitution fails subsequent command admission. Unlike managed
 TOML, standalone JSON paths are literal and do not expand account macros or `~`.
 A denied ancestor admits only CWD, then explicit interior denials apply; denying
 CWD itself is rejected. Denials cause access errors, not empty mounts. Ordinary host paths are read-only

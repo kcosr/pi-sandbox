@@ -25,7 +25,7 @@ read-only outside the writable launch directory and runtime scratch locations.
 Bubblewrap provides private mounts, temporary storage and namespaces;
 `filesystem.hidden_paths` masks selected files and directories. Seatbelt uses
 host paths and real host scratch directories; `filesystem.denied_paths` denies
-access to selected directories instead of masking them. Seatbelt cleanup is best
+access to selected files and directories instead of masking them. Seatbelt cleanup is best
 effort: background descendants may survive completion, cancellation, shutdown,
 or owner death with their original grants. Direct mode preserves tool policy,
 approvals and typed operations but provides no filesystem or network containment.
@@ -36,11 +36,11 @@ server controls that govern other software run by the logged-in user.
 
 ## Execution backends and reusable extensions
 
-| Backend                             | Supported hosts                                  | Tool filesystem                                                             | Tool networking                   |
-| ----------------------------------- | ------------------------------------------------ | --------------------------------------------------------------------------- | --------------------------------- |
-| Bubblewrap (Linux packaged default) | Linux x86-64 / arm64                             | Host read-only, optional writable CWD, private runtime/temp storage, masks  | None, private loopback, or host   |
-| Seatbelt (macOS packaged default)   | macOS arm64 / x86-64 (qualify each architecture) | Host read-only, optional writable CWD, real host scratch, directory denials | None or host; no private loopback |
-| Direct (explicit)                   | Linux and macOS x86-64 / arm64                   | Ordinary host access                                                        | Host                              |
+| Backend                             | Supported hosts                                  | Tool filesystem                                                            | Tool networking                   |
+| ----------------------------------- | ------------------------------------------------ | -------------------------------------------------------------------------- | --------------------------------- |
+| Bubblewrap (Linux packaged default) | Linux x86-64 / arm64                             | Host read-only, optional writable CWD, private runtime/temp storage, masks | None, private loopback, or host   |
+| Seatbelt (macOS packaged default)   | macOS arm64 / x86-64 (qualify each architecture) | Host read-only, optional writable CWD, real host scratch, path denials     | None or host; no private loopback |
+| Direct (explicit)                   | Linux and macOS x86-64 / arm64                   | Ordinary host access                                                       | Host                              |
 
 Packaged defaults are explicit policy settings. `execution.backend` is required
 in configuration; there is no automatic backend fallback.
@@ -79,7 +79,7 @@ flowchart LR
         direction TB
         Operations["Seven tools and user-invoked<br/>shell commands"]
         LaunchDirectory["Launch directory<br/>configured read/write or read-only"]
-        HostFilesystem["Other ordinary host paths<br/>read-only, with masks or directory denials"]
+        HostFilesystem["Other ordinary host paths<br/>read-only, with masks or path denials"]
         Scratch["Writable runtime/temp storage<br/>private mounts or host scratch"]
         Network["Tool networking<br/>none or host; private loopback on Linux"]
 

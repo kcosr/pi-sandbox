@@ -39,6 +39,8 @@
 
 ### Fixed
 
+- Accept regular-file denials and skip missing paths at macOS Seatbelt startup.
+  ([#61](https://github.com/kcosr/pi-sandbox/pull/61))
 - Keep Seatbelt scratch free of probe files and export-reader cache artifacts.
   ([#60](https://github.com/kcosr/pi-sandbox/pull/60))
 - Increase automatic subagent reports to 16 KiB with explicit truncation notices

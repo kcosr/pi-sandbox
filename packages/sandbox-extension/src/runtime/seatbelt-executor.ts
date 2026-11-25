@@ -27,7 +27,9 @@ import { assertToolBundlePlacement, snapshotToolBundle, toolBundlePath } from ".
 import { CommandRegistry } from "./command-registry.js";
 import {
   canonicalizeSeatbeltDirectory,
+  resolveSeatbeltDeniedPath,
   type CanonicalSeatbeltDirectory,
+  type CanonicalSeatbeltPath,
 } from "./seatbelt/paths.js";
 import {
   buildSeatbeltProfile,
@@ -64,21 +66,32 @@ const SCRATCH_CHILDREN = [
   "forbidden",
 ];
 interface Identity {
-  readonly directory: string;
+  readonly path: string;
+  readonly kind: "directory" | "file";
   readonly dev: bigint;
   readonly ino: bigint;
 }
 
-async function identity(directory: string): Promise<Identity> {
-  if ((await realpath(directory)) !== directory) throw new Error("sandbox_path_not_canonical");
-  const info = await lstat(directory, { bigint: true });
-  if (!info.isDirectory()) throw new Error("sandbox_path_not_directory");
-  return { directory, dev: info.dev, ino: info.ino };
+async function identity(value: string, allowFile = false): Promise<Identity> {
+  if ((await realpath(value)) !== value) throw new Error("sandbox_path_not_canonical");
+  const info = await lstat(value, { bigint: true });
+  if (!info.isDirectory() && !(allowFile && info.isFile()))
+    throw new Error("sandbox_path_type_invalid");
+  return {
+    path: value,
+    kind: info.isDirectory() ? "directory" : "file",
+    dev: info.dev,
+    ino: info.ino,
+  };
 }
 async function revalidate(expected: Identity): Promise<void> {
-  const current = await identity(expected.directory);
-  if (current.dev !== expected.dev || current.ino !== expected.ino)
-    throw new Error("sandbox_directory_identity_changed");
+  const current = await identity(expected.path, expected.kind === "file");
+  if (
+    current.kind !== expected.kind ||
+    (expected.kind === "directory" &&
+      (current.dev !== expected.dev || current.ino !== expected.ino))
+  )
+    throw new Error("sandbox_path_identity_changed");
 }
 function profileArguments(profile: SeatbeltProfile, command: readonly string[]): string[] {
   return [
@@ -132,13 +145,9 @@ export async function createSeatbeltExecutor(
     await access(SEATBELT_LAUNCHER, constants.X_OK);
     const cwd = await canonicalizeSeatbeltDirectory(basePolicy.workspace);
     if (cwd !== basePolicy.workspace) throw new Error("sandbox_cwd_not_canonical");
-    const denied = await Promise.all(
-      basePolicy.deniedDirectories.map(async (value) => {
-        const canonical = await canonicalizeSeatbeltDirectory(value);
-        if (canonical !== value) throw new Error("sandbox_denied_path_not_canonical");
-        return canonical;
-      }),
-    );
+    const denied = (
+      await Promise.all(basePolicy.deniedPaths.map(resolveSeatbeltDeniedPath))
+    ).filter((value): value is CanonicalSeatbeltPath => value !== undefined);
     await canonicalizeCommandPathPrepend(
       commandPathPrepend,
       { backend: "seatbelt", cwd, cwdWritable: basePolicy.workspaceWritable, deniedPaths: denied },
@@ -153,7 +162,10 @@ export async function createSeatbeltExecutor(
       await access(resolved, constants.X_OK);
       executables.push(resolved);
     }
-    const identities = await Promise.all([cwd, ...denied].map(identity));
+    const identities = [
+      await identity(cwd),
+      ...(await Promise.all(denied.map((value) => identity(value, true)))),
+    ];
     // mkdtemp gives an owned 0700 parent. Ambient HOME/TMPDIR cannot relocate it.
     const root = await canonicalizeSeatbeltDirectory(await mkdtemp("/private/tmp/pi-sandbox-"));
     runtime = await identity(root);
@@ -178,7 +190,7 @@ export async function createSeatbeltExecutor(
     const policy: SeatbeltPolicy = {
       ...basePolicy,
       temporaryDirectories: writable,
-      deniedDirectories: [...denied, await canonicalizeSeatbeltDirectory(control)],
+      deniedPaths: [...denied, await canonicalizeSeatbeltDirectory(control)],
     };
     const profile = buildSeatbeltProfile(policy);
     let exportSource: SandboxExportSource | undefined;
@@ -323,7 +335,7 @@ class SeatbeltExecutor implements SandboxExecutor {
             ...this.requiredExecutables,
           ],
           environment: {
-            PROBE_ROOT: this.runtime.directory,
+            PROBE_ROOT: this.runtime.path,
             PROBE_FILE: path.join(this.cwd, `.pi-sandbox-probe-${randomUUID()}`),
             PROBE_TMP: path.join(this.environment.TMPDIR!, `.pi-sandbox-probe-${randomUUID()}`),
             PROBE_HOME: path.join(this.home, `.pi-sandbox-probe-${randomUUID()}`),
@@ -426,10 +438,10 @@ async function cleanupRuntime(runtime: Identity): Promise<void> {
   try {
     await revalidate(runtime);
     const profile = buildSeatbeltProfile({
-      workspace: runtime.directory as CanonicalSeatbeltDirectory,
+      workspace: runtime.path as CanonicalSeatbeltDirectory,
       workspaceWritable: true,
       temporaryDirectories: [],
-      deniedDirectories: [],
+      deniedPaths: [],
       networkMode: "none",
     });
     const child = startSeatbeltProcess(
@@ -438,7 +450,7 @@ async function cleanupRuntime(runtime: Identity): Promise<void> {
         "/bin/rm",
         "-rf",
         "--",
-        ...SCRATCH_CHILDREN.map((name) => path.join(runtime.directory, name)),
+        ...SCRATCH_CHILDREN.map((name) => path.join(runtime.path, name)),
       ]),
       { PATH: "/usr/bin:/bin", LANG: "C" },
       Buffer.alloc(0),
@@ -448,7 +460,7 @@ async function cleanupRuntime(runtime: Identity): Promise<void> {
     if ((await child.result).exitCode !== 0)
       throw new Error("sandbox_seatbelt_temp_cleanup_failed");
     await revalidate(runtime);
-    await rmdir(runtime.directory);
+    await rmdir(runtime.path);
   } catch (cause) {
     throw new SandboxExecutionError("sandbox_process_failed", { cause });
   }

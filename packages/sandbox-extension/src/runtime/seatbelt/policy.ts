@@ -3,6 +3,7 @@ import {
   assertSeatbeltPath,
   isSeatbeltPathWithin,
   type CanonicalSeatbeltDirectory,
+  type CanonicalSeatbeltPath,
 } from "./paths.js";
 
 /** Internal typed profile input; callers use the executor, not raw SBPL. */
@@ -12,7 +13,7 @@ export interface SeatbeltPolicy {
   /** Dedicated host-created session home/temp/cache directories, never all /tmp. */
   readonly temporaryDirectories: readonly CanonicalSeatbeltDirectory[];
   /** Access denial, not masking. Only the workspace is restored through ancestors. */
-  readonly deniedDirectories: readonly CanonicalSeatbeltDirectory[];
+  readonly deniedPaths: readonly CanonicalSeatbeltPath[];
   readonly networkMode: "none" | "host";
 }
 
@@ -29,7 +30,7 @@ const POLICY_KEYS = new Set([
   "workspace",
   "workspaceWritable",
   "temporaryDirectories",
-  "deniedDirectories",
+  "deniedPaths",
   "networkMode",
 ]);
 const SYSTEM_TREES = ["/System", "/usr", "/bin", "/sbin", "/dev"];
@@ -73,7 +74,7 @@ export function assertSeatbeltWritableGrantPath(value: unknown): asserts value i
 }
 
 function sortedUnique(
-  paths: readonly CanonicalSeatbeltDirectory[],
+  paths: readonly CanonicalSeatbeltPath[],
   validate: (value: unknown) => asserts value is string,
 ): string[] {
   if (!Array.isArray(paths) || paths.length > SEATBELT_MAXIMUM_DIRECTORIES) {
@@ -88,7 +89,7 @@ function sortedUnique(
 }
 
 /**
- * Pure, deterministic SBPL generation from canonical validated directories.
+ * Pure, deterministic SBPL generation from canonical validated paths.
  * No launch, environment inheritance, raw SBPL option, lifecycle or fallback is
  * provided. Runtime ownership and probes belong to the executor.
  */
@@ -108,7 +109,7 @@ export function buildSeatbeltProfile(policy: SeatbeltPolicy): SeatbeltProfile {
   const workspace = policy.workspace;
   // Sensitive canonical /private directories must remain valid read denials;
   // their unsuitability for writable grants must not prevent protecting them.
-  const denied = sortedUnique(policy.deniedDirectories, assertPolicyPath);
+  const denied = sortedUnique(policy.deniedPaths, assertPolicyPath);
   const temporary = sortedUnique(policy.temporaryDirectories, assertSeatbeltWritableGrantPath);
   if (denied.includes(workspace)) throw new Error("seatbelt_workspace_denied");
 
@@ -154,6 +155,7 @@ export function buildSeatbeltProfile(policy: SeatbeltPolicy): SeatbeltProfile {
   const keys = new Map(paths.map((value, index) => [value, `P${index}`]));
   const filter = (operation: "subpath" | "literal", value: string) =>
     `(${operation} (param "${keys.get(value)!}"))`;
+  // subpath includes the exact target, so it denies a file as well as a directory tree.
   const subpath = (value: string) => filter("subpath", value);
   const all = (terms: readonly string[]) =>
     terms.length === 1 ? terms[0]! : `(require-all ${terms.join(" ")})`;

@@ -110,7 +110,7 @@ Remove provider discovery, tool delegation, provider initialization/teardown,
 and the `requirePermissions` switch. Accept a single new standalone JSON schema
 version, version 6, with `version`, `mode = "owned"`, `userBash`, `backend`, and optional common `maximumTimeoutMs`.
 The backend selects Bubblewrap, macOS Seatbelt, or direct execution with strict
-fields for that choice. Seatbelt uses directory access denials, none/host
+fields for that choice. Seatbelt uses file and directory access denials, none/host
 networking and concurrent commands with the background-survivor limits documented
 in `docs/security.md`; it does not promise Bubblewrap namespace or process
 cleanup semantics. Reject removed VM execution and attachment fields.

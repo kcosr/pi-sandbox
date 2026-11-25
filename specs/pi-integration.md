@@ -579,7 +579,9 @@ managed host tools retain their declared host authority.
 
 Managed schema 16 requires `[filesystem].denied_paths`, empty for
 Bubblewrap/direct. macOS Seatbelt rejects hidden paths
-and local networking, and accepts canonical existing directory denials. A denied
+and local networking, and accepts canonical existing file/directory denials, skipping missing targets at startup.
+Symlink components, non-directory ancestors, special files and permission errors
+still fail closed; paths created after being skipped may be visible until restart. A denied
 ancestor admits only CWD; explicit interior denials remain effective. Denials are
 access restrictions, not empty masks. CWD and real host scratch writes follow
 the configured policy without private /tmp or mount namespaces. Standalone

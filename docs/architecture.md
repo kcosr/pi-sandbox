@@ -560,8 +560,10 @@ Seatbelt shares host namespaces. Ordinary host files are readable and read-only;
 `cwd_writable` permits writes under the canonical launch directory. An executor-owned
 real host scratch directory supplies HOME, TMPDIR and runtime state. Literal `/tmp`
 is not private, and scratch writes are host writes. Main-policy `denied_paths`
-denies access to existing canonical directories; it does not mount empty replacements,
-or skip missing targets. A denied ancestor restores only the CWD subtree, then
+denies access to existing canonical files and directories without mounting empty
+replacements. Missing targets are skipped at startup and may be accessible if
+created later. Symlink components, non-directory ancestors, special files and
+permission errors fail startup. A denied ancestor restores only the CWD subtree, then
 applies explicit interior denials. Equal-CWD denial is rejected. Startup rejects
 contradictory grants and unavailable prerequisites without direct fallback.
 

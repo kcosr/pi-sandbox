@@ -38,7 +38,9 @@ try {
   const home = join(temporary, "decoy-home");
   for (const directory of [denied, state, home]) await mkdir(directory, { recursive: true });
   const secret = join(denied, "secret.txt");
+  const deniedFile = join(workspace, ".git-credentials");
   await writeFile(secret, "DENIED_MARKER");
+  await writeFile(deniedFile, "DENIED_FILE_MARKER");
   const configPath = join(temporary, "config.toml");
   const modelsPath = join(temporary, "models.json");
   const config = prepareWritableSmokeWorkspace(
@@ -47,7 +49,11 @@ try {
   config.models_file = modelsPath;
   config.execution = { backend: "seatbelt" };
   config.network = { mode: "none" };
-  config.filesystem = { cwd_writable: true, hidden_paths: [], denied_paths: [denied] };
+  config.filesystem = {
+    cwd_writable: true,
+    hidden_paths: [],
+    denied_paths: [denied, deniedFile, join(temporary, "missing", "credentials")],
+  };
   config.audit.enabled = false;
   delete config.subagents;
   delete config.tools.subagents;
@@ -115,6 +121,14 @@ try {
   const read = await request("bash", { command: `cat ${quoted(secret)}` });
   assert.notEqual(read.data.exitCode, 0);
   assert(!read.data.output.includes("DENIED_MARKER"));
+  const readFileDenial = await request("bash", { command: `cat ${quoted(deniedFile)}` });
+  assert.notEqual(readFileDenial.data.exitCode, 0);
+  assert(!readFileDenial.data.output.includes("DENIED_FILE_MARKER"));
+  for (const command of [`printf changed > ${quoted(deniedFile)}`, `rm ${quoted(deniedFile)}`]) {
+    const denied = await request("bash", { command });
+    assert.notEqual(denied.data.exitCode, 0);
+  }
+  assert.equal(await readFile(deniedFile, "utf8"), "DENIED_FILE_MARKER");
   const outside = await request("bash", {
     command: `printf escape > ${quoted(join(home, "escape"))}`,
   });
