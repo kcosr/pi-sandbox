@@ -204,20 +204,30 @@ describe("shared administrative source pipeline", () => {
       }),
     ).rejects.toThrow();
   });
-  it("rejects an account overlay which invalidates exports or execution platform relationships", async () => {
+  it("allows a writable-CWD account overlay with exports but rejects direct execution", async () => {
     Object.defineProperty(process, "platform", { value: "linux" });
-    for (const overrides of [
-      { workspace: { default: "sandbox" }, filesystem: { cwd_writable: true }, tools: {} },
-      { execution: { backend: "direct" }, tools: {} },
-    ]) {
-      const { service } = remote(wire(template, overrides));
-      await expect(
-        resolveEffectiveAdministrativeConfiguration({
-          configuration: serviceConfiguration,
-          service,
-        }),
-      ).rejects.toThrow();
-    }
+    const { service } = remote(
+      wire(template, {
+        workspace: { default: "sandbox" },
+        filesystem: { cwd_writable: true },
+        tools: {},
+      }),
+    );
+    const result = await resolveEffectiveAdministrativeConfiguration({
+      configuration: serviceConfiguration,
+      service,
+      getAccountIdentity: account,
+    });
+    expect(result.workspaceSelection.name).toBe("sandbox");
+    expect(result.config.filesystem.cwdWritable).toBe(true);
+    expect(result.config.exports.enabled).toBe(true);
+    const direct = remote(wire(template, { execution: { backend: "direct" }, tools: {} }));
+    await expect(
+      resolveEffectiveAdministrativeConfiguration({
+        configuration: serviceConfiguration,
+        service: direct.service,
+      }),
+    ).rejects.toThrow("exports.enabled requires a confined backend");
   });
   it("validates every authored mode before local catalogs, secrets or identity lookup", async () => {
     const fixture = await local();

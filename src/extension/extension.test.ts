@@ -1,6 +1,7 @@
 import { createTestAuditClient, FakeService } from "../service/fixture.test-support.js";
 import type {
   ExtensionAPI,
+  ExtensionCommandContext,
   ExtensionContext,
   ExtensionToolContext,
   ToolDefinition,
@@ -43,6 +44,7 @@ import type { CommandClassPolicy, SubjectPolicy } from "../permissions/index.js"
 import type { SandboxExecutor } from "./types.js";
 import gitCloneExtension from "../managed-extensions/git-clone/index.js";
 import { instantiateManagedExtension } from "../managed-extensions/sdk.js";
+import { entry, readerFixture } from "../exports/fixtures.test-support.js";
 
 type Handler = (event: never, context: ExtensionContext) => unknown;
 type CommandOptions = Parameters<ExtensionAPI["registerCommand"]>[1];
@@ -1350,6 +1352,64 @@ describe("Pi Sandbox extension", () => {
     );
     expect(fixture.calls).toHaveLength(0);
   });
+
+  it.each([
+    { backend: "bubblewrap", enabled: true, admitted: true },
+    { backend: "seatbelt", enabled: true, admitted: true },
+    { backend: "bubblewrap", enabled: false, admitted: false },
+    { backend: "seatbelt", enabled: false, admitted: false },
+    { backend: "direct", enabled: true, admitted: false },
+  ] as const)(
+    "gates writable-CWD manual saving and quit prompting for $backend with exports=$enabled",
+    async ({ backend, enabled, admitted }) => {
+      const pi = fakePi();
+      const configured: SandboxConfig = {
+        ...config(),
+        execution: { backend },
+        network: { mode: "host" },
+        exports: { enabled },
+      };
+      const { source, reader } = readerFixture([entry("private-report")]);
+      const getExportSource = vi.fn(() => source);
+      const closeReader = vi.spyOn(reader, "close");
+      let beforeQuit:
+        ((ctx: ExtensionCommandContext, signal: AbortSignal) => Promise<boolean>) | undefined;
+      await createPiSandboxExtension({
+        cwd: "/work/project",
+        provenance: { source: "local", configPath: "/policy", modelsPath: "/models" },
+        workspaceSelection: { name: "host", source: "default" },
+        userStateDir: "/home/test/.pi/agent",
+        loadConfig: () => Promise.resolve(configured),
+        executor: fakeExecutor(),
+        getExportSource,
+        registerBeforeInteractiveQuit: (handler) => {
+          beforeQuit = handler;
+        },
+      })(pi.api);
+      const notify = vi.fn();
+      const ctx = context({ hasUI: true, notify });
+      const custom = vi.fn(() => Promise.resolve<unknown>(undefined));
+      const commandContext = {
+        ...ctx,
+        waitForIdle: vi.fn(() => Promise.resolve()),
+        ui: { ...ctx.ui, custom },
+      } as unknown as ExtensionCommandContext;
+      await pi.handlers.get("session_start")?.(undefined as never, ctx);
+
+      // Cancelling selection proves the real command reaches the picker without publishing.
+      await pi.commands.get("sandbox")!.handler("save", commandContext);
+      expect(custom).toHaveBeenCalledTimes(admitted ? 1 : 0);
+      if (!admitted)
+        expect(notify).toHaveBeenCalledWith("Sandbox saving is disabled or unavailable", "warning");
+
+      custom.mockResolvedValueOnce("exit");
+      expect(beforeQuit).toBeDefined();
+      expect(await beforeQuit!(commandContext, new AbortController().signal)).toBe(true);
+      expect(custom).toHaveBeenCalledTimes(admitted ? 2 : 0);
+      expect(getExportSource).toHaveBeenCalledTimes(admitted ? 2 : 0);
+      expect(closeReader).toHaveBeenCalledTimes(admitted ? 2 : 0);
+    },
+  );
 
   it("reports status, semantic mounts, effective policy, and focused policy details", async () => {
     const pi = fakePi();

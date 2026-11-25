@@ -710,10 +710,8 @@ function parseCompleteConfig(
         'config.network.mode must be "none" or "host" when config.execution.backend is "seatbelt"',
       );
   }
-  if (exports?.enabled && (execution?.backend === "direct" || filesystem?.cwdWritable !== false)) {
-    issues.push(
-      "config.exports.enabled requires a confined backend and config.filesystem.cwd_writable = false",
-    );
+  if (exports?.enabled && execution?.backend === "direct") {
+    issues.push("config.exports.enabled requires a confined backend");
   }
   const extensions = parseExtensions(own(parsed, "extensions"), catalog, issues);
   if (extensions !== undefined && execution !== undefined) {
@@ -910,8 +908,8 @@ export function parseSourcePolicy(
       issues.push("config.workspace.default must belong to config.workspace.allowed");
   }
 
-  // Check authored entries even when every mode replaces them. Only effective
-  // relationships (such as read-tool prerequisites and exports/CWD) wait for composition.
+  // Check authored entries even when every mode replaces them. Effective read-tool
+  // prerequisites and export/backend compatibility wait for composition.
   const commonFilesystem = own(parsed, "filesystem");
   if (isRecord(commonFilesystem))
     parseFilesystem(

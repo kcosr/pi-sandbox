@@ -281,7 +281,7 @@ Service [account rules](managed-service.md#workspace-mode-selection) may replace
 allowed/default metadata. Matching explicit allowed arrays are unioned; distinct
 explicit defaults conflict. The effective default must remain allowed even with
 an explicit CLI selector. After selection, ordinary account overrides apply
-once and may change approvals or make CWD/export combinations invalid. They
+once and may change approvals or make backend/export combinations invalid. They
 cannot change definitions, descriptions or audit choices.
 
 `--list-workspace-modes` prints only effective allowed modes and their literal
@@ -298,8 +298,8 @@ Fresh packaged policies have these choices, all with session grants set to never
 
 | Backend    | Default host mode                                        | Optional sandbox mode                                      |
 | ---------- | -------------------------------------------------------- | ---------------------------------------------------------- |
-| Bubblewrap | Writable CWD, exports off, Bash/write/edit ask           | Read-only CWD, exports on, Bash/write/edit allow           |
-| Seatbelt   | Writable CWD, exports off, Bash disabled, write/edit ask | Read-only CWD, exports on, Bash disabled, write/edit allow |
+| Bubblewrap | Writable CWD, exports on, Bash/write/edit ask            | Read-only CWD, exports on, Bash/write/edit allow           |
+| Seatbelt   | Writable CWD, exports on, Bash disabled, write/edit ask  | Read-only CWD, exports on, Bash disabled, write/edit allow |
 | Direct     | Writable CWD, exports off, Bash disabled, write/edit ask | Not defined                                                |
 
 Confined packages allow both names and default to host; direct allows only host.
@@ -1795,16 +1795,17 @@ or supply `exports.enabled` in its main-authored mode definition:
 enabled = false
 ```
 
-Packaged host modes keep it disabled; confined sandbox modes enable it. To enable `/sandbox save`, set `enabled = true`
-and `filesystem.cwd_writable = false` with Bubblewrap or Seatbelt. Startup rejects
-an incompatible base or effective account policy; user/group rules cannot enable or
+Packaged Bubblewrap and Seatbelt host and sandbox modes enable it; direct keeps
+it disabled. To enable `/sandbox save`, set `enabled = true` with Bubblewrap or
+Seatbelt, with either value of `filesystem.cwd_writable`. Startup rejects
+exports with direct execution in a base or effective account policy; user/group rules cannot enable or
 change exports. This does not change tool invocation policy. Administrators may
 enable saving even when the agent's write tool is `ask`, `deny` or `disabled`;
 the user command is independent of all model-tool invocation policies. They may
 separately set `tools.bash`, `tools.write`, and `tools.edit` to `mode = "allow"`
 with `session_grant = "never"` when unrestricted work in private scratch is desired.
-The read-only CWD remains protected by the backend for every sandbox tool and user
-shell command. Host MCP and other host extensions retain their separate authority.
+When CWD is read-only, it remains protected by the backend for every sandbox tool
+and user shell command. Host MCP and other host extensions retain their separate authority.
 
 In the interactive terminal, `/sandbox save` waits for foreground activity, then
 opens a themed overlay with Home and Temporary roots, highlighted rows and
@@ -1815,6 +1816,8 @@ The Open hint appears only for a highlighted directory; Back appears inside a di
 Hidden entries start hidden. Selecting a directory always
 includes hidden descendants, and hiding entries does not discard selections.
 This command is unavailable to models, RPC, print and JSON interfaces.
+With Bubblewrap and writable CWD exactly `/tmp`, only Home is offered: `/tmp`
+is the host workspace, so it is never enumerated as private Temporary storage.
 
 The destination defaults to `sandbox-saved/<timestamp>-<id>` under the launch CWD
 and can be edited to another host directory, including an existing one. Single-root
@@ -1823,7 +1826,17 @@ prefixes. The review lists the mapping and all existing regular files requiring
 replacement. Tab selects Save (or Replace listed files), Change directory, or
 Cancel; Enter activates the selected action. Existing directories
 merge without deleting unrelated entries. Use Left/Right or Home/End in the review
-to inspect long paths. Symlinks and incompatible file types are rejected. New files require a filesystem supporting atomic hard-link publication.
+to inspect long paths. Observed symlinks and incompatible file types are rejected.
+New files require a filesystem supporting atomic hard-link publication. Destinations
+may be inside writable CWD, but may not overlap private sandbox scratch storage.
+
+The save runs with the host user's filesystem authority. Foreground idle does not
+stop surviving background commands: in writable CWD they can race destination
+paths, temporary staging and replacements, potentially redirecting a host operation
+outside the reviewed destination or changing the published output. Existing checks
+detect observed changes but do not eliminate these races. This accepted limitation
+is analogous to host Git cloning; no process monitor or confined writer is added.
+Hashes describe bytes read and copied, not lasting destination integrity.
 
 Saving copies files and leaves scratch intact. When saving is enabled, normal
 interactive exit (Ctrl+D, double Ctrl+C, or `/quit`) checks the private home and temporary

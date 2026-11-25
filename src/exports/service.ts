@@ -154,6 +154,11 @@ export function createUserExportController(options: UserExportOptions): {
           checkCancelled(signal);
           const source = options.getSource();
           if (!source) throw new Error("Private sandbox file export is unavailable");
+          // CWD publication accepts concurrent sandbox writers, like host git_clone.
+          // Keep private host scratch excluded so exports cannot copy back into it.
+          const excludedHostPaths = source.writableHostPaths.filter(
+            (path) => resolve(path) !== resolve(options.cwd),
+          );
           reader = await source.open(transferSignal);
           const selection = await selectExportFiles(ctx, reader, signal);
           if (!selection) return;
@@ -170,7 +175,7 @@ export function createUserExportController(options: UserExportOptions): {
               plan = await inspectExportDestination(
                 manifest,
                 destination,
-                source.writableHostPaths,
+                excludedHostPaths,
                 signal,
               );
             } catch (error) {

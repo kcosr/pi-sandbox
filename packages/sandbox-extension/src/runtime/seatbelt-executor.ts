@@ -302,8 +302,8 @@ class SeatbeltExecutor implements SandboxExecutor {
         test "$(/bin/cat "$PROBE_ROOT/readable")" = sandbox-readable || exit 70
         if /bin/cat "$PROBE_ROOT/control/secret" >/dev/null 2>&1; then exit 71; fi
         if (printf forbidden > "$PROBE_ROOT/forbidden") 2>/dev/null; then exit 72; fi
-        (umask 077; printf private > "$TMPDIR/probe" && printf home > "$HOME/probe") || exit 73
-        test "$(/bin/cat "$TMPDIR/probe")" = private || exit 74
+        (umask 077; set -C; printf private > "$PROBE_TMP" && printf home > "$PROBE_HOME") || exit 73
+        test "$(/bin/cat "$PROBE_TMP")" = private || exit 74
         if test "$PROBE_WRITABLE" = true; then
           (umask 077; set -C; printf workspace > "$PROBE_FILE") || exit 75
           test "$(/bin/cat "$PROBE_FILE")" = workspace || exit 76
@@ -311,6 +311,7 @@ class SeatbeltExecutor implements SandboxExecutor {
         else
           if (printf forbidden > "$PROBE_FILE") 2>/dev/null; then exit 78; fi
         fi
+        /bin/rm -- "$PROBE_TMP" "$PROBE_HOME" || exit 79
         printf probe-ok`,
             "seatbelt-probe",
             ...this.requiredExecutables,
@@ -318,6 +319,8 @@ class SeatbeltExecutor implements SandboxExecutor {
           environment: {
             PROBE_ROOT: this.runtime.directory,
             PROBE_FILE: path.join(this.cwd, `.pi-sandbox-probe-${randomUUID()}`),
+            PROBE_TMP: path.join(this.environment.TMPDIR!, `.pi-sandbox-probe-${randomUUID()}`),
+            PROBE_HOME: path.join(this.home, `.pi-sandbox-probe-${randomUUID()}`),
             PROBE_WRITABLE: String(this.policy.workspaceWritable),
           },
           timeoutMs: Math.min(10_000, this.limits.maximumTimeoutMs ?? 10_000),

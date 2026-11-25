@@ -15,6 +15,7 @@ export async function testWorkspaceModes({ launch, configPath, workspace }) {
   try {
     const config = prepareWritableSmokeWorkspace(parse(original));
     const confined = config.execution.backend !== "direct";
+    config.exports.enabled = confined;
     const policy = (mode) => ({ mode, session_grant: "never" });
     config.tools.bash = policy("ask");
     config.tools.write = policy("ask");
@@ -84,7 +85,7 @@ export async function testWorkspaceModes({ launch, configPath, workspace }) {
       );
       assert.match(
         summary,
-        new RegExp(`File exports:\\s+${name === "host" ? "disabled" : "enabled \\(TUI-only\\)"}`),
+        new RegExp(`File exports:\\s+${confined ? "enabled \\(TUI-only\\)" : "disabled"}`),
       );
       const policies = await active.diagnostic("/sandbox policy");
       assert.match(
@@ -106,6 +107,19 @@ export async function testWorkspaceModes({ launch, configPath, workspace }) {
         const again = await active.request("bash", { command });
         assert.notEqual(again.data.exitCode, 0);
       }
+      await active.close();
+      active = undefined;
+    }
+    if (confined) {
+      // A mode-level opt-out must still override common enabled exports.
+      const disabled = parse(source);
+      disabled.workspace.modes.host.exports = { enabled: false };
+      await writeFile(configPath, stringify(disabled));
+      active = rpc(launch(["--mode", "rpc"]));
+      await active.request("get_state");
+      const summary = await active.diagnostic("/sandbox");
+      assert.match(summary, /Workspace mode:\s+host/);
+      assert.match(summary, /File exports:\s+disabled/);
       await active.close();
       active = undefined;
     }

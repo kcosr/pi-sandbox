@@ -119,14 +119,14 @@ async function directoryChain(
 export async function inspectExportDestination(
   manifest: ExportManifest,
   destination: string,
-  writableHostPaths: readonly string[],
+  excludedHostPaths: readonly string[],
   signal?: AbortSignal,
 ): Promise<ExportDestination> {
   if (!isAbsolute(destination) || destination.includes("\0"))
     throw new Error("Destination must be an absolute host path");
   const path = resolve(destination);
-  if (writableHostPaths.some((grant) => overlaps(path, resolve(grant))))
-    throw new Error("Destination overlaps writable sandbox storage");
+  if (excludedHostPaths.some((grant) => overlaps(path, resolve(grant))))
+    throw new Error("Destination overlaps private sandbox storage");
   const directories = new Map<string, ExportFileIdentity>();
   const conflicts: ExportConflict[] = [];
   const mapped = new Set<string>();
@@ -287,7 +287,7 @@ export async function publishExport(options: {
               "Destination file changed during replacement confirmation; review again",
             );
           checkCancelled(signal);
-          // Atomic pathname replacement; concurrent trusted host writers are not a CAS boundary.
+          // Atomic pathname replacement, not a CAS boundary against concurrent writers.
           await rename(temporary, target);
         } else {
           try {

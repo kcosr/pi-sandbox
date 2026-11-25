@@ -1,7 +1,7 @@
 import type { Component } from "@earendil-works/pi-tui";
 import type { ExtensionCommandContext } from "@earendil-works/pi-coding-agent";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { mkdtemp, readFile, readdir, realpath, rm } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, readdir, realpath, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { dialogTheme, entry, readerFixture } from "./fixtures.test-support.js";
@@ -98,7 +98,7 @@ describe("user-only sandbox save coordinator", () => {
     expect(await readdir(directory)).toEqual([]);
   });
 
-  it("settles background work after foreground idle and before reading export sources", async () => {
+  it("settles subagent work after foreground idle and before reading export sources", async () => {
     const order: string[] = [];
     const { source } = readerFixture([entry("file")]);
     const fixture = context("tui", [undefined]);
@@ -174,6 +174,87 @@ describe("user-only sandbox save coordinator", () => {
     expect(await readFile(join(destination, "file"), "utf8")).toBe("abc");
     expect(close).toHaveBeenCalledOnce();
     expect(fixture.notify).toHaveBeenCalledWith(expect.stringContaining("Saved: 1 files"), "info");
+  });
+
+  it.each(["cwd", "nested", "external"])(
+    "saves scratch to %s with writable CWD after audit acceptance",
+    async (location) => {
+      const selected = entry("file");
+      const { source } = readerFixture([selected]);
+      const cwd = join(directory, "project");
+      await mkdir(cwd);
+      const destination =
+        location === "cwd"
+          ? cwd
+          : location === "nested"
+            ? join(cwd, "saved")
+            : join(directory, "elsewhere");
+      const events: UserExportAuditEvent[] = [];
+      const controller = createUserExportController({
+        cwd,
+        getSource: () => ({
+          ...source,
+          writableHostPaths: [join(directory, "private-scratch"), cwd],
+        }),
+        admitted: () => true,
+        createAudit: () =>
+          Promise.resolve(async (event) => {
+            if (event.type === "export_intent") {
+              await expect(readFile(join(destination, "file"))).rejects.toMatchObject({
+                code: "ENOENT",
+              });
+            }
+            events.push(event);
+          }),
+      });
+      const fixture = context("tui", [[selected], destination, "save", { copy: true }, undefined]);
+      expect(await controller.run(fixture.ctx)).toBe(true);
+      expect(await readFile(join(destination, "file"), "utf8")).toBe("abc");
+      expect(events.map((event) => event.type)).toEqual(["export_intent", "export_complete"]);
+    },
+  );
+
+  it.each(["root", "child", "ancestor"])(
+    "still rejects private scratch %s overlap with writable CWD",
+    async (location) => {
+      const selected = entry("file");
+      const { source } = readerFixture([selected]);
+      const cwd = join(directory, "project");
+      const scratch = join(directory, "private-scratch");
+      const destination =
+        location === "root" ? scratch : location === "child" ? join(scratch, "saved") : directory;
+      const controller = createUserExportController({
+        cwd,
+        getSource: () => ({ ...source, writableHostPaths: [scratch, cwd] }),
+        admitted: () => true,
+      });
+      const fixture = context("tui", [[selected], destination, undefined]);
+      expect(await controller.run(fixture.ctx)).toBe(false);
+      expect(fixture.notify).toHaveBeenCalledWith(
+        expect.stringContaining("overlaps private sandbox storage"),
+        "error",
+      );
+      expect(await readdir(directory)).toEqual([]);
+    },
+  );
+
+  it("creates no destination under writable CWD when intent auditing fails", async () => {
+    const selected = entry("file");
+    const { source } = readerFixture([selected]);
+    const destination = join(directory, "saved");
+    const controller = createUserExportController({
+      cwd: directory,
+      getSource: () => ({ ...source, writableHostPaths: [directory] }),
+      admitted: () => true,
+      createAudit: () => Promise.resolve(() => Promise.reject(new Error("audit unavailable"))),
+    });
+    const fixture = context("tui", [[selected], destination, "save", { copy: true }, undefined]);
+    expect(await controller.run(fixture.ctx)).toBe(false);
+    expect(await readdir(directory)).toEqual([]);
+    expect(fixture.notify).toHaveBeenCalledWith(
+      expect.stringContaining("audit unavailable"),
+      "warning",
+    );
   });
 
   it("lets the user cancel copying while retaining completed files and the partial-results viewer", async () => {
@@ -375,7 +456,7 @@ describe("user-only sandbox save coordinator", () => {
     ]);
     const controller = createUserExportController({
       cwd: directory,
-      getSource: () => source,
+      getSource: () => ({ ...source, writableHostPaths: [directory] }),
       admitted: () => true,
     });
     expect(await controller.beforeQuit(fixture.ctx, new AbortController().signal)).toBe(true);

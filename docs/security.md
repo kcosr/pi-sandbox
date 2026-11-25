@@ -964,7 +964,8 @@ first on PATH, and typed file tools keep their fixed executable selection.
 
 ## User-directed sandbox file export
 
-When main policy enables exports with a read-only CWD, the managed terminal offers
+When main policy enables exports on Bubblewrap or Seatbelt with either writable or
+read-only CWD, the managed terminal offers
 `/sandbox save` or the normal interactive exit prompt. Only an actual TUI command context may invoke it. No export capability
 is registered as a model tool or attached to the public command executor. Selection,
 destination and replacement approval belong to the user. No agent-chosen destination
@@ -988,19 +989,36 @@ promise a portable atomic subtree boundary. Its confined reader cannot acquire m
 read authority than the agent already has. Agents can copy sandbox-readable content
 into scratch; saving does not certify that content as newly authored or safe to run.
 
-Destinations cannot overlap live agent-writable host grants. The publisher rejects
-observed symlink traversal and incompatible types, checks filename collisions using
-the destination filesystem, and revalidates reviewed directories and replacements.
-It writes fresh host-owned staging inodes, then publishes new files with no-replace
-hard links or explicitly approved replacements by rename. It never truncates an
-existing inode, so other hard-link aliases keep their contents. Unsupported no-replace
-publication fails without an overwrite fallback. Trusted concurrent host writers can
-still race the final identity check and rename; these checks are not an atomic
-compare-and-swap guarantee. Publication is per file, with no destructive rollback or
-whole-export crash/power-loss guarantee.
+Destinations may overlap writable CWD, but cannot overlap private sandbox scratch
+storage. The publisher rejects observed symlink traversal and incompatible types,
+checks filename collisions using the destination filesystem, and revalidates
+reviewed directories and replacements. It writes fresh staging inodes, then
+publishes new files with no-replace hard links or explicitly approved replacements
+by rename. It never opens an existing target for truncation, preserving other
+hard-link aliases during an ordinary replacement. Unsupported no-replace publication
+fails without an overwrite fallback.
+
+Publication runs with the host user's authority. A surviving sandbox background
+command can race writable-CWD destination ancestors, temporary staging names or
+contents, and the final replacement check. Restrictive staging modes do not isolate
+same-UID commands. Path redirection can cause host writes or cleanup outside the
+reviewed destination; staging substitution can change the published object, and a
+replacement race can lose a concurrent update. These are accepted limitations,
+analogous to the host `git_clone` destination race. Foreground idle and managed-child
+quiescence are not complete process ownership. No process monitor, descendant
+revocation or confined publisher is added. User review and pre-effect audit remain
+required, while path/identity checks are best-effort detection, not an atomic
+pathname boundary or compare-and-swap guarantee. Trusted host writers retain the
+same concurrency limitations even for read-only CWD.
+
+Hashes identify bytes read from the source and copied by the publisher; they do
+not certify the concurrently mutable destination's contents or durable integrity.
+Publication is per file, with no destructive rollback or whole-export
+crash/power-loss guarantee. Report observed completed and failed operations rather
+than claiming that saved paths cannot subsequently move or change.
 
 When audit is enabled, service protocol 1/record schema 7 carries typed user export summaries
 and per-replacement intent/outcome events, separately from model-tool events. An
 acknowledged intent precedes publication. Audit failure stops further publication;
 the UI retains exact already-saved results. Events contain bounded metadata and a
-manifest digest, not file contents. macOS audit remains disabled.
+manifest digest, not file contents. The same audit gates apply to macOS HTTPS auditing.

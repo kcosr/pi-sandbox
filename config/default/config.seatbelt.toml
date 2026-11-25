@@ -7,7 +7,7 @@ enabled = false
 [mcp.servers]
 
 [exports]
-enabled = false
+enabled = true
 
 [skills]
 # Additional shared roots; personal skills and Pi settings retain precedence.

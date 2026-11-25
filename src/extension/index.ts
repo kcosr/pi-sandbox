@@ -597,7 +597,6 @@ export function createPiSandboxExtension(dependencies: ExtensionDependencies): E
 
     const canSave = () =>
       state.config?.exports.enabled === true &&
-      state.config.filesystem.cwdWritable === false &&
       state.config.execution.backend !== "direct" &&
       state.executor !== undefined &&
       !state.stopped;

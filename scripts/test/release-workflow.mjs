@@ -526,7 +526,7 @@ test("workspace-mode smoke prepares an omitted-common-policy fixture before laun
     );
     assert.equal(prepared.config_version, 14, "first compiled check rejects the old schema");
     assert.equal(prepared.filesystem.cwd_writable, true);
-    assert.deepEqual(prepared.exports, { enabled: false });
+    assert.deepEqual(prepared.exports, { enabled: true });
     for (const name of Object.keys(selectedTools))
       assert.deepEqual(prepared.tools[name], { mode: "ask", session_grant: "never" });
     assert.equal(prepared.workspace.modes.sandbox.filesystem.cwd_writable, false);

@@ -160,23 +160,32 @@ describe("parseConfig", () => {
     expect(() => parseConfig("skills = []\n" + completeConfig())).toThrow(ConfigError);
   });
 
-  it("requires explicit main-only export admission and a confined read-only workspace", () => {
+  it("requires explicit main-only export admission and a confined backend with either CWD policy", () => {
     const source = completeConfig();
     expect(parseConfig(source).exports).toEqual({ enabled: false });
-    const admitted = source
-      .replace("[exports]\nenabled = false", "[exports]\nenabled = true")
-      .replace("cwd_writable = true", "cwd_writable = false");
-    expect(parseConfig(admitted).exports.enabled).toBe(true);
-    expect(
-      parseConfig(admitted.replace('backend = "bubblewrap"', 'backend = "seatbelt"')).exports
-        .enabled,
-    ).toBe(true);
+    const admitted = source.replace("[exports]\nenabled = false", "[exports]\nenabled = true");
+    for (const backend of ["bubblewrap", "seatbelt"]) {
+      for (const cwdWritable of [true, false]) {
+        const effective = parseConfig(
+          admitted
+            .replace('backend = "bubblewrap"', `backend = "${backend}"`)
+            .replace("cwd_writable = true", `cwd_writable = ${cwdWritable}`),
+        );
+        expect(effective.exports.enabled).toBe(true);
+        expect(effective.filesystem.cwdWritable).toBe(cwdWritable);
+      }
+    }
+    expect(() =>
+      parseConfig(
+        admitted
+          .replace('backend = "bubblewrap"', 'backend = "direct"')
+          .replace('mode = "none"', 'mode = "host"'),
+      ),
+    ).toThrow("config.exports.enabled requires a confined backend");
     for (const invalid of [
       source.replace("[exports]\nenabled = false\n\n", ""),
       source.replace("[exports]\nenabled = false", "[exports]\nenabled = 1"),
       source.replace("[exports]\nenabled = false", "[exports]\nenabled = false\npath = '/'"),
-      source.replace("[exports]\nenabled = false", "[exports]\nenabled = true"),
-      admitted.replace('backend = "bubblewrap"', 'backend = "direct"'),
       source.replace("config_version = 16", "config_version = 13"),
     ])
       expect(() => parseConfig(invalid)).toThrow();
