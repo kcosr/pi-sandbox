@@ -17,9 +17,20 @@ import {
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { renderLayoutText } from "../build/layout-render.mjs";
 import { skillCandidateFixture, verifySkillInstallation } from "./skill-install-fixtures.mjs";
 
 const repositoryRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../..");
+const defaultLayout = {
+  configuration: {
+    source: "local",
+    configDir: "/etc/pi-sandbox",
+    allowConfigOverride: false,
+  },
+  libexecDir: "/usr/libexec/pi-sandbox",
+  launcherPath: "/usr/bin/pi-sandbox",
+  bubblewrap: { mode: "system", path: "/usr/bin/bwrap" },
+};
 const defaultPolicy = (
   await readFile(path.join(repositoryRoot, "config/default/config.toml"), "utf8")
 ).replace(/\[skills\][\s\S]*?(?=\n\[)/u, "");
@@ -319,17 +330,20 @@ async function createRelease(
   await mkdir(path.join(payload, "theme"));
   await mkdir(path.join(payload, "assets"));
   await mkdir(path.join(payload, "export-html"));
-  await copyFile(
-    path.join(repositoryRoot, "scripts/install/install.sh"),
+  const layout = bundledBubblewrap
+    ? {
+        ...defaultLayout,
+        bubblewrap: { mode: "bundled", path: "/usr/libexec/pi-sandbox/bwrap" },
+      }
+    : defaultLayout;
+  await writeFile(
     path.join(directory, "install.sh"),
+    renderLayoutText(
+      await readFile(path.join(repositoryRoot, "scripts/install/install.sh"), "utf8"),
+      layout,
+      "linux",
+    ),
   );
-  if (bundledBubblewrap) {
-    const installerPath = path.join(directory, "install.sh");
-    const installer = (await readFile(installerPath, "utf8"))
-      .replace("bubblewrap_mode=system", "bubblewrap_mode=bundled")
-      .replaceAll("/usr/bin/bwrap", "/usr/libexec/pi-sandbox/bwrap");
-    await writeFile(installerPath, installer);
-  }
   await copyFile(
     path.join(repositoryRoot, "scripts/install/uninstall.sh"),
     path.join(directory, "uninstall.sh"),

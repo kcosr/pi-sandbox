@@ -36,6 +36,8 @@
 
 ### Fixed
 
+- Keep Seatbelt scratch free of probe files and export-reader cache artifacts.
+  ([#60](https://github.com/kcosr/pi-sandbox/pull/60))
 - Increase automatic subagent reports to 16 KiB with explicit truncation notices
   and cursor-based `inspect_agent` retrieval of saved final-answer text.
   ([#55](https://github.com/kcosr/pi-sandbox/pull/55))

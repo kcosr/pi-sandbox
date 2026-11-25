@@ -209,7 +209,13 @@ export async function createSeatbeltExecutor(
             profileArguments(profile, [...command, JSON.stringify({ roots })]),
             {
               cwd,
-              env: { ...environment, HOME: writable[0]!, TMPDIR: writable[1]! },
+              env: {
+                ...environment,
+                HOME: writable[0]!,
+                TMPDIR: writable[1]!,
+                // Reading exports must not create Bun cache files in scratch HOME.
+                BUN_RUNTIME_TRANSPILER_CACHE_PATH: "0",
+              },
               stdio: ["pipe", "pipe", "pipe"],
             },
           );

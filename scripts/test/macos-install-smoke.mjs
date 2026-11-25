@@ -22,6 +22,15 @@ import { renderLayoutText } from "../build/layout-render.mjs";
 import { skillCandidateFixture, verifySkillInstallation } from "./skill-install-fixtures.mjs";
 
 const repositoryRoot = resolve(dirname(fileURLToPath(import.meta.url)), "../..");
+const defaultLayout = {
+  configuration: {
+    source: "local",
+    configDir: "/etc/pi-sandbox",
+    allowConfigOverride: false,
+  },
+  libexecDir: "/usr/local/libexec/pi-sandbox",
+  launcherPath: "/usr/local/bin/pi-sandbox",
+};
 const defaultPolicy = (
   await readFile(join(repositoryRoot, "config/default/config.direct.toml"), "utf8")
 ).replace(/\[skills\][\s\S]*?(?=\n\[)/u, "");
@@ -284,13 +293,16 @@ async function verifyExecutionBackends(root) {
   );
 }
 
-async function createRelease(directory, { backend = "direct", layout, homebrewPrefix } = {}) {
+async function createRelease(
+  directory,
+  { backend = "direct", layout = defaultLayout, homebrewPrefix } = {},
+) {
   const payload = join(directory, "payload/pi-sandbox");
   for (const child of ["defaults", "theme", "assets", "export-html", "licenses"]) {
     await mkdir(join(payload, child), { recursive: true });
   }
   let installer = await readFile(join(repositoryRoot, "scripts/install/macos-install.sh"), "utf8");
-  if (layout) installer = renderLayoutText(installer, layout, "darwin");
+  installer = renderLayoutText(installer, layout, "darwin");
   if (homebrewPrefix)
     installer = installer.replace(
       "brew_prefix=/opt/homebrew",
@@ -321,9 +333,9 @@ while [ "$#" -gt 0 ]; do
   esac
   shift 2
 done
-config_dir=${shellQuote(layout?.configuration.configDir ?? "/etc/pi-sandbox")}
+config_dir=${shellQuote(layout.configuration.configDir)}
 config="$root$config_dir/config.toml"
-${skillCandidateFixture(layout?.libexecDir ?? "/usr/local/libexec/pi-sandbox")}
+${skillCandidateFixture(layout.libexecDir)}
 grep -q '^config_version = 16$' "$config" || { echo 'config.config_version must be the integer 16' >&2; exit 1; }
 grep -q '"providers"' "$root$config_dir/models.json"
 case "$operation" in
@@ -346,7 +358,7 @@ esac
     join(payload, "sbom.cdx.json"),
     '{"bomFormat":"CycloneDX","specVersion":"1.6","version":1,"components":[]}\n',
   );
-  if (layout?.toolBundle) {
+  if (layout.toolBundle) {
     for (const directory of ["bin", "lib", "licenses"])
       await mkdir(join(payload, "tools", directory), { recursive: true });
     for (const name of [

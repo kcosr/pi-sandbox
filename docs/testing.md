@@ -786,6 +786,8 @@ paging, bounded pulls, invalid names, source identity changes, special files and
 root/path substitution. Real backend and shipped-source smoke coverage must prove
 that CWD writes follow each configured writable/read-only setting and that private
 files can still be exported through the worker or confined reader in both modes.
+Native Seatbelt checks must open the reader under Node and Bun, verify fresh
+export roots remain empty, and preserve user scratch files across repeated probes.
 Retain the bounded-reader, denied-source and cancellation controls. Concurrency
 tests cover observed checks and the accepted host publication race; they must not
 claim background-process exclusion or durable destination integrity.
