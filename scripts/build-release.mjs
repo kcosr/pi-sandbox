@@ -36,22 +36,16 @@ import {
 
 const repositoryRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const defaultDistribution = join(repositoryRoot, "config/default/distribution.toml");
-const commonRequiredReleaseFiles = Object.freeze([
-  "SHA256SUMS",
-  "install.sh",
-  "uninstall.sh",
-  "payload/pi-sandbox/pi-sandbox",
-  "payload/pi-sandbox/package.json",
-  "payload/pi-sandbox/photon_rs_bg.wasm",
-  "payload/pi-sandbox/licenses/LICENSE",
-  "payload/pi-sandbox/release-manifest.json",
-  "payload/pi-sandbox/sbom.cdx.json",
+const requiredArchiveFiles = ["SHA256SUMS", "install.sh", "uninstall.sh"];
+const commonRequiredPayloadFiles = Object.freeze([
+  "pi-sandbox",
+  "package.json",
+  "photon_rs_bg.wasm",
+  "licenses/LICENSE",
+  "release-manifest.json",
+  "sbom.cdx.json",
 ]);
-const commonRequiredReleaseDirectories = Object.freeze([
-  "payload/pi-sandbox/assets",
-  "payload/pi-sandbox/export-html",
-  "payload/pi-sandbox/theme",
-]);
+const requiredPayloadDirectories = Object.freeze(["assets", "export-html", "theme"]);
 
 function usage(stream = process.stdout) {
   stream.write(`Usage: node scripts/build-release.mjs [options]
@@ -69,6 +63,9 @@ Options:
                             (default: config/default/models.json)
   --distribution FILE      Select extensions and installation layout
                             (default: config/default/distribution.toml)
+  --macos-pkg              Build a native macOS Installer package for a service
+                            distribution (the default is a release archive)
+  --dmg                    Also wrap the Installer package in a disk image
   -h, --help               Show this help
 
 The supplied or downloaded source archive is always checked against
@@ -100,10 +97,20 @@ export function parseReleaseArguments(argv) {
     config: undefined,
     models: undefined,
     distribution: defaultDistribution,
+    macosPackage: false,
+    diskImage: false,
   };
   for (let index = 0; index < argv.length; index += 1) {
     const argument = argv[index];
     if (argument === "--help" || argument === "-h") return { help: true };
+    if (argument === "--macos-pkg") {
+      options.macosPackage = true;
+      continue;
+    }
+    if (argument === "--dmg") {
+      options.diskImage = true;
+      continue;
+    }
     if (
       !["--pi-source-archive", "--out", "--config", "--models", "--distribution"].includes(argument)
     ) {
@@ -120,6 +127,10 @@ export function parseReleaseArguments(argv) {
     if (argument === "--models") options.models = resolve(value);
     if (argument === "--distribution") options.distribution = resolve(value);
   }
+  if (options.diskImage && !options.macosPackage)
+    throw new ReleaseArgumentError("--dmg requires --macos-pkg");
+  if (options.macosPackage && process.platform !== "darwin")
+    throw new ReleaseArgumentError("--macos-pkg requires a macOS build host");
   return options;
 }
 
@@ -299,30 +310,14 @@ function hostPlatform() {
   throw new Error(`unsupported release platform: ${process.platform}-${process.arch}`);
 }
 
-function releaseRequirements(os, bubblewrap, configuration) {
+function payloadRequirements(os, bubblewrap, configuration) {
   const nativeHelper = os === "linux" ? "linux-platform-x11.node" : "darwin-platform.node";
-  const requiredFiles = [
-    ...commonRequiredReleaseFiles,
-    ...(configuration.source === "local"
-      ? ["payload/pi-sandbox/defaults/config.toml", "payload/pi-sandbox/defaults/models.json"]
-      : []),
-    `payload/pi-sandbox/native/${os}/prebuilds/${os}-${process.arch}/${nativeHelper}`,
+  return [
+    ...commonRequiredPayloadFiles,
+    ...(configuration.source === "local" ? ["defaults/config.toml", "defaults/models.json"] : []),
+    `native/${os}/prebuilds/${os}-${process.arch}/${nativeHelper}`,
+    ...(bubblewrap?.mode === "bundled" ? ["bwrap", "licenses/bubblewrap/LICENSE"] : []),
   ];
-  if (os === "darwin") {
-    return {
-      files: requiredFiles,
-      directories: commonRequiredReleaseDirectories,
-    };
-  }
-  return {
-    files: [
-      ...requiredFiles,
-      ...(bubblewrap.mode === "bundled"
-        ? ["payload/pi-sandbox/bwrap", "payload/pi-sandbox/licenses/bubblewrap/LICENSE"]
-        : []),
-    ],
-    directories: commonRequiredReleaseDirectories,
-  };
 }
 
 const REQUIRED_BUBBLEWRAP_OPTIONS = Object.freeze([
@@ -399,13 +394,7 @@ async function fileInventory(root) {
   return inventory;
 }
 
-async function inspectReleaseArchive(
-  archive,
-  expectedInventory,
-  temporaryDirectory,
-  expectedRelease,
-  requirements,
-) {
+async function inspectReleaseArchive(archive, expectedInventory, temporaryDirectory) {
   const listing = (await capture("tar", ["-tzf", archive])).split("\n").filter(Boolean);
   for (const entry of listing) validateArchiveEntry(entry, "pi-sandbox");
   const inspectionRoot = join(temporaryDirectory, "archive-inspection");
@@ -416,67 +405,42 @@ async function inspectReleaseArchive(
   if (JSON.stringify(actualInventory) !== JSON.stringify(expectedInventory)) {
     throw new Error("release archive contents do not match the inspected payload");
   }
-  for (const path of requirements.files) {
+  for (const path of requiredArchiveFiles) {
     const stats = await lstat(join(extractedRoot, path)).catch(() => undefined);
     if (stats?.isFile() !== true)
       throw new Error(`release archive is missing required file: ${path}`);
   }
-  for (const path of requirements.directories) {
-    const stats = await lstat(join(extractedRoot, path)).catch(() => undefined);
-    if (stats?.isDirectory() !== true) {
-      throw new Error(`release archive is missing required directory: ${path}`);
-    }
+  return extractedRoot;
+}
+
+async function inspectReleasePayload(payloadRoot, expectedIdentity, requiredFiles) {
+  for (const path of requiredFiles) {
+    const stats = await lstat(join(payloadRoot, path)).catch(() => undefined);
+    if (stats?.isFile() !== true)
+      throw new Error(`release payload is missing required file: ${path}`);
   }
-  const payloadRoot = join(extractedRoot, "payload/pi-sandbox");
+  for (const path of requiredPayloadDirectories) {
+    const stats = await lstat(join(payloadRoot, path)).catch(() => undefined);
+    if (stats?.isDirectory() !== true)
+      throw new Error(`release payload is missing required directory: ${path}`);
+  }
   let manifest;
   try {
     manifest = JSON.parse(await readFile(join(payloadRoot, "release-manifest.json"), "utf8"));
   } catch (cause) {
     throw new Error("release manifest is invalid", { cause });
   }
-  const expectedIdentity = {
-    manifestVersion: 5,
-    product: "pi-sandbox",
-    version: expectedRelease.version,
-    buildVersion: expectedRelease.buildVersion,
-    platform: expectedRelease.platform,
-    architecture: expectedRelease.architecture,
-    executionBackends: expectedRelease.executionBackends,
-    bubblewrap: expectedRelease.bubblewrap,
-    toolBundle: expectedRelease.toolBundle,
-    skillsBundle: expectedRelease.skillsBundle,
-    pi: expectedRelease.pi,
-    extensions: expectedRelease.extensions,
-    layout: expectedRelease.layout,
-    privateBundleSha256: expectedRelease.privateBundleSha256,
-  };
-  const actualIdentity = {
-    manifestVersion: manifest.manifestVersion,
-    product: manifest.product,
-    version: manifest.version,
-    buildVersion: manifest.buildVersion,
-    platform: manifest.platform,
-    architecture: manifest.architecture,
-    executionBackends: manifest.executionBackends,
-    bubblewrap: manifest.bubblewrap,
-    toolBundle: manifest.toolBundle,
-    skillsBundle: manifest.skillsBundle,
-    pi: manifest.pi,
-    extensions: manifest.extensions,
-    layout: manifest.layout,
-    privateBundleSha256: manifest.privateBundleSha256,
-  };
-  if (JSON.stringify(actualIdentity) !== JSON.stringify(expectedIdentity)) {
+  const { files, ...identity } = manifest;
+  if (JSON.stringify(identity) !== JSON.stringify(expectedIdentity)) {
     throw new Error("release manifest identity does not match the requested build");
   }
   const payloadInventory = (await fileInventory(payloadRoot)).filter(
     (entry) => entry.path !== "release-manifest.json",
   );
-  if (JSON.stringify(manifest.files) !== JSON.stringify(payloadInventory)) {
+  if (JSON.stringify(files) !== JSON.stringify(payloadInventory)) {
     throw new Error("release manifest does not inventory the packaged payload");
   }
   await validatePackagedSkills(payloadRoot, manifest.skillsBundle);
-  return extractedRoot;
 }
 
 /** Build/package integrity is unconditional; only the verifier supplies test callbacks. */
@@ -496,7 +460,9 @@ export async function buildRelease(argv, { verifyPatchedSource, verifyPackagedRe
   const lock = JSON.parse(await readFile(lockPath, "utf8"));
   const packageJson = JSON.parse(await readFile(packagePath, "utf8"));
   const target = hostPlatform();
-  const distribution = await loadDistribution(options.distribution, target.os);
+  const distribution = await loadDistribution(options.distribution, target.os, {
+    macosPackage: options.macosPackage,
+  });
   const skillsBundle = await loadSkillsBundle(distribution.skillsSource);
   validateNativeToolBundle(distribution.toolBundle, target.os, process.arch);
   const configuration = distribution.layout.configuration;
@@ -556,6 +522,7 @@ export async function buildRelease(argv, { verifyPatchedSource, verifyPackagedRe
         "--distribution",
         distribution.path,
         "--executable-relative-tools",
+        ...(options.macosPackage ? ["--macos-pkg"] : []),
       ],
       { env: cleanEnvironment },
     );
@@ -709,23 +676,17 @@ export async function buildRelease(argv, { verifyPatchedSource, verifyPackagedRe
         { env: cleanEnvironment },
       );
     }
-    for (const [name, source] of [
-      [
-        "install.sh",
-        os === "linux" ? "scripts/install/install.sh" : "scripts/install/macos-install.sh",
-      ],
-      [
-        "uninstall.sh",
-        os === "linux" ? "scripts/install/uninstall.sh" : "scripts/install/macos-uninstall.sh",
-      ],
-    ]) {
-      await renderFile(
-        join(repositoryRoot, source),
-        join(releaseRoot, name),
-        distribution.layout,
-        os,
-        0o755,
-      );
+    if (!options.macosPackage) {
+      for (const action of ["install", "uninstall"]) {
+        const source = `scripts/install/${os === "darwin" ? "macos-" : ""}${action}.sh`;
+        await renderFile(
+          join(repositoryRoot, source),
+          join(releaseRoot, `${action}.sh`),
+          distribution.layout,
+          os,
+          0o755,
+        );
+      }
     }
 
     const sbom = await createSbom({
@@ -751,7 +712,7 @@ export async function buildRelease(argv, { verifyPatchedSource, verifyPackagedRe
     });
 
     const releaseManifestPath = join(payload, "release-manifest.json");
-    const releaseManifest = {
+    const releaseIdentity = {
       manifestVersion: 5,
       product: "pi-sandbox",
       version: packageJson.version,
@@ -773,11 +734,48 @@ export async function buildRelease(argv, { verifyPatchedSource, verifyPackagedRe
       layout: releaseLayout(distribution.layout),
       privateBundleSha256: extensionBuildInventory.privateBundleSha256,
       patches,
-      files: await fileInventory(payload),
     };
+    const releaseManifest = { ...releaseIdentity, files: await fileInventory(payload) };
     await writeFile(releaseManifestPath, `${JSON.stringify(releaseManifest, null, 2)}\n`, {
       mode: 0o644,
     });
+    const requiredFiles = payloadRequirements(os, distribution.bubblewrap, configuration);
+    const inspectPayload = (root) => inspectReleasePayload(root, releaseIdentity, requiredFiles);
+
+    const verificationContext = {
+      repositoryRoot,
+      os,
+      packagedConfig,
+      layout: distribution.layout,
+      sourceRoot,
+      codingAgentRoot,
+      bunTarget,
+      bunTsconfig,
+      distribution,
+      options,
+    };
+    if (options.macosPackage) {
+      const { buildMacosInstaller } = await import("./build/macos-installer.mjs");
+      const installer = await buildMacosInstaller({
+        payload,
+        temporaryDirectory,
+        out: options.out,
+        version: packageJson.version,
+        architecture: process.arch,
+        minimumOS: distribution.toolBundle?.inventory.minimumOS,
+        displayVersion: buildVersion.displayVersion,
+        diskImage: options.diskImage,
+        run,
+        capture,
+        fileInventory,
+        inspectPayload,
+      });
+      await verifyPackagedRelease?.({ ...verificationContext, installer });
+      for (const { path, sha256: digest } of installer.artifacts) {
+        process.stdout.write(`Created and inspected ${path}\nSHA-256 ${digest}\n`);
+      }
+      return;
+    }
 
     const checksumEntries = await fileInventory(payload);
     await writeFile(
@@ -815,41 +813,9 @@ export async function buildRelease(argv, { verifyPatchedSource, verifyPackagedRe
       archive,
       expectedInventory,
       temporaryDirectory,
-      {
-        version: packageJson.version,
-        buildVersion,
-        platform,
-        architecture: process.arch,
-        executionBackends: [os === "linux" ? "bubblewrap" : "seatbelt", "direct"],
-        bubblewrap: os === "linux" ? distribution.bubblewrap.release : null,
-        toolBundle: distribution.toolBundle?.release ?? null,
-        skillsBundle: skillsBundle?.release ?? null,
-        pi: {
-          version: lock.version,
-          tag: lock.tag,
-          commit: lock.commit,
-          sourceArchive: lock.sourceArchive,
-          sourceArchiveSha256: lock.sourceArchiveSha256,
-        },
-        extensions: extensionBuildInventory.extensions,
-        layout: releaseLayout(distribution.layout),
-        privateBundleSha256: extensionBuildInventory.privateBundleSha256,
-      },
-      releaseRequirements(os, distribution.bubblewrap, configuration),
     );
-    await verifyPackagedRelease?.({
-      repositoryRoot,
-      extractedRelease,
-      os,
-      packagedConfig,
-      layout: distribution.layout,
-      sourceRoot,
-      codingAgentRoot,
-      bunTarget,
-      bunTsconfig,
-      distribution,
-      options,
-    });
+    await inspectPayload(join(extractedRelease, "payload/pi-sandbox"));
+    await verifyPackagedRelease?.({ ...verificationContext, extractedRelease });
     const archiveSha256 = await sha256(archive);
     await writeFile(join(options.out, "SHA256SUMS"), `${archiveSha256}  ${archiveName}\n`, {
       mode: 0o644,

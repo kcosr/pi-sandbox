@@ -40,7 +40,9 @@ export async function verifyRelease(buildArguments) {
     ],
   );
   {
-    const distribution = await loadDistribution(distributionArguments[1]);
+    const distribution = await loadDistribution(distributionArguments[1], process.platform, {
+      macosPackage: parsedArguments.macosPackage,
+    });
     if (distribution.toolBundle)
       environment.PI_SANDBOX_TEST_TOOL_BUNDLE = distribution.toolBundle.directory;
   }

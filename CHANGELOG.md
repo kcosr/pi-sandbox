@@ -4,6 +4,10 @@
 
 ### Added
 
+- Build a native macOS Installer package for service distributions, with a
+  self-contained app bundle, Finder launch through the default `.command`
+  handler, a CLI symlink, and an optional disk image.
+  ([#64](https://github.com/kcosr/pi-sandbox/pull/64))
 - Allow build-selected HTTPS configuration and audit URLs to use custom public
   paths behind a reverse proxy; direct daemon access retains `/v1/service`.
   Service diagnostics now display the full endpoint URL, including its path.

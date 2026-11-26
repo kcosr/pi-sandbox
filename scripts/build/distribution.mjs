@@ -7,6 +7,7 @@ import { X509Certificate } from "node:crypto";
 import { dirname, isAbsolute, normalize, resolve } from "node:path";
 
 import { parse as parseToml } from "@iarna/toml";
+import { macosPackageLayout } from "./macos-layout.mjs";
 import { loadToolBundle } from "./tool-bundle.mjs";
 
 const ROOT_KEYS = new Set(["version", "extension_manifests", "skills_source", "platforms"]);
@@ -286,7 +287,9 @@ export function releaseLayout(layout) {
   return { ...layout, configuration };
 }
 
-export async function loadDistribution(path, platform = process.platform) {
+export async function loadDistribution(path, platform = process.platform, { macosPackage } = {}) {
+  if (macosPackage && platform !== "darwin")
+    throw new Error("macOS Installer packages require a macOS build host");
   const distributionPath = resolve(path);
   let parsed;
   try {
@@ -320,19 +323,29 @@ export async function loadDistribution(path, platform = process.platform) {
   const selected = object(platforms[platform], `distribution platforms.${platform}`);
   rejectUnknown(selected, PLATFORM_KEYS, `distribution platforms.${platform}`);
   const configuration = await parseConfiguration(selected.configuration, platform);
-  const libexecDir = absolutePath(
+  if (macosPackage && configuration.source !== "service")
+    throw new Error("macOS Installer packages require a service-source distribution");
+  if (macosPackage && skillsSource !== undefined)
+    throw new Error("macOS Installer packages do not support distribution skills_source");
+  const archiveLibexecDir = absolutePath(
     selected.libexec_dir,
     `distribution platforms.${platform}.libexec_dir`,
   );
-  const launcherPath = absolutePath(
+  const archiveLauncherPath = absolutePath(
     selected.launcher_path,
     `distribution platforms.${platform}.launcher_path`,
   );
   if (platform === "darwin" && selected.bubblewrap !== undefined)
     throw new Error("distribution platforms.darwin does not support bubblewrap");
-  if (launcherPath === libexecDir || launcherPath.startsWith(`${libexecDir}/`)) {
+  if (
+    archiveLauncherPath === archiveLibexecDir ||
+    archiveLauncherPath.startsWith(`${archiveLibexecDir}/`)
+  ) {
     throw new Error("distribution launcher_path must be outside libexec_dir");
   }
+  const { libexecDir, launcherPath } = macosPackage
+    ? macosPackageLayout
+    : { libexecDir: archiveLibexecDir, launcherPath: archiveLauncherPath };
   const bubblewrap =
     platform === "linux"
       ? parseBubblewrap(selected.bubblewrap, manifestDirectory, libexecDir)

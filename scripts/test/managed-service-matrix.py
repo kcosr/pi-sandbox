@@ -303,7 +303,9 @@ class Client:
         self.directory = Path(fixture["installation"])
         self.workspace = self.directory / "workspace"
         self.state = self.directory / "state"
-        self.executable = self.directory / "payload/pi-sandbox"
+        self.payload = Path(fixture["payload"])
+        launcher = fixture.get("bundleLauncher")
+        self.executable = Path(launcher["link"]) if launcher else self.payload / "pi-sandbox"
         self.env = {"PATH": str(root / "test-bin") + ":" + os.environ.get("PATH", "/usr/bin:/bin"), "HOME": str(self.directory / "fake-home"), "PI_CODING_AGENT_DIR": str(self.state), "FIXTURE_TOKEN": "ambient-must-not-win", "FIXTURE_USER": "forged", "LANG": "C.UTF-8", "LC_ALL": "C.UTF-8"}
         self.prefix = ["/usr/bin/setpriv", f"--reuid={account.pw_uid}", f"--regid={account.pw_gid}", "--clear-groups", "--"] if linux else []
         self.configuration = ["--config", str(self.directory / "config/selected.toml")] if fixture["name"] == "audit-local" else []
@@ -393,13 +395,31 @@ try:
     protected_file(root / "public-root-probe", public_root_probe.read_bytes(), 0o755)
     for fixture in plan["fixtures"]:
         assert fixture["name"] in ["fixed-local", "audit-local", "service-unix", "service-https"]
-        assert Path(fixture["installation"]) == root / fixture["name"]
+        installation = Path(fixture["installation"])
+        assert installation == root / fixture["name"]
         binary = Path(fixture["executable"])
         assert binary.parent == plan_path.parent and stat.S_ISREG(binary.lstat().st_mode)
         assert hashlib.sha256(binary.read_bytes()).hexdigest() == fixture["sha256"]
-        payload = Path(fixture["installation"]) / "payload"
+        payload = Path(fixture["payload"])
+        launcher = fixture.get("bundleLauncher")
+        if launcher:
+            assert not linux and fixture["name"] == "service-https"
+            assert payload.resolve().is_relative_to(installation.resolve())
+            assert Path(launcher["target"]).resolve().is_relative_to(installation.resolve())
+            assert Path(launcher["link"]) == installation / "bin/pi-sandbox"
+        else:
+            assert payload == installation / "payload"
         shutil.copytree(production, payload)
         shutil.copyfile(binary, payload / "pi-sandbox")
+        if launcher:
+            source = Path(launcher["source"])
+            target = Path(launcher["target"])
+            link = Path(launcher["link"])
+            assert stat.S_ISREG(source.lstat().st_mode)
+            target.parent.mkdir(parents=True)
+            shutil.copy2(source, target)
+            link.parent.mkdir(parents=True)
+            link.symlink_to(target)
         for directory, dirs, files in os.walk(payload):
             Path(directory).chmod(0o755)
             for name in files:
@@ -534,16 +554,16 @@ password_file = "{root}/password"
         if linux:
             os.chown(bootstrap_fixture, account.pw_uid, account.pw_gid)
         bootstrap_fixture.chmod(0o600)
-        client.command(["--validate-bootstrap", str(bootstrap_fixture), "--candidate-payload", str(client.directory / "payload")])
+        client.command(["--validate-bootstrap", str(bootstrap_fixture), "--candidate-payload", str(client.payload)])
         bootstrap_fixture.unlink()
         client.command(["--api-key", "unmanaged"], expect_success=False)
         if fixture["name"] != "audit-local":
             client.command(["--config", str(root / "policy.toml"), "--help"], expect_success=False, configured=False)
         if service_source:
             client.command(["--validate-installation"], expect_success=False)
-            client.command(["--validate-service", "--candidate-payload", str(client.directory / "payload")])
+            client.command(["--validate-service", "--candidate-payload", str(client.payload)])
         else:
-            client.command(["--validate-service", "--candidate-payload", str(client.directory / "payload")], expect_success=False)
+            client.command(["--validate-service", "--candidate-payload", str(client.payload)], expect_success=False)
             expected = "seatbelt" if plan["platform"] == "darwin" else "direct"
             assert client.command(["--validate-installation"]).stdout.strip() == expected
         # Inspection must not read catalogs or secret files.

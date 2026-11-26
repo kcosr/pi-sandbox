@@ -27,6 +27,7 @@ Options:
                        (default: config/default/distribution.toml)
   -h, --help           Show this help
   --executable-relative-tools  Anchor selected tools beside the compiled executable
+  --macos-pkg          Use the macOS Installer application layout
 
 Only extensions selected by the distribution manifest are compiled.
 `);
@@ -35,11 +36,16 @@ Only extensions selected by the distribution manifest are compiled.
 function parseArguments(argv) {
   let distribution = defaultDistribution;
   let executableRelativeTools = false;
+  let macosPackage = false;
   for (let index = 0; index < argv.length; index += 1) {
     const argument = argv[index];
     if (argument === "--help" || argument === "-h") return { help: true };
     if (argument === "--executable-relative-tools") {
       executableRelativeTools = true;
+      continue;
+    }
+    if (argument === "--macos-pkg") {
+      macosPackage = true;
       continue;
     }
     if (argument !== "--distribution") throw new Error(`unknown option: ${argument}`);
@@ -50,7 +56,7 @@ function parseArguments(argv) {
     distribution = resolve(value);
     index += 1;
   }
-  return { distribution, executableRelativeTools };
+  return { distribution, executableRelativeTools, macosPackage };
 }
 
 let options;
@@ -69,13 +75,15 @@ if (options?.help) {
 
 if (options === undefined) process.exit(2);
 
-const distribution = await loadDistribution(options.distribution);
+const distribution = await loadDistribution(options.distribution, process.platform, {
+  macosPackage: options.macosPackage,
+});
 validateNativeToolBundle(distribution.toolBundle);
 const extensions = await loadExtensionManifests(distribution.extensionManifests);
 const compiledExtensionsModule = createCompiledExtensionsModule(extensions);
 const compiledLayoutModule = createCompiledLayoutModule(distribution.layout, {
   toolBundleDirectory: distribution.toolBundle?.directory,
-  executableRelative: options.executableRelativeTools,
+  executableRelative: options.executableRelativeTools || options.macosPackage,
 });
 const privateBundle = join(repositoryRoot, "dist/private/private-cli.js");
 const buildVersion = await readBuildVersion(repositoryRoot);

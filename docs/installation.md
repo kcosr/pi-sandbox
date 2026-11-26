@@ -93,8 +93,9 @@ checksums and transactional installation scripts. Linux defaults are:
   licenses/
 ```
 
-macOS uses `/usr/local/bin/pi-sandbox` and `/usr/local/libexec/pi-sandbox`, with
-its native `darwin-platform.node` asset. Neither client archive includes broker,
+The macOS release archive uses `/usr/local/bin/pi-sandbox` and
+`/usr/local/libexec/pi-sandbox`, with its native `darwin-platform.node` asset.
+Neither client archive includes broker,
 collector or systemd units. Local defaults install under the compiled `config_dir`
 (`/etc/pi-sandbox` in the public distribution); service-source archives contain
 no local administrative defaults and create no configuration directory.
@@ -118,6 +119,58 @@ account with protected account-owned inputs, including under that account's home
 See [foreground HTTPS operation](managed-service.md#foreground-https-only-operation)
 for validation, file modes, descriptor limits and syslog requirements. The packaged
 installer and unit retain their root-managed system layout.
+
+### macOS Installer package
+
+On a native macOS build host with the Apple command-line developer tools, use
+a service-source distribution to build a PKG:
+
+```sh
+env -u NODE_ENV npm run build:release -- \
+  --macos-pkg --distribution /path/to/distribution.toml --out /path/to/output
+```
+
+Add `--dmg` to wrap the same PKG in a disk image. The output includes a SHA-256
+sidecar for each artifact. Keep packages that embed HTTPS Basic credentials
+private. The app is signed ad hoc and the installer is unsigned. The macOS build
+host's selected architecture and the bundled tool inventory determine the
+target requirements.
+
+Open the PKG in Installer. It installs `/Applications/Pi Sandbox.app` with
+root-owned, non-group-writable files. Upgrades replace that bundle as a unit.
+For an intentional downgrade, remove the installed app bundle before running
+the older installer. Installer keeps a newer bundle when one is present.
+The package build selects this layout in place of the distribution's archive
+paths. A selected native tool inventory travels inside the app with its
+libraries and licenses. Seatbelt still uses macOS's system `sandbox-exec`.
+Use the release archive when the distribution needs to bundle `skills_source`.
+The app icon uses the [Pi press kit badge](https://pi.dev/press-kit). Its
+vector source and attribution are in `scripts/build/macos-icon.svg` and
+`scripts/build/macos-icon.LICENSE`.
+
+Installer links `/usr/local/bin/pi-sandbox` to the app's CLI executable. It
+accepts an existing link to that executable. If the command path is occupied
+by another file or link, move it or uninstall the legacy release first.
+Installer records hook diagnostics in `/var/log/install.log`. Protect
+`/usr/local/bin` and its parents from untrusted writes if users rely on the link.
+
+Double-click the app in Finder to start a session in `~/Pi Sandbox Workspace`
+using the macOS default app for `.command` files. The selected app needs to
+support running these scripts. The launcher creates the workspace if needed.
+To start a session in a different workspace, run the CLI from that directory in
+your terminal:
+
+```sh
+pi-sandbox
+```
+
+The service provides policy and models. To uninstall the client, remove the
+app bundle and its `/usr/local/bin/pi-sandbox` symlink. Use
+`sudo pkgutil --forget io.github.kcosr.pi-sandbox` to remove the installer receipt.
+Pi state and sessions live outside the bundle. Local configuration builds use
+the release archive above.
+
+### Client runtime and configuration
 
 Common client installation paths and native tool selection are compiled into the
 application and rendered into the installer and release manifest. A `DESTDIR`
