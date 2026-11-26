@@ -49,6 +49,19 @@ send_machine_id = false
 # tls_ca_file = "/absolute/build-input/service-ca.pem"
 ```
 
+`url` is the complete public HTTPS endpoint, including an optional port and path.
+The client sends every operation directly to that path; it does not append
+`/v1/service`. For example, separate builds can select
+`https://policy.example.net/pi-sandbox-macos` and
+`https://policy.example.net/pi-sandbox-linux`. A reverse proxy can route each
+public path to a different daemon listener and rewrite it to `/v1/service`.
+Direct daemon connections use `/v1/service`. Query strings, fragments and URL
+credentials are rejected. The same rules apply to local builds' `audit_endpoint`.
+The builder uses standard URL parsing and serialization: an omitted path becomes
+`/`, dot segments are resolved (for example, `/old/../service` becomes `/service`),
+and spaces are percent-encoded. Repeated slashes are preserved. Release metadata
+records the resulting URL, and service-source diagnostics display that full URL.
+
 Linux supports Unix and HTTPS endpoints; macOS supports HTTPS. The optional
 machine assertion is macOS-only. Password and optional CA files are build inputs,
 compiled into the executable, not runtime file references. Passwords must have
@@ -290,8 +303,9 @@ validation checks syntax without reading secrets; live bootstrap resolves them.
 
 ## Shared protocol and auditing
 
-Both transports use bounded HTTP/1.1 `POST /v1/service`, JSON protocol version 1,
-and `Connection: close`. Operations are `bootstrap`, `policy_inspect`, `audit_open`,
+Both transports use bounded HTTP/1.1 POST, JSON protocol version 1,
+and `Connection: close`. Unix clients and both daemon listeners use `/v1/service`;
+HTTPS clients post to the compiled endpoint path. Operations are `bootstrap`, `policy_inspect`, `audit_open`,
 `audit_check`, `audit_event` and `audit_close`. Requests run concurrently with
 bounded connection/worker/session limits; each audit handle serializes its event
 sequence. Transport reconnects never refetch a running application's policy.

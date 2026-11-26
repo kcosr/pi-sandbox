@@ -140,7 +140,17 @@ HTTPS accepts only the shown HTTPS fields. All fields except `tls_ca_file` are
 required for their variant. Reject mixed variants, unknown fields, relative paths,
 URL credentials, query/fragment components and an HTTP rather than HTTPS URL. Preserve existing
 build-selected executable/tool-bundle capabilities independently.
-The URL path must be exactly `/v1/service`. `send_machine_id = true` is valid only
+The URL is the complete public HTTPS endpoint. The client posts every operation
+to its parsed pathname without appending a suffix. Direct daemon connections use
+`/v1/service`; reverse proxies may expose custom public paths and rewrite them to
+the daemon's fixed `/v1/service` route. The compiled URL remains immutable, and
+query strings, fragments and URL credentials remain rejected. These rules apply
+to both service `endpoint` and local `audit_endpoint`.
+Use standard URL parsing/serialization at build time: an omitted path becomes `/`,
+dot segments are resolved, spaces are percent-encoded, and repeated slashes are
+preserved. Compile and record the resulting URL in release metadata; service-source
+provenance/diagnostics include its full path, distinguishing endpoints on one origin.
+`send_machine_id = true` is valid only
 for macOS; Linux HTTPS descriptors require false until a Linux identity source is
 separately specified.
 

@@ -342,8 +342,11 @@ The version-4 descriptor requires the strict `configuration` union. Local builds
 require `config_dir` and `allow_config_override`; `audit_endpoint` is optional and
 uses the same endpoint shape as service builds. Service builds require `endpoint`
 and reject local config fields. Unix endpoints require Linux and an absolute
-`socket_path`. HTTPS endpoints require the exact `/v1/service` URL, build-time
+`socket_path`. HTTPS endpoints require a complete HTTPS URL, build-time
 Basic credential input and explicit `send_machine_id` (true is macOS-only).
+The client posts directly to the URL's path. Use `/v1/service` for direct daemon
+access, or a custom public path that a reverse proxy rewrites to `/v1/service`.
+Query strings, fragments and URL credentials are rejected.
 Endpoint, credentials and CA roots are fixed in the executable. Build inputs are
 not runtime environment variables. There is no fallback to local files.
 

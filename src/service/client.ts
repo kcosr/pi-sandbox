@@ -165,20 +165,18 @@ export class ServiceClient implements ServiceTransport {
     const large = operation === "bootstrap" || operation === "policy_inspect";
     if (body.length > (large ? 16 * 1024 : 32 * 1024))
       throw new Error("Managed service request exceeds size limit");
-    const client = new Client(
-      endpoint.transport === "https" ? new URL(endpoint.url).origin : "http://localhost",
-      {
-        connect: directConnector(endpoint, signal),
-        allowH2: false,
-        useMilo: false,
-        pipelining: 0,
-        maxRequestsPerClient: 1,
-        maxHeaderSize: 16 * 1024,
-        maxResponseSize: 4 * 1024 * 1024,
-        headersTimeout: 0,
-        bodyTimeout: 0,
-      },
-    );
+    const url = endpoint.transport === "https" ? new URL(endpoint.url) : undefined;
+    const client = new Client(url?.origin ?? "http://localhost", {
+      connect: directConnector(endpoint, signal),
+      allowH2: false,
+      useMilo: false,
+      pipelining: 0,
+      maxRequestsPerClient: 1,
+      maxHeaderSize: 16 * 1024,
+      maxResponseSize: 4 * 1024 * 1024,
+      headersTimeout: 0,
+      bodyTimeout: 0,
+    });
     // Dispatcher errors are also delivered to the request promise; avoid an
     // unhandled EventEmitter error while aborting a partial response.
     EventEmitter.prototype.on.call(client, "error", () => {});
@@ -186,7 +184,7 @@ export class ServiceClient implements ServiceTransport {
       let response;
       try {
         response = await request.call(client, {
-          path: "/v1/service",
+          path: url?.pathname ?? "/v1/service",
           method: "POST",
           idempotent: false,
           signal,

@@ -101,7 +101,73 @@ path = "/opt/example/bin/bwrap"
   assert.ok(!metadata.includes(password) && !metadata.includes(passwordFile));
   assert.equal(releaseLayout(remote.layout).configuration.endpoint.tlsTrust, "public");
   assert.ok(createCompiledLayoutModule(remote.layout).includes(password));
-  await assert.rejects(load(https.replace("https://config", "http://config")), /HTTPS|https/u);
+  const originalUrl = "https://config.example.test/v1/service";
+  for (const platform of ["linux", "darwin"]) {
+    for (const source of ["service", "local"]) {
+      let descriptor = https;
+      if (source === "local")
+        descriptor = descriptor
+          .replace(
+            'source = "service"',
+            'source = "local"\nconfig_dir = "/opt/example/etc"\nallow_config_override = false',
+          )
+          .replace("configuration.endpoint]", "configuration.audit_endpoint]");
+      if (platform === "darwin")
+        descriptor = descriptor
+          .replaceAll("platforms.linux", "platforms.darwin")
+          .replace(/\n\[platforms\.darwin\.bubblewrap\][\s\S]*$/u, "\n");
+      for (const suffix of [
+        "/v1/service",
+        "/pi-sandbox-macos",
+        "/pi-sandbox-linux",
+        "/service%20path/",
+        "",
+      ]) {
+        const url = `https://config.example.test:9443${suffix}`;
+        const configured = await load(descriptor.replace(originalUrl, url), platform);
+        const endpoint =
+          source === "service"
+            ? configured.layout.configuration.endpoint
+            : configured.layout.configuration.auditEndpoint;
+        const expectedUrl = new URL(url).href;
+        assert.equal(endpoint.url, expectedUrl);
+        assert.ok(createCompiledLayoutModule(configured.layout).includes(expectedUrl));
+        const published = releaseLayout(configured.layout).configuration;
+        assert.equal(
+          (source === "service" ? published.endpoint : published.auditEndpoint).url,
+          expectedUrl,
+        );
+      }
+      for (const [authored, pathname] of [
+        ["/old/../service", "/service"],
+        ["/./service", "/service"],
+        ["/service path", "/service%20path"],
+        ["//service", "//service"],
+      ]) {
+        const configured = await load(
+          descriptor.replace(originalUrl, `https://config.example.test${authored}`),
+          platform,
+        );
+        const endpoint =
+          source === "service"
+            ? configured.layout.configuration.endpoint
+            : configured.layout.configuration.auditEndpoint;
+        assert.equal(endpoint.url, `https://config.example.test${pathname}`);
+      }
+      for (const invalid of [
+        "http://config.example.test/pi-sandbox-macos",
+        "https://user:password@config.example.test/pi-sandbox-macos",
+        "https://config.example.test/pi-sandbox-macos?token=secret",
+        "https://config.example.test/pi-sandbox-macos?",
+        "https://config.example.test/pi-sandbox-macos#fragment",
+        "https://config.example.test/pi-sandbox-macos#",
+      ])
+        await assert.rejects(
+          load(descriptor.replace(originalUrl, invalid), platform),
+          /HTTPS|credentials\/query\/fragment/u,
+        );
+    }
+  }
   await assert.rejects(
     load(https.replace("send_machine_id = false", "send_machine_id = true")),
     /macOS/u,

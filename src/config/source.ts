@@ -143,7 +143,7 @@ export async function loadAdministrativeSnapshot(
     provenance: {
       source: "service",
       transport: endpoint.transport,
-      location: endpoint.transport === "unix" ? endpoint.socketPath : new URL(endpoint.url).origin,
+      location: endpoint.transport === "unix" ? endpoint.socketPath : new URL(endpoint.url).href,
       revision: result.policy_revision,
       identitySource: endpoint.transport === "unix" ? "unix_peer" : "https_assertion",
     },
