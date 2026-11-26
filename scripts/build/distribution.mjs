@@ -178,13 +178,12 @@ async function parseEndpoint(value, platform) {
     url.password ||
     url.search ||
     url.hash ||
-    url.pathname !== "/v1/service" ||
     typeof endpoint.url !== "string" ||
     endpoint.url.includes("?") ||
     endpoint.url.includes("#")
   )
     throw new Error(
-      "distribution endpoint must be an HTTPS /v1/service URL without credentials/query/fragment",
+      "distribution endpoint must be an HTTPS URL without credentials/query/fragment",
     );
   if (
     typeof endpoint.basic_username !== "string" ||

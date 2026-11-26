@@ -154,108 +154,113 @@ describe("managed HTTP/1.1 transport", () => {
       expect(calls).toBe(1);
     },
   );
-  it("enforces TLS trust and hostname verification independently of shared authentication", async () => {
-    const root = await directory();
-    await chmod(root, 0o700);
-    const key = join(root, "key.pem"),
-      cert = join(root, "cert.pem");
-    execFileSync(
-      "openssl",
-      [
-        "req",
-        "-x509",
-        "-newkey",
-        "rsa:2048",
-        "-nodes",
-        "-days",
-        "1",
-        "-keyout",
-        key,
-        "-out",
-        cert,
-        "-subj",
-        "/CN=localhost",
-        "-addext",
-        "subjectAltName=DNS:localhost",
-        "-addext",
-        "basicConstraints=critical,CA:TRUE",
-      ],
-      { stdio: "ignore" },
-    );
-    const certificate = await readFile(cert, "utf8");
-    const seen: Record<string, unknown>[] = [];
-    const server = https({ key: await readFile(key), cert: certificate }, async (req, res) => {
-      const request = await body(req);
-      seen.push(request);
-      if (
-        req.headers.authorization !==
-        `Basic ${Buffer.from("fixture:" + "p".repeat(32)).toString("base64")}`
-      ) {
-        reply(
-          res,
-          {
-            version: 1,
-            request_id: request.request_id,
-            error: { code: "authentication_required", message: "Invalid credential" },
-          },
-          401,
-        );
-        return;
-      }
-      reply(res, {
-        version: 1,
-        request_id: request.request_id,
-        operation: request.operation,
-        result,
+  it.each(["/v1/service", "/pi-sandbox-macos", "/pi-sandbox-linux", "/service%20path/", "/"])(
+    "uses HTTPS endpoint path %s with TLS trust and hostname verification",
+    async (endpointPath) => {
+      const root = await directory();
+      await chmod(root, 0o700);
+      const key = join(root, "key.pem"),
+        cert = join(root, "cert.pem");
+      execFileSync(
+        "openssl",
+        [
+          "req",
+          "-x509",
+          "-newkey",
+          "rsa:2048",
+          "-nodes",
+          "-days",
+          "1",
+          "-keyout",
+          key,
+          "-out",
+          cert,
+          "-subj",
+          "/CN=localhost",
+          "-addext",
+          "subjectAltName=DNS:localhost",
+          "-addext",
+          "basicConstraints=critical,CA:TRUE",
+        ],
+        { stdio: "ignore" },
+      );
+      const certificate = await readFile(cert, "utf8");
+      const seen: Record<string, unknown>[] = [];
+      const server = https({ key: await readFile(key), cert: certificate }, async (req, res) => {
+        expect(req.url).toBe(endpointPath);
+        expect(req.method).toBe("POST");
+        const request = await body(req);
+        seen.push(request);
+        if (
+          req.headers.authorization !==
+          `Basic ${Buffer.from("fixture:" + "p".repeat(32)).toString("base64")}`
+        ) {
+          reply(
+            res,
+            {
+              version: 1,
+              request_id: request.request_id,
+              error: { code: "authentication_required", message: "Invalid credential" },
+            },
+            401,
+          );
+          return;
+        }
+        reply(res, {
+          version: 1,
+          request_id: request.request_id,
+          operation: request.operation,
+          result,
+        });
       });
-    });
-    servers.push(server);
-    await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
-    const port = (server.address() as AddressInfo).port;
-    const endpoint = {
-      transport: "https" as const,
-      url: `https://localhost:${port}/v1/service`,
-      basicUsername: "fixture",
-      basicPassword: "p".repeat(32),
-      sendMachineId: false,
-      tlsCa: certificate,
-    };
-    for (const name of ["HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY", "http_proxy", "https_proxy"])
-      vi.stubEnv(name, "http://127.0.0.1:1");
-    vi.stubEnv("NODE_USE_ENV_PROXY", "1");
-    vi.stubEnv("UNDICI_USE_MILO", "1");
-    vi.stubEnv("NODE_TLS_REJECT_UNAUTHORIZED", "0");
-    vi.stubEnv("NODE_EXTRA_CA_CERTS", cert);
-    vi.stubEnv("SSL_CERT_FILE", cert);
-    const identity = () => ({ username: "alice" });
-    await expect(
-      new ServiceClient(endpoint, { identity }).request("audit_check", input),
-    ).resolves.toEqual(result);
-    expect(seen[0]!.identity).toEqual({ username: "alice" });
-    const untrusted = {
-      transport: endpoint.transport,
-      url: endpoint.url,
-      basicUsername: endpoint.basicUsername,
-      basicPassword: endpoint.basicPassword,
-      sendMachineId: false,
-    };
-    await expect(
-      new ServiceClient(untrusted, { identity }).request("audit_check", input),
-    ).rejects.toThrow();
-    await expect(
-      new ServiceClient(
-        { ...endpoint, url: `https://127.0.0.1:${port}/v1/service` },
-        { identity },
-      ).request("audit_check", input),
-    ).rejects.toThrow();
-    await expect(
-      new ServiceClient({ ...endpoint, basicPassword: "wrong" }, { identity }).request(
-        "audit_check",
-        input,
-      ),
-    ).rejects.toThrow(ServiceError);
-    expect(seen).toHaveLength(2);
-  });
+      servers.push(server);
+      await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+      const port = (server.address() as AddressInfo).port;
+      const endpoint = {
+        transport: "https" as const,
+        url: `https://localhost:${port}${endpointPath}`,
+        basicUsername: "fixture",
+        basicPassword: "p".repeat(32),
+        sendMachineId: false,
+        tlsCa: certificate,
+      };
+      for (const name of ["HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY", "http_proxy", "https_proxy"])
+        vi.stubEnv(name, "http://127.0.0.1:1");
+      vi.stubEnv("NODE_USE_ENV_PROXY", "1");
+      vi.stubEnv("UNDICI_USE_MILO", "1");
+      vi.stubEnv("NODE_TLS_REJECT_UNAUTHORIZED", "0");
+      vi.stubEnv("NODE_EXTRA_CA_CERTS", cert);
+      vi.stubEnv("SSL_CERT_FILE", cert);
+      const identity = () => ({ username: "alice" });
+      await expect(
+        new ServiceClient(endpoint, { identity }).request("audit_check", input),
+      ).resolves.toEqual(result);
+      expect(seen[0]!.identity).toEqual({ username: "alice" });
+      const untrusted = {
+        transport: endpoint.transport,
+        url: endpoint.url,
+        basicUsername: endpoint.basicUsername,
+        basicPassword: endpoint.basicPassword,
+        sendMachineId: false,
+      };
+      await expect(
+        new ServiceClient(untrusted, { identity }).request("audit_check", input),
+      ).rejects.toThrow();
+      await expect(
+        new ServiceClient(
+          { ...endpoint, url: `https://127.0.0.1:${port}${endpointPath}` },
+          { identity },
+        ).request("audit_check", input),
+      ).rejects.toThrow();
+      await expect(
+        new ServiceClient({ ...endpoint, basicPassword: "wrong" }, { identity }).request(
+          "audit_check",
+          input,
+        ),
+      ).rejects.toThrow(ServiceError);
+      expect(seen).toHaveLength(2);
+    },
+  );
   it("rejects symlink or unprotected Unix socket paths before connecting", async () => {
     const { path } = await unix((_req, res) => {
       res.end();

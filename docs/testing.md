@@ -142,6 +142,13 @@ fresh CA/certificate/password inputs. They are not the production bytes and are
 never distributed. Exact production checks cover version/capabilities, source
 controls, offline bootstrap validation and integrity/provenance.
 
+Distribution and transport regressions cover full HTTPS endpoint paths for both
+service and local-audit profiles on Linux and macOS, including custom paths,
+escaped path segments, trailing slashes and the root path. Requests must use the
+configured path without appending `/v1/service`; Unix retains its fixed route.
+TLS hostname/trust checks, Basic authentication and rejection of URL credentials,
+query strings and fragments remain enforced.
+
 Linux verification requires rootful mount isolation, `sudo -n`, Python 3 and
 OpenSSL. The real daemon and a distinct non-root account operate within a random
 protected `/run/pi-sandbox-verify/<run-id>` tree, with a private `/dev/log` mount.

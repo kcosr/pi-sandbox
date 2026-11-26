@@ -248,8 +248,12 @@ Package one concurrent Linux Rust daemon with an ordinary root systemd unit.
 Do not spawn per-user or per-connection service instances.
 HTTPS-only deployments may also run in the foreground as an unprivileged account
 with administrative inputs owned by that account; any Unix listener requires root.
-Both Unix and HTTPS use bounded HTTP/1.1
+Both Unix and HTTPS daemon listeners use bounded HTTP/1.1
 `POST /v1/service`, protocol 1, for bootstrap, policy inspection and audit handles.
+HTTPS clients use the complete build-selected endpoint URL's pathname, allowing
+a reverse proxy to rewrite a custom public path to `/v1/service`. No suffix is
+appended; query strings, fragments and URL credentials are rejected. Unix clients
+retain the fixed route. Runtime state cannot replace either endpoint.
 Unix identity comes from `SO_PEERCRED` plus bounded host account/group lookup;
 HTTPS authenticates Basic ingress and accepts exact username assertions without
 server NSS mapping. HTTPS rules reject numeric/group selectors. The official

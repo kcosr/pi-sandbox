@@ -95,6 +95,33 @@ afterEach(async () => {
   );
 });
 describe("shared administrative source pipeline", () => {
+  it.each(["/pi-sandbox-macos", "/pi-sandbox-linux", "/service%20path/"])(
+    "preserves the complete HTTPS endpoint %s in service provenance",
+    async (path) => {
+      const url = `https://policy.example.test:9443${path}`;
+      const { service } = remote();
+      const snapshot = await loadAdministrativeSnapshot(
+        {
+          source: "service",
+          endpoint: {
+            transport: "https",
+            url,
+            basicUsername: "fixture",
+            basicPassword: "p".repeat(32),
+            sendMachineId: false,
+          },
+        },
+        { catalog: managedExtensionCatalog, client, service, validatePolicy: () => {} },
+      );
+      expect(snapshot.provenance).toEqual({
+        source: "service",
+        transport: "https",
+        location: url,
+        revision: "a".repeat(32),
+        identitySource: "https_assertion",
+      });
+    },
+  );
   it("resolves equivalent local and service snapshots to the same policy in every mode", async () => {
     const text = template
       .replace("[environment.pi]", '[environment.pi]\nTOKEN = "{{username}}-{{uid}}"')

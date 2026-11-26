@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+### Added
+
+- Allow build-selected HTTPS configuration and audit URLs to use custom public
+  paths behind a reverse proxy; direct daemon access retains `/v1/service`.
+  Service diagnostics now display the full endpoint URL, including its path.
+  ([#63](https://github.com/kcosr/pi-sandbox/pull/63))
+
 ## 0.14.0 - 2026-11-25
 
 ### Breaking changes
