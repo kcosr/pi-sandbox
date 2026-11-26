@@ -28,9 +28,9 @@ allow_config_override = false
 mode = "system"
 path = "/opt/example/bin/bwrap"
 `;
-  const load = async (text, platform = "linux") => {
+  const load = async (text, platform = "linux", options) => {
     await writeFile(path, text);
-    return loadDistribution(path, platform);
+    return loadDistribution(path, platform, options);
   };
   const distribution = await load(local);
   assert.deepEqual(distribution.layout.configuration, {
@@ -212,6 +212,21 @@ path = "/opt/example/bin/bwrap"
   const darwin = local
     .replaceAll("platforms.linux", "platforms.darwin")
     .replace(/\n\[platforms\.darwin\.bubblewrap\][\s\S]*$/u, "\n");
+  const darwinService = https
+    .replaceAll("platforms.linux", "platforms.darwin")
+    .replace(/\n\[platforms\.darwin\.bubblewrap\][\s\S]*$/u, "\n");
+  const macosPackage = { macosPackage: true };
+  await writeFile(passwordFile, password, { mode: 0o600 });
+  const installedApp = await load(darwinService, "darwin", macosPackage);
+  assert.equal(
+    installedApp.layout.libexecDir,
+    "/Applications/Pi Sandbox.app/Contents/Resources/client",
+  );
+  assert.equal(installedApp.layout.launcherPath, "/usr/local/bin/pi-sandbox");
+  assert.equal(installedApp.layout.configuration.endpoint.url, originalUrl);
+  assert.equal((await load(darwinService, "darwin")).layout.libexecDir, "/opt/example/libexec");
+  await assert.rejects(load(darwin, "darwin", macosPackage), /require a service-source/u);
+  await assert.rejects(load(https, "linux", macosPackage), /require a macOS build host/u);
   for (const architecture of ["x64", "arm64"]) {
     await writeFile(path, darwin);
     assert.equal(

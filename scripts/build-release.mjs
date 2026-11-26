@@ -69,6 +69,9 @@ Options:
                             (default: config/default/models.json)
   --distribution FILE      Select extensions and installation layout
                             (default: config/default/distribution.toml)
+  --macos-pkg              Build a native macOS Installer package for a service
+                            distribution (the default is a release archive)
+  --dmg                    Also wrap the Installer package in a disk image
   -h, --help               Show this help
 
 The supplied or downloaded source archive is always checked against
@@ -100,10 +103,20 @@ export function parseReleaseArguments(argv) {
     config: undefined,
     models: undefined,
     distribution: defaultDistribution,
+    macosPackage: false,
+    diskImage: false,
   };
   for (let index = 0; index < argv.length; index += 1) {
     const argument = argv[index];
     if (argument === "--help" || argument === "-h") return { help: true };
+    if (argument === "--macos-pkg") {
+      options.macosPackage = true;
+      continue;
+    }
+    if (argument === "--dmg") {
+      options.diskImage = true;
+      continue;
+    }
     if (
       !["--pi-source-archive", "--out", "--config", "--models", "--distribution"].includes(argument)
     ) {
@@ -120,6 +133,10 @@ export function parseReleaseArguments(argv) {
     if (argument === "--models") options.models = resolve(value);
     if (argument === "--distribution") options.distribution = resolve(value);
   }
+  if (options.diskImage && !options.macosPackage)
+    throw new ReleaseArgumentError("--dmg requires --macos-pkg");
+  if (options.macosPackage && process.platform !== "darwin")
+    throw new ReleaseArgumentError("--macos-pkg requires a macOS build host");
   return options;
 }
 
@@ -496,7 +513,9 @@ export async function buildRelease(argv, { verifyPatchedSource, verifyPackagedRe
   const lock = JSON.parse(await readFile(lockPath, "utf8"));
   const packageJson = JSON.parse(await readFile(packagePath, "utf8"));
   const target = hostPlatform();
-  const distribution = await loadDistribution(options.distribution, target.os);
+  const distribution = await loadDistribution(options.distribution, target.os, {
+    macosPackage: options.macosPackage,
+  });
   const skillsBundle = await loadSkillsBundle(distribution.skillsSource);
   validateNativeToolBundle(distribution.toolBundle, target.os, process.arch);
   const configuration = distribution.layout.configuration;
@@ -556,6 +575,7 @@ export async function buildRelease(argv, { verifyPatchedSource, verifyPackagedRe
         "--distribution",
         distribution.path,
         "--executable-relative-tools",
+        ...(options.macosPackage ? ["--macos-pkg"] : []),
       ],
       { env: cleanEnvironment },
     );
@@ -709,23 +729,17 @@ export async function buildRelease(argv, { verifyPatchedSource, verifyPackagedRe
         { env: cleanEnvironment },
       );
     }
-    for (const [name, source] of [
-      [
-        "install.sh",
-        os === "linux" ? "scripts/install/install.sh" : "scripts/install/macos-install.sh",
-      ],
-      [
-        "uninstall.sh",
-        os === "linux" ? "scripts/install/uninstall.sh" : "scripts/install/macos-uninstall.sh",
-      ],
-    ]) {
-      await renderFile(
-        join(repositoryRoot, source),
-        join(releaseRoot, name),
-        distribution.layout,
-        os,
-        0o755,
-      );
+    if (!options.macosPackage) {
+      for (const action of ["install", "uninstall"]) {
+        const source = `scripts/install/${os === "darwin" ? "macos-" : ""}${action}.sh`;
+        await renderFile(
+          join(repositoryRoot, source),
+          join(releaseRoot, `${action}.sh`),
+          distribution.layout,
+          os,
+          0o755,
+        );
+      }
     }
 
     const sbom = await createSbom({
@@ -778,6 +792,40 @@ export async function buildRelease(argv, { verifyPatchedSource, verifyPackagedRe
     await writeFile(releaseManifestPath, `${JSON.stringify(releaseManifest, null, 2)}\n`, {
       mode: 0o644,
     });
+
+    const verificationContext = {
+      repositoryRoot,
+      os,
+      packagedConfig,
+      layout: distribution.layout,
+      sourceRoot,
+      codingAgentRoot,
+      bunTarget,
+      bunTsconfig,
+      distribution,
+      options,
+    };
+    if (options.macosPackage) {
+      const { buildMacosInstaller } = await import("./build/macos-installer.mjs");
+      const installer = await buildMacosInstaller({
+        payload,
+        temporaryDirectory,
+        out: options.out,
+        version: packageJson.version,
+        architecture: process.arch,
+        minimumOS: distribution.toolBundle?.inventory.minimumOS,
+        displayVersion: buildVersion.displayVersion,
+        diskImage: options.diskImage,
+        run,
+        capture,
+        fileInventory,
+      });
+      await verifyPackagedRelease?.({ ...verificationContext, installer });
+      for (const { path, sha256: digest } of installer.artifacts) {
+        process.stdout.write(`Created and inspected ${path}\nSHA-256 ${digest}\n`);
+      }
+      return;
+    }
 
     const checksumEntries = await fileInventory(payload);
     await writeFile(
@@ -837,19 +885,7 @@ export async function buildRelease(argv, { verifyPatchedSource, verifyPackagedRe
       },
       releaseRequirements(os, distribution.bubblewrap, configuration),
     );
-    await verifyPackagedRelease?.({
-      repositoryRoot,
-      extractedRelease,
-      os,
-      packagedConfig,
-      layout: distribution.layout,
-      sourceRoot,
-      codingAgentRoot,
-      bunTarget,
-      bunTsconfig,
-      distribution,
-      options,
-    });
+    await verifyPackagedRelease?.({ ...verificationContext, extractedRelease });
     const archiveSha256 = await sha256(archive);
     await writeFile(join(options.out, "SHA256SUMS"), `${archiveSha256}  ${archiveName}\n`, {
       mode: 0o644,

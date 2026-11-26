@@ -11,6 +11,7 @@ export async function verifyManagedServiceMatrix(context, environment, runComman
   const {
     repositoryRoot,
     extractedRelease,
+    installer,
     codingAgentRoot,
     bunTarget,
     bunTsconfig,
@@ -230,7 +231,8 @@ export async function verifyManagedServiceMatrix(context, environment, runComman
       }),
       { mode: 0o600 },
     );
-    const productionPayload = join(extractedRelease, "payload/pi-sandbox");
+    const productionPayload =
+      installer?.extractedPayload ?? join(extractedRelease, "payload/pi-sandbox");
     await runCommand(
       join(productionPayload, "pi-sandbox"),
       ["--validate-bootstrap", productionFixture, "--candidate-payload", productionPayload],

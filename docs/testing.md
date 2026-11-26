@@ -142,6 +142,31 @@ fresh CA/certificate/password inputs. They are not the production bytes and are
 never distributed. Exact production checks cover version/capabilities, source
 controls, offline bootstrap validation and integrity/provenance.
 
+With `--macos-pkg`, both workflows inspect the flat package's destination,
+architecture and minimum macOS version, root-owned modes, signed bundle and
+complete extracted inventory. If selected, the disk image is mounted read-only
+to confirm it contains the exact PKG. The verifier validates offline bootstrap
+using the client extracted from the PKG.
+
+On the intended native macOS architecture, use a disposable HTTPS distribution
+with the username `fixture`, `send_machine_id = false`, and a custom test CA.
+Set its endpoint to `https://127.0.0.1:<unused-port>/fixture-service`, and
+include GNU `cat` in its pinned tool inventory. Set `tls_ca_file` and
+`basic_password_file` to `certificate.pem` and `password` in a private
+fixture directory alongside `key.pem`. Build with `--macos-pkg`, then run:
+
+```sh
+node scripts/test/macos-pkg-smoke.mjs /path/to/fixture.pkg /path/to/fixture
+```
+
+The smoke test runs the PKG's command-link hooks against a staged volume. It
+checks the link target, repeated execution, and refusal to replace existing
+files and legacy links. It starts a loopback HTTPS service and launches the
+extracted app's RPC interface through a symlink as the invoking user. It checks
+authentication, a real Seatbelt file denial, writable CWD, a denied write
+outside the workspace and the bundled command path. It needs no system
+installation or live model provider.
+
 Distribution and transport regressions cover full HTTPS endpoint paths for both
 service and local-audit profiles on Linux and macOS, including custom paths,
 escaped path segments, trailing slashes and the root path. Requests must use the

@@ -121,7 +121,13 @@ test("release entrypoints import without launching builds or verification", asyn
 });
 
 test("both workflows reject unknown or incomplete arguments before work", async () => {
-  for (const args of [["--skip-tests"], ["--verify"], ["--distribution"], ["--config", "--out"]]) {
+  for (const args of [
+    ["--skip-tests"],
+    ["--verify"],
+    ["--distribution"],
+    ["--config", "--out"],
+    ["--dmg"],
+  ]) {
     assert.throws(() => parseReleaseArguments(args), ReleaseArgumentError);
     await assert.rejects(buildRelease(args), ReleaseArgumentError);
     await assert.rejects(verifyRelease(args), ReleaseArgumentError);
@@ -142,6 +148,20 @@ test("both workflows reject unknown or incomplete arguments before work", async 
     assert.equal(help.status, 0, help.stderr);
     assert.match(help.stdout, /archive integrity/);
     assert.doesNotMatch(help.stdout, /==>/);
+  }
+});
+
+test("selects the native installer separately from the default archive", () => {
+  const archive = parseReleaseArguments([]);
+  assert.equal(archive.macosPackage, false);
+  assert.equal(archive.diskImage, false);
+  if (process.platform === "darwin") {
+    const pkg = parseReleaseArguments(["--macos-pkg"]);
+    assert.equal(pkg.macosPackage, true);
+    assert.equal(pkg.diskImage, false);
+    assert.equal(parseReleaseArguments(["--dmg", "--macos-pkg"]).diskImage, true);
+  } else {
+    assert.throws(() => parseReleaseArguments(["--macos-pkg"]), /requires a macOS build host/u);
   }
 });
 
