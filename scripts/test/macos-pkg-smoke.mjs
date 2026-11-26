@@ -28,6 +28,7 @@ import { promisify } from "node:util";
 import { parse } from "@iarna/toml";
 import {
   macosBundleFinderLauncher,
+  macosBundleIcon,
   macosBundleLauncher,
   macosBundleTerminalCommand,
   macosInstalledBundleLauncher,
@@ -69,6 +70,7 @@ async function expandPackage(packageFile, expanded) {
   ]) {
     assert.equal(entries.get(path), 0o755, `Missing executable or bundle directory: ${path}`);
   }
+  assert.equal(entries.get(`./${applicationName}/${macosBundleIcon}`), 0o644);
   const application = join(component, "Payload", applicationName);
   await capture("/usr/bin/codesign", ["--verify", "--deep", "--strict", application]);
   const { stdout: entry } = await capture("/usr/bin/plutil", [
@@ -78,6 +80,16 @@ async function expandPackage(packageFile, expanded) {
     join(application, "Contents/Info.plist"),
   ]);
   assert.equal(entry.trim(), basename(macosBundleFinderLauncher));
+  const { stdout: icon } = await capture("/usr/bin/plutil", [
+    "-extract",
+    "CFBundleIconFile",
+    "raw",
+    join(application, "Contents/Info.plist"),
+  ]);
+  assert.equal(icon.trim(), basename(macosBundleIcon));
+  const image = join(application, macosBundleIcon);
+  const { stdout: properties } = await capture("/usr/bin/sips", ["-g", "format", image]);
+  assert.match(properties, /format: icns/u);
   return { application, component };
 }
 

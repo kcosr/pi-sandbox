@@ -28,9 +28,9 @@ int main(int argc, char **argv) {
     }
 #ifdef PI_SANDBOX_OPEN_TERMINAL
     (void)argv;
-    char *open_args[] = {"open", "-b", "com.apple.Terminal", target, NULL};
+    char *open_args[] = {"open", target, NULL};
     execv("/usr/bin/open", open_args);
-    perror("Pi Sandbox: Unable to open Terminal");
+    perror("Pi Sandbox: Unable to open the terminal command");
 #else
     argv[0] = target;
     execv(target, argv);

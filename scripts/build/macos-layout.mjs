@@ -6,6 +6,7 @@ export const macosBundleClient = "Contents/Resources/client";
 export const macosBundleLauncher = "Contents/MacOS/pi-sandbox";
 export const macosBundleFinderLauncher = "Contents/MacOS/pi-sandbox-finder";
 export const macosBundleTerminalCommand = "Contents/Resources/Pi Sandbox.command";
+export const macosBundleIcon = "Contents/Resources/PiSandbox.icns";
 
 const installedBundle = join(macosInstallDirectory, macosBundleName);
 export const macosInstalledBundleLauncher = join(installedBundle, macosBundleLauncher);

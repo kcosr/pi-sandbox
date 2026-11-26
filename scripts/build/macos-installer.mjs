@@ -18,6 +18,7 @@ import { fileURLToPath, URL } from "node:url";
 import {
   macosBundleClient,
   macosBundleFinderLauncher,
+  macosBundleIcon,
   macosBundleLauncher,
   macosBundleName,
   macosBundleTerminalCommand,
@@ -29,6 +30,8 @@ import {
 const bundleIdentifier = "io.github.kcosr.pi-sandbox";
 const launcherSource = fileURLToPath(new URL("./macos-launcher.c", import.meta.url));
 const terminalCommandSource = new URL("./macos-terminal.command", import.meta.url);
+const iconSource = new URL("./macos-icon.icns", import.meta.url);
+const iconLicense = new URL("./macos-icon.LICENSE", import.meta.url);
 const launcherHook = new URL("../install/macos-app-launcher.sh", import.meta.url);
 const versionPattern = /^(?:0|[1-9]\d*)\.(?:0|[1-9]\d*)\.(?:0|[1-9]\d*)$/u;
 const osVersionPattern = /^\d+\.\d+(?:\.\d+)?$/u;
@@ -182,6 +185,7 @@ export async function buildMacosInstaller({
   const launcher = join(app, macosBundleLauncher);
   const finderLauncher = join(app, macosBundleFinderLauncher);
   const terminalCommand = join(app, macosBundleTerminalCommand);
+  const icon = join(app, macosBundleIcon);
   await mkdir(dirname(launcher), { recursive: true });
   await mkdir(dirname(client), { recursive: true });
   await cp(payload, client, { recursive: true, force: false, errorOnExist: true });
@@ -197,6 +201,8 @@ export async function buildMacosInstaller({
 
   await copyFile(terminalCommandSource, terminalCommand);
   await chmod(terminalCommand, 0o755);
+  await copyFile(iconSource, icon);
+  await copyFile(iconLicense, join(dirname(icon), "PiSandbox-icon.LICENSE"));
   for (const [executable, target, flags] of [
     [launcher, join(client, "pi-sandbox"), []],
     [finderLauncher, terminalCommand, ["-DPI_SANDBOX_OPEN_TERMINAL"]],
@@ -221,6 +227,7 @@ export async function buildMacosInstaller({
     plist(`<dict>
   <key>CFBundleIdentifier</key><string>${bundleIdentifier}</string>
   <key>CFBundleExecutable</key><string>${basename(finderLauncher)}</string>
+  <key>CFBundleIconFile</key><string>${basename(icon)}</string>
   <key>CFBundleName</key><string>Pi Sandbox</string>
   <key>CFBundlePackageType</key><string>APPL</string>
   <key>CFBundleShortVersionString</key><string>${version}</string>

@@ -141,13 +141,17 @@ root-owned, non-group-writable files. Upgrades replace that bundle as a unit.
 The package build selects this layout in place of the distribution's archive
 paths. A selected native tool inventory travels inside the app with its
 libraries and licenses. Seatbelt still uses macOS's system `sandbox-exec`.
+The app icon uses the [Pi press kit badge](https://pi.dev/press-kit). Its
+vector source and attribution are in `scripts/build/macos-icon.svg` and
+`scripts/build/macos-icon.LICENSE`.
 
 Installer links `/usr/local/bin/pi-sandbox` to the app's CLI executable. It
 accepts an existing link to that executable. If the command path is occupied
 by another file or link, move it or uninstall the legacy release first.
-Double-click the app in Finder to open Apple Terminal and start a session in
-your home directory. To start a session in a different workspace, run the CLI
-from that directory in Terminal:
+Double-click the app in Finder to start a session in your home directory using
+the macOS default app for `.command` files. The selected app needs to support
+running these scripts. To start a session in a different workspace, run the CLI
+from that directory in your terminal:
 
 ```sh
 pi-sandbox
