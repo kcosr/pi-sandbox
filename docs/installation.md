@@ -138,9 +138,12 @@ target requirements.
 
 Open the PKG in Installer. It installs `/Applications/Pi Sandbox.app` with
 root-owned, non-group-writable files. Upgrades replace that bundle as a unit.
+For an intentional downgrade, remove the installed app bundle before running
+the older installer. Installer keeps a newer bundle when one is present.
 The package build selects this layout in place of the distribution's archive
 paths. A selected native tool inventory travels inside the app with its
 libraries and licenses. Seatbelt still uses macOS's system `sandbox-exec`.
+Use the release archive when the distribution needs to bundle `skills_source`.
 The app icon uses the [Pi press kit badge](https://pi.dev/press-kit). Its
 vector source and attribution are in `scripts/build/macos-icon.svg` and
 `scripts/build/macos-icon.LICENSE`.
@@ -148,19 +151,24 @@ vector source and attribution are in `scripts/build/macos-icon.svg` and
 Installer links `/usr/local/bin/pi-sandbox` to the app's CLI executable. It
 accepts an existing link to that executable. If the command path is occupied
 by another file or link, move it or uninstall the legacy release first.
-Double-click the app in Finder to start a session in your home directory using
-the macOS default app for `.command` files. The selected app needs to support
-running these scripts. To start a session in a different workspace, run the CLI
-from that directory in your terminal:
+Installer records hook diagnostics in `/var/log/install.log`. Protect
+`/usr/local/bin` and its parents from untrusted writes if users rely on the link.
+
+Double-click the app in Finder to start a session in `~/Pi Sandbox Workspace`
+using the macOS default app for `.command` files. The selected app needs to
+support running these scripts. The launcher creates the workspace if needed.
+To start a session in a different workspace, run the CLI from that directory in
+your terminal:
 
 ```sh
 pi-sandbox
 ```
 
 The service provides policy and models. To uninstall the client, remove the
-app bundle and its `/usr/local/bin/pi-sandbox` symlink. Pi state and sessions
-live outside the bundle. Local configuration builds use the release archive
-above.
+app bundle and its `/usr/local/bin/pi-sandbox` symlink. Use
+`sudo pkgutil --forget io.github.kcosr.pi-sandbox` to remove the installer receipt.
+Pi state and sessions live outside the bundle. Local configuration builds use
+the release archive above.
 
 ### Client runtime and configuration
 

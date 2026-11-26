@@ -5,6 +5,7 @@ import { createServer } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { stringify, parse } from "@iarna/toml";
+import { macosBundleClient, macosBundleLauncher, macosBundleName } from "../build/macos-layout.mjs";
 
 /** Distinct fixture artifacts, built from the same patched Pi and native inventory. */
 export async function verifyManagedServiceMatrix(context, environment, runCommand) {
@@ -77,6 +78,9 @@ export async function verifyManagedServiceMatrix(context, environment, runComman
     const fixtures = [];
     for (const name of fixtureNames) {
       const installation = join(runtimeRoot, name);
+      const app =
+        installer && name === "service-https" ? join(installation, macosBundleName) : null;
+      const payload = app ? join(app, macosBundleClient) : join(installation, "payload");
       const configuration =
         name === "fixed-local"
           ? {
@@ -99,7 +103,7 @@ export async function verifyManagedServiceMatrix(context, environment, runComman
                     : endpoint,
               };
       const selected = {
-        libexec_dir: join(installation, "payload"),
+        libexec_dir: payload,
         launcher_path: join(installation, "bin/pi-sandbox"),
         configuration,
         ...(os === "linux"
@@ -176,6 +180,16 @@ export async function verifyManagedServiceMatrix(context, environment, runComman
           .update(await readFile(executable))
           .digest("hex"),
         installation,
+        payload,
+        ...(app
+          ? {
+              bundleLauncher: {
+                source: join(installer.extractedApp, macosBundleLauncher),
+                target: join(app, macosBundleLauncher),
+                link: selected.launcher_path,
+              },
+            }
+          : {}),
       });
     }
     const policy = parse(
@@ -195,7 +209,7 @@ export async function verifyManagedServiceMatrix(context, environment, runComman
     policy.sessions.retention_days = 0;
     if (distribution.skillsSource)
       policy.skills = {
-        directories: fixtures.map((fixture) => join(fixture.installation, "payload/skills")),
+        directories: fixtures.map((fixture) => join(fixture.payload, "skills")),
       };
     policy.audit.enabled = true;
     for (const name of ["write", "edit", "bash"])
@@ -233,8 +247,11 @@ export async function verifyManagedServiceMatrix(context, environment, runComman
     );
     const productionPayload =
       installer?.extractedPayload ?? join(extractedRelease, "payload/pi-sandbox");
+    const productionLauncher = installer
+      ? join(installer.extractedApp, macosBundleLauncher)
+      : join(productionPayload, "pi-sandbox");
     await runCommand(
-      join(productionPayload, "pi-sandbox"),
+      productionLauncher,
       ["--validate-bootstrap", productionFixture, "--candidate-payload", productionPayload],
       { env: environment },
     );

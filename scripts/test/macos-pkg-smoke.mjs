@@ -98,16 +98,29 @@ async function verifyTerminalCommand(application, temporary) {
   const command = join(fixture, macosBundleTerminalCommand);
   const launcher = join(fixture, macosBundleLauncher);
   const home = join(temporary, "Finder home");
+  const workspace = join(home, "Pi Sandbox Workspace");
   await mkdir(home);
   await mkdir(dirname(command), { recursive: true });
   await mkdir(dirname(launcher), { recursive: true });
   await copyFile(join(application, macosBundleTerminalCommand), command);
   await writeFile(launcher, '#!/bin/sh\nprintf "%s\\n" "$PWD"\n', { mode: 0o755 });
-  const { stdout } = await capture("/bin/sh", [command], {
-    cwd: temporary,
-    env: { ...systemEnvironment, HOME: home },
-  });
-  assert.equal(stdout.trim(), home, "Finder's Terminal script must start in the user's home");
+  const launch = () =>
+    capture("/bin/sh", [command], {
+      cwd: temporary,
+      env: { ...systemEnvironment, HOME: home },
+    });
+  assert.equal((await launch()).stdout.trim(), workspace);
+  assert.equal((await lstat(workspace)).mode & 0o777, 0o700);
+  await writeFile(join(workspace, "retained.txt"), "keep");
+  assert.equal((await launch()).stdout.trim(), workspace);
+  assert.equal(await readFile(join(workspace, "retained.txt"), "utf8"), "keep");
+  await rename(workspace, join(home, "Previous workspace"));
+  await symlink(home, workspace);
+  await assert.rejects(launch, /Cannot open Finder workspace/u);
+  await rm(workspace);
+  await writeFile(workspace, "user file");
+  await assert.rejects(launch, /Cannot open Finder workspace/u);
+  assert.equal(await readFile(workspace, "utf8"), "user file");
 }
 
 async function stageCommandLink(component, application, root) {

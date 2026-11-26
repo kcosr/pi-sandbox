@@ -144,9 +144,12 @@ controls, offline bootstrap validation and integrity/provenance.
 
 With `--macos-pkg`, both workflows inspect the flat package's destination,
 architecture and minimum macOS version, root-owned modes, signed bundle and
-complete extracted inventory. If selected, the disk image is mounted read-only
-to confirm it contains the exact PKG. The verifier validates offline bootstrap
-using the client extracted from the PKG.
+complete extracted inventory. The PKG and archive share the extracted client
+checks for required files, manifest identity and inventory. If selected, the disk
+image is mounted read-only to confirm it contains the exact PKG.
+`verify:release` validates offline bootstrap through the extracted app's CLI.
+It also stages the HTTPS service runtime fixture in an app bundle and starts it
+through a CLI symlink.
 
 On the intended native macOS architecture, use a disposable HTTPS distribution
 with the username `fixture`, `send_machine_id = false`, and a custom test CA.
@@ -160,8 +163,9 @@ node scripts/test/macos-pkg-smoke.mjs /path/to/fixture.pkg /path/to/fixture
 ```
 
 The smoke test checks the Finder entry in the packaged app and exercises its
-Terminal script with a disposable home directory. It runs the PKG's command-link
-hooks against a staged volume and
+terminal script with a disposable home directory. It checks workspace creation,
+reuse, and rejection of symlinks and files at the workspace path. It runs the
+PKG's command-link hooks against a staged volume and
 checks the link target, repeated execution, and refusal to replace existing
 files and legacy links. It starts a loopback HTTPS service and launches the
 extracted app's RPC interface through a symlink as the invoking user. It checks

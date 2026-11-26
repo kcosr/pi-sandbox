@@ -325,6 +325,8 @@ export async function loadDistribution(path, platform = process.platform, { maco
   const configuration = await parseConfiguration(selected.configuration, platform);
   if (macosPackage && configuration.source !== "service")
     throw new Error("macOS Installer packages require a service-source distribution");
+  if (macosPackage && skillsSource !== undefined)
+    throw new Error("macOS Installer packages do not support distribution skills_source");
   const archiveLibexecDir = absolutePath(
     selected.libexec_dir,
     `distribution platforms.${platform}.libexec_dir`,

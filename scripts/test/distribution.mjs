@@ -225,6 +225,15 @@ path = "/opt/example/bin/bwrap"
   assert.equal(installedApp.layout.launcherPath, "/usr/local/bin/pi-sandbox");
   assert.equal(installedApp.layout.configuration.endpoint.url, originalUrl);
   assert.equal((await load(darwinService, "darwin")).layout.libexecDir, "/opt/example/libexec");
+  const darwinWithSkills = `skills_source = "./shared-skills"\n${darwinService}`;
+  await assert.rejects(
+    load(darwinWithSkills, "darwin", macosPackage),
+    /do not support distribution skills_source/u,
+  );
+  assert.equal(
+    (await load(darwinWithSkills, "darwin")).skillsSource,
+    join(temporaryDirectory, "shared-skills"),
+  );
   await assert.rejects(load(darwin, "darwin", macosPackage), /require a service-source/u);
   await assert.rejects(load(https, "linux", macosPackage), /require a macOS build host/u);
   for (const architecture of ["x64", "arm64"]) {

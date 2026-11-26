@@ -168,6 +168,7 @@ export async function buildMacosInstaller({
   run,
   capture,
   fileInventory,
+  inspectPayload,
 }) {
   const nativeArch = { arm64: "arm64", x64: "x86_64" }[architecture];
   if (process.platform !== "darwin" || nativeArch === undefined || architecture !== process.arch)
@@ -342,6 +343,7 @@ export async function buildMacosInstaller({
 
     const extractedApp = join(expandedPayload, macosBundleName);
     const extractedPayload = join(extractedApp, macosBundleClient);
+    await inspectPayload(extractedPayload);
     await run("/usr/bin/codesign", ["--verify", "--deep", "--strict", extractedApp]);
     await run("/usr/bin/codesign", ["--verify", "--strict", join(extractedPayload, "pi-sandbox")]);
     if (
