@@ -13,19 +13,22 @@ import {
   rm,
   writeFile,
 } from "node:fs/promises";
-import { dirname, join, relative } from "node:path";
+import { basename, dirname, join, relative } from "node:path";
 import { fileURLToPath, URL } from "node:url";
 import {
   macosBundleClient,
+  macosBundleFinderLauncher,
   macosBundleLauncher,
   macosBundleName,
+  macosBundleTerminalCommand,
   macosInstallDirectory,
   macosInstalledBundleLauncher,
   macosPackageLayout,
 } from "./macos-layout.mjs";
 
 const bundleIdentifier = "io.github.kcosr.pi-sandbox";
-const launcherSource = fileURLToPath(new URL("./macos-cli-launcher.c", import.meta.url));
+const launcherSource = fileURLToPath(new URL("./macos-launcher.c", import.meta.url));
+const terminalCommandSource = new URL("./macos-terminal.command", import.meta.url);
 const launcherHook = new URL("../install/macos-app-launcher.sh", import.meta.url);
 const versionPattern = /^(?:0|[1-9]\d*)\.(?:0|[1-9]\d*)\.(?:0|[1-9]\d*)$/u;
 const osVersionPattern = /^\d+\.\d+(?:\.\d+)?$/u;
@@ -177,6 +180,8 @@ export async function buildMacosInstaller({
   const app = join(root, macosBundleName);
   const client = join(app, macosBundleClient);
   const launcher = join(app, macosBundleLauncher);
+  const finderLauncher = join(app, macosBundleFinderLauncher);
+  const terminalCommand = join(app, macosBundleTerminalCommand);
   await mkdir(dirname(launcher), { recursive: true });
   await mkdir(dirname(client), { recursive: true });
   await cp(payload, client, { recursive: true, force: false, errorOnExist: true });
@@ -190,24 +195,32 @@ export async function buildMacosInstaller({
     requiredOS = newerOS(requiredOS, nativeOS);
   }
 
-  await run("/usr/bin/clang", [
-    "-arch",
-    nativeArch,
-    `-mmacosx-version-min=${requiredOS}`,
-    "-Wall",
-    "-Wextra",
-    "-Werror",
-    `-DPI_SANDBOX_CLIENT_PATH=${JSON.stringify(relative(dirname(launcher), join(client, "pi-sandbox")))}`,
-    launcherSource,
-    "-o",
-    launcher,
-  ]);
-  await nativeMinimumOS(launcher, nativeArch, capture);
+  await copyFile(terminalCommandSource, terminalCommand);
+  await chmod(terminalCommand, 0o755);
+  for (const [executable, target, flags] of [
+    [launcher, join(client, "pi-sandbox"), []],
+    [finderLauncher, terminalCommand, ["-DPI_SANDBOX_OPEN_TERMINAL"]],
+  ]) {
+    await run("/usr/bin/clang", [
+      "-arch",
+      nativeArch,
+      `-mmacosx-version-min=${requiredOS}`,
+      "-Wall",
+      "-Wextra",
+      "-Werror",
+      `-DPI_SANDBOX_TARGET_PATH=${JSON.stringify(relative(dirname(executable), target))}`,
+      ...flags,
+      launcherSource,
+      "-o",
+      executable,
+    ]);
+    await nativeMinimumOS(executable, nativeArch, capture);
+  }
   await writeFile(
     join(app, "Contents/Info.plist"),
     plist(`<dict>
   <key>CFBundleIdentifier</key><string>${bundleIdentifier}</string>
-  <key>CFBundleExecutable</key><string>pi-sandbox</string>
+  <key>CFBundleExecutable</key><string>${basename(finderLauncher)}</string>
   <key>CFBundleName</key><string>Pi Sandbox</string>
   <key>CFBundlePackageType</key><string>APPL</string>
   <key>CFBundleShortVersionString</key><string>${version}</string>
@@ -215,6 +228,7 @@ export async function buildMacosInstaller({
   <key>LSMinimumSystemVersion</key><string>${requiredOS}</string>
 </dict>`),
   );
+  await run("/usr/bin/codesign", ["--force", "--sign", "-", launcher]);
   await run("/usr/bin/codesign", ["--force", "--sign", "-", app]);
   const expectedModes = await bundleModes(root, true);
   const expectedPayload = await fileInventory(root);

@@ -145,7 +145,9 @@ libraries and licenses. Seatbelt still uses macOS's system `sandbox-exec`.
 Installer links `/usr/local/bin/pi-sandbox` to the app's CLI executable. It
 accepts an existing link to that executable. If the command path is occupied
 by another file or link, move it or uninstall the legacy release first.
-Run the CLI from a workspace in Terminal:
+Double-click the app in Finder to open Apple Terminal and start a session in
+your home directory. To start a session in a different workspace, run the CLI
+from that directory in Terminal:
 
 ```sh
 pi-sandbox

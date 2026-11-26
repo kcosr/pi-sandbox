@@ -5,6 +5,7 @@ import { Buffer } from "node:buffer";
 import { execFile, spawn } from "node:child_process";
 import { once } from "node:events";
 import {
+  copyFile,
   lstat,
   mkdir,
   mkdtemp,
@@ -19,13 +20,19 @@ import {
 } from "node:fs/promises";
 import { createServer } from "node:https";
 import { userInfo } from "node:os";
-import { dirname, join, resolve } from "node:path";
+import { basename, dirname, join, resolve } from "node:path";
 import { createInterface } from "node:readline";
 import { setTimeout as delay } from "node:timers/promises";
 import { URL } from "node:url";
 import { promisify } from "node:util";
 import { parse } from "@iarna/toml";
-import { macosInstalledBundleLauncher, macosPackageLayout } from "../build/macos-layout.mjs";
+import {
+  macosBundleFinderLauncher,
+  macosBundleLauncher,
+  macosBundleTerminalCommand,
+  macosInstalledBundleLauncher,
+  macosPackageLayout,
+} from "../build/macos-layout.mjs";
 
 const capture = promisify(execFile);
 const systemEnvironment = { PATH: "/usr/bin:/bin:/usr/sbin:/sbin", LANG: "C" };
@@ -55,14 +62,40 @@ async function expandPackage(packageFile, expanded) {
   }
   for (const path of [
     `./${applicationName}`,
-    `./${applicationName}/Contents/MacOS/pi-sandbox`,
+    `./${applicationName}/${macosBundleLauncher}`,
+    `./${applicationName}/${macosBundleFinderLauncher}`,
+    `./${applicationName}/${macosBundleTerminalCommand}`,
     `./${applicationName}/Contents/Resources/client/pi-sandbox`,
   ]) {
     assert.equal(entries.get(path), 0o755, `Missing executable or bundle directory: ${path}`);
   }
   const application = join(component, "Payload", applicationName);
   await capture("/usr/bin/codesign", ["--verify", "--deep", "--strict", application]);
+  const { stdout: entry } = await capture("/usr/bin/plutil", [
+    "-extract",
+    "CFBundleExecutable",
+    "raw",
+    join(application, "Contents/Info.plist"),
+  ]);
+  assert.equal(entry.trim(), basename(macosBundleFinderLauncher));
   return { application, component };
+}
+
+async function verifyTerminalCommand(application, temporary) {
+  const fixture = join(temporary, "Finder test.app");
+  const command = join(fixture, macosBundleTerminalCommand);
+  const launcher = join(fixture, macosBundleLauncher);
+  const home = join(temporary, "Finder home");
+  await mkdir(home);
+  await mkdir(dirname(command), { recursive: true });
+  await mkdir(dirname(launcher), { recursive: true });
+  await copyFile(join(application, macosBundleTerminalCommand), command);
+  await writeFile(launcher, '#!/bin/sh\nprintf "%s\\n" "$PWD"\n', { mode: 0o755 });
+  const { stdout } = await capture("/bin/sh", [command], {
+    cwd: temporary,
+    env: { ...systemEnvironment, HOME: home },
+  });
+  assert.equal(stdout.trim(), home, "Finder's Terminal script must start in the user's home");
 }
 
 async function stageCommandLink(component, application, root) {
@@ -302,12 +335,13 @@ const temporary = await realpath(await mkdtemp("/private/tmp/pi-macos-pkg-smoke-
 let fixture;
 try {
   const expanded = await expandPackage(packageFile, join(temporary, "expanded"));
+  await verifyTerminalCommand(expanded.application, temporary);
   const application = await stageCommandLink(
     expanded.component,
     expanded.application,
     join(temporary, "target-volume"),
   );
-  const launcher = join(application, "Contents/MacOS/pi-sandbox");
+  const launcher = join(application, macosBundleLauncher);
   const payload = join(application, "Contents/Resources/client");
   const manifest = JSON.parse(await readFile(join(payload, "release-manifest.json"), "utf8"));
   assert.equal(manifest.architecture, process.arch);

@@ -159,7 +159,9 @@ fixture directory alongside `key.pem`. Build with `--macos-pkg`, then run:
 node scripts/test/macos-pkg-smoke.mjs /path/to/fixture.pkg /path/to/fixture
 ```
 
-The smoke test runs the PKG's command-link hooks against a staged volume. It
+The smoke test checks the Finder entry in the packaged app and exercises its
+Terminal script with a disposable home directory. It runs the PKG's command-link
+hooks against a staged volume and
 checks the link target, repeated execution, and refusal to replace existing
 files and legacy links. It starts a loopback HTTPS service and launches the
 extracted app's RPC interface through a symlink as the invoking user. It checks
